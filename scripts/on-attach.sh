@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
+
 echo "[on-attach] standard bootstrap active"
-if command -v gh >/dev/null 2>&1; then
-  gh auth status >/dev/null 2>&1 && echo "[on-attach] gh auth OK" || {
-    if [ -n "${GITHUB_TOKEN_OJOS:-}" ]; then
-      echo "$GITHUB_TOKEN_OJOS" | gh auth login --with-token >/dev/null 2>&1
-      echo "[on-attach] gh auth initialized with GITHUB_TOKEN_OJOS"
-    else
-      echo "[on-attach] WARN: gh auth missing and GITHUB_TOKEN_OJOS not set"
-    fi
-  }
+if [[ -x "scripts/github-account-switch.sh" ]]; then
+  bash scripts/github-account-switch.sh auto --git-scope local
 fi
+
+if command -v gh >/dev/null 2>&1; then
+  gh auth status >/dev/null 2>&1 && echo "[on-attach] gh auth OK" || \
+    echo "[on-attach] WARN: gh auth missing"
+fi
+
 echo "[on-attach] profile list: bash scripts/github-account-switch.sh list"
 
 # ASF workflow bootstrap: detect installation, validate runtime, and optionally start workers.

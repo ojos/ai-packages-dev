@@ -25,11 +25,13 @@ usage() {
 usage:
   bash scripts/github-account-switch.sh status
   bash scripts/github-account-switch.sh list
+  bash scripts/github-account-switch.sh auto [--git-scope local|global]
   bash scripts/github-account-switch.sh use <profile> [--git-scope local|global]
 
 subcommands:
   status   現在の gh auth 状態・git identity・owner 情報を表示
   list     設定済みプロファイル（GITHUB_TOKEN_* が存在するもの）を列挙
+  auto     環境変数と既存 git config からプロファイルを自動選択して切替
   use      指定プロファイルへ切替
 
 profile:
@@ -189,6 +191,114 @@ cmd_use() {
   echo "[github-account] git user.email: $(git config --"$git_scope" user.email 2>/dev/null || echo '<unchanged>')"
 }
 
+list_profile_suffixes() {
+  env | awk -F= '/^GITHUB_TOKEN_[A-Z0-9_]+=/ {sub(/^GITHUB_TOKEN_/,"",$1); print $1}' | sort -u
+}
+
+resolve_profile_for_repo() {
+  if [[ -n "${GITHUB_ACTIVE_PROFILE:-}" ]]; then
+    printf '%s' "$GITHUB_ACTIVE_PROFILE"
+    return 0
+  fi
+
+  local expected_owner
+  expected_owner="$(git config --local github.owner 2>/dev/null || true)"
+  [[ -z "$expected_owner" ]] && expected_owner="$(git config --global github.owner 2>/dev/null || true)"
+
+  local suffixes
+  suffixes="$(list_profile_suffixes)"
+
+  if [[ -n "$expected_owner" ]]; then
+    local s owner_var owner_val
+    while IFS= read -r s; do
+      [[ -z "$s" ]] && continue
+      owner_var="GITHUB_OWNER_${s}"
+      owner_val="${!owner_var:-}"
+      if [[ -n "$owner_val" && "$owner_val" == "$expected_owner" ]]; then
+        printf '%s' "$(printf '%s' "$s" | tr '[:upper:]' '[:lower:]')"
+        return 0
+      fi
+    done <<< "$suffixes"
+  fi
+
+  local count
+  count="$(printf '%s\n' "$suffixes" | sed '/^$/d' | wc -l | tr -d ' ')"
+  if [[ "$count" == "1" ]]; then
+    printf '%s' "$(printf '%s\n' "$suffixes" | sed -n '1p' | tr '[:upper:]' '[:lower:]')"
+    return 0
+  fi
+
+  return 1
+}
+
+apply_direct_env_identity() {
+  local git_scope="$1"
+  local token="${GITHUB_TOKEN:-}"
+  [[ -n "$token" ]] || return 1
+
+  local login
+  login="$(GH_TOKEN="$token" gh api user --jq .login)"
+  [[ -n "$login" && "$login" != "null" ]] || return 1
+
+  printf '%s' "$token" | gh auth login --hostname github.com --with-token >/dev/null
+  if gh auth switch --help >/dev/null 2>&1; then
+    gh auth switch --hostname github.com --user "$login" >/dev/null
+  fi
+
+  if [[ -n "${GIT_AUTHOR_NAME:-}" ]]; then
+    git config --"$git_scope" user.name "$GIT_AUTHOR_NAME"
+  fi
+  if [[ -n "${GIT_AUTHOR_EMAIL:-}" ]]; then
+    git config --"$git_scope" user.email "$GIT_AUTHOR_EMAIL"
+  fi
+
+  local owner="${GITHUB_OWNER:-$login}"
+  git config --"$git_scope" github.account "$login"
+  git config --"$git_scope" github.owner "$owner"
+
+  echo "[github-account] auto mode: direct env token selected"
+  echo "[github-account] active login:   $login"
+  echo "[github-account] owner:          $owner"
+  echo "[github-account] git scope:      $git_scope"
+  return 0
+}
+
+cmd_auto() {
+  local git_scope="local"
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --git-scope)
+        git_scope="$2"
+        shift 2
+        ;;
+      *)
+        echo "error: unknown option: $1" >&2
+        usage
+        exit 1
+        ;;
+    esac
+  done
+
+  if [[ "$git_scope" != "local" && "$git_scope" != "global" ]]; then
+    echo "error: --git-scope must be local or global" >&2
+    exit 1
+  fi
+
+  if apply_direct_env_identity "$git_scope"; then
+    return 0
+  fi
+
+  local profile
+  if profile="$(resolve_profile_for_repo)"; then
+    cmd_use "$profile" --git-scope "$git_scope"
+    return 0
+  fi
+
+  echo "[github-account] WARN: auto profile resolution failed"
+  echo "[github-account] hint: set GITHUB_ACTIVE_PROFILE or run use <profile> explicitly"
+  return 0
+}
+
 main() {
   [[ $# -ge 1 ]] || {
     usage
@@ -204,6 +314,9 @@ main() {
       ;;
     list)
       cmd_list
+      ;;
+    auto)
+      cmd_auto "$@"
       ;;
     use)
       [[ $# -ge 1 ]] || {
