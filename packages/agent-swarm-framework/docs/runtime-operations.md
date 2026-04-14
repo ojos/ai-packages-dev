@@ -13,6 +13,32 @@
 
 ## リリース手順（パッケージ配布）
 
+標準運用:
+- リリース前の事前検証は `scripts/release-packages.sh` の dry-run を使用する。
+- この preflight には README のローカル相対リンク検証が含まれる。
+- リンク切れがある場合は fail-fast で停止する。
+
+例:
+
+```bash
+bash scripts/release-packages.sh \
+	--owner <github-owner> \
+	--dcb-version <vX.Y.Z> \
+	--asf-version <vX.Y.Z> \
+	--dotfiles-version <vX.Y.Z>
+```
+
+本番リリース:
+
+```bash
+bash scripts/release-packages.sh \
+	--owner <github-owner> \
+	--dcb-version <vX.Y.Z> \
+	--asf-version <vX.Y.Z> \
+	--dotfiles-version <vX.Y.Z> \
+	--execute
+```
+
 ### 1. 事前確認
 
 ```bash
