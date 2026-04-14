@@ -2,6 +2,20 @@
 
 `packages/agent-swarm-framework/install.sh` は、マルチエージェント開発パッケージを対象リポジトリに適用するメインスクリプトです。
 
+English:
+`packages/agent-swarm-framework/install.sh` is the main entrypoint to apply the multi-agent package into a target repository.
+
+---
+
+## At A Glance (English)
+
+1. Collect config from interactive wizard or `--config` JSON.
+2. Validate config with `config.schema.json`.
+3. Generate preview in `.preview/<projectSlug>/`.
+4. Review per-category add/overwrite files.
+5. Apply selected categories into `--target-dir`.
+6. Optionally create GitHub milestones/issues (or skip with `--skip-github`).
+
 ---
 
 ## 動作概要

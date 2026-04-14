@@ -4,6 +4,13 @@ dotfiles / DevContainer Bootstrap (DCB) / Agent Swarm Framework (ASF) の 3 パ�
 
 各パッケージは独立して配布可能な設計ですが、相互補完することで AI コーディング導入のシナジーを生み出すために、開発は 1 リポジトリに集約します。
 
+## English Summary
+
+This repository is a monorepo for collaborative development of three packages:
+dotfiles, DevContainer Bootstrap (DCB), and Agent Swarm Framework (ASF).
+
+Each package is distributable on its own, but they are developed together to reduce AI coding onboarding cost through combined usage.
+
 ---
 
 ## パッケージ構成
@@ -37,6 +44,13 @@ ai-packages-dev/
     └── setup-devcontainer-bootstrap-release-repo.sh  # DCB 公開リポジトリ初期化
 ```
 
+### Package Layout (English)
+
+- `dotfiles/`: shared AI rules and role definitions
+- `packages/devcontainer-bootstrap/`: one-command Dev Container generator
+- `packages/agent-swarm-framework/`: multi-agent execution framework
+- `scripts/`: operational helper scripts
+
 ---
 
 ## パッケージの役割と関係
@@ -54,6 +68,14 @@ ai-packages-dev/
 
 各パッケージは独立して利用できるが、3 つを組み合わせることで AI コーディング導入の初期コストを最小化できる。
 
+### Roles And Relationship (English)
+
+1. Build a Dev Container environment with DCB.
+2. Install ASF and start multi-agent workflow operations.
+3. Apply shared agent rules from dotfiles.
+
+The three packages are intentionally independent but designed to work best together.
+
 ---
 
 ## 開発ルール
@@ -62,6 +84,13 @@ ai-packages-dev/
 - **スクリプト互換:** macOS bash 3.2+ 互換を維持する（`bash -n` で構文確認）
 - **リリース:** 各パッケージは独立してタグを打ち、専用リリースリポジトリへ配布する
 - **秘匿情報:** トークン・シークレットはファイルに保存しない（環境変数または CLI 認証を使う）
+
+### Development Rules (English)
+
+- No direct push to `main`; use feature branch and PR.
+- Keep macOS bash 3.2+ compatibility and validate with `bash -n`.
+- Release each package independently to its dedicated release repository.
+- Never store secrets in files; use environment variables or CLI auth.
 
 ---
 
@@ -74,6 +103,12 @@ ai-packages-dev/
 | dotfiles | 専用リリースリポジトリ 未作成（次工程） |
 
 リリース実行手順は各パッケージの `docs/` または `.github/workflows/` を参照する。
+
+### Release Status (English)
+
+- `devcontainer-bootstrap`: published up to `v0.1.5` at `ojos/devcontainer-bootstrap`
+- `agent-swarm-framework`: dedicated release repository is not created yet
+- `dotfiles`: dedicated release repository is not created yet
 
 ---
 
