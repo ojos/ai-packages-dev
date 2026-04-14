@@ -5,7 +5,9 @@
     "planner": "copilot",
     "implementer": "claude",
     "reviewer": "gemini",
-    "closer": "copilot"
+    "closer": "copilot",
+    "intake-manager": "copilot",
+    "consult-facilitator": "gemini"
   },
   "taskEngineOverrides": {}
 }

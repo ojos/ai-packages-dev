@@ -10,7 +10,7 @@ packages/agent-swarm-framework/
 ├── config.schema.json      # 設定 JSON Schema（正規パス）
 ├── README.md               # このファイル
 ├── runtime-core/           # 実行基盤（workflow / command / monitor / worker）
-├── agent-skills/           # ロール別の基本 skill（5 ロール）
+├── agent-skills/           # ロール別の基本 skill（7 ロール）
 ├── executors/              # リモート実行アダプタ（github-actions）
 ├── template-project/       # 設定・Issue・milestone 雛形
 └── docs/                   # ドキュメント

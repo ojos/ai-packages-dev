@@ -15,8 +15,22 @@
       "planner": "copilot",
       "implementer": "claude",
       "reviewer": "gemini",
-      "closer": "copilot"
+      "closer": "copilot",
+      "intake-manager": "copilot",
+      "consult-facilitator": "gemini"
     }
+  },
+  "intake": {
+    "enabled": true
+  },
+  "consult": {
+    "enabled": true,
+    "blockingRules": [
+      "design-change",
+      "priority-change",
+      "contract-change",
+      "scope-change"
+    ]
   },
   "taskEngineOverrides": {}
 }

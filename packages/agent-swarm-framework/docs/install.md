@@ -301,7 +301,7 @@ bash packages/agent-swarm-framework/tests/self-hosted-preflight.sh \
 |---------|------|
 | `.agent-swarm-framework.config.json` | 適用した設定の記録 |
 | `.agent-swarm-framework.manifest.json` | 生成日時 + 設定のマニフェスト |
-| `.multi-agent/skills/*.md` | エージェントスキル定義（5 ロール） |
+| `.multi-agent/skills/*.md` | エージェントスキル定義（7 ロール） |
 | `.multi-agent/labels.json` | GitHub ラベル定義 |
 | `.multi-agent/project-overrides.example.json` | プロジェクト設定オーバーライド例 |
 | `scripts/gate/*.sh` | ゲート制御スクリプト |

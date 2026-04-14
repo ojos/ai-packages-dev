@@ -11,7 +11,7 @@ packages/agent-swarm-framework/
 ├── config.schema.json      # config JSON schema (canonical)
 ├── README.md               # this file
 ├── runtime-core/           # runtime base (workflow / command / monitor / worker)
-├── agent-skills/           # role-specific skills (5 roles)
+├── agent-skills/           # role-specific skills (7 roles)
 ├── executors/              # remote executors (github-actions)
 ├── template-project/       # project templates (config / issues / milestones)
 └── docs/                   # documentation
@@ -101,6 +101,19 @@ For full details, see [docs/install.md](docs/install.md).
 ---
 
 ## Documentation
+
+## Core Roles
+
+- orchestrator
+- planner
+- implementer
+- reviewer
+- closer
+- intake-manager
+- consult-facilitator
+
+- `intake-manager` is the human-facing intake owner.
+- `consult-facilitator` coordinates consult sessions and decision logging.
 
 - [docs/install.md](docs/install.md) — CLI reference and config field spec
 - [docs/architecture.md](docs/architecture.md) — directory structure and design

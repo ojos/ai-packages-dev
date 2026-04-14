@@ -16,7 +16,7 @@ options='{}'
 
 usage() {
   cat <<'EOF'
-usage: ./scripts/command-validate.sh --issuer <human|orchestrator|closer|implementer> --action <command> --scope <target> [--options <json>]
+usage: ./scripts/command-validate.sh --issuer <human|intake-manager|consult-facilitator|orchestrator|closer|implementer> --action <command> --scope <target> [--options <json>]
 
 examples:
   ./scripts/command-validate.sh --issuer orchestrator --action "/pause" --scope line:auto-001
@@ -195,6 +195,18 @@ allowed_for_issuer() {
         *) return 1 ;;
       esac
       ;;
+    intake-manager)
+      case "$cmd" in
+        "/intake"|"/consult"|"/log"|"/apply"|"/defer") return 0 ;;
+        *) return 1 ;;
+      esac
+      ;;
+    consult-facilitator)
+      case "$cmd" in
+        "/consult"|"/log"|"/apply"|"/defer") return 0 ;;
+        *) return 1 ;;
+      esac
+      ;;
     closer)
       case "$cmd" in
         "/review"|"/close pr") return 0 ;;
@@ -202,10 +214,7 @@ allowed_for_issuer() {
       esac
       ;;
     implementer)
-      case "$cmd" in
-        "/consult"|"/log") return 0 ;;
-        *) return 1 ;;
-      esac
+      return 1
       ;;
     *)
       return 1
@@ -218,6 +227,9 @@ validate_scope_shape() {
   local tgt="$2"
 
   case "$cmd" in
+    "/intake")
+      [[ "$tgt" =~ ^issue:#[0-9]+$ ]] || return 1
+      ;;
     "/start"|"/pause"|"/resume"|"/stop"|"/abort")
       [[ "$tgt" == "all" || "$tgt" =~ ^line:.+ ]] || return 1
       ;;

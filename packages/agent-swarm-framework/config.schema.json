@@ -42,8 +42,29 @@
             "planner": { "type": "string", "enum": ["copilot", "claude", "gemini", "codex"] },
             "implementer": { "type": "string", "enum": ["claude", "gemini", "codex"] },
             "reviewer": { "type": "string", "enum": ["claude", "gemini", "codex"] },
-            "closer": { "type": "string", "enum": ["copilot", "claude", "gemini", "codex"] }
+            "closer": { "type": "string", "enum": ["copilot", "claude", "gemini", "codex"] },
+            "intake-manager": { "type": "string", "enum": ["copilot", "claude", "gemini", "codex"] },
+            "consult-facilitator": { "type": "string", "enum": ["copilot", "claude", "gemini", "codex"] }
           }
+        }
+      }
+    },
+    "intake": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean", "default": true }
+      }
+    },
+    "consult": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean", "default": true },
+        "blockingRules": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": []
         }
       }
     },
@@ -57,7 +78,9 @@
           "planner": { "type": "string", "enum": ["copilot", "claude", "gemini", "codex"] },
           "implementer": { "type": "string", "enum": ["claude", "gemini", "codex"] },
           "reviewer": { "type": "string", "enum": ["claude", "gemini", "codex"] },
-          "closer": { "type": "string", "enum": ["copilot", "claude", "gemini", "codex"] }
+          "closer": { "type": "string", "enum": ["copilot", "claude", "gemini", "codex"] },
+          "intake-manager": { "type": "string", "enum": ["copilot", "claude", "gemini", "codex"] },
+          "consult-facilitator": { "type": "string", "enum": ["copilot", "claude", "gemini", "codex"] }
         }
       }
     }
