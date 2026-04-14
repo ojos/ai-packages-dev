@@ -115,6 +115,20 @@ prepare_asf_release_repo() {
   cp -R packages/agent-swarm-framework/tests "$dir/"
 }
 
+prepare_dcb_release_repo() {
+  local dir="$1"
+  rm -rf "$dir"
+  mkdir -p "$dir/.github/workflows"
+
+  cp packages/devcontainer-bootstrap/bootstrap.sh "$dir/"
+  cp packages/devcontainer-bootstrap/doctor.sh "$dir/"
+  cp packages/devcontainer-bootstrap/README.md "$dir/"
+  if [[ -f packages/devcontainer-bootstrap/README.ja.md ]]; then
+    cp packages/devcontainer-bootstrap/README.ja.md "$dir/"
+  fi
+  cp packages/devcontainer-bootstrap/.github/workflows/release.yml "$dir/.github/workflows/"
+}
+
 prepare_dotfiles_release_repo() {
   local dir="$1"
   rm -rf "$dir"
@@ -127,10 +141,26 @@ init_and_push_release_repo() {
   local repo="$2"
   local vis="$3" # public|private
 
+  if gh repo view "$repo" >/dev/null 2>&1; then
+    local stage_dir
+    stage_dir="${dir}.stage"
+    rm -rf "$stage_dir"
+    mv "$dir" "$stage_dir"
+    git clone --depth 1 "https://github.com/$repo.git" "$dir"
+    find "$dir" -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+    cp -R "$stage_dir"/. "$dir"/
+    rm -rf "$stage_dir"
+  else
+    pushd "$dir" >/dev/null
+    git init -b main
+    popd >/dev/null
+  fi
+
   pushd "$dir" >/dev/null
-  git init -b main
   git add .
-  git commit -m "chore: release snapshot"
+  if ! git diff --cached --quiet; then
+    git commit -m "chore: release snapshot"
+  fi
 
   if gh repo view "$repo" >/dev/null 2>&1; then
     git remote add origin "https://github.com/$repo.git" || true
@@ -206,11 +236,8 @@ DCB_DIR="/tmp/dcb-release"
 ASF_DIR="/tmp/asf-release"
 DOTFILES_DIR="/tmp/dotfiles-release"
 
-bash scripts/setup-devcontainer-bootstrap-release-repo.sh \
-  --target-dir "$DCB_DIR" \
-  --repo "$OWNER/devcontainer-bootstrap" \
-  --create-remote \
-  --force
+prepare_dcb_release_repo "$DCB_DIR"
+init_and_push_release_repo "$DCB_DIR" "$OWNER/devcontainer-bootstrap" public
 
 tag_and_release "$DCB_DIR" "$OWNER/devcontainer-bootstrap" "$DCB_TAG" "Release $DCB_TAG"
 
