@@ -7,14 +7,14 @@ deferredIssue:
 affectedLines: []
 blocking: false
 
-## Command Mapping
+## コマンド対応
 
-- start: `/consult`
-- record only: `/log`
-- apply now: `/apply`
-- defer: `/defer`
+- 開始: `/consult`
+- 記録のみ: `/log`
+- 即時反映: `/apply`
+- 後続送り: `/defer`
 
-## Notes
+## メモ
 
-- Use `blocking: true` for design/scope/contract/priority blockers
-- Do not include secrets in consult records
+- 設計/スコープ/契約/優先度の変更は `blocking: true` を使う
+- 相談記録に秘密情報を含めない

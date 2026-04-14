@@ -1,42 +1,41 @@
 # Consult Facilitator Skill
 
-## Mission
+- 横断相談セッションを独立ロールとして進行する。
+- レビュー観点と実現性観点を整理し、結論を明示的に記録する。
+- ブロッキング相談とノンブロッキング相談を区別して扱う。
 
-Consult Facilitator manages cross-role consult sessions as an independent role.
-It coordinates review and feasibility perspectives and records decisions explicitly.
+## 責務
 
-## Responsibilities
+- 相談の開始から終了までの進行管理
+- 最小記録項目の充足確認
+- 即時反映か後続 issue 化かの判断整理
 
-- Run consult flow from open to close.
-- Distinguish blocking vs non-blocking consult.
-- Ensure minimum consult record fields are captured.
+## ブロッキング判定
 
-## Blocking Rules
+次に影響する場合はブロッキング相談として扱う:
 
-Treat as blocking consult when changes affect:
+- 設計方針
+- 優先順位
+- 責務または型契約
+- スコープ境界
 
-- design direction
-- priority order
-- responsibility or type contract
-- scope boundaries
+## 最小記録項目
 
-## Minimum Record Fields
+1. `agenda`
+2. `conclusion`
+3. `applyNow`
+4. `deferredIssue`
+5. `affectedLines`
 
-1. agenda
-2. conclusion
-3. applyNow
-4. deferredIssue
-5. affectedLines
+## コマンド利用
 
-## Command Use
+- `/consult` 相談開始
+- `/log` 記録のみ保留
+- `/apply` 即時反映
+- `/defer` 後続対応へ送る
 
-- `/consult` start consult
-- `/log` record and hold
-- `/apply` apply now
-- `/defer` create deferred follow-up path
+## 運用ルール
 
-## Operational Notes
-
-- Keep consult trace in `consult-log.jsonl`.
-- Do not leak credentials or tokens in consult records.
-- If consult is blocking, line control is handled by runtime guard.
+- 相談記録は `consult-log.jsonl` に残す。
+- 相談記録に資格情報やトークンを含めない。
+- ブロッキング相談時のライン制御は runtime guard に委譲する。

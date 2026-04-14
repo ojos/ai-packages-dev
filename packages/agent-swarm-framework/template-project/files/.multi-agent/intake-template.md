@@ -8,8 +8,8 @@ constraints:
 acceptance:
 priority:
 
-## Notes
+## メモ
 
-- Required fields: `type`, `goal`, `scope.in`, `acceptance`, `priority`
-- Keep statements concrete and testable
-- Default language: Japanese
+- 必須項目: `type`, `goal`, `scope.in`, `acceptance`, `priority`
+- 記述は具体的かつ検証可能に保つ
+- 既定言語は日本語

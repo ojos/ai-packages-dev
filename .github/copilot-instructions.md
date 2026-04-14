@@ -7,6 +7,10 @@ This repository has a strict package-neutrality policy.
 
 - `.github/PROJECT_DEFINITION.md` をプロジェクト固有の最上位定義として読み、必ず従う。
 - Read and follow `.github/PROJECT_DEFINITION.md` as the project-specific source of truth.
+- 汎用ルール（言語方針・命名規則）は `dotfiles/ai/common/shared-ai-rules.md` を参照する。
+- For generic rules (language policy, naming convention), refer to `dotfiles/ai/common/shared-ai-rules.md`.
+- packages構造・ASFワークフロー規則の汎用雛形は `packages/agent-swarm-framework/template-project/files/.github/PROJECT_DEFINITION.md` を参照する。
+- For generic packages structure and ASF workflow rules, refer to `packages/agent-swarm-framework/template-project/files/.github/PROJECT_DEFINITION.md`.
 - 利便性のための編集よりも、上記ポリシーを優先する。
 - Treat the policy in that file as higher priority than convenience edits.
 - `packages/**` に固有名詞を混入し得る編集は、ユーザー確認なしで実施しない。
@@ -34,8 +38,10 @@ This repository has a strict package-neutrality policy.
 - `packages/**/README.md` は英語正本として扱う。
 - Package-layer README.md should be treated as the normative version in English.
 - `packages/**/README.ja.md` は日本語翻訳版である。
-- README.ja.md is the Japanese translation, and should be kept in sync with English updates.
-- 英語更新後に日本語を必ず追随させる。同期漏れを避けるため、同時に両ファイルを編集する。
+- README.ja.md is the Japanese translation, and should be kept in sync with English updates.- `packages/agent-swarm-framework/docs/*.md` も英語正本として扱う。
+- `packages/agent-swarm-framework/docs/*.md` should also be treated as normative English documents.
+- 対応する日本語翻訳は `*.ja.md` として分離し、英語更新と同時に同期する。
+- Matching Japanese translations should be split as `*.ja.md` and kept synchronized with English updates.- 英語更新後に日本語を必ず追随させる。同期漏れを避けるため、同時に両ファイルを編集する。
 - Always update Japanese translation immediately after English updates, editing both files together to prevent sync drift.
 
 ## 衝突時の扱い / Conflict Handling
