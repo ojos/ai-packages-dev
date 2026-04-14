@@ -1,0 +1,22 @@
+{
+  "version": "1.0",
+  "displayName": "E2E Test Project",
+  "projectSlug": "e2e-test",
+  "executionMode": "hybrid",
+  "remoteProvider": "github-actions",
+  "automationStage": "implement",
+  "mergePolicy": "manual",
+  "lineStrategy": "fixed2",
+  "orchestratorMode": "remote",
+  "stateBackend": "hybrid",
+  "agentEngines": {
+    "roles": {
+      "orchestrator": "copilot",
+      "planner": "copilot",
+      "implementer": "claude",
+      "reviewer": "gemini",
+      "closer": "copilot"
+    }
+  },
+  "taskEngineOverrides": {}
+}

@@ -1,0 +1,40 @@
+{
+  "name": "ojos-ai-packages-dev (standard)",
+  "image": "mcr.microsoft.com/devcontainers/base:ubuntu",
+  "features": {
+    "ghcr.io/devcontainers/features/common-utils:1": {
+      "configureZsh": true
+    },
+    "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {
+      "version": "latest",
+      "moby": false,
+      "dockerDashComposeVersion": "latest",
+      "installDockerComposeSwitch": true,
+      "installDockerBuildx": true
+    },
+    "ghcr.io/devcontainers/features/github-cli:1": {},
+    "ghcr.io/devcontainers/features/node:1": {}
+  },
+  "remoteEnv": {
+    "GITHUB_TOKEN_PRIMARY": "${localEnv:GITHUB_TOKEN_PRIMARY}",
+    "GITHUB_OWNER_PRIMARY": "${localEnv:GITHUB_OWNER_PRIMARY}",
+    "GIT_AUTHOR_NAME_PRIMARY": "${localEnv:GIT_AUTHOR_NAME_PRIMARY}",
+    "GIT_AUTHOR_EMAIL_PRIMARY": "${localEnv:GIT_AUTHOR_EMAIL_PRIMARY}",
+    "GITHUB_TOKEN_SECONDARY": "${localEnv:GITHUB_TOKEN_SECONDARY}",
+    "GITHUB_OWNER_SECONDARY": "${localEnv:GITHUB_OWNER_SECONDARY}",
+    "GIT_AUTHOR_NAME_SECONDARY": "${localEnv:GIT_AUTHOR_NAME_SECONDARY}",
+    "GIT_AUTHOR_EMAIL_SECONDARY": "${localEnv:GIT_AUTHOR_EMAIL_SECONDARY}",
+    "GEMINI_API_KEY": "${localEnv:GEMINI_API_KEY}",
+    "CLAUDE_CODE_OAUTH_TOKEN": "${localEnv:CLAUDE_CODE_OAUTH_TOKEN}",
+    "LOCAL_WORKSPACE_FOLDER": "${localWorkspaceFolder}"
+  },
+  "postAttachCommand": "bash scripts/on-attach.sh",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-azuretools.vscode-containers",
+        "amazonwebservices.aws-toolkit-vscode"
+      ]
+    }
+  }
+}

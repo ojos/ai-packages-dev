@@ -1,0 +1,25 @@
+{
+  // 対象GitHubリポジトリ (owner/name 形式)
+  "repo": "owner/repo",
+  // プロジェクト表示名
+  "displayName": "My Multi-Agent Project",
+  // スラッグ（小文字・ハイフン区切り）
+  "projectSlug": "my-multi-agent-project",
+  // ラインID配列（例: 固定2ライン, 3ライン, 動的割当型など）
+  "lineIds": ["auto-001", "auto-002"],
+  // ライン割当戦略: fixed2, dynamic など
+  "lineStrategy": "fixed2",
+  // 状態管理: github, file, hybrid
+  "stateBackend": "hybrid",
+  // オーケストレーターモード: local, remote, hybrid
+  "orchestratorMode": "remote",
+  // マージポリシー: manual, conditional, auto
+  "mergePolicy": "manual",
+  // リモート実行基盤: github-actions, aws, both
+  "remoteProvider": "github-actions"
+  // ---
+  // カスタマイズ例:
+  // "lineIds": ["dev-1", "dev-2", "dev-3"],
+  // "mergePolicy": "conditional",
+  // "stateBackend": "github"
+}

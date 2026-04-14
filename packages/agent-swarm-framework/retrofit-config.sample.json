@@ -1,0 +1,22 @@
+{
+  "version": "1.0",
+  "displayName": "My Existing Project",
+  "projectSlug": "my-existing-project",
+  "executionMode": "local",
+  "remoteProvider": "none",
+  "automationStage": "plan",
+  "mergePolicy": "manual",
+  "lineStrategy": "fixed2",
+  "orchestratorMode": "local",
+  "stateBackend": "file",
+  "agentEngines": {
+    "roles": {
+      "orchestrator": "copilot",
+      "planner": "copilot",
+      "implementer": "claude",
+      "reviewer": "gemini",
+      "closer": "copilot"
+    }
+  },
+  "taskEngineOverrides": {}
+}

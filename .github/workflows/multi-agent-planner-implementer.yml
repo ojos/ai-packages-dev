@@ -1,0 +1,15 @@
+name: Multi-Agent Planner Implementer
+
+on:
+  issues:
+    types: [opened, labeled, edited]
+
+jobs:
+  planner-dispatcher:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Placeholder
+        run: |
+          echo "Implement planner -> dispatcher -> implement adapter here"
+          echo "Current package supports github-actions as the initial remote executor."

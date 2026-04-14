@@ -1,0 +1,9 @@
+[
+  // 推奨: ラベル名は短く一貫性を持たせる。色分けで優先度や種別を明示。
+  { "name": "feature", "color": "0075ca", "description": "feature work" },
+  { "name": "dev-env", "color": "e4e669", "description": "developer environment work" },
+  { "name": "docs", "color": "0052cc", "description": "documentation work" },
+  { "name": "review-needed", "color": "e99695", "description": "waiting for review" },
+  { "name": "blocked", "color": "b60205", "description": "blocked work" }
+  // 例: { "name": "urgent", "color": "d73a4a", "description": "high priority" }
+]

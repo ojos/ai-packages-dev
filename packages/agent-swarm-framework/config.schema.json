@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.local/packages/agent-swarm-framework/config.schema.json",
+  "title": "Agent Swarm Framework Install Config",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "displayName",
+    "projectSlug",
+    "executionMode",
+    "remoteProvider",
+    "automationStage",
+    "mergePolicy",
+    "lineStrategy",
+    "orchestratorMode",
+    "stateBackend"
+  ],
+  "properties": {
+    "version": { "type": "string", "const": "1.0" },
+    "displayName": { "type": "string", "minLength": 1 },
+    "projectSlug": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+([a-z0-9-]*[a-z0-9])?$"
+    },
+    "executionMode": { "type": "string", "enum": ["local", "remote", "hybrid"] },
+    "remoteProvider": { "type": "string", "enum": ["none", "github-actions", "aws", "both"] },
+    "automationStage": { "type": "string", "enum": ["plan", "implement", "review", "merge"] },
+    "mergePolicy": { "type": "string", "enum": ["manual", "conditional", "auto"] },
+    "lineStrategy": { "type": "string", "enum": ["fixed2", "dynamic"] },
+    "orchestratorMode": { "type": "string", "enum": ["local", "remote", "hybrid"] },
+    "stateBackend": { "type": "string", "enum": ["github", "file", "hybrid"] },
+    "agentEngines": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "roles": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "orchestrator": { "type": "string", "enum": ["copilot", "claude", "gemini", "codex"] },
+            "planner": { "type": "string", "enum": ["copilot", "claude", "gemini", "codex"] },
+            "implementer": { "type": "string", "enum": ["claude", "gemini", "codex"] },
+            "reviewer": { "type": "string", "enum": ["claude", "gemini", "codex"] },
+            "closer": { "type": "string", "enum": ["copilot", "claude", "gemini", "codex"] }
+          }
+        }
+      }
+    },
+    "taskEngineOverrides": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "orchestrator": { "type": "string", "enum": ["copilot", "claude", "gemini", "codex"] },
+          "planner": { "type": "string", "enum": ["copilot", "claude", "gemini", "codex"] },
+          "implementer": { "type": "string", "enum": ["claude", "gemini", "codex"] },
+          "reviewer": { "type": "string", "enum": ["claude", "gemini", "codex"] },
+          "closer": { "type": "string", "enum": ["copilot", "claude", "gemini", "codex"] }
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "executionMode": { "const": "local" } } },
+      "then": { "properties": { "remoteProvider": { "const": "none" } } }
+    },
+    {
+      "if": { "properties": { "executionMode": { "enum": ["remote", "hybrid"] } } },
+      "then": { "properties": { "remoteProvider": { "const": "github-actions" } } }
+    }
+  ]
+}

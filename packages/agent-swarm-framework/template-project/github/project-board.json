@@ -1,0 +1,18 @@
+{
+  "title": "Multi-Agent Project Board",
+  "description": "AIエージェント/ワーカー/ライン横断の進捗・担当・優先度を可視化するプロジェクトボード",
+  "fields": [
+    { "name": "Status", "type": "single_select", "options": ["To Do", "In Progress", "In Review", "Done"] },
+    { "name": "Line", "type": "single_select", "options": ["milestone", "auto-001", "auto-002", "auto-003"] },
+    { "name": "Priority", "type": "single_select", "options": ["High", "Medium", "Low"] },
+    { "name": "Batch ID", "type": "text" },
+    { "name": "Blocked By", "type": "text" },
+    { "name": "Next Action", "type": "text" },
+    { "name": "Due Date", "type": "date" },
+    { "name": "Owner Role", "type": "single_select", "options": ["Intake Manager", "Coordinator", "Line Worker", "Closer"] }
+  ],
+  "views": [
+    { "name": "Kanban", "layout": "board", "group_by": "Status" },
+    { "name": "Table", "layout": "table" }
+  ]
+}

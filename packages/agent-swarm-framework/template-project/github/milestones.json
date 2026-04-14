@@ -1,0 +1,10 @@
+[
+  {
+    "title": "M0 Package Bootstrap",
+    "description": "Package install, config bootstrap, labels, baseline runtime verification"
+  },
+  {
+    "title": "M1 Remote Implement Baseline",
+    "description": "planner -> dispatcher -> implement -> PR creation via github-actions"
+  }
+]
