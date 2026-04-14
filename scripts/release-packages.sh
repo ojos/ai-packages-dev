@@ -95,6 +95,64 @@ validate_asf_version() {
   fi
 }
 
+validate_markdown_links_in_tree() {
+  local base_dir="$1"
+  python3 - "$base_dir" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+base = Path(sys.argv[1]).resolve()
+md_files = sorted(base.rglob("README*.md"))
+link_re = re.compile(r"\[[^\]]*\]\(([^)]+)\)")
+heading_re = re.compile(r"^#{1,6}\s+(.+?)\s*$", re.M)
+
+def slugify(text: str) -> str:
+    s = text.strip().lower()
+    s = re.sub(r"[`*_~\[\](){}.!?,:;\"']", "", s)
+    s = re.sub(r"\s+", "-", s)
+    s = re.sub(r"-+", "-", s)
+    return s
+
+def heading_slugs(path: Path):
+    txt = path.read_text(encoding="utf-8", errors="ignore")
+    return {slugify(m.group(1)) for m in heading_re.finditer(txt)}
+
+failed = []
+
+for md in md_files:
+    txt = md.read_text(encoding="utf-8", errors="ignore")
+    for m in link_re.finditer(txt):
+        raw = m.group(1).strip()
+        if not raw:
+            continue
+        if raw.startswith(("http://", "https://", "mailto:", "tel:", "data:")):
+            continue
+        if raw.startswith("#"):
+            anchor = raw[1:]
+            if anchor and anchor not in heading_slugs(md):
+                failed.append((str(md), raw, "missing local anchor"))
+            continue
+
+        path_part, _, frag = raw.partition("#")
+        path_part = path_part.split("?", 1)[0]
+        target = (md.parent / path_part).resolve()
+        if not target.exists():
+            failed.append((str(md), raw, "missing target file"))
+            continue
+
+        if frag and target.suffix.lower() == ".md":
+            if frag not in heading_slugs(target):
+                failed.append((str(md), raw, "missing target anchor"))
+
+if failed:
+    for md, raw, reason in failed:
+        print(f"error: broken markdown link in {md} -> {raw} ({reason})", file=sys.stderr)
+    print(f"error: markdown link validation failed under {base}", file=sys.stderr)
+    sys.exit(1)
+PY
+}
+
 prepare_asf_release_repo() {
   local dir="$1"
   rm -rf "$dir"
@@ -223,6 +281,9 @@ extract_semver "$ASF_TAG" >/dev/null
 extract_semver "$DOTFILES_TAG" >/dev/null
 validate_dcb_docs "$DCB_TAG"
 validate_asf_version "$ASF_TAG"
+validate_markdown_links_in_tree "$(pwd)/dotfiles"
+validate_markdown_links_in_tree "$(pwd)/packages/devcontainer-bootstrap"
+validate_markdown_links_in_tree "$(pwd)/packages/agent-swarm-framework"
 
 echo "[ok] preflight checks passed"
 

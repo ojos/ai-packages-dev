@@ -18,9 +18,9 @@ Project-specific requirements, design decisions, handover details, and operation
 
 Currently managed files:
 
-- `ai/shared-ai-rules.md` — Cross-role AI rules and behavior patterns
-- `ai/claude-instructions.md` — Claude-specific instructions
-- `ai/gemini-instructions.md` — Gemini-specific instructions
+- `ai/common/shared-ai-rules.md` — Cross-role AI rules and behavior patterns
+- `ai/common/claude-instructions.md` — Claude-specific instructions
+- `ai/common/gemini-instructions.md` — Gemini-specific instructions
 
 ## Core Principles
 
@@ -83,6 +83,6 @@ Projects using this package should follow these practices:
 ## Documentation
 
 For detailed AI guidance and role specifications:
-- [ai/shared-ai-rules.md](ai/shared-ai-rules.md) — Core rules and patterns
-- [ai/claude-instructions.md](ai/claude-instructions.md) — Claude-specific behavior
-- [ai/gemini-instructions.md](ai/gemini-instructions.md) — Gemini-specific behavior
+- [ai/common/shared-ai-rules.md](ai/common/shared-ai-rules.md) — Core rules and patterns
+- [ai/common/claude-instructions.md](ai/common/claude-instructions.md) — Claude-specific behavior
+- [ai/common/gemini-instructions.md](ai/common/gemini-instructions.md) — Gemini-specific behavior

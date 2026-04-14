@@ -61,7 +61,7 @@ Start with `--retrofit-safe` + `automationStage=plan` for audit mode, then gradu
   - Apply: `runtime-core`, `agent-skills`
   - Skip: `executors`, `template-project`
 - See `retrofit-config.sample.json` for details.
-- Full retrofit workflow: [docs/install.md](docs/install.md#retrofit)
+- Full retrofit workflow: [docs/install.md](docs/install.md)
 
 ### Standalone Execution
 
