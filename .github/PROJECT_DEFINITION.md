@@ -30,6 +30,17 @@ This file is the project-specific source of truth.
 - リクエストがこの方針と衝突する場合、パッケージ編集前に必ずユーザーへ確認する。
 - If a request conflicts with this policy, stop and ask the user before editing package files.
 
+## ASF ワークフロー規則 / ASF Workflow Rule
+
+- 本プロジェクトの開発運用は Agent Swarm Framework (ASF) ワークフローを標準とし、常にこれに従う。
+- Development operations in this repository must follow the Agent Swarm Framework (ASF) workflow as the default standard.
+- ワークフロー操作は `scripts/gate/workflow.sh` または `scripts/asf-workflow.sh` を通じて実行する。
+- Workflow operations must be executed via `scripts/gate/workflow.sh` or `scripts/asf-workflow.sh`.
+- ASF 実行前に前提条件（設定ファイル・実行スクリプト・`gh auth`）を確認する。
+- Before ASF operations, validate prerequisites (config files, runtime scripts, and `gh auth`).
+- 例外運用を行う場合は、事前にユーザー合意を得る。
+- Any exception to ASF workflow must be explicitly approved by the user beforehand.
+
 ## ドキュメント言語方針 / Documentation Language Policy
 
 - 本リポジトリの主要ドキュメントは、原則として日英併記を推奨する。

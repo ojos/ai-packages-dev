@@ -20,6 +20,10 @@ This repository has a strict package-neutrality policy.
 - Put project-specific values only in project layer files.
 - Dev Container のプロファイル名対応では、パッケージ既定値変更ではなく、プロジェクト層設定と実行時オプションを優先する。
 - When working on Dev Container profile names, prefer project-layer configuration and runtime options over package default changes.
+- 本リポジトリでの開発運用は ASF ワークフローを標準とし、原則として `scripts/gate/workflow.sh` または `scripts/asf-workflow.sh` を使用する。
+- Development operations in this repository should default to ASF workflow, using `scripts/gate/workflow.sh` or `scripts/asf-workflow.sh` in principle.
+- ASF 実行時は前提チェック（設定ファイル・スクリプト・`gh auth`）を満たしていることを確認する。
+- For ASF operations, ensure prerequisite checks pass (config files, scripts, and `gh auth`).
 - 主要ドキュメント更新時は、日英併記を維持する。
 - When updating major documentation, preserve Japanese-English bilingual content.
 - 規範文は英語を残し、日本語は同義の補足として併記する。
