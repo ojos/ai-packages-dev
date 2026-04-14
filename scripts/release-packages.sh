@@ -54,12 +54,13 @@ validate_dcb_docs() {
   local dcb_tag="$1"
   local en="packages/devcontainer-bootstrap/README.md"
   local ja="packages/devcontainer-bootstrap/README.ja.md"
+  local pinned="- \`$dcb_tag\`"
 
   grep -q "Latest stable release:" "$en" || {
     echo "error: missing 'Latest stable release' section in $en" >&2
     exit 1
   }
-  grep -q "- \\`$dcb_tag\\`" "$en" || {
+  grep -Fq -- "$pinned" "$en" || {
     echo "error: DCB README.md latest release does not match $dcb_tag" >&2
     exit 1
   }
@@ -72,7 +73,7 @@ validate_dcb_docs() {
     echo "error: missing '最新安定リリース' section in $ja" >&2
     exit 1
   }
-  grep -q "- \\`$dcb_tag\\`" "$ja" || {
+  grep -Fq -- "$pinned" "$ja" || {
     echo "error: DCB README.ja.md latest release does not match $dcb_tag" >&2
     exit 1
   }
