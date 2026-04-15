@@ -3,6 +3,16 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 WORKFLOW_SCRIPT="$ROOT_DIR/scripts/gate/workflow.sh"
+MARKER_DIR="$ROOT_DIR/scripts/orchestration/runtime"
+MARKER_FILE="$MARKER_DIR/asf-last-run.json"
+
+write_last_run_marker() {
+  local command_name="$1"
+  mkdir -p "$MARKER_DIR"
+  printf '{"timestamp":"%s","command":"%s"}\n' \
+    "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \
+    "$command_name" >"$MARKER_FILE"
+}
 
 usage() {
   cat <<'EOF'
@@ -64,10 +74,12 @@ main() {
       ;;
     preflight)
       check_preflight
+      write_last_run_marker "preflight"
       ;;
     status|up|down|restart|dead-letter)
       check_preflight
       bash "$WORKFLOW_SCRIPT" "$subcommand" "$@"
+      write_last_run_marker "$subcommand"
       ;;
     *)
       echo "error: unknown subcommand: $subcommand" >&2

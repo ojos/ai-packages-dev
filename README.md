@@ -94,6 +94,24 @@ The three packages are intentionally independent but designed to work best toget
 
 ---
 
+## ASF 強制適用の運用
+
+本リポジトリでは ASF ワークフロー遵守を Git フックで強制する。
+
+- VS Code Dev Container: 接続時に `postAttachCommand` から `scripts/on-attach.sh` が実行され、`.githooks` 設定が自動適用される。
+- 非IDE（ターミナル）: 初回に `bash scripts/gate/install-git-hooks.sh` を実行し、commit/push 前に `bash scripts/asf-workflow.sh preflight` を実行する。
+- 強制対象: `pre-commit` と `pre-push`。
+
+### ASF Enforcement Operations (English)
+
+ASF workflow compliance is enforced by Git hooks in this repository.
+
+- VS Code Dev Container: `postAttachCommand` runs `scripts/on-attach.sh` and installs `.githooks` automatically.
+- Non-IDE terminal: run `bash scripts/gate/install-git-hooks.sh` once per clone, then run `bash scripts/asf-workflow.sh preflight` before commit/push.
+- Enforcement scope: `pre-commit` and `pre-push` only.
+
+---
+
 ## リリースリポジトリとの関係
 
 | パッケージ | 配布状態 |

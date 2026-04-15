@@ -13,6 +13,19 @@ fi
 
 echo "[on-attach] profile list: bash scripts/github-account-switch.sh list"
 
+if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  hooks_path="$(git config --local --get core.hooksPath || true)"
+  if [[ -z "$hooks_path" || "$hooks_path" == ".githooks" ]]; then
+    if [[ -x "scripts/gate/install-git-hooks.sh" ]]; then
+      bash scripts/gate/install-git-hooks.sh >/dev/null 2>&1 && \
+        echo "[on-attach] ASF git hooks installed" || \
+        echo "[on-attach] WARN: failed to install ASF git hooks"
+    fi
+  else
+    echo "[on-attach] skip ASF git hooks (custom core.hooksPath=$hooks_path)"
+  fi
+fi
+
 # ASF workflow bootstrap: detect installation, validate runtime, and optionally start workers.
 if [[ -f ".agent-swarm-framework.config.json" && -x "scripts/asf-workflow.sh" ]]; then
   echo "[on-attach] ASF detected"
