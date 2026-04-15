@@ -14,6 +14,18 @@ This directory manages cross-project reusable configurations:
 
 Project-specific requirements, design decisions, handover details, and operational procedures remain the responsibility of individual projects.
 
+## Boundary with ASF
+
+This package provides shared environment and language-level AI rules.
+Workflow-specific orchestration policies are owned by ASF.
+
+- dotfiles owns: shared AI writing/development rules, common instruction style, reusable environment conventions
+- ASF owns: delegation workflow, conversation-gate reason codes, role coordination behavior
+
+For ASF-specific workflow policies, refer to:
+- `packages/agent-swarm-framework/README.md`
+- `packages/agent-swarm-framework/docs/CONVERSATION_GATE_REASON_CODES.md`
+
 ## Managed Content
 
 Currently managed files:

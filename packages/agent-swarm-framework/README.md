@@ -103,6 +103,18 @@ For full details, see [docs/install.md](docs/install.md).
 
 ---
 
+## Boundary with Dotfiles
+
+ASF owns workflow-specific coordination behavior.
+dotfiles owns shared environment and language-level AI rules.
+
+- ASF owns: delegation pattern, conversation-gate reason codes, runtime coordination scripts, role workflow behavior
+- dotfiles owns: shared writing/development rules, common instruction style, reusable shell/editor environment conventions
+
+ASF can be used standalone, but when dotfiles is present, treat dotfiles as base policy and ASF as workflow layer.
+
+---
+
 ## Documentation
 
 ## Core Roles

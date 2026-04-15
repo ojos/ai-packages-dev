@@ -81,6 +81,16 @@ standalone 実行時（install.sh 単体）の動作:
 | 正規パス | `packages/agent-swarm-framework/config.schema.json` |
 | リリース単位 | このディレクトリ全体を `git archive` または `tar.gz` で配布する |
 
+## dotfiles との責務境界
+
+ASF はワークフロー固有の協調挙動を担います。
+dotfiles は共有の環境設定と言語レベルの AI ルールを担います。
+
+- ASF の責務: 委譲パターン、conversation-gate reason code、実行時協調スクリプト、ロール間ワークフロー挙動
+- dotfiles の責務: 共通記述/開発ルール、共通指示スタイル、再利用可能な shell/editor 環境規約
+
+ASF は単体利用も可能ですが、dotfiles を併用する場合は、dotfiles を基盤ポリシー、ASF をワークフローレイヤーとして扱います。
+
 ## 詳細ドキュメント
 
 - [docs/install.md](docs/install.md) — CLI リファレンス・設定フィールド仕様

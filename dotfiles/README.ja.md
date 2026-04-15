@@ -18,6 +18,18 @@
 
 各プロジェクト固有の要件、設計、引き継ぎ、運用詳細は、それぞれのプロジェクト側で管理してください。
 
+## ASF との責務境界
+
+このパッケージは、共有の環境設定と言語レベルの AI ルールを提供します。
+ワークフロー固有のオーケストレーション方針は ASF 側の責務です。
+
+- dotfiles の責務: 共通 AI 記述ルール、共通指示スタイル、再利用可能な環境規約
+- ASF の責務: 委譲ワークフロー、conversation-gate reason code、ロール協調挙動
+
+ASF 固有のワークフロー方針は次を参照してください。
+- `packages/agent-swarm-framework/README.md`
+- `packages/agent-swarm-framework/docs/CONVERSATION_GATE_REASON_CODES.md`
+
 ## 管理対象
 
 現在の主な管理対象は以下です。
