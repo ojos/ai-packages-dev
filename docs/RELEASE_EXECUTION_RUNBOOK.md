@@ -80,6 +80,51 @@ git push origin agent-swarm-framework/v1.0.0
 
 Repeat with package-specific prefixes.
 
+#### 3-A) agent-swarm-framework
+
+```bash
+set -euo pipefail
+WORK=/tmp/release-asf
+rm -rf "$WORK"
+git clone https://github.com/ojos/agent-swarm-framework.git "$WORK"
+cd "$WORK"
+
+TAG="agent-swarm-framework/v1.0.0"
+git fetch --tags
+git tag "$TAG"
+git push origin "$TAG"
+```
+
+#### 3-B) ai-dotfiles
+
+```bash
+set -euo pipefail
+WORK=/tmp/release-dotfiles
+rm -rf "$WORK"
+git clone https://github.com/ojos/ai-dotfiles.git "$WORK"
+cd "$WORK"
+
+TAG="ai-dotfiles/v1.0.0"
+git fetch --tags
+git tag "$TAG"
+git push origin "$TAG"
+```
+
+#### 3-C) devcontainer-bootstrap
+
+```bash
+set -euo pipefail
+WORK=/tmp/release-dcb
+rm -rf "$WORK"
+git clone https://github.com/ojos/devcontainer-bootstrap.git "$WORK"
+cd "$WORK"
+
+TAG="devcontainer-bootstrap/v1.0.0"
+git fetch --tags
+git tag "$TAG"
+git push origin "$TAG"
+```
+
 ### 4) GitHub Release Publication
 
 ```bash
@@ -89,6 +134,36 @@ set -euo pipefail
 gh release create agent-swarm-framework/v1.0.0 \
   --title "agent-swarm-framework v1.0.0" \
   --notes-file /path/to/release-notes.md
+```
+
+#### 4-A) agent-swarm-framework
+
+```bash
+set -euo pipefail
+gh release create agent-swarm-framework/v1.0.0 \
+  --repo ojos/agent-swarm-framework \
+  --title "agent-swarm-framework v1.0.0" \
+  --notes-file /workspaces/ojos-ai-packages-dev/docs/release-notes-agent-swarm-framework.md
+```
+
+#### 4-B) ai-dotfiles
+
+```bash
+set -euo pipefail
+gh release create ai-dotfiles/v1.0.0 \
+  --repo ojos/ai-dotfiles \
+  --title "ai-dotfiles v1.0.0" \
+  --notes-file /workspaces/ojos-ai-packages-dev/docs/release-notes-ai-dotfiles.md
+```
+
+#### 4-C) devcontainer-bootstrap
+
+```bash
+set -euo pipefail
+gh release create devcontainer-bootstrap/v1.0.0 \
+  --repo ojos/devcontainer-bootstrap \
+  --title "devcontainer-bootstrap v1.0.0" \
+  --notes-file /workspaces/ojos-ai-packages-dev/docs/release-notes-devcontainer-bootstrap.md
 ```
 
 ### 5) Verification
