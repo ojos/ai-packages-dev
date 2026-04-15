@@ -73,6 +73,21 @@ Projects using this package should follow these practices:
 - Regardless of method, adopting projects must record the adopted tag and commit SHA
 - Public distribution is acceptable; consuming projects must pin specific versions rather than auto-tracking latest
 
+## Installation Script Policy
+
+Current decision: this package does not provide an installation shell script.
+
+Rationale:
+- The package currently contains only documentation/rule assets and no executable runtime components.
+- Projects already adopt this package through explicit version pinning (tag + commit SHA), which is the required safety control.
+- Adding an installer now would increase maintenance and compatibility burden without meaningful operational benefit.
+
+Adoption methods:
+- Submodule, subtree, or manual sync with explicit version pinning
+
+Revisit trigger:
+- Add an installer only when this package gains executable assets that require deterministic setup steps.
+
 ## File Sync Rules
 
 - `README.md` is the English normative version

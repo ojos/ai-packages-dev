@@ -78,6 +78,48 @@ The three packages are intentionally independent but designed to work best toget
 
 ---
 
+## dotfiles と ASF の境界判断
+
+結論: `dotfiles` と `ASF` は分離維持を正とする。
+
+判断理由:
+
+- `dotfiles` は AI 開発共通ルールの Source of Truth を担い、実行ランタイムを持たない。
+- `ASF` はマルチエージェント実行基盤（状態遷移・実行制御・監査）を担う。
+- 役割を分離することで、パッケージ中立性・再利用性・リリース独立性を維持できる。
+
+責務境界:
+
+- `dotfiles` に置くもの:
+    - 共通ポリシー、指示テンプレート、役割ガイド
+- `ASF` に置くもの:
+    - コマンド検証、状態管理、実行ワークフロー、運用スクリプト
+- 重複禁止:
+    - `dotfiles` 側へ実行制御ロジックを持ち込まない
+    - `ASF` 側へプロジェクト固有ポリシーを埋め込まない
+
+### Boundary Decision (English)
+
+Decision: keep `dotfiles` and `ASF` separated.
+
+Rationale:
+
+- `dotfiles` owns shared AI rules and guidance templates, without runtime execution responsibilities.
+- `ASF` owns runtime orchestration responsibilities such as command validation, state transitions, and workflow operations.
+- Separation preserves package neutrality, reuse, and independent release cadence.
+
+Boundary rules:
+
+- Keep in `dotfiles`:
+    - Shared policy, instruction templates, role guidance
+- Keep in `ASF`:
+    - Command validation, state handling, execution workflow, operational scripts
+- Do not duplicate:
+    - Runtime control logic in `dotfiles`
+    - Project-specific policy values in `ASF`
+
+---
+
 ## 開発ルール
 
 - **ブランチ:** `main` への直 push 禁止。1 タスク 1 feature ブランチ + PR 経由で行う
