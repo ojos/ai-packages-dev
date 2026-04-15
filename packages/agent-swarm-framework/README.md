@@ -17,6 +17,7 @@ packages/agent-swarm-framework/
 └── docs/                   # documentation
     ├── install.md          # CLI reference
     ├── architecture.md     # directory structure and design
+    ├── CONVERSATION_GATE_REASON_CODES.md    # canonical reason_code list for conversation gate
   ├── intake-channel-boundary.md              # core vs channel boundary memo
   ├── intake-channel-boundary-checklist.md    # implementation checklist from boundary policy
     └── VISION_AUTONOMOUS_ORCHESTRATION.md
@@ -126,6 +127,7 @@ For full details, see [docs/install.md](docs/install.md).
 - [docs/PACKAGE_DISTRIBUTION.md](docs/PACKAGE_DISTRIBUTION.md) — distribution, boundaries, version rules
 - [docs/intake-channel-boundary.md](docs/intake-channel-boundary.md) — intake boundary policy memo (core vs channel adapter)
 - [docs/intake-channel-boundary-checklist.md](docs/intake-channel-boundary-checklist.md) — boundary policy implementation checklist
+- [docs/CONVERSATION_GATE_REASON_CODES.md](docs/CONVERSATION_GATE_REASON_CODES.md) — canonical reason_code list for conversation gate decisions
 
 ---
 
