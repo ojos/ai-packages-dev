@@ -162,6 +162,18 @@ OUT="$(run_case \
 assert_eq "$(printf '%s' "$OUT" | jq -r '.intake_required')" "true" "既存 issue 不足時は intake 必須"
 assert_eq "$(printf '%s' "$OUT" | jq -r '.reason_code')" "IMPLEMENTATION_EXISTING_ISSUE_UNCLEAR" "既存 issue 不明瞭コード"
 
+OUT="$(run_case \
+  --input-text "#123 の続き実装" \
+  --intent-type implement \
+  --existing-issue-number 123 \
+  --existing-issue-body $'goal: 既存の不具合修正\nscope.in: API のエラーハンドリング\nacceptance: エラー時に 4xx を返す\npriority: high' \
+  --has-edit-request true \
+  --draft-fields '{"goal":{"filled":false},"acceptance":{"filled":false},"scope":{"in":{"filled":false}},"priority":{"filled":false}}' \
+  --channel-type vscode_chat \
+  --bypass-requested false)"
+assert_eq "$(printf '%s' "$OUT" | jq -r '.intake_required')" "false" "issue本文補完で流用可能なら intake 不要"
+assert_eq "$(printf '%s' "$OUT" | jq -r '.reason_code')" "IMPLEMENTATION_EXISTING_ISSUE_REUSABLE" "issue本文補完後の流用コード"
+
 section "配布スクリプトとの同値性"
 ARGS=(
   --input-text "この機能を実装して"

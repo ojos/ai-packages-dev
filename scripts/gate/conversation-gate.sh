@@ -10,6 +10,7 @@ is_small_task_candidate="false"
 channel_type="other"
 bypass_requested="false"
 bypass_reason=""
+existing_issue_body=""
 
 usage() {
   cat <<'EOF'
@@ -22,7 +23,8 @@ usage: ./scripts/gate/conversation-gate.sh \
   [--is-small-task-candidate <true|false>] \
   [--channel-type <vscode_chat|vscode_editor|slack|other>] \
   [--bypass-requested <true|false>] \
-  [--bypass-reason <emergency|external_factor|...>]
+  [--bypass-reason <emergency|external_factor|...>] \
+  [--existing-issue-body <markdown>]
 
 output:
   JSON object with fields:
@@ -92,6 +94,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --bypass-reason)
       bypass_reason="$2"
+      shift 2
+      ;;
+    --existing-issue-body)
+      existing_issue_body="$2"
       shift 2
       ;;
     -h|--help)
@@ -183,6 +189,96 @@ field_required() {
       false
     end
   '
+}
+
+extract_issue_field() {
+  local body="$1"
+  local key="$2"
+  local lower
+  lower="$(printf '%s' "$body" | tr '[:upper:]' '[:lower:]')"
+  printf '%s\n' "$lower" | sed -n "s/^${key}[[:space:]]*:[[:space:]]*//p" | head -n 1
+}
+
+issue_draft_fields_from_body() {
+  local body="$1"
+  local goal acceptance priority scope_in scope_out constraints
+
+  goal="$(extract_issue_field "$body" "goal")"
+  scope_in="$(extract_issue_field "$body" "scope\.in")"
+  scope_out="$(extract_issue_field "$body" "scope\.out")"
+  acceptance="$(extract_issue_field "$body" "acceptance")"
+  priority="$(extract_issue_field "$body" "priority")"
+  constraints="$(extract_issue_field "$body" "constraints")"
+
+  jq -cn \
+    --arg goal "$goal" \
+    --arg scope_in "$scope_in" \
+    --arg scope_out "$scope_out" \
+    --arg acceptance "$acceptance" \
+    --arg priority "$priority" \
+    --arg constraints "$constraints" '
+    {
+      goal: {value:$goal, filled:($goal|length>0), source_hint:"existing_issue"},
+      scope: {
+        in: {value:$scope_in, filled:($scope_in|length>0), source_hint:"existing_issue"},
+        out: {value:$scope_out, filled:($scope_out|length>0), source_hint:"existing_issue"}
+      },
+      acceptance: {value:$acceptance, filled:($acceptance|length>0), source_hint:"existing_issue"},
+      priority: {value:$priority, filled:($priority|length>0), source_hint:"existing_issue"},
+      constraints: {value:$constraints, filled:($constraints|length>0), source_hint:"existing_issue"}
+    }'
+}
+
+get_existing_issue_body() {
+  if [[ -n "$existing_issue_body" ]]; then
+    printf '%s' "$existing_issue_body"
+    return
+  fi
+  if [[ -n "${CONVERSATION_GATE_ISSUE_BODY:-}" ]]; then
+    printf '%s' "$CONVERSATION_GATE_ISSUE_BODY"
+    return
+  fi
+  if [[ -n "$existing_issue_number" ]] && command -v gh >/dev/null 2>&1; then
+    gh issue view "$existing_issue_number" --json body --jq '.body // ""' 2>/dev/null || true
+    return
+  fi
+  printf ''
+}
+
+merge_draft_fields() {
+  local base_json="$1"
+  local issue_json="$2"
+  printf '%s' "$base_json" | jq -c --argjson issue "$issue_json" '
+    def choose($base; $fallback):
+      if ($base.filled // false) == true then $base else $fallback end;
+    {
+      goal: choose((.goal // {}); ($issue.goal // {})),
+      scope: {
+        in: choose((.scope.in // {}); ($issue.scope.in // {})),
+        out: choose((.scope.out // {}); ($issue.scope.out // {}))
+      },
+      acceptance: choose((.acceptance // {}); ($issue.acceptance // {})),
+      priority: choose((.priority // {}); ($issue.priority // {})),
+      constraints: choose((.constraints // {}); ($issue.constraints // {}))
+    }
+  '
+}
+
+effective_draft_fields() {
+  local base_json="$1"
+  if [[ -z "$existing_issue_number" ]]; then
+    printf '%s' "$base_json"
+    return
+  fi
+  local body
+  body="$(get_existing_issue_body)"
+  if [[ -z "$body" ]]; then
+    printf '%s' "$base_json"
+    return
+  fi
+  local issue_json
+  issue_json="$(issue_draft_fields_from_body "$body")"
+  merge_draft_fields "$base_json" "$issue_json"
 }
 
 missing_entry() {
@@ -314,9 +410,11 @@ has_required_intake_fields() {
 
 decide_result() {
   local missing_json='[]'
+  local draft_effective
+  draft_effective="$(effective_draft_fields "$draft_fields")"
 
   if [[ "$bypass_requested" == "true" ]]; then
-    if has_required_intake_fields "$draft_fields"; then
+    if has_required_intake_fields "$draft_effective"; then
       local code="BYPASS_UNNECESSARY_INTAKE_COMPLETE"
       json_result false "$code" "$(reason_message_for_code "$code")" '[]'
       return
@@ -369,10 +467,10 @@ decide_result() {
   esac
 
   if [[ "$intent_type" == "implement" || "$has_edit_request" == "true" || -n "$existing_issue_number" ]]; then
-    missing_json="$(build_missing_fields "$draft_fields")"
+    missing_json="$(build_missing_fields "$draft_effective")"
 
     if [[ -n "$existing_issue_number" ]]; then
-      if has_required_intake_fields "$draft_fields"; then
+      if has_required_intake_fields "$draft_effective"; then
         local code="IMPLEMENTATION_EXISTING_ISSUE_REUSABLE"
         json_result false "$code" "$(reason_message_for_code "$code")" '[]'
       else
