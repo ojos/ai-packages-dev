@@ -65,3 +65,24 @@ labels: implementation,asf-workflow
 
 <!-- Optional: Add context for implementer -->
 
+---
+
+## Runtime Delegation (Auto-Enqueue Opt-in)
+
+Enable auto-enqueue only when all safety conditions are met.
+
+- [ ] Add labels: `line-task` and `auto-enqueue`
+- [ ] Dependencies are closed
+- [ ] English Summary is present
+- [ ] Acceptance Criteria is complete
+
+Required for auto-enqueue:
+
+task_command: <single-line shell command>
+line: auto-001
+
+Example:
+
+task_command: bash packages/agent-swarm-framework/tests/conversation-entry.sh >/dev/null
+line: auto-001
+

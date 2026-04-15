@@ -67,6 +67,7 @@ start_worker() {
 start_worker "worker-coordinator" "$SCRIPT_DIR/worker-coordinator.sh --interval $interval"
 start_worker "orchestrator-worker" "$SCRIPT_DIR/orchestrator-worker.sh --interval $interval"
 start_worker "closer-worker" "$SCRIPT_DIR/closer-worker.sh --interval $interval"
+start_worker "auto-enqueue-worker" "$SCRIPT_DIR/auto-enqueue-worker.sh --interval 60"
 
 initial_count="${INITIAL_LINE_WORKERS:-2}"
 WORKER_INTERVAL="$interval" "$LINE_SCALER" --count "$initial_count"

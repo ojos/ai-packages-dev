@@ -125,6 +125,13 @@ bash scripts/worker/delegate-issue-implementation.sh \
 このスクリプトは `/implement` を line scope に投入し、issue に runtime delegation コメントを残す。
 This script dispatches `/implement` to a line scope and records runtime delegation on the issue.
 
+### 条件付き自動enqueue / Conditional Auto-Enqueue
+
+- `implementation:` / `feature:` issue で、`line-task` + `auto-enqueue` ラベルが付与され、
+  `English Summary` / `Acceptance Criteria` / `task_command:` が定義されている場合、
+  auto-enqueue worker が実行可能タスクへ自動変換する。
+- 安全条件を満たさない issue は自動実行しない（手動委譲を使用）。
+
 ### 自実装の記録 / Self-Implementation Logging
 
 自分で実装する場合も Consult log に記録します:

@@ -252,6 +252,18 @@ A: 推奨されません。以下のいずれかで対応:
 - [ ] Delegation 判定に必要な情報は十分か？
 - [ ] Consult log への記録タイミングは明確か？
 
+### Auto-Enqueue 条件（`feature: 条件付きで issue から自動enqueue`）
+
+以下を満たす issue のみ自動で line 実行キューに投入される:
+
+- [ ] title が `implementation:` または `feature:` で開始
+- [ ] labels に `line-task` と `auto-enqueue` が付与されている
+- [ ] issue に `English Summary` と `Acceptance Criteria` がある
+- [ ] 依存 issue がすべて CLOSED
+- [ ] `task_command:` が本文に定義されている
+
+この条件を満たさない issue は自動enqueueされず、手動委譲（`delegate-issue-implementation.sh`）を使用する。
+
 これが整っていれば、ASF workflow がスムーズに流れます。
 
 ---
