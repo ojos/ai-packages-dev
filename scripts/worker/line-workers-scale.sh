@@ -114,8 +114,9 @@ start_slot_worker() {
   fi
 
   nohup bash -lc "$SCRIPT_DIR/line-worker.sh --line $slot --interval ${WORKER_INTERVAL:-15}" >>"$log_file" 2>&1 &
-  local pid=$!
-  printf '%s\n' "$pid" >"$pid_file"
+
+  # line-worker.sh manages its own PID file after single-instance check.
+  # Writing a PID here can cause a false "already running" self-detection.
 }
 
 queue_has_backlog() {

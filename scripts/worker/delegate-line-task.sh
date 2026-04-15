@@ -2,7 +2,19 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-DISPATCH="$SCRIPT_DIR/command-dispatch.sh"
+DISPATCH=""
+
+dispatch_script_path() {
+  if [[ -x "$SCRIPT_DIR/command-dispatch.sh" ]]; then
+    echo "$SCRIPT_DIR/command-dispatch.sh"
+    return
+  fi
+  if [[ -x "$SCRIPT_DIR/../gate/command-dispatch.sh" ]]; then
+    echo "$SCRIPT_DIR/../gate/command-dispatch.sh"
+    return
+  fi
+  echo ""
+}
 
 line=""
 branch=""
@@ -77,6 +89,12 @@ done
 
 if [[ -z "$line" || ! "$line" =~ ^[a-z0-9][a-z0-9-]*$ ]]; then
   echo "error: --line must match ^[a-z0-9][a-z0-9-]*$" >&2
+  exit 1
+fi
+
+DISPATCH="$(dispatch_script_path)"
+if [[ -z "$DISPATCH" ]]; then
+  echo "error: command-dispatch script not found in worker or gate paths" >&2
   exit 1
 fi
 
