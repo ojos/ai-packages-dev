@@ -28,6 +28,22 @@ This guide clarifies how to instruct the Copilot agent (this agent) to perform s
 - 実行可能な委譲には `scripts/worker/delegate-issue-implementation.sh` を使う
 - line worker が処理するのは `line:<id>` scope の `/implement` であり、実行には `task-command` が必要
 
+### Issue クローズの標準実行ルール
+
+- クローズ前に必ず理由コメントを残す（completed/superseded/duplicate/invalid/deferred）
+- `superseded` / `duplicate` は置換先 issue を明記する
+- 実装 issue は検証結果（例: `PASS=24`、`no-op completed`）をコメントに含める
+- 標準クローズは次のスクリプトを使う
+
+```bash
+bash scripts/worker/close-issue-with-policy.sh \
+   --issue-number <N> \
+   --reason <completed|superseded|duplicate|invalid|deferred> \
+   --summary-en "<English summary>" \
+   --summary-ja "<日本語要約>" \
+   --related "#12,#13"
+```
+
 ---
 
 ## 詳細な指示パターン / Detailed Instruction Patterns

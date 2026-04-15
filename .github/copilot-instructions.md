@@ -132,6 +132,21 @@ This script dispatches `/implement` to a line scope and records runtime delegati
   auto-enqueue worker が実行可能タスクへ自動変換する。
 - 安全条件を満たさない issue は自動実行しない（手動委譲を使用）。
 
+### Issue クローズ方針 / Issue Closure Policy
+
+- Issue をクローズする際は、必ずクローズ理由をコメントで明示する。
+- Always add an explicit closure reason comment before closing an issue.
+- クローズ理由は次のいずれかに分類する: `completed`, `superseded`, `duplicate`, `invalid`, `deferred`。
+- Classify closure reason as one of: `completed`, `superseded`, `duplicate`, `invalid`, `deferred`.
+- `superseded` / `duplicate` では、置き換え先 issue 番号を明記する。
+- For `superseded` / `duplicate`, include replacement issue numbers.
+- 実装系 issue のクローズ時は、検証結果（テスト/実行結果）を最低1行含める。
+- For implementation issue closure, include at least one line of verification outcome.
+- 規範文は英語正本、日本語補足を同じコメントに併記する。
+- Keep normative statement in English with equivalent Japanese companion text in the same comment.
+- 標準化されたクローズ処理は `scripts/worker/close-issue-with-policy.sh` を使用する。
+- Use `scripts/worker/close-issue-with-policy.sh` for standardized closure operations.
+
 ### 自実装の記録 / Self-Implementation Logging
 
 自分で実装する場合も Consult log に記録します:
