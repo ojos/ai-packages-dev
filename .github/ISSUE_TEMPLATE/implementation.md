@@ -12,6 +12,10 @@ labels: implementation,asf-workflow
 
 <!-- 日本語での背景・補足説明を記載。英語要約と矛盾しないこと。 -->
 
+## Runtime Dispatch Note
+
+<!-- Creating this issue alone does not start line execution. After scope is ready, dispatch executable work with scripts/worker/delegate-issue-implementation.sh. -->
+
 ## 📋 Implementation Scope
 
 <!-- Explicit scope helps delegation decision -->

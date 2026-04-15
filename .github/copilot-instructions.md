@@ -96,7 +96,9 @@ This agent follows ASF workflow. **Implementation work should be delegated to li
   ↓
 GitHub issue 作成（実装スコープ明記）
   ↓
-Consult log へ委譲意思を記録
+実行可能な line task へ変換（`scripts/worker/delegate-issue-implementation.sh`）
+  ↓
+GitHub issue へ runtime delegation 記録
   ↓
 Line worker の PR を待機
   ↓
@@ -105,23 +107,23 @@ Code review + approval
 Merge
 ```
 
-### Consult Log への記録 / Consult Log Entry
+### 実行委譲の標準経路 / Standard Executable Delegation Path
 
-委譲判定の後、必ず以下を実行する必要があります:
+Issue 作成やコメント追加だけでは line worker は実行を開始しない。
+Issue creation/comments alone do not enqueue executable line-worker work.
+
+実装 issue を line worker が実行可能なタスクに変換するには、次を使用する:
+Use the following command to convert an implementation issue into an executable line-worker task:
 
 ```bash
-bash scripts/gate/command-dispatch.sh \
-  --issuer [agent-name] \
-  --action /delegate \
-  --scope "issue:#N" \
-  --options '{
-    "decision": "delegate_to_line_worker",
-    "scope_description": "[実装スコープ]",
-    "estimated_effort": "small|medium|large"
-  }'
+bash scripts/worker/delegate-issue-implementation.sh \
+  --issue-number <N> \
+  --line auto-001 \
+  --task-command "<shell-command>"
 ```
 
-This ensures ASF workflow coordination logging and visibility across agents.
+このスクリプトは `/implement` を line scope に投入し、issue に runtime delegation コメントを残す。
+This script dispatches `/implement` to a line scope and records runtime delegation on the issue.
 
 ### 自実装の記録 / Self-Implementation Logging
 

@@ -22,6 +22,12 @@ This guide clarifies how to instruct the Copilot agent (this agent) to perform s
 - 冒頭に `English Summary` を置く
 - 規範・受け入れ条件は英語で記述し、日本語は同義補足として併記する
 
+### 実装委譲の標準実行ルール
+
+- issue 作成やコメント追加だけでは line worker は動かない
+- 実行可能な委譲には `scripts/worker/delegate-issue-implementation.sh` を使う
+- line worker が処理するのは `line:<id>` scope の `/implement` であり、実行には `task-command` が必要
+
 ---
 
 ## 詳細な指示パターン / Detailed Instruction Patterns
