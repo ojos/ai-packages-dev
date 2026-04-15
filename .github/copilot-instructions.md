@@ -48,3 +48,88 @@ This repository has a strict package-neutrality policy.
 
 - ユーザー意図とポリシーが衝突する場合、パッケージ編集前に焦点化した確認質問を行う。
 - If user intent and policy appear to conflict, ask a focused clarification question before changing package files.
+
+## ASF ワークフロー: 実装委譲パターン / ASF Workflow: Delegation Pattern
+
+このエージェントは ASF (Agent Swarm Framework) workflow に従う。**実装作業は line worker に委譲する** ことを原則とする。
+
+This agent follows ASF workflow. **Implementation work should be delegated to line workers** as a principle.
+
+### 実装委譲の判定 / When to Delegate Implementation
+
+**委譲対象（✅ Delegate）**:
+- GitHub issue が作成され、実装スコープが明記されている
+- Issue title が「implementation:」「feature:」で始まる
+- コード生成・変更を伴う作業（新ファイル作成、既存コード修正）
+- GitHub issue の code review が必要な場合
+
+**自分で実装してOK（❌ Don't Delegate）**:
+- ドキュメント作成・編集（README、ガイド、方針文書など）
+- 設計・意思決定作業（Q&A、分析、reason_code 定義など）
+- 小規模テスト・検証（既存テスト実行、簡単な動作確認）
+- ユーザーが明示的に「直接やってしまえ」と指示した場合
+
+### ユーザーコマンド解釈表 / User Command Interpretation
+
+| コマンド | 意図 | エージェント動作 |
+|---------|------|-----------------|
+| "進めて下さい" | ASF workflow に沿って次フェーズへ | Issue 作成 → 委譲判定 → (line worker OR 自実装) |
+| "やってしまえ" | 直接実装する | スキップ delegation、直接実装 |
+| "確認して" | 分析・レビューのみ | 委譲なし、自分で実施 |
+| "#N を実装して" | 特定 issue の実装 | Issue scope 確認後、委譲判定 |
+
+### 委譲フロー / Delegation Flow
+
+```
+設計完了 (Design Phase)
+  ↓
+GitHub issue 作成（実装スコープ明記）
+  ↓
+Consult log へ委譲意思を記録
+  ↓
+Line worker の PR を待機
+  ↓
+Code review + approval
+  ↓
+Merge
+```
+
+### Consult Log への記録 / Consult Log Entry
+
+委譲判定の後、必ず以下を実行する必要があります:
+
+```bash
+bash scripts/gate/command-dispatch.sh \
+  --issuer [agent-name] \
+  --action /delegate \
+  --scope "issue:#N" \
+  --options '{
+    "decision": "delegate_to_line_worker",
+    "scope_description": "[実装スコープ]",
+    "estimated_effort": "small|medium|large"
+  }'
+```
+
+This ensures ASF workflow coordination logging and visibility across agents.
+
+### 自実装の記録 / Self-Implementation Logging
+
+自分で実装する場合も Consult log に記録します:
+
+```bash
+bash scripts/gate/command-dispatch.sh \
+  --issuer [agent-name] \
+  --action /delegate \
+  --scope "issue:#N" \
+  --options '{
+    "decision": "self_implement",
+    "reason": "document_edit|trivial_fix|no_worker_available",
+    "scope_description": "[簡潔な説明]"
+  }'
+```
+
+### エラーハンドリング / Error Handling
+
+- Line worker が不可用な場合 → ユーザーに通知、委譲できないことを報告
+- Issue scope が不明確な場合 → 委譲前にユーザーに scope 確認を求める
+- Code review が必要だが reviewer 不在 → consult log に escalate flag を設定
