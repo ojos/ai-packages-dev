@@ -275,6 +275,7 @@ done
 
 require_cmd git
 require_cmd gh
+require_cmd bash
 require_clean_worktree
 extract_semver "$DCB_TAG" >/dev/null
 extract_semver "$ASF_TAG" >/dev/null
@@ -311,6 +312,14 @@ init_and_push_release_repo "$DOTFILES_DIR" "$OWNER/ai-dotfiles" public
 tag_and_release "$DOTFILES_DIR" "$OWNER/ai-dotfiles" "$DOTFILES_TAG" "Initial release $DOTFILES_TAG"
 
 cd "$ROOT_DIR"
+
+if [[ -x scripts/update-release-status.sh ]]; then
+  bash scripts/update-release-status.sh --owner "$OWNER" --readme README.md
+  echo "[info] README release status refreshed. commit README.md if changed."
+else
+  echo "[warn] scripts/update-release-status.sh not found or not executable; skip README refresh"
+fi
+
 echo "[ok] completed releases"
 for r in "$OWNER/devcontainer-bootstrap" "$OWNER/agent-swarm-framework" "$OWNER/ai-dotfiles"; do
   echo "[repo] $r"

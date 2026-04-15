@@ -57,9 +57,9 @@ ai-packages-dev/
 
 | パッケージ | 役割 | 配布先リポジトリ |
 |---|---|---|
-| dotfiles | AI 開発共通ルールの Source of Truth | 専用リリースリポジトリ（未作成） |
+| dotfiles | AI 開発共通ルールの Source of Truth | ojos/ai-dotfiles |
 | devcontainer-bootstrap (DCB) | Dev Container 環境を 1 コマンドで生成 | ojos/devcontainer-bootstrap |
-| agent-swarm-framework (ASF) | マルチエージェント並列開発の実行基盤 | 専用リリースリポジトリ（未作成） |
+| agent-swarm-framework (ASF) | マルチエージェント並列開発の実行基盤 | ojos/agent-swarm-framework |
 
 **設計思想:**  
 1. 新プロジェクトに DCB で Dev Container 環境を構築する  
@@ -156,19 +156,24 @@ ASF workflow compliance is enforced by Git hooks in this repository.
 
 ## リリースリポジトリとの関係
 
+このセクションは `bash scripts/update-release-status.sh` で更新する。
+リリース実施後は必ず同スクリプトを実行し、README の更新をコミットする。
+
+<!-- RELEASE_STATUS:START -->
 | パッケージ | 配布状態 |
 |---|---|
-| devcontainer-bootstrap | ojos/devcontainer-bootstrap で v0.1.5 まで公開済み |
-| agent-swarm-framework | 専用リリースリポジトリ 未作成（次工程） |
-| dotfiles | 専用リリースリポジトリ 未作成（次工程） |
+| devcontainer-bootstrap | ojos/devcontainer-bootstrap で v0.1.6 まで公開済み |
+| agent-swarm-framework | ojos/agent-swarm-framework で v0.1.1 まで公開済み |
+| dotfiles | ojos/ai-dotfiles で v0.1.1 まで公開済み |
 
 リリース実行手順は各パッケージの `docs/` または `.github/workflows/` を参照する。
 
 ### Release Status (English)
 
-- `devcontainer-bootstrap`: published up to `v0.1.5` at `ojos/devcontainer-bootstrap`
-- `agent-swarm-framework`: dedicated release repository is not created yet
-- `dotfiles`: dedicated release repository is not created yet
+- `devcontainer-bootstrap`: published up to `v0.1.6` at `ojos/devcontainer-bootstrap`
+- `agent-swarm-framework`: published up to `v0.1.1` at `ojos/agent-swarm-framework`
+- `dotfiles`: published up to `v0.1.1` at `ojos/ai-dotfiles`
+<!-- RELEASE_STATUS:END -->
 
 ---
 
