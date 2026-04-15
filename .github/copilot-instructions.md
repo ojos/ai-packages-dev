@@ -44,6 +44,17 @@ This repository has a strict package-neutrality policy.
 - Matching Japanese translations should be split as `*.ja.md` and kept synchronized with English updates.- 英語更新後に日本語を必ず追随させる。同期漏れを避けるため、同時に両ファイルを編集する。
 - Always update Japanese translation immediately after English updates, editing both files together to prevent sync drift.
 
+### Issue 言語運用 / Issue Language Policy
+
+- GitHub issue は日本語で作成してよい。
+- GitHub issues may be authored in Japanese.
+- ただし、実装委譲 issue（`implementation:` / `feature:`）は日英併記を必須とする。
+- However, implementation/delegation issues (`implementation:` / `feature:`) must be bilingual (Japanese + English).
+- 規範・判定基準・受け入れ条件は英語を正本として残し、日本語は同義補足として併記する。
+- Keep normative statements, decision criteria, and acceptance checks in English, with equivalent Japanese companion text.
+- 最低要件として、issue 冒頭に `English Summary` を設ける。
+- At minimum, include an `English Summary` section at the top of the issue body.
+
 ## 衝突時の扱い / Conflict Handling
 
 - ユーザー意図とポリシーが衝突する場合、パッケージ編集前に焦点化した確認質問を行う。

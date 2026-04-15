@@ -16,6 +16,12 @@ This guide clarifies how to instruct the Copilot agent (this agent) to perform s
 | "#N 実装して" | Issue #N を実装する | Issue scope 確認 → 委譲判定 → 実装 |
 | "レビューして" | Code review を実施 | PR/commit を確認、approve/suggest |
 
+### Issue 言語ルール（標準）
+
+- `implementation:` / `feature:` issue は日英併記を必須とする
+- 冒頭に `English Summary` を置く
+- 規範・受け入れ条件は英語で記述し、日本語は同義補足として併記する
+
 ---
 
 ## 詳細な指示パターン / Detailed Instruction Patterns

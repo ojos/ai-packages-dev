@@ -4,6 +4,14 @@ about: Scoped implementation work within ASF workflow requiring delegation revie
 labels: implementation,asf-workflow
 ---
 
+## English Summary (Required)
+
+<!-- Keep this section short (2-6 lines). Include intent, scope, and expected outcome in English. -->
+
+## 日本語詳細 / Japanese Details
+
+<!-- 日本語での背景・補足説明を記載。英語要約と矛盾しないこと。 -->
+
 ## 📋 Implementation Scope
 
 <!-- Explicit scope helps delegation decision -->
