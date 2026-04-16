@@ -6,6 +6,45 @@ This guide clarifies how to instruct the Copilot agent (this agent) to perform s
 
 ## クイックリファレンス / Quick Reference
 
+### セッション開始時の重複排除ゲート / Session-Start De-duplication Gate
+
+タスクを Todo に起票する前に、必ず以下を実施する。
+Before registering tasks into Todo, always run the reconciliation checks below.
+
+1. 候補タスクを列挙する（前回ハンドオーバー、メモ、口頭依頼）。
+   List candidate tasks from handover notes, memory, and user request.
+2. 各タスクを「証跡」で照合する（必須）。
+   Reconcile each task against evidence sources (required).
+3. 照合結果をステータス分類する（後述の4分類）。
+   Classify each task using the 4 statuses defined below.
+4. `DONE_EVIDENCED` は Todo に再登録しない。
+   Do not re-register `DONE_EVIDENCED` tasks into Todo.
+5. 判定不能なら「実施」ではなく「確認タスク」として起票する。
+   If uncertain, register a verification task instead of an execution task.
+
+推奨証跡ソース / Recommended evidence sources:
+- Git 作業状態: `git status --short --branch`
+- 実施履歴: `git log --oneline --decorate -n 20`
+- 進捗文書: `docs/*.md` のチェックリスト・Decision Point・Status
+- リリース状態: `README.md` の `RELEASE_STATUS` ブロック
+- Issue 状態: OPEN/CLOSED とクローズ理由コメント
+
+判定ステータス / Reconciliation statuses:
+- `DONE_EVIDENCED`: 実行結果があり、受け入れ条件を満たす
+- `PLANNED_ONLY`: 計画文書のみ存在し、実行証跡なし
+- `PARTIAL`: 一部のみ実施、残作業あり
+- `BLOCKED`: 前提不足や依存未解決で進行不可
+
+Todo 起票ルール / Todo registration rules:
+- `DONE_EVIDENCED` -> 起票しない
+- `PLANNED_ONLY` -> 実行タスクとして起票
+- `PARTIAL` -> 残作業だけを分割して起票
+- `BLOCKED` -> ブロッカー解消タスクを先に起票
+
+最小ログ要件 / Minimum logging requirement:
+- 各 Todo 項目に、判定根拠を1行残す（例: "source: README release status", "source: commit 1892eb6"）。
+- Record one-line evidence for each Todo item (e.g., "source: README release status", "source: commit 1892eb6").
+
 ### 実装フェーズの進め方
 
 | あなたの指示 | エージェントの解釈 | 結果 |
@@ -267,6 +306,14 @@ A: 推奨されません。以下のいずれかで対応:
 - [ ] テスト要件が記載されている？
 - [ ] Delegation 判定に必要な情報は十分か？
 - [ ] Consult log への記録タイミングは明確か？
+
+### セッション再開時のチェック（重複防止） / Resume Session Check (De-dup)
+
+- [ ] 前回ハンドオーバーの「完了」と「残タスク」を分離して読み取ったか？
+- [ ] 候補タスクを `DONE_EVIDENCED/PLANNED_ONLY/PARTIAL/BLOCKED` に分類したか？
+- [ ] `DONE_EVIDENCED` を Todo から除外したか？
+- [ ] `PARTIAL` は残作業のみをタスク化したか？
+- [ ] 判定根拠（commit/doc/issue）を1行で記録したか？
 
 ### Auto-Enqueue 条件（`feature: 条件付きで issue から自動enqueue`）
 

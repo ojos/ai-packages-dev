@@ -19,10 +19,10 @@
 - https://github.com/ojos/devcontainer-bootstrap
 
 最新安定リリース:
-- `v0.1.6`
+- `v0.1.7`
 
 ```bash
-TAG=v0.1.6
+TAG=v0.1.7
 curl -sSL "https://github.com/ojos/devcontainer-bootstrap/releases/download/${TAG}/bootstrap.sh" -o bootstrap.sh
 curl -sSL "https://github.com/ojos/devcontainer-bootstrap/releases/download/${TAG}/SHA256SUMS" -o SHA256SUMS
 sha256sum -c SHA256SUMS
@@ -83,6 +83,7 @@ bash scripts/github-account-switch.sh use ojos
 
 ## Feature フラグ
 - `features.docker`（既定値: true）
+- `features.ripgrep`（既定値: true）
 - `features.githubCli`（既定値: true）
 - `features.node`（`languages` に `node` を含む場合）
 - `features.go`（`languages` に `go` を含む場合）
