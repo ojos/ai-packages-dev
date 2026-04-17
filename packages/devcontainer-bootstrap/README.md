@@ -99,7 +99,9 @@ bash scripts/github-account-switch.sh use ojos
 - `features.node` (when `languages` includes `node`)
 - `features.go` (when `languages` includes `go`)
 - `features.python` (when `languages` includes `python`)
-- `features.awsCli` (full mode only)
+- `features.awsCli` (when mode is `standard` or `full`)
+- `features.terraform` (when mode is `standard` or `full`)
+- `features.googleCloudSdk` (full mode only; external feature source)
 - `features.devTools` (default: true)
 
 ---

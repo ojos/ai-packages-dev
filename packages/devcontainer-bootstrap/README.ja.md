@@ -88,7 +88,9 @@ bash scripts/github-account-switch.sh use ojos
 - `features.node`（`languages` に `node` を含む場合）
 - `features.go`（`languages` に `go` を含む場合）
 - `features.python`（`languages` に `python` を含む場合）
-- `features.awsCli`（`full` モードのみ）
+- `features.awsCli`（`standard` または `full` モードの場合）
+- `features.terraform`（`standard` または `full` モードの場合）
+- `features.googleCloudSdk`（`full` モードのみ、外部 feature を利用）
 - `features.devTools`（既定値: true）
 
 ## シークレット方針

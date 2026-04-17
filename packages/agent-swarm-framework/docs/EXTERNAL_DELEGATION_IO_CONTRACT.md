@@ -95,11 +95,19 @@
   "scope": "pr:#123",
   "options": {
     "policy": "manual|conditional|auto",
+    "approved": true,
+    "checksPassed": true,
+    "blockingFindings": false,
     "requireApprovedReview": true,
     "requireGreenChecks": true
   }
 }
 ```
+
+Selector behavior (safe default):
+- `policy=manual` always routes to manual-required path.
+- `policy=conditional|auto` is auto-eligible only when `approved=true`, `checksPassed=true`, and `blockingFindings=false`.
+- If any condition is not satisfied, closer logs `manual required` with actionable reason fields.
 
 出力:
 

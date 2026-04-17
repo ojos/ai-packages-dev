@@ -395,6 +395,8 @@ TMPL
     },
     "ghcr.io/devcontainers-extra/features/ripgrep:1": {},
     "ghcr.io/devcontainers/features/github-cli:1": {},
+    "ghcr.io/devcontainers/features/aws-cli:1": {},
+    "ghcr.io/devcontainers/features/terraform:1": {},
     "__IF_RUNTIME_NODE__": "ghcr.io/devcontainers/features/node:1",
     "__IF_RUNTIME_GO__": "ghcr.io/devcontainers/features/go:1",
     "__IF_RUNTIME_PYTHON__": "ghcr.io/devcontainers/features/python:1"
@@ -461,7 +463,9 @@ TMPL
     "__IF_RUNTIME_NODE__": "ghcr.io/devcontainers/features/node:1",
     "__IF_RUNTIME_GO__": "ghcr.io/devcontainers/features/go:1",
     "__IF_RUNTIME_PYTHON__": "ghcr.io/devcontainers/features/python:1",
-    "ghcr.io/devcontainers/features/aws-cli:1": {}
+    "ghcr.io/devcontainers/features/aws-cli:1": {},
+    "ghcr.io/devcontainers/features/terraform:1": {},
+    "truepill-tyler-benfield/vscode-feature-gcloud/google-cloud-sdk": "latest"
   },
   "remoteEnv": {
 __GITHUB_PROFILE_ENV_BLOCK__
