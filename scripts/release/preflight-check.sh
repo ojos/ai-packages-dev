@@ -39,7 +39,7 @@ check_no_open_pr_linked() {
 check_identity_zero() {
   local tmp
   tmp="$(mktemp -d)"
-  trap 'rm -rf "$tmp"' EXIT
+  trap "rm -rf '$tmp'" EXIT
 
   local repos=(
     "ojos/ai-packages-dev"
