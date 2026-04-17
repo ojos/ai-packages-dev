@@ -147,6 +147,21 @@ This script dispatches `/implement` to a line scope and records runtime delegati
 - 標準化されたクローズ処理は `scripts/worker/close-issue-with-policy.sh` を使用する。
 - Use `scripts/worker/close-issue-with-policy.sh` for standardized closure operations.
 
+### 終了時整理方針 / End-State Cleanup Policy
+
+- 実行中は `issue:PR:merge` が一時的に 1:1:1 でなくても許容する。
+- During execution, temporary deviation from 1:1:1 mapping among issue/PR/merge is allowed.
+- ただし作業終了時には、未採用PR・実装済みIssue・キュー残件を必ず整理してクリーン状態へ戻す。
+- At task completion, always normalize state by resolving stale PRs, implemented issues, and runtime queue leftovers.
+- 実装済み issue は理由と検証結果を付けてクローズする。
+- Close implemented issues with explicit reason and verification outcome.
+- 採用PRはマージし、不要PRは理由付きでクローズする。
+- Merge accepted PRs and close unnecessary PRs with explicit reasons.
+- 終了前に open issue / open PR / pending queue / dead-letter の状態を確認する。
+- Before completion, verify open issue / open PR / pending queue / dead-letter status.
+- 最終判定の基準は「再開可能かつ追跡可能なクリーン状態」である。
+- The completion criterion is a clean, restartable, and auditable repository/runtime state.
+
 ### 自実装の記録 / Self-Implementation Logging
 
 自分で実装する場合も Consult log に記録します:
