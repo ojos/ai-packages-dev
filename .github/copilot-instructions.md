@@ -162,6 +162,17 @@ This script dispatches `/implement` to a line scope and records runtime delegati
 - 最終判定の基準は「再開可能かつ追跡可能なクリーン状態」である。
 - The completion criterion is a clean, restartable, and auditable repository/runtime state.
 
+### 運用厳格度方針 / Operational Strictness Policy
+
+- `production` / `mainline` 向けの作業では、Issue 管理に milestone / GitHub Project の更新を必須とする。
+- For work targeting `production` / `mainline`, milestone and GitHub Project updates are mandatory for issue management.
+- `spike` / `hotfix` / 小規模タスクでは、実行中の milestone / Project 更新は任意とする。
+- For `spike` / `hotfix` / small tasks, milestone/Project updates are optional during execution.
+- ただし任意運用を選んだ場合でも、作業終了時には終了時整理方針に従って必ず正規化する。
+- Even when optional mode is used, end-state normalization is mandatory at completion per End-State Cleanup Policy.
+- 途中の簡略運用を行った場合は、クローズ時コメントに「後追い正規化」の実施結果を明記する。
+- If simplified operation was used mid-flight, closure comments must include the result of post-normalization.
+
 ### 自実装の記録 / Self-Implementation Logging
 
 自分で実装する場合も Consult log に記録します:
