@@ -168,3 +168,79 @@ bash scripts/gate/command-dispatch.sh \
 - Line worker が不可用な場合 → ユーザーに通知、委譲できないことを報告
 - Issue scope が不明確な場合 → 委譲前にユーザーに scope 確認を求める
 - Code review が必要だが reviewer 不在 → consult log に escalate flag を設定
+
+## @intake コマンド / @intake Command
+
+ユーザーが `@intake` をメッセージ先頭に付けた場合、Intake Manager フローを起動する。
+When the user prefixes a message with `@intake`, trigger the Intake Manager flow.
+
+### トリガー条件 / Trigger Condition
+
+- メッセージが `@intake` で始まる場合のみ起動する。
+- Only activate when the message starts with `@intake`.
+- `@intake` なしの通常会話には適用しない（探索的会話を妨げない）。
+- Do not apply to normal conversation without `@intake` (preserve exploratory conversation freedom).
+
+### 実行フロー / Execution Flow
+
+```
+Step 1: 要件テキストの確定
+  - @intake <テキスト> の形式なら、<テキスト> をそのまま使用
+  - @intake のみで要件テキストがない場合、要件を対話で引き出す
+
+Step 2: 意図の解釈・確認（インプット確認）
+  - 入力テキストの内容を解釈し、以下をユーザーに提示して確認する:
+      - 解釈した目的（何を実現したいか）
+      - 想定する変更の範囲・種別（新機能/修正/設計変更 等）
+      - 不明点があれば質問する
+  - ユーザーが「合っている」と確認するまで次へ進まない
+
+Step 3: Consult Facilitator による設計妥当性確認（条件付き）
+  - 以下のいずれかに該当する場合のみ /consult を起動する:
+      - 設計方針に曖昧さ・矛盾がある
+      - スコープ境界が不明確（何が in/out か判断できない）
+      - 責務・型契約に影響する懸念がある
+      - 優先順位の判断が難しい
+  - 上記に該当しない場合はスキップしてよい
+  - /consult 結論は goal/scope.in/acceptance に反映してから次へ進む
+  - 相談記録は consult-log.jsonl に残す
+
+Step 4: conversation-entry.sh を dry-run で実行
+  bash scripts/gate/conversation-entry.sh \
+    --input-text "<要件テキスト>" \
+    --intent-type "implement" \
+    --channel-type "vscode_chat" \
+    --dry-run true
+
+Step 5: INTAKE_CONFIRMATION_BLOCK をユーザーに提示・確認
+  - goal / scope.in / scope.out / acceptance / priority をチャット上で表示
+  - ユーザーが修正・承認するまで次へ進まない
+
+Step 6: 最終意図確認（実行前ゲート）
+  - issue 化・ASF フロー開始の直前に、以下を要約してユーザーへ確認する:
+      - 作成予定の issue タイトルと内容サマリー
+      - 実行される ASF アクション（/intake dispatch）
+      - 「この内容で進めてよいか？」を明示的に確認する
+  - ユーザーが承認するまで issue を作成しない
+
+Step 7: ユーザー承認後に issue 化 + /intake dispatch
+  bash scripts/gate/conversation-entry.sh \
+    --input-text "<要件テキスト>" \
+    --intent-type "implement" \
+    --channel-type "vscode_chat" \
+    --draft-fields '<承認済みフィールドJSON>' \
+    --issue-title "<タイトル>" \
+    --confirm true
+
+Step 8: ASF フローへ自動移行
+  - issue 作成完了後、通常の ASF delegation フローへ引き継ぐ
+```
+
+### 制約 / Constraints
+
+- Step 6（ユーザー承認）なしに issue を作成してはならない。
+- Do not create an issue without explicit user approval at Step 6.
+- intake issue は `type: orchestrator-intake` ラベルを必ず持つ。
+- Intake issues must always carry the `type: orchestrator-intake` label.
+- intake-manager スキルの権限境界（`agent-skills/files/.multi-agent/skills/intake-manager.md`）に従う。
+- Follow the intake-manager skill's authority boundary.
