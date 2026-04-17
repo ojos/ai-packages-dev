@@ -11,6 +11,8 @@ This repository has a strict package-neutrality policy.
 - For generic rules (language policy, naming convention), refer to `dotfiles/ai/common/shared-ai-rules.md`.
 - packages構造・ASFワークフロー規則の汎用雛形は `packages/agent-swarm-framework/template-project/files/.github/PROJECT_DEFINITION.md` を参照する。
 - For generic packages structure and ASF workflow rules, refer to `packages/agent-swarm-framework/template-project/files/.github/PROJECT_DEFINITION.md`.
+- ASF 汎用運用規則（実装委譲、@intake、終了時整理、運用厳格度）の正本は上記 template-project 側とする。
+- The canonical source for generic ASF operational rules (delegation, @intake, end-state cleanup, strictness) is the template-project PROJECT_DEFINITION above.
 - 利便性のための編集よりも、上記ポリシーを優先する。
 - Treat the policy in that file as higher priority than convenience edits.
 - `packages/**` に固有名詞を混入し得る編集は、ユーザー確認なしで実施しない。
