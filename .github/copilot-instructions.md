@@ -216,14 +216,23 @@ Step 5: INTAKE_CONFIRMATION_BLOCK をユーザーに提示・確認
   - goal / scope.in / scope.out / acceptance / priority をチャット上で表示
   - ユーザーが修正・承認するまで次へ進まない
 
-Step 6: 最終意図確認（実行前ゲート）
+Step 6: 計画整合性レビュー（必須）
+  - INTAKE_CONFIRMATION_BLOCK の内容に対して以下を審査する:
+      - goal と acceptance の整合性（acceptance が goal を検証できるか）
+      - scope.in と scope.out の境界が明確か
+      - acceptance が検証可能な形式か（曖昧な完了条件を検出する）
+      - 依存関係・前提条件の漏れがないか
+  - 矛盾・漏れを発見した場合は指摘内容を提示し、Step 5 へ差し戻す
+  - 問題がなければ「レビュー通過」を明示してから次へ進む
+
+Step 7: 最終意図確認（実行前ゲート）
   - issue 化・ASF フロー開始の直前に、以下を要約してユーザーへ確認する:
       - 作成予定の issue タイトルと内容サマリー
       - 実行される ASF アクション（/intake dispatch）
       - 「この内容で進めてよいか？」を明示的に確認する
   - ユーザーが承認するまで issue を作成しない
 
-Step 7: ユーザー承認後に issue 化 + /intake dispatch
+Step 8: ユーザー承認後に issue 化 + /intake dispatch
   bash scripts/gate/conversation-entry.sh \
     --input-text "<要件テキスト>" \
     --intent-type "implement" \
@@ -232,14 +241,14 @@ Step 7: ユーザー承認後に issue 化 + /intake dispatch
     --issue-title "<タイトル>" \
     --confirm true
 
-Step 8: ASF フローへ自動移行
+Step 9: ASF フローへ自動移行
   - issue 作成完了後、通常の ASF delegation フローへ引き継ぐ
 ```
 
 ### 制約 / Constraints
 
-- Step 6（ユーザー承認）なしに issue を作成してはならない。
-- Do not create an issue without explicit user approval at Step 6.
+- Step 7（ユーザー承認）なしに issue を作成してはならない。
+- Do not create an issue without explicit user approval at Step 7.
 - intake issue は `type: orchestrator-intake` ラベルを必ず持つ。
 - Intake issues must always carry the `type: orchestrator-intake` label.
 - intake-manager スキルの権限境界（`agent-skills/files/.multi-agent/skills/intake-manager.md`）に従う。
