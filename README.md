@@ -162,7 +162,7 @@ ASF workflow compliance is enforced by Git hooks in this repository.
 <!-- RELEASE_STATUS:START -->
 | パッケージ | 配布状態 |
 |---|---|
-| devcontainer-bootstrap | ojos/devcontainer-bootstrap で v0.1.10 まで公開済み |
+| devcontainer-bootstrap | ojos/devcontainer-bootstrap で v0.1.11 まで公開済み |
 | agent-swarm-framework | ojos/agent-swarm-framework で v0.1.3 まで公開済み |
 | dotfiles | ojos/ai-dotfiles で v0.1.2 まで公開済み |
 
@@ -170,7 +170,7 @@ ASF workflow compliance is enforced by Git hooks in this repository.
 
 ### Release Status (English)
 
-- `devcontainer-bootstrap`: published up to `v0.1.10` at `ojos/devcontainer-bootstrap`
+- `devcontainer-bootstrap`: published up to `v0.1.11` at `ojos/devcontainer-bootstrap`
 - `agent-swarm-framework`: published up to `v0.1.3` at `ojos/agent-swarm-framework`
 - `dotfiles`: published up to `v0.1.2` at `ojos/ai-dotfiles`
 <!-- RELEASE_STATUS:END -->
