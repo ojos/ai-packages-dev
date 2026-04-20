@@ -48,3 +48,12 @@
    - stop workers
    - inspect runtime logs under scripts/orchestration/runtime
    - clear/replay actions only after manual validation
+
+## Remote Executor Wiring Status (2026-04-20)
+
+- GitHub Actions executor workflow now dispatches:
+  - `/intake` on issue events
+  - `/review` on pull_request_target events
+  - `/merge` on approved pull_request_review events (conditional policy)
+- Manual fallback is available via `workflow_dispatch` input `pr_number`.
+- Final production enablement still requires self-hosted runner validation in target environment.
