@@ -28,3 +28,23 @@
 
 - 設計全体: `docs/architecture.md`
 - 完了条件: `docs/VISION_AUTONOMOUS_ORCHESTRATION.md`
+
+## Remote Automation Status (2026-04-20)
+
+- reviewer / merge remote automation:
+  - command routing for /review and /merge exists in runtime workers.
+  - closer worker executes review comment and merge actions with execute guard.
+- mesh migration readiness:
+  - dependency close gate and backlog/mesh pull behavior are available.
+  - full remote executor integration remains phased and should be validated in staged rollout.
+
+### Safety Rollback Path
+
+1. Disable automatic execution by stopping workers:
+   - bash scripts/worker/workers-stop.sh
+2. Keep commands in queued/planned mode:
+   - do not pass options.execute=true when dispatching /review or /merge
+3. If unsafe behavior is observed:
+   - stop workers
+   - inspect runtime logs under scripts/orchestration/runtime
+   - clear/replay actions only after manual validation
