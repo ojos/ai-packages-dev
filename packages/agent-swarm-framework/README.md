@@ -49,6 +49,20 @@ Installation flow:
 4. Apply selected categories to target repo
 5. Optionally create milestone/bootstrap issues on GitHub
 
+## Runtime CLI
+
+Use the unified entrypoint:
+
+```bash
+bash scripts/asf doctor
+bash scripts/asf preflight
+bash scripts/asf status
+bash scripts/asf up --interval 15
+bash scripts/asf down
+```
+
+Doctor mode verifies required files/scripts, command availability, `gh auth`, and hook path sanity.
+
 ### Retrofit (Staged Adoption)
 
 ASF can be adopted into existing repositories, not just new ones.
@@ -152,3 +166,17 @@ ASF can be used standalone, but when dotfiles is present, treat dotfiles as base
 | `error: --non-interactive requires --config` | Always use `--config <file>` with `--non-interactive` |
 | Files unexpectedly overwritten | Check preview's "overwrite" section before applying |
 | milestone/issue not reflected | Check `--skip-github` flag and `gh auth status` |
+
+## Shell Tests
+
+Run quick shell tests:
+
+```bash
+bash packages/agent-swarm-framework/tests/run-shell-tests.sh
+```
+
+Run E2E tests as well:
+
+```bash
+RUN_E2E_TESTS=true bash packages/agent-swarm-framework/tests/run-shell-tests.sh
+```

@@ -126,7 +126,9 @@ check_dir "scripts/worker" "scripts/worker/"
 check_file ".multi-agent/engine-routing.json" "engine-routing.json"
 
 for script in \
+  scripts/asf \
   scripts/gate/auto-gate.sh \
+  scripts/gate/asf-doctor.sh \
   scripts/gate/command-dispatch.sh \
   scripts/gate/command-validate.sh \
   scripts/gate/workflow.sh \
