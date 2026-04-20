@@ -33,3 +33,19 @@
 ## ロールアウト備考
 - Phase-1 は契約定義と運用ガードレールを対象とする。
 - 実行時実装フックは後続ステップで追加可能。
+
+## Phase-2 Runtime Hook (2026-04-20)
+
+### Runtime Hook パス
+- `runtime-core/files/scripts/gate/slack-intake-hook.sh`
+
+### 挙動
+- channel/user メタデータを検証する
+- `safety.auth_validated != true` の場合は reject する
+- `runtime.runner_available != true` の場合は deferred を返す
+- 安全条件が満たされる場合は dispatch 可能な正規化 intake payload を返す
+
+### ロールバック
+1. `bash scripts/worker/workers-stop.sh` でワーカー停止
+2. 検証ポリシー修正まで slack-intake-hook 呼び出しを無効化
+3. runner 復旧後に deferred queue を再投入
