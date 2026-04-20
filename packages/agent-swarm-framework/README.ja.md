@@ -45,6 +45,20 @@ bash install.sh --non-interactive --config my-config.json --target-dir /path/to/
 4. 確認後に target repository へ反映
 5. 確認付きで milestone / bootstrap issue を GitHub に起票
 
+## Runtime CLI
+
+統一エントリポイントとして次を利用できます:
+
+```bash
+bash scripts/asf doctor
+bash scripts/asf preflight
+bash scripts/asf status
+bash scripts/asf up --interval 15
+bash scripts/asf down
+```
+
+doctor モードでは、必須ファイル/スクリプト、コマンド可用性、`gh auth`、hook path の健全性を確認します。
+
 既存プロジェクトへの途中導入（Retrofit）:
 - ASF は新規リポジトリだけでなく既存リポジトリへ段階導入できる。
 - まず `--retrofit-safe` + `automationStage=plan` で監査導入し、次に `implement/review/merge` を順次解放する。
@@ -112,3 +126,17 @@ ASF は単体利用も可能ですが、dotfiles を併用する場合は、dotf
 | ファイルが意図せず上書きされる | プレビューの「上書き予定」欄を必ず確認する |
 | milestone/issue が反映されない | `--skip-github` 有無と `gh auth status` を確認する |
 - [docs/PACKAGE_DISTRIBUTION.md](docs/PACKAGE_DISTRIBUTION.md) — 配布構成・責務境界・版管理ルール
+
+## Shell テスト
+
+簡易シェルテスト実行:
+
+```bash
+bash packages/agent-swarm-framework/tests/run-shell-tests.sh
+```
+
+E2E も含める場合:
+
+```bash
+RUN_E2E_TESTS=true bash packages/agent-swarm-framework/tests/run-shell-tests.sh
+```
