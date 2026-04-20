@@ -170,7 +170,7 @@ ASF workflow compliance is enforced by Git hooks in this repository.
 
 ### Release Status (English)
 
-- `devcontainer-bootstrap`: published up to `v0.1.8` at `ojos/devcontainer-bootstrap`
+- `devcontainer-bootstrap`: published up to `v0.1.9` at `ojos/devcontainer-bootstrap`
 - `agent-swarm-framework`: published up to `v0.1.3` at `ojos/agent-swarm-framework`
 - `dotfiles`: published up to `v0.1.2` at `ojos/ai-dotfiles`
 <!-- RELEASE_STATUS:END -->
