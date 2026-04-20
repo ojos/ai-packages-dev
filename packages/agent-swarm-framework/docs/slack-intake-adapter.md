@@ -33,3 +33,19 @@ This document defines phase-1 adapter contract and operation model for Slack int
 ## Rollout Notes
 - Phase-1 scope is contract + operation guardrails.
 - Runtime implementation hooks can be added in subsequent issue steps.
+
+## Phase-2 Runtime Hook (2026-04-20)
+
+### Runtime Hook Path
+- `runtime-core/files/scripts/gate/slack-intake-hook.sh`
+
+### Behavior
+- validates channel/user metadata
+- rejects when `safety.auth_validated != true`
+- emits deferred outcome when `runtime.runner_available != true`
+- emits dispatch-ready normalized intake payload when safe
+
+### Rollback
+1. stop workers with `bash scripts/worker/workers-stop.sh`
+2. disable caller path to slack-intake-hook until validation policy is corrected
+3. replay deferred queue after runner recovery
