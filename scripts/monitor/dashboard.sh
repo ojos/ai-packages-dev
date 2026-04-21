@@ -38,13 +38,15 @@ worker_state() {
   echo "stopped"
 }
 
-# helper: last 5 gate log lines
+# helper: last 5 gate log lines for one line
 gate_log_tail() {
-  local logfile="$RUNTIME_DIR/line-auto-001-events.jsonl"
+  local line_id="$1"
+  local logfile="$RUNTIME_DIR/line-${line_id}-events.jsonl"
   if [[ ! -f "$logfile" ]]; then
-    echo "(no gate log)"
+    printf "  [%s] (no gate log)\n" "$line_id"
     return
   fi
+  printf "  [%s]\n" "$line_id"
   tail -5 "$logfile" | while IFS= read -r line; do
     local ts cmd note
     ts="$(printf '%s' "$line" | jq -r '.timestamp // ""')"
@@ -67,7 +69,7 @@ render() {
   local lines
   lines="$(runtime_line_ids 2>/dev/null || echo "auto-001 auto-002")"
 
-  tput home
+  tput home 2>/dev/null || true
 
   printf "\033[1;36m=== ASF Terminal Dashboard ===\033[0m  (refresh: %ss  exit: Ctrl-C)\n" "$REFRESH"
   printf "updated: %s\n\n" "$(date "+%Y-%m-%d %H:%M:%S %Z")"
@@ -86,10 +88,18 @@ render() {
   printf "count: %s\n" "$(open_prs)"
 
   printf "\n\033[1m[gate log (last 5)]\033[0m\n"
-  gate_log_tail
+  for line in $lines; do
+    gate_log_tail "$line"
+  done
 
-  tput ed
+  tput ed 2>/dev/null || true
 }
+
+# This dashboard uses cursor movement and alternate screen, so require TTY.
+if [[ ! -t 1 ]]; then
+  echo "error: dashboard.sh requires an interactive terminal (TTY)." >&2
+  exit 1
+fi
 
 # enter alternate screen, hide cursor
 tput smcup 2>/dev/null || true
