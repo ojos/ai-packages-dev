@@ -340,7 +340,7 @@ ensure_worktree() {
 
 run_implement_action() {
   local line="$1"
-  local branch base commit_message pr_title pr_body task_command
+  local branch base commit_message pr_title pr_body task_command issue_number
 
   branch="$(json_field "$line" '.options.branch // empty')"
   base="$(json_field "$line" '.options.base // "main"')"
@@ -348,6 +348,7 @@ run_implement_action() {
   pr_title="$(json_field "$line" '.options.prTitle // empty')"
   pr_body="$(json_field "$line" '.options.prBody // "Automated PR by line worker"')"
   task_command="$(json_field "$line" '.options.taskCommand // empty')"
+  issue_number="$(json_field "$line" '.scope' | grep -oE '[0-9]+' | head -1 || true)"
 
   if [[ -z "$branch" || -z "$commit_message" || -z "$pr_title" || -z "$task_command" ]]; then
     log_process "implement skipped: missing required options (branch/commitMessage/prTitle/taskCommand)"
@@ -367,7 +368,16 @@ run_implement_action() {
 
   if (cd "$WORKTREE_DIR" && git diff --cached --quiet); then
     log_process "implement no-op: no file changes branch=$branch"
+    if [[ -n "$issue_number" ]]; then
+      (cd "$ROOT_DIR" && gh issue comment "$issue_number" --body "line worker no-op: task command produced no file changes on branch \`${branch}\`. Review task-command and re-delegate if implementation is needed." >/dev/null 2>&1 || true)
+    fi
     return 0
+  fi
+
+  # Run ASF preflight to satisfy pre-commit and pre-push hooks in the worktree.
+  if ! (cd "$WORKTREE_DIR" && bash scripts/asf-workflow.sh preflight >/dev/null 2>&1); then
+    log_process "implement failed: asf preflight failed branch=$branch"
+    return 1
   fi
 
   (cd "$WORKTREE_DIR" && git commit -m "$commit_message" >/dev/null)
