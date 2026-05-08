@@ -92,6 +92,20 @@ bash scripts/github-account-switch.sh use ojos
 
 ---
 
+## AI Tool Provisioning by Mode
+
+`scripts/install-ai-tools.sh` is generated in all modes and installs the Claude and Gemini CLIs when the corresponding credentials are present at container create time.
+
+| Mode | `postCreateCommand` | AI env vars in `remoteEnv` | Persistent storage |
+|---------|----------------------|----------------------------|--------------------|
+| minimal | `bash scripts/install-ai-tools.sh` | `CLAUDE_CODE_OAUTH_TOKEN`, `GEMINI_API_KEY` | none |
+| standard | `bash scripts/install-ai-tools.sh` | `CLAUDE_CODE_OAUTH_TOKEN`, `GEMINI_API_KEY` | none |
+| full | `bash scripts/install-ai-tools.sh && bash scripts/post-rebuild-check.sh` | `CLAUDE_CODE_OAUTH_TOKEN`, `GEMINI_API_KEY` | named volumes for `.claude` and `.gemini` |
+
+Installation is credential-gated: if `CLAUDE_CODE_OAUTH_TOKEN` is not set, Claude CLI is skipped; if `GEMINI_API_KEY` is not set, Gemini CLI is skipped. No error is emitted for missing credentials — the script logs a `SKIP` message and exits cleanly.
+
+---
+
 ## Feature Flags
 - `features.docker` (default: true)
 - `features.ripgrep` (default: true)
@@ -150,6 +164,7 @@ Notes:
 ## Expected Output
 - `.devcontainer/devcontainer.json` (with language-specific features)
 - `scripts/github-account-switch.sh`
+- `scripts/install-ai-tools.sh`
 - `scripts/on-attach.sh`
 - `scripts/post-rebuild-check.sh`
 - `.gitignore` managed section (updated based on languages)
@@ -174,3 +189,4 @@ After generation, run:
 ```
 
 This validates that each configured language runtime is available.
+

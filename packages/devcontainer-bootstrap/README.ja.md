@@ -81,6 +81,18 @@ bash scripts/github-account-switch.sh list
 bash scripts/github-account-switch.sh use ojos
 ```
 
+## モード別 AI ツール導入挙動
+
+`scripts/install-ai-tools.sh` は全モードで生成され、コンテナ作成時に認証情報が存在する場合のみ Claude CLI / Gemini CLI をインストールします。
+
+| モード | `postCreateCommand` | AI 環境変数 (`remoteEnv`) | 永続ストレージ |
+|---------|----------------------|--------------------------|----------------|
+| minimal | `bash scripts/install-ai-tools.sh` | `CLAUDE_CODE_OAUTH_TOKEN`、`GEMINI_API_KEY` | なし |
+| standard | `bash scripts/install-ai-tools.sh` | `CLAUDE_CODE_OAUTH_TOKEN`、`GEMINI_API_KEY` | なし |
+| full | `bash scripts/install-ai-tools.sh && bash scripts/post-rebuild-check.sh` | `CLAUDE_CODE_OAUTH_TOKEN`、`GEMINI_API_KEY` | `.claude` / `.gemini` を named volume で永続化 |
+
+インストールはクレデンシャルの有無で制御されます。`CLAUDE_CODE_OAUTH_TOKEN` が未設定の場合は Claude CLI をスキップし、`GEMINI_API_KEY` が未設定の場合は Gemini CLI をスキップします。未設定でもエラーにはならず、`SKIP` ログを出力して正常終了します。
+
 ## Feature フラグ
 - `features.docker`（既定値: true）
 - `features.ripgrep`（既定値: true）
@@ -131,6 +143,7 @@ bash scripts/github-account-switch.sh use ojos
 ## 期待される出力
 - `.devcontainer/devcontainer.json`（言語別 feature を反映）
 - `scripts/github-account-switch.sh`
+- `scripts/install-ai-tools.sh`
 - `scripts/on-attach.sh`
 - `scripts/post-rebuild-check.sh`
 - `.gitignore` の managed セクション（言語構成に応じて自動更新）
@@ -151,3 +164,4 @@ bash scripts/github-account-switch.sh use ojos
 ./doctor.sh --target-dir result --strict
 ```
 設定された各言語ランタイムの可用性を動的にチェックします。
+
