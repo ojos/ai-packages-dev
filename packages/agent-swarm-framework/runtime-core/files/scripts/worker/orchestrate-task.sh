@@ -92,8 +92,20 @@ run_engine_with_prompt_file() {
         rm -f "$stderr_tmp"
         return 1
       fi
+      local engine_extra_flags=()
+      local stdin_prompt=""
+      if [[ "$engine" == "gemini" ]]; then
+        engine_extra_flags=(--skip-trust --approval-mode plan)
+        stdin_prompt="Use stdin content as the primary prompt context."
+      fi
+
       # Prefer stdin mode to avoid argv size limits on large prompts.
-      if cat "$prompt_file" | "$engine" -p > "$output_file" 2>"$stderr_tmp"; then
+      if [[ "$engine" == "claude" ]]; then
+        if cat "$prompt_file" | claude --print --permission-mode plan > "$output_file" 2>"$stderr_tmp"; then
+          rm -f "$stderr_tmp"
+          return 0
+        fi
+      elif cat "$prompt_file" | "$engine" "${engine_extra_flags[@]}" -p "$stdin_prompt" > "$output_file" 2>"$stderr_tmp"; then
         rm -f "$stderr_tmp"
         return 0
       fi
@@ -110,7 +122,12 @@ run_engine_with_prompt_file() {
       fi
 
       prompt="$(cat "$prompt_file")"
-      if "$engine" -p "$prompt" > "$output_file" 2>>"$stderr_tmp"; then
+      if [[ "$engine" == "claude" ]]; then
+        if claude --print --permission-mode plan "$prompt" > "$output_file" 2>>"$stderr_tmp"; then
+          rm -f "$stderr_tmp"
+          return 0
+        fi
+      elif "$engine" "${engine_extra_flags[@]}" -p "$prompt" > "$output_file" 2>>"$stderr_tmp"; then
         rm -f "$stderr_tmp"
         return 0
       fi
@@ -132,7 +149,7 @@ run_engine_with_prompt_file() {
 # Issue mode or Plan mode
 if [[ -n "$ISSUE_NUMBER" && -z "$PLAN_FILE" ]]; then
   # Issue mode: fetch and infer
-  ISSUE_JSON="$(gh issue view "$ISSUE_NUMBER" --json title,body)"
+  ISSUE_JSON="$(gh issue view "$ISSUE_NUMBER" --json title,body,labels)"
   ISSUE_TITLE="$(printf '%s' "$ISSUE_JSON" | jq -r '.title')"
   ISSUE_BODY="$(printf '%s' "$ISSUE_JSON" | jq -r '.body')"
   
@@ -146,6 +163,12 @@ if [[ -n "$ISSUE_NUMBER" && -z "$PLAN_FILE" ]]; then
     TASK_KIND="frontend_state_finalize"
   elif [[ "$ISSUE_TITLE" =~ レビュー|review ]]; then
     TASK_KIND="review_standardization"
+  elif [[ "$ISSUE_TITLE" =~ DCB[[:space:]]+minimal[[:space:]]+AI[[:space:]]+tools[[:space:]]+provisioning[[:space:]]+parity ]]; then
+    TASK_KIND="dcb_minimal_ai_tools_parity"
+  elif [[ "$ISSUE_TITLE" =~ doctor[[:space:]]+dependency[[:space:]]+contract|jq/gh[[:space:]]+required ]]; then
+    TASK_KIND="asf_doctor_dependency_contract"
+  elif [[ "$ISSUE_TITLE" =~ unified[[:space:]]+engine[[:space:]]+provisioning[[:space:]]+matrix ]]; then
+    TASK_KIND="engine_provisioning_matrix"
   else
     TASK_KIND="minimal_roundtrip"
   fi
@@ -346,6 +369,51 @@ EOF
 EOF
 )
       ;;
+    dcb_minimal_ai_tools_parity)
+      FILES=(
+        "packages/devcontainer-bootstrap/bootstrap.sh"
+        "packages/devcontainer-bootstrap/README.md"
+        "packages/devcontainer-bootstrap/README.ja.md"
+      )
+      IMPLEMENTATION_GOAL=$(cat <<'EOF'
+- Implement minimal-mode parity for AI tools provisioning in DCB:
+  - ensure minimal mode includes a valid scripts/install-ai-tools.sh template path
+  - eliminate unknown template key errors during minimal generation
+  - keep minimal devcontainer postCreateCommand wiring deterministic
+  - update README and README.ja to clarify minimal/standard/full AI provisioning behavior
+EOF
+)
+      ;;
+    asf_doctor_dependency_contract)
+      FILES=(
+        "scripts/gate/asf-doctor.sh"
+        "packages/agent-swarm-framework/runtime-core/files/scripts/gate/asf-doctor.sh"
+        "packages/agent-swarm-framework/README.md"
+        "packages/agent-swarm-framework/README.ja.md"
+      )
+      IMPLEMENTATION_GOAL=$(cat <<'EOF'
+- Harden ASF dependency contract for jq/gh:
+  - treat jq and gh as required in doctor checks
+  - keep remediation messages explicit and actionable
+  - align README/README.ja dependency guidance with doctor behavior
+EOF
+)
+      ;;
+    engine_provisioning_matrix)
+      FILES=(
+        "packages/agent-swarm-framework/README.md"
+        "packages/agent-swarm-framework/README.ja.md"
+        "packages/devcontainer-bootstrap/README.md"
+        "packages/devcontainer-bootstrap/README.ja.md"
+      )
+      IMPLEMENTATION_GOAL=$(cat <<'EOF'
+- Add unified engine provisioning matrix across ASF/DCB:
+  - include claude/gemini/codex command and credential mapping
+  - include minimal/standard/full provisioning path and failure behavior
+  - keep English/Japanese descriptions synchronized
+EOF
+)
+      ;;
   esac
 }
 
@@ -540,6 +608,54 @@ run_checks() {
         exit 1
       fi
       ;;
+    dcb_minimal_ai_tools_parity)
+      log "Run DCB minimal parity checks"
+      if ! bash -n "$ROOT_DIR/packages/devcontainer-bootstrap/bootstrap.sh"; then
+        log "bootstrap.sh syntax check failed"
+        write_state "blocked" "copilot" "bootstrap.sh syntax check failed"
+        exit 1
+      fi
+      if ! grep -q "'minimal:scripts/install-ai-tools.sh'" "$ROOT_DIR/packages/devcontainer-bootstrap/bootstrap.sh"; then
+        log "minimal install-ai-tools template key missing"
+        write_state "blocked" "copilot" "minimal install-ai-tools template key missing"
+        exit 1
+      fi
+      ;;
+    asf_doctor_dependency_contract)
+      log "Run ASF doctor dependency checks"
+      if ! bash -n "$ROOT_DIR/scripts/gate/asf-doctor.sh"; then
+        log "asf-doctor.sh syntax check failed"
+        write_state "blocked" "copilot" "asf-doctor.sh syntax check failed"
+        exit 1
+      fi
+      if ! grep -q "check_cmd_required jq" "$ROOT_DIR/scripts/gate/asf-doctor.sh"; then
+        log "jq is not required in asf-doctor"
+        write_state "blocked" "copilot" "jq required contract missing"
+        exit 1
+      fi
+      if ! grep -q "check_cmd_required gh" "$ROOT_DIR/scripts/gate/asf-doctor.sh"; then
+        log "gh is not required in asf-doctor"
+        write_state "blocked" "copilot" "gh required contract missing"
+        exit 1
+      fi
+      ;;
+    engine_provisioning_matrix)
+      log "Run engine provisioning matrix checks"
+      if ! grep -qi "claude" "$ROOT_DIR/packages/agent-swarm-framework/README.md" || \
+         ! grep -qi "gemini" "$ROOT_DIR/packages/agent-swarm-framework/README.md" || \
+         ! grep -qi "codex" "$ROOT_DIR/packages/agent-swarm-framework/README.md"; then
+        log "ASF README engine matrix coverage missing"
+        write_state "blocked" "copilot" "ASF README engine matrix coverage missing"
+        exit 1
+      fi
+      if ! grep -qi "minimal" "$ROOT_DIR/packages/devcontainer-bootstrap/README.md" || \
+         ! grep -qi "standard" "$ROOT_DIR/packages/devcontainer-bootstrap/README.md" || \
+         ! grep -qi "full" "$ROOT_DIR/packages/devcontainer-bootstrap/README.md"; then
+        log "DCB README mode matrix coverage missing"
+        write_state "blocked" "copilot" "DCB README mode matrix coverage missing"
+        exit 1
+      fi
+      ;;
   esac
 }
 
@@ -706,6 +822,11 @@ write_state "done" "$ORCHESTRATOR_ENGINE"
 if [[ -n "$ISSUE_NUMBER" ]]; then
   log "Create Draft PR for issue #$ISSUE_NUMBER"
   CURRENT_BRANCH="$(git -C "$ROOT_DIR" branch --show-current)"
+  git -C "$ROOT_DIR" add -- "${FILES[@]}"
+  if ! git -C "$ROOT_DIR" diff --cached --quiet; then
+    git -C "$ROOT_DIR" commit -m "chore(line): execute issue #$ISSUE_NUMBER"
+  fi
+  git -C "$ROOT_DIR" push -u origin "$CURRENT_BRANCH"
   PR_TITLE="$(gh issue view "$ISSUE_NUMBER" --json title -q .title)"
   REVIEW_REL="${REVIEW_FILE#$ROOT_DIR/}"
   gh pr create \
