@@ -436,6 +436,7 @@ EOF
     dcb_php_language_support)
       FILES=(
         "packages/devcontainer-bootstrap/bootstrap.sh"
+        "packages/devcontainer-bootstrap/doctor.sh"
         "packages/devcontainer-bootstrap/README.md"
         "packages/devcontainer-bootstrap/README.ja.md"
       )
@@ -711,6 +712,11 @@ run_checks() {
       if ! grep -qi 'php' "$ROOT_DIR/packages/devcontainer-bootstrap/README.ja.md"; then
         log "PHP language docs missing in README.ja.md"
         write_state "blocked" "copilot" "php docs missing in README.ja.md"
+        exit 1
+      fi
+      if ! grep -q 'for lang in node go python php; do' "$ROOT_DIR/packages/devcontainer-bootstrap/doctor.sh"; then
+        log "doctor.sh PHP runtime detection missing"
+        write_state "blocked" "copilot" "doctor.sh php runtime detection missing"
         exit 1
       fi
       ;;
