@@ -33,7 +33,7 @@ bash bootstrap.sh --project-name myapp --languages node,go --mode standard
 
 ### 必須入力
 - `--project-name <name>`（文字列。必須）
-- `--languages <csv>`（CSV 形式。`node`、`go`、`python` を任意に組み合わせ。必須）
+- `--languages <csv>`（CSV 形式。`node`、`go`、`python`、`php` を任意に組み合わせ。必須）
 - `--mode <minimal|standard|full>`（テンプレート選択。既定: `standard`）
 
 ### オプション入力
@@ -56,6 +56,7 @@ bash bootstrap.sh --project-name myapp --languages node,go --mode standard
 - `node`（Node.js / JavaScript / TypeScript）
 - `go`（Go）
 - `python`（Python 3）
+- `php`（PHP）
 
 ### 使用例:
 ```bash
@@ -63,10 +64,10 @@ bash bootstrap.sh --project-name myapp --languages node,go --mode standard
 ./bootstrap.sh --project-name myapp --languages node --mode minimal
 
 # 複数言語
-./bootstrap.sh --project-name myapp --languages node,go,python --mode standard
+./bootstrap.sh --project-name myapp --languages node,go,python,php --mode standard
 
 # バックエンドのみ（フロントエンドなし）
-./bootstrap.sh --project-name backend-api --languages go,python --mode minimal
+./bootstrap.sh --project-name backend-api --languages go,python,php --mode minimal
 
 # 出力先を明示指定したい場合
 ./bootstrap.sh --project-name myapp --languages node --mode standard --output-dir /path/to/existing-workspace
@@ -75,7 +76,7 @@ bash bootstrap.sh --project-name myapp --languages node,go --mode standard
 ./bootstrap.sh --project-name myapp --languages node --mode minimal --no-gitignore
 
 # 暗黙ターゲット（macOS + 言語対応テンプレート）のみ使う場合
-./bootstrap.sh --project-name myapp --languages node,python --mode standard
+./bootstrap.sh --project-name myapp --languages node,python,php --mode standard
 
 # 追加テンプレートを明示指定したい場合（暗黙ターゲットに追加で合成）
 ./bootstrap.sh --project-name myapp --languages node --mode standard --gitignore-targets macOS,Node,VisualStudioCode
@@ -98,6 +99,7 @@ bash scripts/github-account-switch.sh use ojos
 - `features.node`（`languages` に `node` を含む場合）
 - `features.go`（`languages` に `go` を含む場合）
 - `features.python`（`languages` に `python` を含む場合）
+- `features.php`（`languages` に `php` を含む場合）
 - `features.awsCli`（`standard` または `full` モードの場合）
 - `features.terraform`（`standard` または `full` モードの場合）
 - `features.googleCloudSdk`（`full` モードのみ、外部 feature を利用）
@@ -143,7 +145,7 @@ Agent Swarm Framework (ASF) および DevContainer Bootstrap (DCB) における�
 | Codex  | `codex` | `OPENAI_API_KEY` | すべてのモードで手動導入のみ（DCB による自動導入なし） | バイナリ未導入または API キー未設定で失敗 |
 
 ## 検証ルール
-1. `languages` には少なくとも 1 つの対応言語（node|go|python）を含めること
+1. `languages` には少なくとも 1 つの対応言語（node|go|python|php）を含めること
 2. 指定した各言語に対応する feature を devcontainer.json に追加すること
 3. `--github-profiles` で指定した各 profile に対して `GITHUB_TOKEN_<PROFILE>` などの `remoteEnv` を生成すること
 4. ベースイメージは Docker サーバーの `os/arch` から自動判定（既定: `mcr.microsoft.com/devcontainers/base:ubuntu`、必要に応じて `--base-image` で上書き可能）
@@ -158,12 +160,12 @@ Agent Swarm Framework (ASF) および DevContainer Bootstrap (DCB) における�
 
 ### `.gitignore` と github/gitignore の連携
 - managed セクション末尾には常に `github/gitignore` テンプレートを追加します。
-- 暗黙ターゲットは `macOS` + `--languages` で指定した言語対応テンプレート（`node`→`Node` / `go`→`Go` / `python`→`Python`）です。
+- 暗黙ターゲットは `macOS` + `--languages` で指定した言語対応テンプレート（`node`→`Node` / `go`→`Go` / `python`→`Python` / `php`→`PHP`）です。
 - `--gitignore-targets <csv>` を指定すると、暗黙ターゲットに追加で合成します（重複は除去）。
 - テンプレート取得は `https://github.com/github/gitignore` から行います（`<name>.gitignore` と `Global/<name>.gitignore` を順に探索）。
 - 取得できないテンプレート名は警告を出してスキップします（処理は継続）。
 
-> **注意**: `--languages` の値は小文字（`node`, `go`, `python`）で指定します。一方 `--gitignore-targets` の値は [github/gitignore](https://github.com/github/gitignore) リポジトリのファイル名に合わせた大文字始まり（`Node`, `Go`, `macOS` など）で指定してください。これらは別々の用途を持つため、意図的に表記が異なります。
+> **注意**: `--languages` の値は小文字（`node`, `go`, `python`, `php`）で指定します。一方 `--gitignore-targets` の値は [github/gitignore](https://github.com/github/gitignore) リポジトリのファイル名に合わせた大文字始まり（`Node`, `Go`, `PHP`, `macOS` など）で指定してください。これらは別々の用途を持つため、意図的に表記が異なります。
 
 ## Doctor 自己診断
 生成後に次を実行して検証します:
