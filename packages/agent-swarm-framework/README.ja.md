@@ -85,6 +85,16 @@ standalone 実行時（install.sh 単体）の動作:
 | orchestrator mode | `remote` |
 | state backend | `hybrid` |
 
+## AI エンジン導入マトリックス
+
+Agent Swarm Framework (ASF) および DevContainer Bootstrap (DCB) における、共通のエンジンルーティングと導入・認証要件のマトリックスです。
+
+| エンジン | コマンド | 認証環境変数 | 導入経路 (モード) | 未導入・未認証時の挙動 |
+|----------|----------|--------------|-------------------|------------------------|
+| Claude | `claude` | `CLAUDE_CODE_OAUTH_TOKEN` | `standard` / `full` (`minimal` ではスキップ) | ログインプロンプトが表示されるか、エラー終了する |
+| Gemini | `gemini` | `GEMINI_API_KEY` | `standard` / `full` (`minimal` ではスキップ) | 認証キー不足でエラー終了する |
+| Codex  | `codex` | `OPENAI_API_KEY` | `standard` / `full` (`minimal` ではスキップ) | 認証キー不足でエラー終了する |
+
 ## バージョン方針
 
 | 項目 | 方針 |
@@ -140,3 +150,4 @@ E2E も含める場合:
 ```bash
 RUN_E2E_TESTS=true bash packages/agent-swarm-framework/tests/run-shell-tests.sh
 ```
+

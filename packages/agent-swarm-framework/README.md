@@ -105,6 +105,18 @@ For full details, see [docs/install.md](docs/install.md).
 
 ---
 
+## AI Engine Provisioning Matrix
+
+This unified matrix describes engine routing, required credentials, and installation paths across DevContainer Bootstrap (DCB) and Agent Swarm Framework (ASF).
+
+| Engine | Command | Credential Env Var | Provisioning Path (Mode) | Failure Behavior (Missing Credential/Not Installed) |
+|--------|---------|--------------------|--------------------------|-----------------------------------------------------|
+| Claude | `claude` | `CLAUDE_CODE_OAUTH_TOKEN` | `standard` / `full` (Skipped in `minimal`) | Command prompts for interactive login or fails |
+| Gemini | `gemini` | `GEMINI_API_KEY` | `standard` / `full` (Skipped in `minimal`) | Command fails with missing API key error |
+| Codex  | `codex` | `OPENAI_API_KEY` | `standard` / `full` (Skipped in `minimal`) | Command fails with missing API key error |
+
+---
+
 ## Version Policy
 
 | Item | Policy |
@@ -180,3 +192,4 @@ Run E2E tests as well:
 ```bash
 RUN_E2E_TESTS=true bash packages/agent-swarm-framework/tests/run-shell-tests.sh
 ```
+
