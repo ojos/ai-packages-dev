@@ -41,6 +41,16 @@ bash bootstrap.sh --project-name myapp --languages node,go --mode standard
 - `--base-image <image>`（自動判定結果を上書きして明示指定）
 - `--github-profiles <csv>`（GitHub マルチアカウント用 profile 名。既定: `primary,secondary`）
 
+### モード別 AI CLI 導入挙動
+
+| モード | `scripts/install-ai-tools.sh` 生成 | `postCreateCommand` の挙動 |
+|---|---|---|
+| `minimal` | あり | `bash scripts/install-ai-tools.sh` を実行 |
+| `standard` | あり | `bash scripts/install-ai-tools.sh` を実行 |
+| `full` | あり | `bash scripts/install-ai-tools.sh && bash scripts/post-rebuild-check.sh` を実行 |
+
+`install-ai-tools.sh` は対応する認証情報が設定されている場合のみ `claude` / `gemini` を導入します（`CLAUDE_CODE_OAUTH_TOKEN`, `GEMINI_API_KEY`）。
+
 ## 言語サポート
 対応ランタイム（任意の組み合わせ）:
 - `node`（Node.js / JavaScript / TypeScript）
