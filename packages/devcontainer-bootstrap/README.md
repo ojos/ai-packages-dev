@@ -39,7 +39,7 @@ bash bootstrap.sh --project-name myapp --languages node,go --mode standard
 
 ### Required Inputs
 - `--project-name <name>` (string, required)
-- `--languages <csv>` (CSV format. Choose from `node`, `go`, `python`. Required.)
+- `--languages <csv>` (CSV format. Choose from `node`, `go`, `python`, `php`. Required.)
 - `--mode <minimal|standard|full>` (template selection. Default: `standard`)
 
 ### Optional Inputs
@@ -65,6 +65,7 @@ Supported runtimes (any combination):
 - `node` (Node.js / JavaScript / TypeScript)
 - `go` (Go)
 - `python` (Python 3)
+- `php` (PHP)
 
 ### Examples:
 ```bash
@@ -72,10 +73,10 @@ Supported runtimes (any combination):
 ./bootstrap.sh --project-name myapp --languages node --mode minimal
 
 # Multiple languages
-./bootstrap.sh --project-name myapp --languages node,go,python --mode standard
+./bootstrap.sh --project-name myapp --languages node,go,python,php --mode standard
 
 # Backend only
-./bootstrap.sh --project-name backend-api --languages go,python --mode minimal
+./bootstrap.sh --project-name backend-api --languages go,python,php --mode minimal
 
 # With explicit output directory
 ./bootstrap.sh --project-name myapp --languages node --mode standard --output-dir /path/to/existing-workspace
@@ -84,7 +85,7 @@ Supported runtimes (any combination):
 ./bootstrap.sh --project-name myapp --languages node --mode minimal --no-gitignore
 
 # macOS + language-specific templates only
-./bootstrap.sh --project-name myapp --languages node,python --mode standard
+./bootstrap.sh --project-name myapp --languages node,python,php --mode standard
 
 # Add custom gitignore templates
 ./bootstrap.sh --project-name myapp --languages node --mode standard --gitignore-targets macOS,Node,VisualStudioCode
@@ -109,6 +110,7 @@ bash scripts/github-account-switch.sh use ojos
 - `features.node` (when `languages` includes `node`)
 - `features.go` (when `languages` includes `go`)
 - `features.python` (when `languages` includes `python`)
+- `features.php` (when `languages` includes `php`)
 - `features.awsCli` (when mode is `standard` or `full`)
 - `features.terraform` (when mode is `standard` or `full`)
 - `features.googleCloudSdk` (full mode only; external feature source)
@@ -162,7 +164,7 @@ This unified matrix describes engine routing, required credentials, and installa
 ---
 
 ## Validation Rules
-1. `languages` must include at least one of `node`, `go`, or `python`
+1. `languages` must include at least one of `node`, `go`, `python`, or `php`
 2. Each specified language must have a corresponding feature in devcontainer.json
 3. Each profile in `--github-profiles` must generate `GITHUB_TOKEN_<PROFILE>` and related `remoteEnv` entries
 4. Base image is auto-detected from Docker server `os/arch` (default: `mcr.microsoft.com/devcontainers/base:ubuntu`, override with `--base-image`)
@@ -179,12 +181,12 @@ This unified matrix describes engine routing, required credentials, and installa
 
 ### `.gitignore` and github/gitignore Integration
 - The managed section always includes `github/gitignore` templates at the end.
-- Default targets: `macOS` + language-specific templates (`node`→`Node`, `go`→`Go`, `python`→`Python`)
+- Default targets: `macOS` + language-specific templates (`node`→`Node`, `go`→`Go`, `python`→`Python`, `php`→`PHP`)
 - `--gitignore-targets <csv>` adds to the defaults (duplicates removed).
 - Templates are fetched from `https://github.com/github/gitignore` (searches for both `<name>.gitignore` and `Global/<name>.gitignore`).
 - Missing templates generate a warning but do not stop processing.
 
-> **Note**: `--languages` values are lowercase (`node`, `go`, `python`), while `--gitignore-targets` values match [github/gitignore](https://github.com/github/gitignore) filenames (capitalized: `Node`, `Go`, `macOS`). This difference is intentional.
+> **Note**: `--languages` values are lowercase (`node`, `go`, `python`, `php`), while `--gitignore-targets` values match [github/gitignore](https://github.com/github/gitignore) filenames (capitalized: `Node`, `Go`, `PHP`, `macOS`). This difference is intentional.
 
 ---
 

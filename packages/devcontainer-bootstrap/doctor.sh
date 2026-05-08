@@ -112,8 +112,8 @@ check_runtime_languages() {
     return
   fi
 
-  # Extract language runtimes from features (node, go, python)
-  for lang in node go python; do
+  # Extract language runtimes from features (node, go, python, php)
+  for lang in node go python php; do
     if grep -q "\"ghcr.io/devcontainers/features/$lang:1\"" "$devcontainer_json" 2>/dev/null; then
       if command -v "$lang" >/dev/null 2>&1; then
         ok "$lang command available"

@@ -32,7 +32,7 @@ options:
   --project-name <name>       Project name for devcontainer display name (required)
   --mode <minimal|standard|full>
                               Template variant (default: standard)
-  --languages <csv>           Language runtimes (CSV: node,go,python) (required)
+  --languages <csv>           Language runtimes (CSV: node,go,python,php) (required)
   --output-dir <path>         Output directory (default: $PWD/<project-name>)
   --github-profiles <csv>     GitHub profiles for multi-account env injection
                               (default: primary,secondary)
@@ -85,8 +85,8 @@ for i in "${!LANGUAGES[@]}"; do
 done
 for lang in "${LANGUAGES[@]}"; do
   case "$lang" in
-    node|go|python) ;;
-    *) echo "error: unsupported language: $lang (supported: node, go, python)" >&2; exit 1 ;;
+    node|go|python|php) ;;
+    *) echo "error: unsupported language: $lang (supported: node, go, python, php)" >&2; exit 1 ;;
   esac
 done
 case "$MODE" in
@@ -196,7 +196,8 @@ get_template_content() {
     "ghcr.io/devcontainers/features/github-cli:1": {},
     "__IF_RUNTIME_NODE__": "ghcr.io/devcontainers/features/node:1",
     "__IF_RUNTIME_GO__": "ghcr.io/devcontainers/features/go:1",
-    "__IF_RUNTIME_PYTHON__": "ghcr.io/devcontainers/features/python:1"
+    "__IF_RUNTIME_PYTHON__": "ghcr.io/devcontainers/features/python:1",
+    "__IF_RUNTIME_PHP__": "ghcr.io/devcontainers/features/php:1"
   },
   "remoteEnv": {
 __GITHUB_PROFILE_ENV_BLOCK__
@@ -413,6 +414,7 @@ echo "[check] minimal bootstrap checks"
 command -v bash >/dev/null 2>&1 && echo "[check] bash OK"
 command -v gh   >/dev/null 2>&1 && echo "[check] gh OK" || echo "[check] gh missing"
 command -v rg   >/dev/null 2>&1 && echo "[check] rg OK" || echo "[check] rg missing"
+__IF_RUNTIME_PHP_CHECK__command -v php  >/dev/null 2>&1 && echo "[check] php OK" || echo "[check] php missing"
 TMPL
       ;;
     'standard:.devcontainer/devcontainer.json')
@@ -437,7 +439,8 @@ TMPL
     "ghcr.io/devcontainers/features/terraform:1": {},
     "__IF_RUNTIME_NODE__": "ghcr.io/devcontainers/features/node:1",
     "__IF_RUNTIME_GO__": "ghcr.io/devcontainers/features/go:1",
-    "__IF_RUNTIME_PYTHON__": "ghcr.io/devcontainers/features/python:1"
+    "__IF_RUNTIME_PYTHON__": "ghcr.io/devcontainers/features/python:1",
+    "__IF_RUNTIME_PHP__": "ghcr.io/devcontainers/features/php:1"
   },
   "remoteEnv": {
 __GITHUB_PROFILE_ENV_BLOCK__
@@ -516,6 +519,7 @@ echo "[check] standard bootstrap checks"
 for cmd in bash jq gh node go docker rg; do
   command -v "$cmd" >/dev/null 2>&1 && echo "[check] $cmd OK" || echo "[check] $cmd missing"
 done
+__IF_RUNTIME_PHP_CHECK__command -v php >/dev/null 2>&1 && echo "[check] php OK" || echo "[check] php missing"
 TMPL
       ;;
     'full:.devcontainer/devcontainer.json')
@@ -539,6 +543,7 @@ TMPL
     "__IF_RUNTIME_NODE__": "ghcr.io/devcontainers/features/node:1",
     "__IF_RUNTIME_GO__": "ghcr.io/devcontainers/features/go:1",
     "__IF_RUNTIME_PYTHON__": "ghcr.io/devcontainers/features/python:1",
+    "__IF_RUNTIME_PHP__": "ghcr.io/devcontainers/features/php:1",
     "ghcr.io/devcontainers/features/aws-cli:1": {},
     "ghcr.io/devcontainers/features/terraform:1": {},
     "ghcr.io/dhoeric/features/google-cloud-cli:1": {
@@ -625,6 +630,7 @@ echo "[check] full bootstrap checks"
 for cmd in bash jq gh node go docker rg claude gemini; do
   command -v "$cmd" >/dev/null 2>&1 && echo "[check] $cmd OK" || echo "[check] $cmd missing"
 done
+__IF_RUNTIME_PHP_CHECK__command -v php >/dev/null 2>&1 && echo "[check] php OK" || echo "[check] php missing"
 TMPL
       ;;
     *)
@@ -653,6 +659,9 @@ build_default_gitignore_targets() {
   fi
   if has_language "python"; then
     targets+=("Python")
+  fi
+  if has_language "php"; then
+    targets+=("PHP")
   fi
   printf '%s\n' "${targets[@]}" | awk '!seen[$0]++'
 }
@@ -763,7 +772,7 @@ render_content() {
   sed_args+=(-e "s|__CLAUDE_TOKEN_ENV__|$CLAUDE_TOKEN_ENV|g")
   sed_args+=(-e "s|__GEMINI_KEY_ENV__|$GEMINI_KEY_ENV|g")
   sed_args+=(-e "s|__BASE_IMAGE__|$escaped_base_image|g")
-  for lang in node go python; do
+  for lang in node go python php; do
     local lang_upper
     lang_upper=$(printf '%s' "$lang" | tr '[:lower:]' '[:upper:]')
     if has_language "$lang"; then
@@ -772,6 +781,11 @@ render_content() {
       sed_args+=(-e "/\"__IF_RUNTIME_${lang_upper}__\"/d")
     fi
   done
+  if has_language "php"; then
+    sed_args+=(-e "s|__IF_RUNTIME_PHP_CHECK__||g")
+  else
+    sed_args+=(-e "/__IF_RUNTIME_PHP_CHECK__/d")
+  fi
   printf '%s' "$content" | sed "${sed_args[@]}"
 }
 
