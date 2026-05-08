@@ -61,7 +61,7 @@ bash scripts/asf up --interval 15
 bash scripts/asf down
 ```
 
-Doctor mode verifies required files/scripts, command availability, `gh auth`, and hook path sanity.
+Doctor mode verifies required files/scripts, required command availability (bash, git, jq, gh), `gh auth` status, and hook path sanity.
 
 ### Retrofit (Staged Adoption)
 
@@ -161,8 +161,8 @@ ASF can be used standalone, but when dotfiles is present, treat dotfiles as base
 
 | Symptom | Solution |
 |---------|----------|
-| `gh: command not found` | Install GitHub CLI and run `gh auth login` |
-| `jq: command not found` | Install: `apt install jq` or `brew install jq` |
+| `gh: command not found` | Install GitHub CLI (required) and run `gh auth login` |
+| `jq: command not found` | Install jq (required): `apt install jq` or `brew install jq` |
 | `error: --non-interactive requires --config` | Always use `--config <file>` with `--non-interactive` |
 | Files unexpectedly overwritten | Check preview's "overwrite" section before applying |
 | milestone/issue not reflected | Check `--skip-github` flag and `gh auth status` |
@@ -180,3 +180,4 @@ Run E2E tests as well:
 ```bash
 RUN_E2E_TESTS=true bash packages/agent-swarm-framework/tests/run-shell-tests.sh
 ```
+

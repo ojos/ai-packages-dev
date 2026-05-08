@@ -57,7 +57,7 @@ bash scripts/asf up --interval 15
 bash scripts/asf down
 ```
 
-doctor モードでは、必須ファイル/スクリプト、コマンド可用性、`gh auth`、hook path の健全性を確認します。
+doctor モードでは、必須ファイル/スクリプト、必須コマンドの可用性（bash, git, jq, gh）、`gh auth` の状態、hook path の健全性を確認します。
 
 既存プロジェクトへの途中導入（Retrofit）:
 - ASF は新規リポジトリだけでなく既存リポジトリへ段階導入できる。
@@ -120,8 +120,8 @@ ASF は単体利用も可能ですが、dotfiles を併用する場合は、dotf
 
 | 症状 | 対策 |
 |------|------|
-| `gh: command not found` | GitHub CLI をインストールして `gh auth login` |
-| `jq: command not found` | `apt install jq` または `brew install jq` |
+| `gh: command not found` | GitHub CLI をインストール（必須）して `gh auth login` |
+| `jq: command not found` | jq をインストール（必須）: `apt install jq` または `brew install jq` |
 | `error: --non-interactive requires --config` | `--config <file>` を必ず併用する |
 | ファイルが意図せず上書きされる | プレビューの「上書き予定」欄を必ず確認する |
 | milestone/issue が反映されない | `--skip-github` 有無と `gh auth status` を確認する |
@@ -140,3 +140,4 @@ E2E も含める場合:
 ```bash
 RUN_E2E_TESTS=true bash packages/agent-swarm-framework/tests/run-shell-tests.sh
 ```
+
