@@ -91,9 +91,9 @@ Agent Swarm Framework (ASF) および DevContainer Bootstrap (DCB) における�
 
 | エンジン | コマンド | 認証環境変数 | 導入経路 (モード) | 未導入・未認証時の挙動 |
 |----------|----------|--------------|-------------------|------------------------|
-| Claude | `claude` | `CLAUDE_CODE_OAUTH_TOKEN` | `standard` / `full` (`minimal` ではスキップ) | ログインプロンプトが表示されるか、エラー終了する |
-| Gemini | `gemini` | `GEMINI_API_KEY` | `standard` / `full` (`minimal` ではスキップ) | 認証キー不足でエラー終了する |
-| Codex  | `codex` | `OPENAI_API_KEY` | `standard` / `full` (`minimal` ではスキップ) | 認証キー不足でエラー終了する |
+| Claude | `claude` | `CLAUDE_CODE_OAUTH_TOKEN` | DCB の `minimal` / `standard` / `full` で生成される `scripts/install-ai-tools.sh` を `postCreateCommand` で実行 | トークン/認証不足時はログインプロンプト表示またはエラー終了 |
+| Gemini | `gemini` | `GEMINI_API_KEY` | DCB の `minimal` / `standard` / `full` で生成される `scripts/install-ai-tools.sh` を `postCreateCommand` で実行 | API キー不足または API/認証エラーで失敗 |
+| Codex  | `codex` | `OPENAI_API_KEY` | すべてのモードで手動導入のみ（DCB による自動導入なし） | バイナリ未導入または API キー未設定で失敗 |
 
 ## バージョン方針
 
