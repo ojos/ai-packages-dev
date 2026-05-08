@@ -52,6 +52,12 @@ resolve_role_engine() {
   local default_engine
   default_engine="$(role_default_engine "$role")"
 
+  # Stabilize known issue classes on gemini in headless line-worker execution.
+  if [[ "$role" == "implementer" ]] && [[ "$task_kind" =~ ^(dcb_minimal_ai_tools_parity|asf_doctor_dependency_contract|engine_provisioning_matrix)$ ]]; then
+    echo "gemini"
+    return
+  fi
+
   if [[ -f "$ENGINE_ROUTING_FILE" ]]; then
     jq -r --arg role "$role" --arg task "$task_kind" --arg def "$default_engine" '
       (.taskEngineOverrides[$task][$role] // .roleEngines[$role] // $def)
@@ -155,9 +161,19 @@ if [[ -n "$ISSUE_NUMBER" && -z "$PLAN_FILE" ]]; then
   
   PLAN_TEXT="$ISSUE_BODY"
   PLAN_SOURCE_LABEL="Issue #$ISSUE_NUMBER"
+
+  # Deterministic issue-number mapping for known implementation tracks.
+  case "$ISSUE_NUMBER" in
+    44) TASK_KIND="dcb_minimal_ai_tools_parity" ;;
+    45) TASK_KIND="asf_doctor_dependency_contract" ;;
+    46) TASK_KIND="engine_provisioning_matrix" ;;
+    *) TASK_KIND="" ;;
+  esac
   
   # Infer task kind from issue title
-  if [[ "$ISSUE_TITLE" =~ [Bb]ackend ]] && [[ "$ISSUE_TITLE" =~ エラー|error|処理 ]]; then
+  if [[ -n "$TASK_KIND" ]]; then
+    :
+  elif [[ "$ISSUE_TITLE" =~ [Bb]ackend ]] && [[ "$ISSUE_TITLE" =~ エラー|error|処理 ]]; then
     TASK_KIND="backend_error_handling"
   elif [[ "$ISSUE_TITLE" =~ [Ff]rontend ]] && [[ "$ISSUE_TITLE" =~ 状態|state ]]; then
     TASK_KIND="frontend_state_finalize"
