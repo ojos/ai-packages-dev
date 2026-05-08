@@ -17,11 +17,13 @@ options:
   --asf-version <vX.Y.Z>        ASF release tag (required)
   --dotfiles-version <vX.Y.Z>   dotfiles release tag (required)
   --execute                     Actually execute release operations
+  --audit                       Audit release assets across all repos and exit
   -h, --help                    Show help
 
 notes:
   - Without --execute, this script only validates inputs and exits.
   - This script enforces release-version consistency checks before publishing.
+  - Use --audit to check asset completeness across all repos without releasing.
 EOF
 }
 
@@ -153,6 +155,52 @@ if failed:
 PY
 }
 
+# Required assets every package release must include.
+REQUIRED_RELEASE_ASSETS=("RELEASE-MANIFEST.json" "SHA256SUMS" "PACKAGE_ARCHIVE.tar.gz")
+
+# Generate the three standard release assets in <dir> for a given package.
+# Usage: generate_standard_assets <dir> <package-name> <version>
+generate_standard_assets() {
+  local dir="$1"
+  local pkg_name="$2"
+  local version="$3"
+
+  pushd "$dir" >/dev/null
+
+  # PACKAGE_ARCHIVE.tar.gz — full tree minus the .git directory
+  tar --exclude='./.git' -czf PACKAGE_ARCHIVE.tar.gz .
+
+  # SHA256SUMS — covers all regular files except itself and the manifest
+  find . -type f \
+    ! -name SHA256SUMS \
+    ! -name 'RELEASE-MANIFEST.json' \
+    ! -path './.git/*' \
+    | sort | xargs sha256sum > SHA256SUMS
+
+  # RELEASE-MANIFEST.json
+  local archive_sha
+  archive_sha=$(sha256sum PACKAGE_ARCHIVE.tar.gz | awk '{print $1}')
+  local sums_sha
+  sums_sha=$(sha256sum SHA256SUMS | awk '{print $1}')
+  cat > RELEASE-MANIFEST.json <<JSON
+{
+  "package": "$pkg_name",
+  "version": "$version",
+  "assets": [
+    "RELEASE-MANIFEST.json",
+    "SHA256SUMS",
+    "PACKAGE_ARCHIVE.tar.gz"
+  ],
+  "checksums": {
+    "PACKAGE_ARCHIVE.tar.gz": "$archive_sha",
+    "SHA256SUMS": "$sums_sha"
+  }
+}
+JSON
+
+  popd >/dev/null
+}
+
 prepare_asf_release_repo() {
   local dir="$1"
   rm -rf "$dir"
@@ -185,13 +233,6 @@ prepare_dcb_release_repo() {
     cp packages/devcontainer-bootstrap/README.ja.md "$dir/"
   fi
   cp packages/devcontainer-bootstrap/.github/workflows/release.yml "$dir/.github/workflows/"
-}
-
-prepare_dcb_release_assets() {
-  local dir="$1"
-  pushd "$dir" >/dev/null
-  sha256sum bootstrap.sh doctor.sh > SHA256SUMS
-  popd >/dev/null
 }
 
 prepare_dotfiles_release_repo() {
@@ -267,11 +308,47 @@ tag_and_release() {
   fi
 }
 
+# Audit required release assets across all repos for the given owner.
+# Prints a report and exits non-zero if any required asset is missing.
+audit_release_assets() {
+  local owner="$1"
+  local repos=("$owner/agent-swarm-framework" "$owner/ai-dotfiles" "$owner/devcontainer-bootstrap")
+  local failed=0
+
+  echo "[audit] checking required release assets: ${REQUIRED_RELEASE_ASSETS[*]}"
+  for repo in "${repos[@]}"; do
+    local tag
+    tag=$(gh release list --repo "$repo" --limit 1 --json tagName --jq '.[0].tagName' 2>/dev/null || true)
+    if [[ -z "$tag" ]]; then
+      echo "[audit] WARN  $repo — no releases found"
+      continue
+    fi
+    local present
+    present=$(gh release view "$tag" --repo "$repo" --json assets --jq '[.assets[].name]' 2>/dev/null || echo '[]')
+    for asset in "${REQUIRED_RELEASE_ASSETS[@]}"; do
+      if echo "$present" | grep -qF "\"$asset\""; then
+        echo "[audit] OK    $repo@$tag  $asset"
+      else
+        echo "[audit] MISS  $repo@$tag  $asset"
+        failed=1
+      fi
+    done
+  done
+
+  if [[ $failed -eq 0 ]]; then
+    echo "[audit] all required assets present"
+  else
+    echo "[audit] missing required assets detected" >&2
+    return 1
+  fi
+}
+
 OWNER=""
 DCB_TAG=""
 ASF_TAG=""
 DOTFILES_TAG=""
 EXECUTE="false"
+AUDIT="false"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -280,10 +357,23 @@ while [[ $# -gt 0 ]]; do
     --asf-version) ASF_TAG="$2"; shift 2 ;;
     --dotfiles-version) DOTFILES_TAG="$2"; shift 2 ;;
     --execute) EXECUTE="true"; shift ;;
+    --audit) AUDIT="true"; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "error: unknown option: $1" >&2; usage; exit 1 ;;
   esac
 done
+
+# --audit only requires --owner
+if [[ "$AUDIT" == "true" ]]; then
+  [[ -n "$OWNER" ]] || {
+    echo "error: --owner is required for --audit" >&2
+    usage
+    exit 1
+  }
+  require_cmd gh
+  audit_release_assets "$OWNER"
+  exit $?
+fi
 
 [[ -n "$OWNER" && -n "$DCB_TAG" && -n "$ASF_TAG" && -n "$DOTFILES_TAG" ]] || {
   echo "error: required options are missing" >&2
@@ -294,6 +384,8 @@ done
 require_cmd git
 require_cmd gh
 require_cmd bash
+require_cmd tar
+require_cmd sha256sum
 require_clean_worktree
 extract_semver "$DCB_TAG" >/dev/null
 extract_semver "$ASF_TAG" >/dev/null
@@ -316,21 +408,35 @@ DCB_DIR="/tmp/dcb-release"
 ASF_DIR="/tmp/asf-release"
 DOTFILES_DIR="/tmp/dotfiles-release"
 
+DCB_VER="$(extract_semver "$DCB_TAG")"
+ASF_VER="$(extract_semver "$ASF_TAG")"
+DOTFILES_VER="$(extract_semver "$DOTFILES_TAG")"
+
 prepare_dcb_release_repo "$DCB_DIR"
-prepare_dcb_release_assets "$DCB_DIR"
+generate_standard_assets "$DCB_DIR" "devcontainer-bootstrap" "$DCB_VER"
 init_and_push_release_repo "$DCB_DIR" "$OWNER/devcontainer-bootstrap" public
 tag_and_release "$DCB_DIR" "$OWNER/devcontainer-bootstrap" "$DCB_TAG" "Release $DCB_TAG" \
   "$DCB_DIR/bootstrap.sh" \
   "$DCB_DIR/doctor.sh" \
-  "$DCB_DIR/SHA256SUMS"
+  "$DCB_DIR/RELEASE-MANIFEST.json" \
+  "$DCB_DIR/SHA256SUMS" \
+  "$DCB_DIR/PACKAGE_ARCHIVE.tar.gz"
 
 prepare_asf_release_repo "$ASF_DIR"
+generate_standard_assets "$ASF_DIR" "agent-swarm-framework" "$ASF_VER"
 init_and_push_release_repo "$ASF_DIR" "$OWNER/agent-swarm-framework" public
-tag_and_release "$ASF_DIR" "$OWNER/agent-swarm-framework" "$ASF_TAG" "Initial release $ASF_TAG"
+tag_and_release "$ASF_DIR" "$OWNER/agent-swarm-framework" "$ASF_TAG" "Release $ASF_TAG" \
+  "$ASF_DIR/RELEASE-MANIFEST.json" \
+  "$ASF_DIR/SHA256SUMS" \
+  "$ASF_DIR/PACKAGE_ARCHIVE.tar.gz"
 
 prepare_dotfiles_release_repo "$DOTFILES_DIR"
+generate_standard_assets "$DOTFILES_DIR" "ai-dotfiles" "$DOTFILES_VER"
 init_and_push_release_repo "$DOTFILES_DIR" "$OWNER/ai-dotfiles" public
-tag_and_release "$DOTFILES_DIR" "$OWNER/ai-dotfiles" "$DOTFILES_TAG" "Initial release $DOTFILES_TAG"
+tag_and_release "$DOTFILES_DIR" "$OWNER/ai-dotfiles" "$DOTFILES_TAG" "Release $DOTFILES_TAG" \
+  "$DOTFILES_DIR/RELEASE-MANIFEST.json" \
+  "$DOTFILES_DIR/SHA256SUMS" \
+  "$DOTFILES_DIR/PACKAGE_ARCHIVE.tar.gz"
 
 cd "$ROOT_DIR"
 
@@ -347,3 +453,6 @@ for r in "$OWNER/devcontainer-bootstrap" "$OWNER/agent-swarm-framework" "$OWNER/
   gh release list --repo "$r" --limit 3 || true
   echo "---"
 done
+
+audit_release_assets "$OWNER"
+
