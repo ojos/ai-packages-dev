@@ -47,6 +47,16 @@ bash bootstrap.sh --project-name myapp --languages node,go --mode standard
 - `--base-image <image>` (override auto-detected base image)
 - `--github-profiles <csv>` (GitHub profiles for multi-account env injection. Default: `primary,secondary`)
 
+### Mode Provisioning Behavior (AI CLI)
+
+| Mode | `scripts/install-ai-tools.sh` generated | `postCreateCommand` behavior |
+|---|---|---|
+| `minimal` | yes | runs `bash scripts/install-ai-tools.sh` |
+| `standard` | yes | runs `bash scripts/install-ai-tools.sh` |
+| `full` | yes | runs `bash scripts/install-ai-tools.sh && bash scripts/post-rebuild-check.sh` |
+
+`install-ai-tools.sh` installs `claude` and `gemini` only when corresponding credentials are present (`CLAUDE_CODE_OAUTH_TOKEN`, `GEMINI_API_KEY`).
+
 ---
 
 ## Supported Languages
