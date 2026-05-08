@@ -187,6 +187,13 @@ prepare_dcb_release_repo() {
   cp packages/devcontainer-bootstrap/.github/workflows/release.yml "$dir/.github/workflows/"
 }
 
+prepare_dcb_release_assets() {
+  local dir="$1"
+  pushd "$dir" >/dev/null
+  sha256sum bootstrap.sh doctor.sh > SHA256SUMS
+  popd >/dev/null
+}
+
 prepare_dotfiles_release_repo() {
   local dir="$1"
   rm -rf "$dir"
@@ -234,6 +241,8 @@ tag_and_release() {
   local repo="$2"
   local tag="$3"
   local notes="$4"
+  shift 4
+  local assets=("$@")
 
   pushd "$dir" >/dev/null
   if ! git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
@@ -244,8 +253,17 @@ tag_and_release() {
   fi
   popd >/dev/null
 
-  if ! gh release view "$tag" --repo "$repo" >/dev/null 2>&1; then
-    gh release create "$tag" --repo "$repo" --title "$tag" --notes "$notes"
+  if gh release view "$tag" --repo "$repo" >/dev/null 2>&1; then
+    if [[ ${#assets[@]} -gt 0 ]]; then
+      gh release upload "$tag" --repo "$repo" --clobber "${assets[@]}"
+    fi
+    gh release edit "$tag" --repo "$repo" --title "$tag" --notes "$notes"
+  else
+    if [[ ${#assets[@]} -gt 0 ]]; then
+      gh release create "$tag" --repo "$repo" --title "$tag" --notes "$notes" "${assets[@]}"
+    else
+      gh release create "$tag" --repo "$repo" --title "$tag" --notes "$notes"
+    fi
   fi
 }
 
@@ -299,9 +317,12 @@ ASF_DIR="/tmp/asf-release"
 DOTFILES_DIR="/tmp/dotfiles-release"
 
 prepare_dcb_release_repo "$DCB_DIR"
+prepare_dcb_release_assets "$DCB_DIR"
 init_and_push_release_repo "$DCB_DIR" "$OWNER/devcontainer-bootstrap" public
-
-tag_and_release "$DCB_DIR" "$OWNER/devcontainer-bootstrap" "$DCB_TAG" "Release $DCB_TAG"
+tag_and_release "$DCB_DIR" "$OWNER/devcontainer-bootstrap" "$DCB_TAG" "Release $DCB_TAG" \
+  "$DCB_DIR/bootstrap.sh" \
+  "$DCB_DIR/doctor.sh" \
+  "$DCB_DIR/SHA256SUMS"
 
 prepare_asf_release_repo "$ASF_DIR"
 init_and_push_release_repo "$ASF_DIR" "$OWNER/agent-swarm-framework" public
