@@ -132,6 +132,16 @@ bash scripts/github-account-switch.sh use ojos
 - `GITHUB_TOKEN_<PROFILE>` は `scripts/github-account-switch.sh` で profile ごとに切替利用する前提です。
 - `GITHUB_OWNER_<PROFILE>` は、トークン発行者と操作対象 owner（個人/組織）が異なるときに使います。
 
+## AI エンジン導入マトリックス
+
+Agent Swarm Framework (ASF) および DevContainer Bootstrap (DCB) における、共通のエンジンルーティングと導入・認証要件のマトリックスです。
+
+| エンジン | コマンド | 認証環境変数 | 導入経路 (モード) | 未導入・未認証時の挙動 |
+|----------|----------|--------------|-------------------|------------------------|
+| Claude | `claude` | `CLAUDE_CODE_OAUTH_TOKEN` | `minimal` / `standard` / `full` で生成される `scripts/install-ai-tools.sh` を `postCreateCommand` で実行 | トークン/認証不足時はログインプロンプト表示またはエラー終了 |
+| Gemini | `gemini` | `GEMINI_API_KEY` | `minimal` / `standard` / `full` で生成される `scripts/install-ai-tools.sh` を `postCreateCommand` で実行 | API キー不足または API/認証エラーで失敗 |
+| Codex  | `codex` | `OPENAI_API_KEY` | すべてのモードで手動導入のみ（DCB による自動導入なし） | バイナリ未導入または API キー未設定で失敗 |
+
 ## 検証ルール
 1. `languages` には少なくとも 1 つの対応言語（node|go|python）を含めること
 2. 指定した各言語に対応する feature を devcontainer.json に追加すること
@@ -161,3 +171,4 @@ bash scripts/github-account-switch.sh use ojos
 ./doctor.sh --target-dir result --strict
 ```
 設定された各言語ランタイムの可用性を動的にチェックします。
+
