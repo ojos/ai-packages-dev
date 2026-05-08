@@ -838,6 +838,12 @@ write_state "done" "$ORCHESTRATOR_ENGINE"
 if [[ -n "$ISSUE_NUMBER" ]]; then
   log "Create Draft PR for issue #$ISSUE_NUMBER"
   CURRENT_BRANCH="$(git -C "$ROOT_DIR" branch --show-current)"
+
+  # Ensure ASF preflight marker exists for hook-enforced repositories.
+  if [[ -x "$ROOT_DIR/scripts/asf-workflow.sh" ]]; then
+    bash "$ROOT_DIR/scripts/asf-workflow.sh" preflight >> "$LOG_FILE" 2>&1 || true
+  fi
+
   git -C "$ROOT_DIR" add -- "${FILES[@]}"
   if ! git -C "$ROOT_DIR" diff --cached --quiet; then
     git -C "$ROOT_DIR" commit -m "chore(line): execute issue #$ISSUE_NUMBER"
