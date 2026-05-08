@@ -53,7 +53,7 @@ resolve_role_engine() {
   default_engine="$(role_default_engine "$role")"
 
   # Stabilize known issue classes on gemini in headless line-worker execution.
-  if [[ "$role" == "implementer" ]] && [[ "$task_kind" =~ ^(dcb_minimal_ai_tools_parity|asf_doctor_dependency_contract|engine_provisioning_matrix)$ ]]; then
+  if [[ "$role" == "implementer" ]] && [[ "$task_kind" =~ ^(dcb_minimal_ai_tools_parity|asf_doctor_dependency_contract|engine_provisioning_matrix|dcb_php_language_support)$ ]]; then
     echo "gemini"
     return
   fi
@@ -167,6 +167,7 @@ if [[ -n "$ISSUE_NUMBER" && -z "$PLAN_FILE" ]]; then
     44) TASK_KIND="dcb_minimal_ai_tools_parity" ;;
     45) TASK_KIND="asf_doctor_dependency_contract" ;;
     46) TASK_KIND="engine_provisioning_matrix" ;;
+    55) TASK_KIND="dcb_php_language_support" ;;
     *) TASK_KIND="" ;;
   esac
   
@@ -185,6 +186,8 @@ if [[ -n "$ISSUE_NUMBER" && -z "$PLAN_FILE" ]]; then
     TASK_KIND="asf_doctor_dependency_contract"
   elif [[ "$ISSUE_TITLE" =~ unified[[:space:]]+engine[[:space:]]+provisioning[[:space:]]+matrix ]]; then
     TASK_KIND="engine_provisioning_matrix"
+  elif [[ "$ISSUE_TITLE" =~ [Pp][Hh][Pp][[:space:]]+language[[:space:]]+support|DCB[[:space:]]+bootstrap ]]; then
+    TASK_KIND="dcb_php_language_support"
   else
     TASK_KIND="minimal_roundtrip"
   fi
@@ -430,6 +433,22 @@ EOF
 EOF
 )
       ;;
+    dcb_php_language_support)
+      FILES=(
+        "packages/devcontainer-bootstrap/bootstrap.sh"
+        "packages/devcontainer-bootstrap/README.md"
+        "packages/devcontainer-bootstrap/README.ja.md"
+      )
+      IMPLEMENTATION_GOAL=$(cat <<'EOF'
+- Add PHP language support to DCB bootstrap while keeping existing languages unchanged:
+  - add php to --languages validation and language feature expansion in bootstrap templates
+  - wire PHP devcontainer feature for generated devcontainer.json where language flags are rendered
+  - update mode behavior documentation in README and README.ja
+  - keep package-neutral implementation (no framework-specific Composer/Laravel setup)
+  - add/update generated check scripts where needed so php runtime availability can be verified
+EOF
+)
+      ;;
   esac
 }
 
@@ -669,6 +688,29 @@ run_checks() {
          ! grep -qi "full" "$ROOT_DIR/packages/devcontainer-bootstrap/README.md"; then
         log "DCB README mode matrix coverage missing"
         write_state "blocked" "copilot" "DCB README mode matrix coverage missing"
+        exit 1
+      fi
+      ;;
+    dcb_php_language_support)
+      log "Run DCB PHP language support checks"
+      if ! bash -n "$ROOT_DIR/packages/devcontainer-bootstrap/bootstrap.sh"; then
+        log "bootstrap.sh syntax check failed"
+        write_state "blocked" "copilot" "bootstrap.sh syntax check failed"
+        exit 1
+      fi
+      if ! grep -q '__IF_RUNTIME_PHP__' "$ROOT_DIR/packages/devcontainer-bootstrap/bootstrap.sh"; then
+        log "PHP runtime placeholder missing in bootstrap templates"
+        write_state "blocked" "copilot" "php runtime placeholder missing"
+        exit 1
+      fi
+      if ! grep -qi 'php' "$ROOT_DIR/packages/devcontainer-bootstrap/README.md"; then
+        log "PHP language docs missing in README.md"
+        write_state "blocked" "copilot" "php docs missing in README.md"
+        exit 1
+      fi
+      if ! grep -qi 'php' "$ROOT_DIR/packages/devcontainer-bootstrap/README.ja.md"; then
+        log "PHP language docs missing in README.ja.md"
+        write_state "blocked" "copilot" "php docs missing in README.ja.md"
         exit 1
       fi
       ;;
