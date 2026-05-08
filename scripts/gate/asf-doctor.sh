@@ -13,8 +13,8 @@ usage: bash scripts/gate/asf-doctor.sh [--strict]
 
 checks:
   - required files/scripts
-  - command availability (bash/git required, jq/gh recommended)
-  - gh auth status (recommended)
+  - command availability (bash/git/jq/gh required)
+  - gh auth status (required)
   - hooksPath sanity
 
 exit codes:
@@ -104,14 +104,14 @@ check_exec "scripts/worker/workers-stop.sh"
 
 check_cmd_required bash
 check_cmd_required git
-check_cmd_recommended jq
-check_cmd_recommended gh
+check_cmd_required jq
+check_cmd_required gh
 
 if command -v gh >/dev/null 2>&1; then
   if gh auth status >/dev/null 2>&1; then
     ok "gh auth status: OK"
   else
-    warn "gh auth missing (run: gh auth login)"
+    fail "gh auth missing (run: gh auth login)"
   fi
 fi
 
@@ -128,3 +128,4 @@ if [[ "$FAIL_COUNT" -gt 0 ]]; then
 fi
 
 echo "[summary] fail=0 warn=$WARN_COUNT strict=$STRICT"
+
