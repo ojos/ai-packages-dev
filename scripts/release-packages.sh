@@ -168,7 +168,12 @@ generate_standard_assets() {
   pushd "$dir" >/dev/null
 
   # PACKAGE_ARCHIVE.tar.gz — full tree minus the .git directory
-  tar --exclude='./.git' -czf PACKAGE_ARCHIVE.tar.gz .
+  tar \
+    --exclude='./.git' \
+    --exclude='./PACKAGE_ARCHIVE.tar.gz' \
+    --exclude='./SHA256SUMS' \
+    --exclude='./RELEASE-MANIFEST.json' \
+    -czf PACKAGE_ARCHIVE.tar.gz .
 
   # SHA256SUMS — covers all regular files except itself and the manifest
   find . -type f \
