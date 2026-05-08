@@ -14,6 +14,18 @@ Target repositories:
 Related proposal:
 - `docs/RELEASE_ASSET_STANDARDIZATION_PROPOSAL.md`
 
+## Required Release Asset Contract
+
+Every release across all packages **must** include the following three assets:
+
+| Asset | Description |
+|---|---|
+| `RELEASE-MANIFEST.json` | Package name, version, asset list, and SHA-256 checksums |
+| `SHA256SUMS` | SHA-256 checksums of all files in the release tree |
+| `PACKAGE_ARCHIVE.tar.gz` | Full release tree as a compressed tarball |
+
+Package-specific additional assets (e.g. `bootstrap.sh`, `doctor.sh` for DCB) are permitted alongside the three required assets.
+
 ## Gate Conditions (Must Pass)
 
 Run releases only when all conditions are true:
@@ -130,62 +142,94 @@ git push origin "$TAG"
 
 ### 4) GitHub Release Publication
 
-```bash
-# Example
-set -euo pipefail
+Use `scripts/release-packages.sh` to publish all packages in a single idempotent operation:
 
-gh release create agent-swarm-framework/v1.0.0 \
-  --title "agent-swarm-framework v1.0.0" \
-  --notes-file /path/to/release-notes.md
+```bash
+set -euo pipefail
+cd /workspaces/ojos-ai-packages-dev
+
+bash scripts/release-packages.sh \
+  --owner ojos \
+  --dcb-version v0.1.12 \
+  --asf-version v0.1.1 \
+  --dotfiles-version v0.1.0 \
+  --execute
 ```
 
-#### 4-A) agent-swarm-framework
+The script automatically generates and attaches `RELEASE-MANIFEST.json`, `SHA256SUMS`, and `PACKAGE_ARCHIVE.tar.gz` for every package. For existing releases it uploads assets with `--clobber` and edits the release metadata; for new releases it creates the release with assets in one step.
+
+#### 4-A) agent-swarm-framework (manual fallback)
 
 ```bash
 set -euo pipefail
 gh release create agent-swarm-framework/v1.0.0 \
   --repo ojos/agent-swarm-framework \
   --title "agent-swarm-framework v1.0.0" \
-  --notes-file /workspaces/ojos-ai-packages-dev/docs/release-notes-agent-swarm-framework.md
+  --notes-file /workspaces/ojos-ai-packages-dev/docs/release-notes-agent-swarm-framework.md \
+  /tmp/asf-release/RELEASE-MANIFEST.json \
+  /tmp/asf-release/SHA256SUMS \
+  /tmp/asf-release/PACKAGE_ARCHIVE.tar.gz
 ```
 
-#### 4-B) ai-dotfiles
+#### 4-B) ai-dotfiles (manual fallback)
 
 ```bash
 set -euo pipefail
 gh release create ai-dotfiles/v1.0.0 \
   --repo ojos/ai-dotfiles \
   --title "ai-dotfiles v1.0.0" \
-  --notes-file /workspaces/ojos-ai-packages-dev/docs/release-notes-ai-dotfiles.md
+  --notes-file /workspaces/ojos-ai-packages-dev/docs/release-notes-ai-dotfiles.md \
+  /tmp/dotfiles-release/RELEASE-MANIFEST.json \
+  /tmp/dotfiles-release/SHA256SUMS \
+  /tmp/dotfiles-release/PACKAGE_ARCHIVE.tar.gz
 ```
 
-#### 4-C) devcontainer-bootstrap
+#### 4-C) devcontainer-bootstrap (manual fallback)
 
 ```bash
 set -euo pipefail
 gh release create devcontainer-bootstrap/v1.0.0 \
   --repo ojos/devcontainer-bootstrap \
   --title "devcontainer-bootstrap v1.0.0" \
-  --notes-file /workspaces/ojos-ai-packages-dev/docs/release-notes-devcontainer-bootstrap.md
+  --notes-file /workspaces/ojos-ai-packages-dev/docs/release-notes-devcontainer-bootstrap.md \
+  /tmp/dcb-release/bootstrap.sh \
+  /tmp/dcb-release/doctor.sh \
+  /tmp/dcb-release/RELEASE-MANIFEST.json \
+  /tmp/dcb-release/SHA256SUMS \
+  /tmp/dcb-release/PACKAGE_ARCHIVE.tar.gz
 ```
 
-### 5) Verification
+### 5) Asset Verification
 
-- verify release pages are published
-- verify tags are visible remotely
-- verify links from README/docs
-- verify required release assets are present per package contract
-
-Recommended verification command:
+After publication, run the cross-repo asset audit to confirm all required assets are present:
 
 ```bash
 set -euo pipefail
-for repo in ojos/agent-swarm-framework ojos/ai-dotfiles ojos/devcontainer-bootstrap; do
-  tag=$(gh release list --repo "$repo" --limit 1 --json tagName --jq '.[0].tagName')
-  echo "[repo] $repo [tag] $tag"
-  gh release view "$tag" --repo "$repo" --json assets --jq '.assets | map(.name)'
-done
+bash scripts/release-packages.sh --owner ojos --audit
 ```
+
+Expected output — every line should read `[audit] OK`:
+
+```
+[audit] checking required release assets: RELEASE-MANIFEST.json SHA256SUMS PACKAGE_ARCHIVE.tar.gz
+[audit] OK    ojos/agent-swarm-framework@vX.Y.Z  RELEASE-MANIFEST.json
+[audit] OK    ojos/agent-swarm-framework@vX.Y.Z  SHA256SUMS
+[audit] OK    ojos/agent-swarm-framework@vX.Y.Z  PACKAGE_ARCHIVE.tar.gz
+[audit] OK    ojos/ai-dotfiles@vX.Y.Z  RELEASE-MANIFEST.json
+[audit] OK    ojos/ai-dotfiles@vX.Y.Z  SHA256SUMS
+[audit] OK    ojos/ai-dotfiles@vX.Y.Z  PACKAGE_ARCHIVE.tar.gz
+[audit] OK    ojos/devcontainer-bootstrap@vX.Y.Z  RELEASE-MANIFEST.json
+[audit] OK    ojos/devcontainer-bootstrap@vX.Y.Z  SHA256SUMS
+[audit] OK    ojos/devcontainer-bootstrap@vX.Y.Z  PACKAGE_ARCHIVE.tar.gz
+[audit] all required assets present
+```
+
+If any line reads `[audit] MISS`, the script exits non-zero. Re-run the release script with `--execute` to repair; it is idempotent and will upload the missing assets with `--clobber`.
+
+Additional checks:
+- verify release pages are published
+- verify tags are visible remotely
+- verify links from README/docs
 
 ## Rollback Policy
 
@@ -199,3 +243,4 @@ If release content is incorrect:
 - implementation: line workers
 - review/approval: reviewer role
 - release execution: maintainer with repo admin/tag permissions
+
