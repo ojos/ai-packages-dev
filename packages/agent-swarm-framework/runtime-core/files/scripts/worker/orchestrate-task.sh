@@ -784,9 +784,20 @@ else
 fi
 
 if ! validate_payload; then
-  log "$IMPLEMENTER_ENGINE did not produce valid JSON payload"
-  write_state "blocked" "$IMPLEMENTER_ENGINE" "invalid JSON payload from $IMPLEMENTER_ENGINE"
-  exit 1
+  if [[ "$IMPLEMENTER_ENGINE" == "gemini" ]]; then
+    log "gemini payload invalid, retrying implementer fallback (claude)"
+    if run_engine_with_prompt_file "implementer" "claude" "$IMPLEMENT_INPUT" "$RAW_IMPL_FILE" && validate_payload; then
+      log "fallback implementer (claude) produced valid payload"
+    else
+      log "fallback implementer (claude) failed to produce valid JSON payload"
+      write_state "blocked" "claude" "invalid JSON payload after gemini fallback"
+      exit 1
+    fi
+  else
+    log "$IMPLEMENTER_ENGINE did not produce valid JSON payload"
+    write_state "blocked" "$IMPLEMENTER_ENGINE" "invalid JSON payload from $IMPLEMENTER_ENGINE"
+    exit 1
+  fi
 fi
 
 apply_payload
@@ -809,19 +820,24 @@ REVIEW_INPUT="$LOG_DIR/$TASK_ID-review-input.txt"
   git -C "$ROOT_DIR" --no-pager diff -- "${FILES[@]}"
 } > "$REVIEW_INPUT"
 
-if run_engine_with_prompt_file "reviewer" "$REVIEWER_ENGINE" "$REVIEW_INPUT" "$REVIEW_FILE"; then
+if run_engine_with_prompt_file "reviewer" "$REVIEWER_ENGINE" "$REVIEW_INPUT" "$REVIEW_FILE" && [[ -s "$REVIEW_FILE" ]]; then
   :
 else
   review_exit=$?
-  log "$REVIEWER_ENGINE review failed (exit code: $review_exit)"
-  write_state "blocked" "$REVIEWER_ENGINE" "review command failed (exit code: $review_exit)"
-  exit 1
-fi
-
-if [[ ! -s "$REVIEW_FILE" ]]; then
-  log "$REVIEWER_ENGINE returned empty review"
-  write_state "blocked" "$REVIEWER_ENGINE" "review output is empty"
-  exit 1
+  if [[ "$REVIEWER_ENGINE" == "gemini" ]]; then
+    log "gemini review failed/empty, retrying reviewer fallback (claude)"
+    if run_engine_with_prompt_file "reviewer" "claude" "$REVIEW_INPUT" "$REVIEW_FILE" && [[ -s "$REVIEW_FILE" ]]; then
+      log "fallback reviewer (claude) produced review output"
+    else
+      log "fallback reviewer (claude) failed"
+      write_state "blocked" "claude" "review command failed after gemini fallback"
+      exit 1
+    fi
+  else
+    log "$REVIEWER_ENGINE review failed (exit code: $review_exit)"
+    write_state "blocked" "$REVIEWER_ENGINE" "review command failed (exit code: $review_exit)"
+    exit 1
+  fi
 fi
 
 if review_has_high_findings; then
