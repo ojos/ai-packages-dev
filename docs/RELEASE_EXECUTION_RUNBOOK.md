@@ -11,6 +11,9 @@ Target repositories:
 - `ojos/ai-dotfiles`
 - `ojos/devcontainer-bootstrap`
 
+Related proposal:
+- `docs/RELEASE_ASSET_STANDARDIZATION_PROPOSAL.md`
+
 ## Gate Conditions (Must Pass)
 
 Run releases only when all conditions are true:
@@ -171,6 +174,18 @@ gh release create devcontainer-bootstrap/v1.0.0 \
 - verify release pages are published
 - verify tags are visible remotely
 - verify links from README/docs
+- verify required release assets are present per package contract
+
+Recommended verification command:
+
+```bash
+set -euo pipefail
+for repo in ojos/agent-swarm-framework ojos/ai-dotfiles ojos/devcontainer-bootstrap; do
+  tag=$(gh release list --repo "$repo" --limit 1 --json tagName --jq '.[0].tagName')
+  echo "[repo] $repo [tag] $tag"
+  gh release view "$tag" --repo "$repo" --json assets --jq '.assets | map(.name)'
+done
+```
 
 ## Rollback Policy
 
