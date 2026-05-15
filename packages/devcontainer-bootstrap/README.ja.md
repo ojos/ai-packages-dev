@@ -19,10 +19,10 @@
 - https://github.com/ojos/devcontainer-bootstrap
 
 最新安定リリース:
-- `v0.1.13`
+- `v0.1.14`
 
 ```bash
-TAG=v0.1.13
+TAG=v0.1.14
 curl -sSL "https://github.com/ojos/devcontainer-bootstrap/releases/download/${TAG}/bootstrap.sh" -o bootstrap.sh
 curl -sSL "https://github.com/ojos/devcontainer-bootstrap/releases/download/${TAG}/SHA256SUMS" -o SHA256SUMS
 sha256sum -c SHA256SUMS
