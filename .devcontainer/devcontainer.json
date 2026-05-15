@@ -25,8 +25,8 @@
     "CLAUDE_CODE_OAUTH_TOKEN": "${localEnv:CLAUDE_CODE_OAUTH_TOKEN}",
     "LOCAL_WORKSPACE_FOLDER": "${localWorkspaceFolder}"
   },
-  "postCreateCommand": "bash scripts/install-ai-tools.sh",
-  "postAttachCommand": "bash scripts/on-attach.sh",
+  "postCreateCommand": "bash -lc 'source scripts/load-env.sh && bash scripts/install-ai-tools.sh'",
+  "postAttachCommand": "bash -lc 'source scripts/load-env.sh && bash scripts/on-attach.sh'",
   "customizations": {
     "vscode": {
       "extensions": [

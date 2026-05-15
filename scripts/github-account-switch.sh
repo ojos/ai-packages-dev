@@ -32,6 +32,7 @@ subcommands:
   status   現在の gh auth 状態・git identity・owner 情報を表示
   list     設定済みプロファイル（GITHUB_TOKEN_* が存在するもの）を列挙
   auto     環境変数と既存 git config からプロファイルを自動選択して切替
+           複数候補がある場合は先頭定義の GITHUB_TOKEN_* を既定候補として扱う
   use      指定プロファイルへ切替
 
 profile:
@@ -192,7 +193,8 @@ cmd_use() {
 }
 
 list_profile_suffixes() {
-  env | awk -F= '/^GITHUB_TOKEN_[A-Z0-9_]+=/ {sub(/^GITHUB_TOKEN_/,"",$1); print $1}' | sort -u
+  # Preserve environment iteration order so the first defined token can act as the default.
+  env | awk -F= '/^GITHUB_TOKEN_[A-Z0-9_]+=/ {sub(/^GITHUB_TOKEN_/,"",$1); print $1}'
 }
 
 resolve_profile_for_repo() {
@@ -224,6 +226,12 @@ resolve_profile_for_repo() {
   local count
   count="$(printf '%s\n' "$suffixes" | sed '/^$/d' | wc -l | tr -d ' ')"
   if [[ "$count" == "1" ]]; then
+    printf '%s' "$(printf '%s\n' "$suffixes" | sed -n '1p' | tr '[:upper:]' '[:lower:]')"
+    return 0
+  fi
+
+  if [[ "$count" -gt 1 ]]; then
+    # Fallback: use the first declared GITHUB_TOKEN_* as the default profile.
     printf '%s' "$(printf '%s\n' "$suffixes" | sed -n '1p' | tr '[:upper:]' '[:lower:]')"
     return 0
   fi
