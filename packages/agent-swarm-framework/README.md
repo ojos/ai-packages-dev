@@ -110,8 +110,7 @@ Agent Swarm Framework (ASF) および DevContainer Bootstrap (DCB) における�
 ASF はワークフロー固有の協調挙動を担います。
 dotfiles は共有の環境設定と言語レベルの AI ルールを担います。
 
-dotfiles（ai-dotfiles）は、全プロジェクト共通の AI ルールや共通指示スタイルをまとめた別リポジトリです。
-詳細は [dotfiles/README.md](../../dotfiles/README.md) を参照してください。
+dotfiles（ai-dotfiles）は、全プロジェクト共通の AI ルールや共通指示スタイルをまとめた別リポジトリです。詳細は [dotfiles/README.md](../../dotfiles/README.md) を参照してください。
 
 - ASF の責務: 委譲パターン、conversation-gate reason code、実行時協調スクリプト、ロール間ワークフロー挙動
 - dotfiles の責務: 共通記述/開発ルール、共通指示スタイル、再利用可能な shell/editor 環境規約
