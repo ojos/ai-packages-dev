@@ -1,57 +1,53 @@
 # Agent Swarm Framework
 
-This package bootstraps multi-agent development workflows into a new or existing repository.
-It provides runtime scripts, role skills, executor templates, and installation flows.
+複数エージェントによる開発運用を、新規プロジェクトへ導入するための初期パッケージです。
 
-## Package Layout
+## パッケージ構成
 
 ```
 packages/agent-swarm-framework/
-├── install.sh              # entrypoint (interactive / non-interactive)
-├── config.schema.json      # config JSON schema (canonical)
-├── README.md               # this file
-├── runtime-core/           # runtime base (workflow / command / monitor / worker)
-├── agent-skills/           # role-specific skills (7 roles)
-├── executors/              # remote executors (github-actions)
-├── template-project/       # project templates (config / issues / milestones)
-└── docs/                   # documentation
-    ├── install.md          # CLI reference
-    ├── architecture.md     # directory structure and design
-    ├── CONVERSATION_GATE_REASON_CODES.md    # canonical reason_code list for conversation gate
-  ├── intake-channel-boundary.md              # core vs channel boundary memo
-  ├── intake-channel-boundary-checklist.md    # implementation checklist from boundary policy
+├── install.sh              # エントリポイント（インタラクティブ / 非インタラクティブ対応）
+├── config.schema.json      # 設定 JSON Schema（正規パス）
+├── README.md               # このファイル
+├── runtime-core/           # 実行基盤（workflow / command / monitor / worker）
+├── agent-skills/           # ロール別の基本 skill（7 ロール）
+├── executors/              # リモート実行アダプタ（github-actions）
+├── template-project/       # 設定・Issue・milestone 雛形
+└── docs/                   # ドキュメント
+    ├── install.md          # CLI リファレンス
+    ├── architecture.md     # ディレクトリ構成・設計方針
     └── VISION_AUTONOMOUS_ORCHESTRATION.md
 ```
 
-## Usage
+## 使い方
 
 ```bash
-# Interactive wizard
+# インタラクティブ（ウィザード形式）
 bash packages/agent-swarm-framework/install.sh
 
-# Non-interactive (CI)
+# 非インタラクティブ（CI 等）
 bash packages/agent-swarm-framework/install.sh \
   --non-interactive \
   --config my-config.json \
   --target-dir /path/to/project
 
-# Standalone (download install.sh alone)
+# standalone（install.sh 単体ダウンロード実行）
 curl -fsSL https://raw.githubusercontent.com/ojos/agent-swarm-framework/main/install.sh \
   -o install.sh && \
 bash install.sh --non-interactive --config my-config.json --target-dir /path/to/project --skip-github
 ```
 
-Installation flow:
+導入フロー:
 
-1. Collect config from wizard or JSON file
-2. Generate preview in `.preview/<projectSlug>/`
-3. Review category files (add/overwrite)
-4. Apply selected categories to target repo
-5. Optionally create milestone/bootstrap issues on GitHub
+1. ウィザードまたは設定ファイルで設定を入力
+2. `.preview/<projectSlug>/` にプレビューを生成
+3. `runtime-core` / `agent-skills` / `executors` / `template-project` をカテゴリ単位で確認
+4. 確認後に target repository へ反映
+5. 確認付きで milestone / bootstrap issue を GitHub に起票
 
 ## Runtime CLI
 
-Use the unified entrypoint:
+統一エントリポイントとして次を利用できます:
 
 ```bash
 bash scripts/asf doctor
@@ -61,40 +57,26 @@ bash scripts/asf up --interval 15
 bash scripts/asf down
 ```
 
-Doctor mode verifies required files/scripts, required command availability (bash, git, jq, gh), `gh auth` status, and hook path sanity.
+doctor モードでは、必須ファイル/スクリプト、必須コマンドの可用性（bash, git, jq, gh）、`gh auth` の状態、hook path の健全性を確認します。
 
-### Retrofit (Staged Adoption)
+既存プロジェクトへの途中導入（Retrofit）:
+- ASF は新規リポジトリだけでなく既存リポジトリへ段階導入できる。
+- まず `--retrofit-safe` + `automationStage=plan` で監査導入し、次に `implement/review/merge` を順次解放する。
+- `--retrofit-safe` は `executionMode=local`, `remoteProvider=none`, `mergePolicy=manual`, `orchestratorMode=local` を強制し、`--skip-github` も自動有効化する。
+- `--retrofit-safe` のカテゴリ既定は `runtime-core/agent-skills` を適用、`executors/template-project` をスキップとする。
+- サンプル設定は `retrofit-config.sample.json` を参照。
+- 詳細手順は [docs/install.md](docs/install.md) の「既存プロジェクトへの途中導入（Retrofit）」を参照。
 
-ASF can be adopted into existing repositories, not just new ones.
-Start with `--retrofit-safe` + `automationStage=plan` for audit mode, then gradually unlock `implement/review/merge`.
+standalone 実行時（install.sh 単体）の動作:
+- 同梱ディレクトリ（`runtime-core` など）が見つからない場合、install.sh は package アーカイブを自動取得して再実行する。
+- 取得元はデフォルトで main ブランチのアーカイブ。必要に応じて `--bootstrap-from <url>` で上書き可能。
 
-- `--retrofit-safe` enforces safe defaults:
-  - `executionMode=local`
-  - `remoteProvider=none`
-  - `mergePolicy=manual`
-  - `orchestratorMode=local`
-  - auto-enables `--skip-github`
-- Default categories for retrofit:
-  - Apply: `runtime-core`, `agent-skills`
-  - Skip: `executors`, `template-project`
-- See `retrofit-config.sample.json` for details.
-- Full retrofit workflow: [docs/install.md](docs/install.md)
+詳細は [docs/install.md](docs/install.md) を参照してください。
 
-### Standalone Execution
+## 既定方針
 
-When `install.sh` is run standalone (download only):
-- If bundled package directories are missing, `install.sh` auto-fetches the package archive and re-runs.
-- Default fetch source: main branch archive.
-- Override with `--bootstrap-from <url>` or `AGENT_SWARM_FRAMEWORK_ARCHIVE_URL`.
-
-For full details, see [docs/install.md](docs/install.md).
-
----
-
-## Default Configuration
-
-| Setting | Default |
-|---------|---------|
+| 設定 | 既定値 |
+|------|--------|
 | execution mode | `hybrid` |
 | remote provider | `github-actions` |
 | automation stage | `implement` |
@@ -103,91 +85,67 @@ For full details, see [docs/install.md](docs/install.md).
 | orchestrator mode | `remote` |
 | state backend | `hybrid` |
 
----
+## AI エンジン導入マトリックス
 
-## AI Engine Provisioning Matrix
+Agent Swarm Framework (ASF) および DevContainer Bootstrap (DCB) における、共通のエンジンルーティングと導入・認証要件のマトリックスです。
 
-This unified matrix describes engine routing, required credentials, and installation paths across DevContainer Bootstrap (DCB) and Agent Swarm Framework (ASF).
+| エンジン | コマンド | 認証環境変数 | 導入経路 (モード) | 未導入・未認証時の挙動 |
+|----------|----------|--------------|-------------------|------------------------|
+| Claude | `claude` | `CLAUDE_CODE_OAUTH_TOKEN` | DCB の `minimal` / `standard` / `full` で生成される `scripts/install-ai-tools.sh` を `postCreateCommand` で実行 | トークン/認証不足時はログインプロンプト表示またはエラー終了 |
+| Gemini | `gemini` | `GEMINI_API_KEY` | DCB の `minimal` / `standard` / `full` で生成される `scripts/install-ai-tools.sh` を `postCreateCommand` で実行 | API キー不足または API/認証エラーで失敗 |
+| Codex  | `codex` | `OPENAI_API_KEY` | すべてのモードで手動導入のみ（DCB による自動導入なし） | バイナリ未導入または API キー未設定で失敗 |
 
-| Engine | Command | Credential Env Var | Provisioning Path (Mode) | Failure Behavior (Missing Credential/Not Installed) |
-|--------|---------|--------------------|--------------------------|-----------------------------------------------------|
-| Claude | `claude` | `CLAUDE_CODE_OAUTH_TOKEN` | DCB `minimal` / `standard` / `full` via generated `scripts/install-ai-tools.sh` on `postCreateCommand` | Command prompts for interactive login or fails when token/auth is missing |
-| Gemini | `gemini` | `GEMINI_API_KEY` | DCB `minimal` / `standard` / `full` via generated `scripts/install-ai-tools.sh` on `postCreateCommand` | Command fails with missing API key or API/auth error |
-| Codex  | `codex` | `OPENAI_API_KEY` | Manual provisioning only (not auto-installed by DCB in any mode) | Command fails when binary is missing or API key is not set |
+## バージョン方針
 
----
+| 項目 | 方針 |
+|------|------|
+| スキーマバージョン | `config.schema.json` の `version` フィールド（現在: `"1.0"`） |
+| 後方互換性 | メジャーバージョン間（例: 1.x → 2.x）は互換保証なし |
+| 変更管理 | スキーマ変更時は `version` を更新し、`install.sh` のバリデーションも更新する |
+| 正規パス | `packages/agent-swarm-framework/config.schema.json` |
+| リリース単位 | このディレクトリ全体を `git archive` または `tar.gz` で配布する |
 
-## Version Policy
+## dotfiles との責務境界
 
-| Item | Policy |
-|------|--------|
-| Schema version | from `config.schema.json` `version` field (current: `"1.0"`) |
-| Backward compatibility | Not guaranteed across major versions (1.x → 2.x) |
-| Change management | Update `version` on schema changes; also update `install.sh` validation |
-| Canonical path | `packages/agent-swarm-framework/config.schema.json` |
-| Distribution unit | Entire directory via `git archive` or `tar.gz` |
+ASF はワークフロー固有の協調挙動を担います。
+dotfiles は共有の環境設定と言語レベルの AI ルールを担います。
 
----
+- ASF の責務: 委譲パターン、conversation-gate reason code、実行時協調スクリプト、ロール間ワークフロー挙動
+- dotfiles の責務: 共通記述/開発ルール、共通指示スタイル、再利用可能な shell/editor 環境規約
 
-## Boundary with Dotfiles
+ASF は単体利用も可能ですが、dotfiles を併用する場合は、dotfiles を基盤ポリシー、ASF をワークフローレイヤーとして扱います。
 
-ASF owns workflow-specific coordination behavior.
-dotfiles owns shared environment and language-level AI rules.
+## 詳細ドキュメント
 
-- ASF owns: delegation pattern, conversation-gate reason codes, runtime coordination scripts, role workflow behavior
-- dotfiles owns: shared writing/development rules, common instruction style, reusable shell/editor environment conventions
-
-ASF can be used standalone, but when dotfiles is present, treat dotfiles as base policy and ASF as workflow layer.
-
----
-
-## Documentation
-
-## Core Roles
-
-- orchestrator
-- planner
-- implementer
-- reviewer
-- closer
-- intake-manager
-- consult-facilitator
-
-- `intake-manager` is the human-facing intake owner.
-- `consult-facilitator` coordinates consult sessions and decision logging.
-
-- [docs/install.md](docs/install.md) — CLI reference and config field spec
-- [docs/architecture.md](docs/architecture.md) — directory structure and design
-- [docs/VISION_AUTONOMOUS_ORCHESTRATION.md](docs/VISION_AUTONOMOUS_ORCHESTRATION.md) — autonomous orchestration vision
-- [docs/github-actions.md](docs/github-actions.md) — GitHub Actions executor details
-- [docs/runtime-operations.md](docs/runtime-operations.md) — release procedures and operations
-- [docs/STATE_MANAGEMENT.md](docs/STATE_MANAGEMENT.md) — state management details
-- [docs/PACKAGE_DISTRIBUTION.md](docs/PACKAGE_DISTRIBUTION.md) — distribution, boundaries, version rules
-- [docs/intake-channel-boundary.md](docs/intake-channel-boundary.md) — intake boundary policy memo (core vs channel adapter)
-- [docs/intake-channel-boundary-checklist.md](docs/intake-channel-boundary-checklist.md) — boundary policy implementation checklist
-- [docs/CONVERSATION_GATE_REASON_CODES.md](docs/CONVERSATION_GATE_REASON_CODES.md) — canonical reason_code list for conversation gate decisions
+- [docs/install.md](docs/install.md) — CLI リファレンス・設定フィールド仕様
+- [docs/architecture.md](docs/architecture.md) — ディレクトリ構成・設計方針
+- [docs/VISION_AUTONOMOUS_ORCHESTRATION.md](docs/VISION_AUTONOMOUS_ORCHESTRATION.md) — 自律オーケストレーションビジョン
+- [docs/github-actions.md](docs/github-actions.md) — GitHub Actions executor 詳細
+- [docs/runtime-operations.md](docs/runtime-operations.md) — リリース手順・更新運用・互換性ルール
+- [docs/STATE_MANAGEMENT.md](docs/STATE_MANAGEMENT.md) — 状態管理詳細
 
 ---
 
-## FAQ & Troubleshooting
+## FAQ・トラブルシュート
 
-| Symptom | Solution |
-|---------|----------|
-| `gh: command not found` | Install GitHub CLI (required) and run `gh auth login` |
-| `jq: command not found` | Install jq (required): `apt install jq` or `brew install jq` |
-| `error: --non-interactive requires --config` | Always use `--config <file>` with `--non-interactive` |
-| Files unexpectedly overwritten | Check preview's "overwrite" section before applying |
-| milestone/issue not reflected | Check `--skip-github` flag and `gh auth status` |
+| 症状 | 対策 |
+|------|------|
+| `gh: command not found` | GitHub CLI をインストール（必須）して `gh auth login` |
+| `jq: command not found` | jq をインストール（必須）: `apt install jq` または `brew install jq` |
+| `error: --non-interactive requires --config` | `--config <file>` を必ず併用する |
+| ファイルが意図せず上書きされる | プレビューの「上書き予定」欄を必ず確認する |
+| milestone/issue が反映されない | `--skip-github` 有無と `gh auth status` を確認する |
+- [docs/PACKAGE_DISTRIBUTION.md](docs/PACKAGE_DISTRIBUTION.md) — 配布構成・責務境界・版管理ルール
 
-## Shell Tests
+## Shell テスト
 
-Run quick shell tests:
+簡易シェルテスト実行:
 
 ```bash
 bash packages/agent-swarm-framework/tests/run-shell-tests.sh
 ```
 
-Run E2E tests as well:
+E2E も含める場合:
 
 ```bash
 RUN_E2E_TESTS=true bash packages/agent-swarm-framework/tests/run-shell-tests.sh

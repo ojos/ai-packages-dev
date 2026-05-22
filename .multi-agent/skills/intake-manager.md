@@ -1,4 +1,4 @@
-# Intake Manager Skill
+# インテークマネージャースキル
 
 - 人間との直接対話窓口を担う。
 - 要件探索と intake issue の品質管理を担う。

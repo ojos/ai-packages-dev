@@ -41,7 +41,7 @@ options:
   --base-image <image>        Override auto-selected devcontainer base image
   --dry-run                   Show planned outputs without writing files
   --force                     Overwrite existing files
-  --no-gitignore              Do not write/update managed .gitignore section
+  --no-gitignore              管理対象の .gitignore セクションを更新しない
   --gitignore-targets <csv>   Additional template names to use (e.g. VisualStudioCode,JetBrains)
   -h, --help                  Show help
 EOF

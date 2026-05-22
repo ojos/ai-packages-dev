@@ -1,201 +1,176 @@
-# DevContainer Bootstrap
+# DevContainer Bootstrap 使い方ガイド
 
-`bootstrap.sh` generates a baseline Dev Container setup for new or existing workspaces.
-It focuses on reproducible setup, multi-account GitHub switching, and AI coding tooling.
+## 概要
+`bootstrap.sh` は、新規または既存のワークスペースに DevContainer の基本構成を一括生成するコマンドです。
+このガイドでは、次の内容を説明します。
 
-This guide explains:
-- what will be generated,
-- which inputs are required,
-- and what to verify after generation.
+- 何を生成するか（出力物）
+- どの引数を指定すればよいか（入力仕様）
+- 生成後に何を確認するか（Doctor 自己診断）
 
-Recommended approach:
-- start with the minimum command,
-- then add language and template options as needed.
+まずは最小コマンドで生成し、必要に応じて言語やテンプレートオプションを追加する使い方を推奨します。
 
-This package assumes development workflows with AI coding tools (Copilot, Claude, Gemini, etc.).
-It emphasizes multi-account GitHub switching, CLI authentication state verification, and reproducible initial setup.
+本パッケージは、AIコーディング（Copilot / Claude / Gemini など）を前提とした開発運用を想定しています。
+そのため、devcontainer 設定や補助スクリプトは「複数アカウント切替」「CLI 認証状態の確認」「再現可能な初期セットアップ」を重視した構成になっています。
 
-## Public Release Usage
+## 公開リリースからの利用
 
-Public repository:
+公開リポジトリ:
 - https://github.com/ojos/devcontainer-bootstrap
 
-Latest stable release:
-- `v0.1.14`
-
-## Quick Start
+最新安定リリース:
+- `v0.1.15`
 
 ```bash
-TAG=v0.1.14
+TAG=v0.1.15
 curl -sSL "https://github.com/ojos/devcontainer-bootstrap/releases/download/${TAG}/bootstrap.sh" -o bootstrap.sh
 curl -sSL "https://github.com/ojos/devcontainer-bootstrap/releases/download/${TAG}/SHA256SUMS" -o SHA256SUMS
 sha256sum -c SHA256SUMS
 bash bootstrap.sh --project-name myapp --languages node,go --mode standard
 ```
 
----
+## 入力仕様
 
-## Input Specification
+### 必須入力
+- `--project-name <name>`（文字列。必須）
+- `--languages <csv>`（CSV 形式。`node`、`go`、`python`、`php` を任意に組み合わせ。必須）
+- `--mode <minimal|standard|full>`（テンプレート選択。既定: `standard`）
 
-### Required Inputs
-- `--project-name <name>` (string, required)
-- `--languages <csv>` (CSV format. Choose from `node`, `go`, `python`, `php`. Required.)
-- `--mode <minimal|standard|full>` (template selection. Default: `standard`)
+### オプション入力
+- `--output-dir <path>`（省略時: カレントディレクトリ直下に `<project-name>/` を作成して展開）
+- `--base-image <image>`（自動判定結果を上書きして明示指定）
+- `--github-profiles <csv>`（GitHub マルチアカウント用 profile 名。既定: `primary,secondary`）
 
-### Optional Inputs
-- `--output-dir <path>` (default: creates `<project-name>/` in current directory)
-- `--base-image <image>` (override auto-detected base image)
-- `--github-profiles <csv>` (GitHub profiles for multi-account env injection. Default: `primary,secondary`)
+### モード別 AI CLI 導入挙動
 
-### Mode Provisioning Behavior (AI CLI)
-
-| Mode | `scripts/install-ai-tools.sh` generated | `postCreateCommand` behavior |
+| モード | `scripts/install-ai-tools.sh` 生成 | `postCreateCommand` の挙動 |
 |---|---|---|
-| `minimal` | yes | runs `bash scripts/install-ai-tools.sh` |
-| `standard` | yes | runs `bash scripts/install-ai-tools.sh` |
-| `full` | yes | runs `bash scripts/install-ai-tools.sh && bash scripts/post-rebuild-check.sh` |
+| `minimal` | あり | `bash scripts/install-ai-tools.sh` を実行 |
+| `standard` | あり | `bash scripts/install-ai-tools.sh` を実行 |
+| `full` | あり | `bash scripts/install-ai-tools.sh && bash scripts/post-rebuild-check.sh` を実行 |
 
-`install-ai-tools.sh` installs `claude` and `gemini` only when corresponding credentials are present (`CLAUDE_CODE_OAUTH_TOKEN`, `GEMINI_API_KEY`).
+`install-ai-tools.sh` は対応する認証情報が設定されている場合のみ `claude` / `gemini` を導入します（`CLAUDE_CODE_OAUTH_TOKEN`, `GEMINI_API_KEY`）。
 
----
+## 言語サポート
+対応ランタイム（任意の組み合わせ）:
+- `node`（Node.js / JavaScript / TypeScript）
+- `go`（Go）
+- `python`（Python 3）
+- `php`（PHP）
 
-## Supported Languages
-
-Supported runtimes (any combination):
-- `node` (Node.js / JavaScript / TypeScript)
-- `go` (Go)
-- `python` (Python 3)
-- `php` (PHP)
-
-### Examples:
+### 使用例:
 ```bash
-# Single language
+# 単一言語（カレントディレクトリ直下に myapp/ を作成して展開）
 ./bootstrap.sh --project-name myapp --languages node --mode minimal
 
-# Multiple languages
+# 複数言語
 ./bootstrap.sh --project-name myapp --languages node,go,python,php --mode standard
 
-# Backend only
+# バックエンドのみ（フロントエンドなし）
 ./bootstrap.sh --project-name backend-api --languages go,python,php --mode minimal
 
-# With explicit output directory
+# 出力先を明示指定したい場合
 ./bootstrap.sh --project-name myapp --languages node --mode standard --output-dir /path/to/existing-workspace
 
-# Without .gitignore managed section update
+# .gitignore の managed セクション更新を無効化したい場合
 ./bootstrap.sh --project-name myapp --languages node --mode minimal --no-gitignore
 
-# macOS + language-specific templates only
+# 暗黙ターゲット（macOS + 言語対応テンプレート）のみ使う場合
 ./bootstrap.sh --project-name myapp --languages node,python,php --mode standard
 
-# Add custom gitignore templates
+# 追加テンプレートを明示指定したい場合（暗黙ターゲットに追加で合成）
 ./bootstrap.sh --project-name myapp --languages node --mode standard --gitignore-targets macOS,Node,VisualStudioCode
 
-# Specify GitHub profiles
+# GitHub マルチアカウント profile を指定する場合
 ./bootstrap.sh --project-name myapp --languages node --mode full --github-profiles work,personal
 ```
 
-After generation, you can switch profiles:
+生成後の切替例:
 
 ```bash
 bash scripts/github-account-switch.sh list
 bash scripts/github-account-switch.sh use ojos
 ```
 
----
+## Feature フラグ
+- `features.docker`（既定値: true）
+- `features.ripgrep`（既定値: true）
+- `features.githubCli`（既定値: true）
+- `features.node`（`languages` に `node` を含む場合）
+- `features.go`（`languages` に `go` を含む場合）
+- `features.python`（`languages` に `python` を含む場合）
+- `features.php`（`languages` に `php` を含む場合）
+- `features.awsCli`（`standard` または `full` モードの場合）
+- `features.terraform`（`standard` または `full` モードの場合）
+- `features.googleCloudSdk`（`full` モードのみ、外部 feature を利用）
+- `features.devTools`（既定値: true）
 
-## Feature Flags
-- `features.docker` (default: true)
-- `features.ripgrep` (default: true)
-- `features.githubCli` (default: true)
-- `features.node` (when `languages` includes `node`)
-- `features.go` (when `languages` includes `go`)
-- `features.python` (when `languages` includes `python`)
-- `features.php` (when `languages` includes `php`)
-- `features.awsCli` (when mode is `standard` or `full`)
-- `features.terraform` (when mode is `standard` or `full`)
-- `features.googleCloudSdk` (full mode only; external feature source)
-- `features.devTools` (default: true)
+## VS Code 拡張（Remote）
+- 生成される `standard` / `full` モードでは、リビルド後の再現性確保のため `github.copilot` と `github.copilot-chat` をインストールします。
+- Terraform feature が有効な場合（`standard` / `full`）は `hashicorp.terraform` をインストールします。
+- Google Cloud CLI feature が有効な場合（`full`）は `GoogleCloudTools.cloudcode` をインストールします。
+- `ms-azuretools.vscode-containers` と `amazonwebservices.aws-toolkit-vscode` は `standard` / `full` の既定拡張として維持されます。
 
-## VS Code Extensions (Remote)
-- `github.copilot` and `github.copilot-chat` are installed in generated `standard` and `full` modes to keep remote chat usability reproducible after rebuild.
-- `hashicorp.terraform` is installed when Terraform feature is present (`standard` and `full`).
-- `GoogleCloudTools.cloudcode` is installed when Google Cloud CLI feature is present (`full` mode).
-- `ms-azuretools.vscode-containers` and `amazonwebservices.aws-toolkit-vscode` remain default extensions in `standard` and `full`.
+## シークレット方針
+この方針は、トークンや API キーの平文漏えいを防ぎつつ、AIコーディング時の認証切替を安全に行うためのルールです。
 
----
+- 受け付けるのは環境変数名のみ（秘密値そのものは不可）
+  - `GITHUB_TOKEN_<PROFILE>`（例: `GITHUB_TOKEN_WORK`, `GITHUB_TOKEN_PERSONAL`）
+    - `<PROFILE>` 切替時に `gh` 認証へ使うトークン値です。
+  - `GITHUB_OWNER_<PROFILE>`（任意。トークン発行者と操作対象 owner が異なる場合）
+    - `<PROFILE>` 切替時に `github.owner` として扱う owner（個人名/組織名）です。
+  - `GIT_AUTHOR_NAME_<PROFILE>`（任意）
+    - `<PROFILE>` 切替時に `git config user.name`（コミット author/committer 名）へ設定する文字列です。
+  - `GIT_AUTHOR_EMAIL_<PROFILE>`（任意）
+    - `<PROFILE>` 切替時に `git config user.email`（コミット author/committer メール）へ設定する文字列です。
+  - `CLAUDE_CODE_OAUTH_TOKEN`
+    - Claude CLI の認証に使うトークンです。
+  - `GEMINI_API_KEY`
+    - Gemini CLI の API 認証に使うキーです。
+- 生成される devcontainer 設定では `${localEnv:...}` 参照のみを使用する。
+- `GH_TOKEN` の常時注入は、マルチアカウント切替を阻害するため推奨しない。
 
-## Secret Management
+補足:
+- `GITHUB_TOKEN_<PROFILE>` は `scripts/github-account-switch.sh` で profile ごとに切替利用する前提です。
+- `GITHUB_OWNER_<PROFILE>` は、トークン発行者と操作対象 owner（個人/組織）が異なるときに使います。
 
-Secrets are injected as environment variable names only (never as literal values).
-This approach prevents credentials from being leaked in repository files while enabling safe authentication switching for AI coding.
+## AI エンジン導入マトリックス
 
-- `GITHUB_TOKEN_<PROFILE>` (e.g., `GITHUB_TOKEN_WORK`, `GITHUB_TOKEN_PERSONAL`)
-  - Token for `gh` CLI authentication when switching to `<PROFILE>`.
-- `GITHUB_OWNER_<PROFILE>` (optional, if token issuer differs from target owner)
-  - Owner (personal account or organization) to use for `github.owner` when switching to `<PROFILE>`.
-- `GIT_AUTHOR_NAME_<PROFILE>` (optional)
-  - Commit author name to set in `git config user.name` when switching to `<PROFILE>`.
-- `GIT_AUTHOR_EMAIL_<PROFILE>` (optional)
-  - Commit author email to set in `git config user.email` when switching to `<PROFILE>`.
-- `CLAUDE_CODE_OAUTH_TOKEN`
-  - OAuth token for Claude CLI.
-- `GEMINI_API_KEY`
-  - API key for Gemini CLI.
+Agent Swarm Framework (ASF) および DevContainer Bootstrap (DCB) における、共通のエンジンルーティングと導入・認証要件のマトリックスです。
 
-The generated devcontainer configuration uses only `${localEnv:...}` references and never stores secrets in files.
-Avoid permanently setting `GH_TOKEN` in environment, as it interferes with multi-account switching.
+| エンジン | コマンド | 認証環境変数 | 導入経路 (モード) | 未導入・未認証時の挙動 |
+|----------|----------|--------------|-------------------|------------------------|
+| Claude | `claude` | `CLAUDE_CODE_OAUTH_TOKEN` | `minimal` / `standard` / `full` で生成される `scripts/install-ai-tools.sh` を `postCreateCommand` で実行 | トークン/認証不足時はログインプロンプト表示またはエラー終了 |
+| Gemini | `gemini` | `GEMINI_API_KEY` | `minimal` / `standard` / `full` で生成される `scripts/install-ai-tools.sh` を `postCreateCommand` で実行 | API キー不足または API/認証エラーで失敗 |
+| Codex  | `codex` | `OPENAI_API_KEY` | すべてのモードで手動導入のみ（DCB による自動導入なし） | バイナリ未導入または API キー未設定で失敗 |
 
-Notes:
-- `GITHUB_TOKEN_<PROFILE>` is used by `scripts/github-account-switch.sh` for profile-based switching.
-- `GITHUB_OWNER_<PROFILE>` is needed only when the token issuer and target owner differ.
+## 検証ルール
+1. `languages` には少なくとも 1 つの対応言語（node|go|python|php）を含めること
+2. 指定した各言語に対応する feature を devcontainer.json に追加すること
+3. `--github-profiles` で指定した各 profile に対して `GITHUB_TOKEN_<PROFILE>` などの `remoteEnv` を生成すること
+4. ベースイメージは Docker サーバーの `os/arch` から自動判定（既定: `mcr.microsoft.com/devcontainers/base:ubuntu`、必要に応じて `--base-image` で上書き可能）
 
----
-
-## AI Engine Provisioning Matrix
-
-This unified matrix describes engine routing, required credentials, and installation paths across DevContainer Bootstrap (DCB) and Agent Swarm Framework (ASF).
-
-| Engine | Command | Credential Env Var | Provisioning Path (Mode) | Failure Behavior (Missing Credential/Not Installed) |
-|--------|---------|--------------------|--------------------------|-----------------------------------------------------|
-| Claude | `claude` | `CLAUDE_CODE_OAUTH_TOKEN` | `minimal` / `standard` / `full` via generated `scripts/install-ai-tools.sh` on `postCreateCommand` | Command prompts for interactive login or fails when token/auth is missing |
-| Gemini | `gemini` | `GEMINI_API_KEY` | `minimal` / `standard` / `full` via generated `scripts/install-ai-tools.sh` on `postCreateCommand` | Command fails with missing API key or API/auth error |
-| Codex  | `codex` | `OPENAI_API_KEY` | Manual provisioning only (not auto-installed by DCB in any mode) | Command fails when binary is missing or API key is not set |
-
----
-
-## Validation Rules
-1. `languages` must include at least one of `node`, `go`, `python`, or `php`
-2. Each specified language must have a corresponding feature in devcontainer.json
-3. Each profile in `--github-profiles` must generate `GITHUB_TOKEN_<PROFILE>` and related `remoteEnv` entries
-4. Base image is auto-detected from Docker server `os/arch` (default: `mcr.microsoft.com/devcontainers/base:ubuntu`, override with `--base-image`)
-
----
-
-## Expected Output
-- `.devcontainer/devcontainer.json` (with language-specific features)
+## 期待される出力
+- `.devcontainer/devcontainer.json`（言語別 feature を反映）
 - `scripts/github-account-switch.sh`
 - `scripts/on-attach.sh`
 - `scripts/post-rebuild-check.sh`
-- `.gitignore` managed section (updated based on languages)
-- README setup section (updated)
+- `.gitignore` の managed セクション（言語構成に応じて自動更新）
+- README のセットアップ節更新
 
-### `.gitignore` and github/gitignore Integration
-- The managed section always includes `github/gitignore` templates at the end.
-- Default targets: `macOS` + language-specific templates (`node`→`Node`, `go`→`Go`, `python`→`Python`, `php`→`PHP`)
-- `--gitignore-targets <csv>` adds to the defaults (duplicates removed).
-- Templates are fetched from `https://github.com/github/gitignore` (searches for both `<name>.gitignore` and `Global/<name>.gitignore`).
-- Missing templates generate a warning but do not stop processing.
+### `.gitignore` と github/gitignore の連携
+- managed セクション末尾には常に `github/gitignore` テンプレートを追加します。
+- 暗黙ターゲットは `macOS` + `--languages` で指定した言語対応テンプレート（`node`→`Node` / `go`→`Go` / `python`→`Python` / `php`→`PHP`）です。
+- `--gitignore-targets <csv>` を指定すると、暗黙ターゲットに追加で合成します（重複は除去）。
+- テンプレート取得は `https://github.com/github/gitignore` から行います（`<name>.gitignore` と `Global/<name>.gitignore` を順に探索）。
+- 取得できないテンプレート名は警告を出してスキップします（処理は継続）。
 
-> **Note**: `--languages` values are lowercase (`node`, `go`, `python`, `php`), while `--gitignore-targets` values match [github/gitignore](https://github.com/github/gitignore) filenames (capitalized: `Node`, `Go`, `PHP`, `macOS`). This difference is intentional.
+> **注意**: `--languages` の値は小文字（`node`, `go`, `python`, `php`）で指定します。一方 `--gitignore-targets` の値は [github/gitignore](https://github.com/github/gitignore) リポジトリのファイル名に合わせた大文字始まり（`Node`, `Go`, `PHP`, `macOS` など）で指定してください。これらは別々の用途を持つため、意図的に表記が異なります。
 
----
-
-## Doctor Self-Check
-
-After generation, run:
+## Doctor 自己診断
+生成後に次を実行して検証します:
 ```bash
 ./doctor.sh --target-dir result --strict
 ```
-
-This validates that each configured language runtime is available.
+設定された各言語ランタイムの可用性を動的にチェックします。
 

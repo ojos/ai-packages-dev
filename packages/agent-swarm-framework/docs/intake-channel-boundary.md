@@ -1,94 +1,94 @@
-# Intake Channel Boundary Memo
+# Intake チャネル境界メモ
 
-This memo captures current decisions and assumptions about Intake Manager scope and Slack integration.
-This document is a planning note to reduce drift across milestones.
+このメモは、Intake Manager の適用範囲と Slack 連携に関する現時点の判断と前提を記録する。
+この文書の目的は、マイルストーン間での方針ドリフトを抑えることである。
 
-## Current State (as of 2026-04-14)
+## 現状（2026-04-14 時点）
 
-- ASF workflow enforcement is implemented at execution boundaries (for example pre-commit and pre-push gates).
-- Intake Manager role is defined, but chat-session level enforcement is not fully automated.
-- IDE-first development flow is the near-term primary milestone.
-- Slack is a supporting entry point in the near term.
+- ASF ワークフロー強制は実行境界（例: pre-commit / pre-push）で実装済み。
+- Intake Manager のロール定義はあるが、チャットセッション開始時の強制は未完全。
+- 直近マイルストーンは IDE 開発フローの完走を主目的とする。
+- Slack は直近では補助的な入口として扱う。
 
-## Product Direction
+## プロダクト方向性
 
-1. Near term:
-- Make IDE-first flow work end-to-end with stable quality.
-- Keep Slack as a supplemental intake path.
+1. 直近:
+- IDE 起点フローを end-to-end で安定稼働させる。
+- Slack は補助的な intake 経路として運用する。
 
-2. Next step:
-- Upgrade Slack path so it can perform equivalent intake-to-implementation flow.
-- Target a balanced operation where IDE and Slack can be used with similar capability.
+2. 次段階:
+- Slack 経路を intake から実装まで同等に扱える水準へ引き上げる。
+- IDE と Slack をほぼ同等の比重で使える運用を目指す。
 
-## Separation Decision
+## 分離方針
 
-Decision: keep Slack adapter separated from ASF core responsibilities.
+決定: Slack アダプターは ASF コア責務から分離する。
 
-Rationale:
-- Preserve package neutrality in `packages/**`.
-- Keep core reusable across channels.
-- Allow independent release pace and risk isolation for channel integrations.
+理由:
+- `packages/**` の package-neutrality を維持しやすい。
+- コアをチャネル非依存で再利用可能に保てる。
+- チャネル連携を独立した速度で改善・リリースできる。
 
-## Boundary Rule
+## 境界ルール
 
-Place in ASF core:
-- Intake contract and validation semantics.
-- Command/state transition rules.
-- Orchestration execution and audit logs.
+ASF コアに置く:
+- Intake 契約とバリデーション意味論。
+- コマンド/状態遷移ルール。
+- 実行オーケストレーションと監査ログ。
 
-Place in Slack adapter:
-- Slack-specific message handling, thread UX, and channel interaction.
-- Slack identity mapping and channel-specific auth checks.
-- Mobile-friendly prompts and confirmation UX.
+Slack アダプターに置く:
+- Slack 固有のメッセージ処理、スレッド UX、チャネル対話。
+- Slack ユーザーと実行主体の対応付け、チャネル固有認証チェック。
+- モバイル向け確認 UI と短文プロンプト。
 
-Do not duplicate in adapter:
-- Core transition logic.
-- Source-of-truth command validation.
+アダプターで重複実装しない:
+- コアの状態遷移ロジック。
+- 正規判定のソースオブトゥルースであるコマンドバリデーション。
 
-## Enforcement Scope Clarification
+## 強制範囲の明確化
 
-- Current mandatory enforcement: execution gate (commit/push path).
-- Not yet mandatory by mechanism: conversation entry must always start via Intake Manager.
-- Future enhancement option: conversation gateway that routes implementation intent through Intake Manager before execution.
+- 現在の必須強制: 実行ゲート（commit/push 経路）。
+- 仕組み上まだ必須でない: すべての会話を Intake Manager 起点にすること。
+- 将来拡張候補: 実装意図を Intake Manager 経由へルーティングする会話ゲート。
 
-## Implementation Strategy
+## 実装戦略
 
-1. Phase 1 (now):
-- Stabilize IDE-first flow and enforce ASF at execution boundaries.
+1. Phase 1（現在）:
+- IDE 主導フローを安定化し、実行境界の ASF 強制を維持する。
 
 2. Phase 2:
-- Define stable Intake I/O contract between core and adapters.
-- Build Slack adapter as supplemental channel using the same contract.
+- コアとアダプター間の Intake I/O 契約を固定する。
+- 同契約を使う補助チャネルとして Slack アダプターを実装する。
 
 3. Phase 3:
-- Reach functional parity between IDE and Slack entry paths.
-- Keep one shared validation/orchestration core.
+- IDE と Slack の入口機能を実用上同等へ引き上げる。
+- 検証/遷移/実行の中核ロジックは共通化を維持する。
 
-## Trade-off Summary (Intake Manager strict enforcement)
+## トレードオフ要約（Intake Manager 厳格強制）
 
-Potential gains:
-- Higher requirement consistency.
-- Better reproducibility and handover quality.
-- Better downstream automation quality.
+得るもの:
+- 要件品質の下限統一。
+- 再現性と引き継ぎ品質の向上。
+- 後段自動化精度の向上。
 
-Potential losses:
-- Lower speed for tiny tasks.
-- Reduced exploratory conversation freedom.
-- Higher interaction overhead on mobile.
+失うもの:
+- 小タスク初動速度の低下。
+- 探索的会話の自由度低下。
+- モバイル操作時の対話負荷増加。
 
-Recommended policy:
-- Keep strict enforcement on execution gates.
-- Introduce staged intake enforcement before implementation actions, not before all conversations.
+推奨ポリシー:
+- 実行ゲート強制は維持する。
+- 会話全体ではなく、実装アクション直前に段階強制を入れる。
 
-## Open Questions
+## 未決事項
 
-- Exact trigger point for mandatory intake in chat flows.
-- Emergency bypass policy and required audit fields.
-- Minimal mobile interaction set for Slack path.
+- チャットフローで intake 必須化を発火させる正確なトリガー。
+- 緊急 bypass 時の許可条件と監査必須項目。
+- Slack 経路における最小モバイル対話セット。
 
-## Review Trigger
+## 見直しトリガー
 
-Revisit this memo when one of the following occurs:
-- Slack path starts implementation tasks regularly.
-- Core and adapter responsibilities become duplicated.
-- Team requests fully mandatory intake at conversation start.
+次のいずれかが起きたらこのメモを見直す:
+- Slack 経路で実装タスクを常時実行する運用へ移行したとき。
+- コアとアダプターで責務重複が発生したとき。
+- 会話開始時点での全面 intake 強制が必要になったとき。

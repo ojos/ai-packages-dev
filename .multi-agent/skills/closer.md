@@ -1,4 +1,4 @@
-# Closer Skill
+# クローザースキル
 
 - merge / close の最終判断を扱う。
 - 既定 merge policy は manual とし、conditional まで拡張可能な設計を維持する。

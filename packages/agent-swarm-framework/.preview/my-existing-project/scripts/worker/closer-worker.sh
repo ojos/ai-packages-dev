@@ -95,6 +95,58 @@ should_execute() {
   return 1
 }
 
+is_true() {
+  local value="${1:-false}"
+  case "$value" in
+    true|1|yes|on)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+merge_selector() {
+  local line="$1"
+  local policy approved checks_passed blocking_findings
+
+  policy="$(json_field "$line" '.options.policy // .options.mergePolicy // "manual"')"
+  approved="$(json_field "$line" '.options.approved // false')"
+  checks_passed="$(json_field "$line" '.options.checksPassed // false')"
+  blocking_findings="$(json_field "$line" '.options.blockingFindings // false')"
+
+  case "$policy" in
+    auto|conditional)
+      if is_true "$approved" && is_true "$checks_passed" && ! is_true "$blocking_findings"; then
+        printf 'auto:policy=%s,approved=%s,checksPassed=%s,blockingFindings=%s' "$policy" "$approved" "$checks_passed" "$blocking_findings"
+        return
+      fi
+
+      local reason="policy=$policy"
+      if ! is_true "$approved"; then
+        reason+=";missing=approved"
+      fi
+      if ! is_true "$checks_passed"; then
+        reason+=";missing=checksPassed"
+      fi
+      if is_true "$blocking_findings"; then
+        reason+=";blockingFindings=true"
+      fi
+      printf 'manual:%s' "$reason"
+      return
+      ;;
+    manual)
+      printf 'manual:policy=manual'
+      return
+      ;;
+    *)
+      printf 'manual:policy=unknown(%s)' "$policy"
+      return
+      ;;
+  esac
+}
+
 already_processed() {
   local id="$1"
   grep -Fxq "$id" "$PROCESSED_FILE"
@@ -189,25 +241,35 @@ handle_action() {
       return 0
       ;;
     "/merge")
+      local selector selector_mode selector_reason
+      selector="$(merge_selector "$line")"
+      selector_mode="${selector%%:*}"
+      selector_reason="${selector#*:}"
+
+      if [[ "$selector_mode" != "auto" ]]; then
+        log_process "manual required: command=$command scope=$scope reason=$selector_reason"
+        return 0
+      fi
+
       if should_execute "$line"; then
         local method
         method="$(json_field "$line" '.options.mergeMethod // "squash"')"
         case "$method" in
           merge)
             if (cd "$ROOT_DIR" && gh pr merge "$pr_number" --merge --delete-branch=false >/dev/null); then
-              log_process "executed closer action: command=$command scope=$scope method=merge"
+              log_process "executed closer action: command=$command scope=$scope method=merge selector=$selector_reason"
               return 0
             fi
             ;;
           rebase)
             if (cd "$ROOT_DIR" && gh pr merge "$pr_number" --rebase --delete-branch=false >/dev/null); then
-              log_process "executed closer action: command=$command scope=$scope method=rebase"
+              log_process "executed closer action: command=$command scope=$scope method=rebase selector=$selector_reason"
               return 0
             fi
             ;;
           *)
             if (cd "$ROOT_DIR" && gh pr merge "$pr_number" --squash --delete-branch=false >/dev/null); then
-              log_process "executed closer action: command=$command scope=$scope method=squash"
+              log_process "executed closer action: command=$command scope=$scope method=squash selector=$selector_reason"
               return 0
             fi
             ;;
@@ -215,7 +277,7 @@ handle_action() {
         log_process "failed closer action: command=$command scope=$scope"
         return 1
       fi
-      log_process "manual required: command=$command scope=$scope"
+      log_process "planned closer action: command=$command scope=$scope selector=$selector_reason execute=false"
       return 0
       ;;
     "/close pr")

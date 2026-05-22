@@ -3,13 +3,106 @@ name: Multi-Agent Planner Implementer
 on:
   issues:
     types: [opened, labeled, edited]
+  pull_request_target:
+    types: [opened, reopened, synchronize, ready_for_review]
+  pull_request_review:
+    types: [submitted]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "Target PR number for manual merge dispatch"
+        required: false
+        type: string
+      checks_passed:
+        description: "Set true when required checks are green"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+      blocking_findings:
+        description: "Set true when blocking findings exist"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
 
 jobs:
   planner-dispatcher:
-    runs-on: ubuntu-latest
+    if: github.event_name == 'issues'
+    runs-on: self-hosted
     steps:
       - uses: actions/checkout@v4
-      - name: Placeholder
+      - name: Dispatch intake command for issue
+        shell: bash
         run: |
-          echo "Implement planner -> dispatcher -> implement adapter here"
-          echo "Current package supports github-actions as the initial remote executor."
+          set -euo pipefail
+          ISSUE_NUMBER="${{ github.event.issue.number }}"
+          if [[ -z "$ISSUE_NUMBER" ]]; then
+            echo "no issue number; skip"
+            exit 0
+          fi
+          bash scripts/gate/command-dispatch.sh \
+            --issuer github-actions \
+            --action /intake \
+            --scope "issue:#${ISSUE_NUMBER}" \
+            --options '{"execute":true,"comment":"remote intake dispatch from github-actions"}'
+
+  reviewer-dispatcher:
+    if: github.event_name == 'pull_request_target'
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dispatch review command for PR
+        shell: bash
+        run: |
+          set -euo pipefail
+          PR_NUMBER="${{ github.event.pull_request.number }}"
+          bash scripts/gate/command-dispatch.sh \
+            --issuer github-actions \
+            --action /review \
+            --scope "pr:#${PR_NUMBER}" \
+            --options '{"execute":true,"reviewBody":"Automated remote review dispatch from github-actions"}'
+
+  merge-dispatcher:
+    if: github.event_name == 'pull_request_review' && github.event.review.state == 'approved'
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dispatch conditional merge command for approved PR
+        shell: bash
+        run: |
+          set -euo pipefail
+          PR_NUMBER="${{ github.event.pull_request.number }}"
+          bash scripts/gate/command-dispatch.sh \
+            --issuer github-actions \
+            --action /merge \
+            --scope "pr:#${PR_NUMBER}" \
+            --options '{"execute":true,"policy":"conditional","approved":true,"checksPassed":true,"blockingFindings":false,"mergeMethod":"squash"}'
+
+  merge-dispatcher-manual:
+    if: github.event_name == 'workflow_dispatch' && inputs.pr_number != ''
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dispatch manual merge command
+        shell: bash
+        run: |
+          set -euo pipefail
+          PR_NUMBER="${{ inputs.pr_number }}"
+          CHECKS_PASSED="${{ inputs.checks_passed }}"
+          BLOCKING_FINDINGS="${{ inputs.blocking_findings }}"
+          OPTIONS_JSON="$(jq -cn \
+            --arg cp "$CHECKS_PASSED" \
+            --arg bf "$BLOCKING_FINDINGS" \
+            '{execute:true,policy:"conditional",approved:true,checksPassed:($cp=="true"),blockingFindings:($bf=="true"),mergeMethod:"squash"}')"
+
+          bash scripts/gate/command-dispatch.sh \
+            --issuer github-actions \
+            --action /merge \
+            --scope "pr:#${PR_NUMBER}" \
+            --options "$OPTIONS_JSON"

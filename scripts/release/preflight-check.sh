@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Release preflight check for B-3 execution.
-# This script validates gate conditions before running tag/release commands.
+# B-3 実行向けのリリース事前チェック。
+# このスクリプトはタグ/リリース実行前にゲート条件を検証する。
 
 ROOT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT_DIR"

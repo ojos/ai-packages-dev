@@ -11,8 +11,7 @@ usage() {
   cat <<'EOF'
 usage: ./scripts/worker/auto-enqueue-issues.sh [--dry-run <true|false>]
 
-Scans open issues and enqueues executable implementation tasks only when all
-eligibility conditions are satisfied.
+open 状態の issue を走査し、条件を満たす実装タスクのみを enqueue する。
 EOF
 }
 
@@ -52,8 +51,8 @@ fi
 
 has_required_sections() {
   local body="$1"
-  [[ "$body" == *"English Summary"* ]] || return 1
-  [[ "$body" == *"Acceptance Criteria"* ]] || return 1
+  [[ "$body" == *"要約"* ]] || return 1
+  ([[ "$body" == *"受け入れ条件"* ]] || [[ "$body" == *"Acceptance Criteria"* ]]) || return 1
   return 0
 }
 
@@ -108,33 +107,33 @@ printf '%s' "$candidates_json" | jq -c '.[]' | while IFS= read -r row; do
   body="$(printf '%s' "$row" | jq -r '.body // ""')"
 
   if [[ ! "$title" =~ ^(implementation:|feature:) ]]; then
-    echo "skip #$issue_number: title prefix mismatch"
+    echo "skip #$issue_number: タイトル接頭辞が不一致"
     continue
   fi
 
   if ! has_required_sections "$body"; then
-    echo "skip #$issue_number: required sections missing"
+    echo "skip #$issue_number: 必須セクション不足"
     continue
   fi
 
   if dependency_open_exists "$body"; then
-    echo "skip #$issue_number: dependency still open"
+    echo "skip #$issue_number: 依存 issue が未クローズ"
     continue
   fi
 
   if open_pr_exists_for_issue "$issue_number"; then
-    echo "skip #$issue_number: open PR already exists"
+    echo "skip #$issue_number: open PR が既に存在"
     continue
   fi
 
   if already_queued_marker "$issue_number"; then
-    echo "skip #$issue_number: already queued marker present"
+    echo "skip #$issue_number: 既に queued マーカーあり"
     continue
   fi
 
   task_command="$(parse_task_command "$body")"
   if [[ -z "$task_command" ]]; then
-    echo "skip #$issue_number: task_command missing"
+    echo "skip #$issue_number: task_command 未設定"
     continue
   fi
 

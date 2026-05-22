@@ -1,87 +1,87 @@
 ---
-name: Implementation Task
-about: Scoped implementation work within ASF workflow requiring delegation review
+name: 実装タスク
+about: ASF ワークフロー内で委譲レビューを伴う実装作業
 labels: implementation,asf-workflow
 ---
 
-## English Summary (Required)
+## 要約（必須）
 
-<!-- Keep this section short (2-6 lines). Include intent, scope, and expected outcome in English. -->
+<!-- 2〜6行で簡潔に記載。目的、スコープ、期待結果を含めること。 -->
 
-## 日本語詳細 / Japanese Details
+## 詳細
 
-<!-- 日本語での背景・補足説明を記載。英語要約と矛盾しないこと。 -->
+<!-- 背景や補足説明を記載する。要約との矛盾がないこと。 -->
 
-## Runtime Dispatch Note
+## 実行ディスパッチ注意
 
-<!-- Creating this issue alone does not start line execution. After scope is ready, dispatch executable work with scripts/worker/delegate-issue-implementation.sh. -->
+<!-- Issue を作成しただけでは line 実行は開始されない。スコープ確定後に scripts/worker/delegate-issue-implementation.sh で実行可能タスクを投入する。 -->
 
-## 📋 Implementation Scope
+## 📋 実装スコープ
 
-<!-- Explicit scope helps delegation decision -->
+<!-- スコープを明確にすると委譲判断が容易になる -->
 
-### Files to create/modify
-- [ ] List files or wildcards (e.g., `scripts/gate/**.sh`, `packages/agent-swarm-framework/...`)
+### 作成/更新対象ファイル
+- [ ] 対象ファイルまたはワイルドカードを記載（例: `scripts/gate/**.sh`, `packages/agent-swarm-framework/...`）
 
-### Acceptance Criteria
-- [ ] (Add criteria here)
-- [ ] All tests pass
-- [ ] Parity maintained (root/runtime-core if applicable)
-- [ ] Code reviewed before merge
+### 受け入れ条件
+- [ ] （条件を記載）
+- [ ] テストがすべて成功する
+- [ ] root/runtime-core の整合性を維持する（該当時）
+- [ ] マージ前にコードレビューを完了する
 
-### Test Coverage Required
-- [ ] Unit tests: YES / NO
-- [ ] Integration tests: YES / NO
-- [ ] E2E tests: YES / NO
+### 必要なテスト範囲
+- [ ] Unit tests: 実施 / 非実施
+- [ ] Integration tests: 実施 / 非実施
+- [ ] E2E tests: 実施 / 非実施
 
-### Breaking Changes?
-- [ ] None
-- [ ] Minor (backward compatible)
-- [ ] Major (breaking change)
+### 破壊的変更
+- [ ] なし
+- [ ] 軽微（後方互換あり）
+- [ ] 重大（後方互換なし）
 
 ---
 
-## 🤝 Delegation Metadata
+## 🤝 委譲メタデータ
 
-### For Agent Coordination
+### エージェント協調向け
 
-**Delegation Status**: 
-- [ ] Requires code review before implementation (**delegate to line worker**)
-- [ ] Can be self-implemented by agent (small/doc task)
-- [ ] Awaiting line worker assignment
+**委譲ステータス**:
+- [ ] 実装前に code review が必要（**line worker へ委譲**）
+- [ ] エージェントの自実装で対応可能（小規模/ドキュメント）
+- [ ] line worker 割り当て待ち
 
-**Estimated Effort**:
+**想定工数**:
 - [ ] small (< 1 hour)
 - [ ] medium (1-4 hours)
 - [ ] large (> 4 hours)
 
-**Blocking Other Work?**
-- [ ] NO (can proceed in parallel)
-- [ ] YES (blocking: [list issues])
+**他作業のブロッキング有無**
+- [ ] NO（並行実行可）
+- [ ] YES（blocking: [issue番号を列挙]）
 
 ---
 
-## 📝 Implementation Notes
+## 📝 実装メモ
 
-<!-- Optional: Add context for implementer -->
+<!-- 任意: 実装担当向けの補足情報を記載 -->
 
 ---
 
-## Runtime Delegation (Auto-Enqueue Opt-in)
+## Runtime 委譲（Auto-Enqueue 任意有効）
 
-Enable auto-enqueue only when all safety conditions are met.
+安全条件を満たす場合のみ auto-enqueue を有効化する。
 
 - [ ] Add labels: `line-task` and `auto-enqueue`
 - [ ] Dependencies are closed
-- [ ] English Summary is present
-- [ ] Acceptance Criteria is complete
+- [ ] 要約が記載されている
+- [ ] 受け入れ条件が充足している
 
-Required for auto-enqueue:
+auto-enqueue 必須項目:
 
 task_command: <single-line shell command>
 line: auto-001
 
-Example:
+例:
 
 task_command: bash packages/agent-swarm-framework/tests/conversation-entry.sh >/dev/null
 line: auto-001

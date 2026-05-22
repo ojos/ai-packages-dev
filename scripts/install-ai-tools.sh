@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Install AI CLI tools (claude, gemini) if API credentials are available.
-# Called from devcontainer postCreateCommand.
+# API 資格情報がある場合に AI CLI ツール（claude, gemini）をインストールする。
+# devcontainer の postCreateCommand から呼び出される。
 set -euo pipefail
 
 CLAUDE_PKG="@anthropic-ai/claude-code"
@@ -18,14 +18,14 @@ install_if_missing() {
   echo "[install-ai-tools] $cmd installed: $(command -v "$cmd")"
 }
 
-# claude: requires CLAUDE_CODE_OAUTH_TOKEN
+# claude: CLAUDE_CODE_OAUTH_TOKEN が必要
 if [[ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]]; then
   install_if_missing claude "$CLAUDE_PKG"
 else
   echo "[install-ai-tools] SKIP claude (CLAUDE_CODE_OAUTH_TOKEN not set)"
 fi
 
-# gemini: requires GEMINI_API_KEY
+# gemini: GEMINI_API_KEY が必要
 if [[ -n "${GEMINI_API_KEY:-}" ]]; then
   install_if_missing gemini "$GEMINI_PKG"
 else

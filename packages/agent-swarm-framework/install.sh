@@ -21,6 +21,9 @@ PREVIEW_DIR=""
 SKIP_GITHUB="false"
 BOOTSTRAP_FROM=""
 RETROFIT_SAFE="false"
+WITH_DOTFILES=""
+DOTFILES_FROM=""
+DOTFILES_CONFLICT_POLICY="skip"
 ORIGINAL_ARGS=("$@")
 
 usage() {
@@ -33,6 +36,11 @@ options:
   --config <json-file>       Use a JSON config file
   --bootstrap-from <url>     Package archive URL for standalone mode (default: main branch archive)
   --retrofit-safe            Apply safe preset for existing project retrofit
+  --with-dotfiles            Install shared dotfiles rules together with ASF
+  --without-dotfiles         Do not install dotfiles rules
+  --dotfiles-from <path|url> Dotfiles source (directory/file path or archive URL)
+  --dotfiles-conflict-policy <skip|overwrite|prompt>
+                              Policy when dotfiles target file already exists (default: skip)
   --non-interactive          Do not ask questions; requires --config
   --skip-github              Skip milestone/issue creation step
   -h, --help                 Show help
@@ -106,6 +114,22 @@ while [[ $# -gt 0 ]]; do
     --retrofit-safe)
       RETROFIT_SAFE="true"
       shift
+      ;;
+    --with-dotfiles)
+      WITH_DOTFILES="true"
+      shift
+      ;;
+    --without-dotfiles)
+      WITH_DOTFILES="false"
+      shift
+      ;;
+    --dotfiles-from)
+      DOTFILES_FROM="$2"
+      shift 2
+      ;;
+    --dotfiles-conflict-policy)
+      DOTFILES_CONFLICT_POLICY="$2"
+      shift 2
       ;;
     --non-interactive)
       NON_INTERACTIVE="true"
@@ -191,6 +215,177 @@ confirm() {
   read -r -p "$prompt $suffix: " answer
   answer="${answer:-$default}"
   [[ "$answer" == "y" || "$answer" == "Y" ]]
+}
+
+detect_dotfiles_shared_rules_file() {
+  local source_hint="$1"
+  local local_candidates=()
+  local tmp_root archive_file shared_file
+
+  if [[ -n "$source_hint" ]]; then
+    if [[ "$source_hint" =~ ^https?:// ]]; then
+      require_cmd curl
+      require_cmd tar
+      tmp_root="$(mktemp -d)"
+      archive_file="$tmp_root/dotfiles.tar.gz"
+      curl -fsSL "$source_hint" -o "$archive_file"
+      tar -xzf "$archive_file" -C "$tmp_root"
+      shared_file="$(find "$tmp_root" -type f \( -path '*/dotfiles/ai/common/shared-ai-rules.md' -o -path '*/ai/common/shared-ai-rules.md' \) | head -n 1 || true)"
+      [[ -n "$shared_file" ]] || {
+        echo "error: shared-ai-rules.md not found in dotfiles archive: $source_hint" >&2
+        exit 1
+      }
+      printf '%s' "$shared_file"
+      return
+    fi
+
+    if [[ -f "$source_hint" ]]; then
+      printf '%s' "$source_hint"
+      return
+    fi
+
+    if [[ -d "$source_hint" ]]; then
+      shared_file="$(find "$source_hint" -type f \( -path '*/dotfiles/ai/common/shared-ai-rules.md' -o -path '*/ai/common/shared-ai-rules.md' \) | head -n 1 || true)"
+      [[ -n "$shared_file" ]] || {
+        echo "error: shared-ai-rules.md not found under directory: $source_hint" >&2
+        exit 1
+      }
+      printf '%s' "$shared_file"
+      return
+    fi
+
+    echo "error: --dotfiles-from not found: $source_hint" >&2
+    exit 1
+  fi
+
+  local_candidates+=("$PACKAGE_ROOT/../../dotfiles/ai/common/shared-ai-rules.md")
+  local_candidates+=("$PACKAGE_ROOT/../../../dotfiles/ai/common/shared-ai-rules.md")
+
+  for shared_file in "${local_candidates[@]}"; do
+    if [[ -f "$shared_file" ]]; then
+      printf '%s' "$shared_file"
+      return
+    fi
+  done
+
+  echo ""
+}
+
+should_install_dotfiles() {
+  if [[ "$WITH_DOTFILES" == "true" ]]; then
+    return 0
+  fi
+  if [[ "$WITH_DOTFILES" == "false" ]]; then
+    return 1
+  fi
+  if [[ "$NON_INTERACTIVE" == "true" ]]; then
+    return 1
+  fi
+  confirm "Install shared dotfiles rules together with ASF?" n
+}
+
+validate_dotfiles_options() {
+  case "$DOTFILES_CONFLICT_POLICY" in
+    skip|overwrite|prompt) ;;
+    *)
+      echo "error: --dotfiles-conflict-policy must be one of: skip, overwrite, prompt" >&2
+      exit 1
+      ;;
+  esac
+}
+
+apply_file_with_policy() {
+  local src="$1"
+  local dest="$2"
+  local label="$3"
+
+  mkdir -p "$(dirname "$dest")"
+
+  if [[ ! -f "$dest" ]]; then
+    cp "$src" "$dest"
+    echo "Applied: $label"
+    return 0
+  fi
+
+  case "$DOTFILES_CONFLICT_POLICY" in
+    skip)
+      echo "Skipped: $label already exists (policy: skip)"
+      ;;
+    overwrite)
+      cp "$src" "$dest"
+      echo "Applied: $label (policy: overwrite)"
+      ;;
+    prompt)
+      if [[ "$NON_INTERACTIVE" == "true" ]]; then
+        echo "Skipped: $label already exists (policy: prompt, non-interactive fallback=skip)"
+      elif confirm "File exists: $dest. Overwrite?" n; then
+        cp "$src" "$dest"
+        echo "Applied: $label (policy: prompt->overwrite)"
+      else
+        echo "Skipped: $label (policy: prompt->skip)"
+      fi
+      ;;
+  esac
+}
+
+install_dotfiles_rules() {
+  local target_root="$1"
+  local shared_source
+  local tmp
+
+  shared_source="$(detect_dotfiles_shared_rules_file "$DOTFILES_FROM")"
+  if [[ -z "$shared_source" ]]; then
+    echo "error: dotfiles source not found. specify --dotfiles-from <path|url> to install dotfiles together." >&2
+    exit 1
+  fi
+
+  apply_file_with_policy \
+    "$shared_source" \
+    "$target_root/dotfiles/ai/common/shared-ai-rules.md" \
+    "dotfiles/ai/common/shared-ai-rules.md"
+
+  mkdir -p "$target_root/.github"
+
+  tmp="$(mktemp)"
+  cat > "$tmp" <<'EOF'
+# プロジェクト共通 AI ルール
+
+- このファイルはプロジェクト共通ルールの正本です。
+- 全体共通ルールは `dotfiles/ai/common/shared-ai-rules.md` を参照します。
+- 実行環境入口ファイル（`.github/copilot-instructions.md`, `CLAUDE.md`）はこのファイルを参照し、最小差分のみを記述します。
+EOF
+  apply_file_with_policy "$tmp" "$target_root/.github/project-ai-rules.md" ".github/project-ai-rules.md"
+  rm -f "$tmp"
+
+  tmp="$(mktemp)"
+  cat > "$tmp" <<'EOF'
+# Copilot 実行環境向け入口ファイル
+
+次の順序でルールを適用します（下位から上位へ優先）。
+
+1. `dotfiles/ai/common/shared-ai-rules.md`
+2. `.github/project-ai-rules.md`
+3. このファイル
+
+- このファイルは最小構成に保ち、実行環境固有の差分のみを扱います。
+EOF
+  apply_file_with_policy "$tmp" "$target_root/.github/copilot-instructions.md" ".github/copilot-instructions.md"
+  rm -f "$tmp"
+
+  tmp="$(mktemp)"
+  cat > "$tmp" <<'EOF'
+# Claude 実行環境向け入口ファイル
+
+次の順序でルールを適用します（下位から上位へ優先）。
+
+1. `dotfiles/ai/common/shared-ai-rules.md`
+2. `.github/project-ai-rules.md`
+3. このファイル
+
+- このファイルは最小構成に保ち、実行環境固有の差分のみを扱います。
+EOF
+  apply_file_with_policy "$tmp" "$target_root/CLAUDE.md" "CLAUDE.md"
+  rm -f "$tmp"
 }
 
 default_apply_for_category() {
@@ -440,6 +635,8 @@ category_enabled() {
   [[ "$remote_provider" == "github-actions" || "$remote_provider" == "both" ]]
 }
 
+validate_dotfiles_options
+
 CONFIG_JSON="$(load_config)"
 CONFIG_JSON="$(normalize_config "$CONFIG_JSON")"
 if [[ "$RETROFIT_SAFE" == "true" ]]; then
@@ -528,5 +725,12 @@ else
 fi
 
 create_github_bootstrap "$TARGET_DIR" "$PREVIEW_DIR"
+
+if should_install_dotfiles; then
+  echo "Dotfiles conflict policy: $DOTFILES_CONFLICT_POLICY"
+  install_dotfiles_rules "$TARGET_DIR"
+else
+  echo "Skipped dotfiles co-install"
+fi
 
 echo "Install flow completed."

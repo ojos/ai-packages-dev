@@ -409,6 +409,45 @@ print_gate() {
   done <<< "$rows"
 }
 
+print_consult() {
+  local consult_state_file consult_log_file state updated_at blocking lines last_log
+  consult_state_file="$RUNTIME_DIR/consult-state.json"
+  consult_log_file="$RUNTIME_DIR/consult-log.jsonl"
+
+  if [[ ! -f "$consult_state_file" ]]; then
+    echo 'scope: consult'
+    echo 'state: inactive'
+    echo 'blocking: false'
+    echo 'lines: []'
+    echo 'last_log: none'
+    echo 'allowed_commands: /consult /log /apply /defer'
+    return
+  fi
+
+  state="$(jq -r '.state // "inactive"' "$consult_state_file" 2>/dev/null || echo inactive)"
+  updated_at="$(jq -r '.updated_at // ""' "$consult_state_file" 2>/dev/null || true)"
+  blocking="$(jq -r '.blocking // false' "$consult_state_file" 2>/dev/null || echo false)"
+  lines="$(jq -c '.lines // []' "$consult_state_file" 2>/dev/null || echo '[]')"
+
+  if [[ -f "$consult_log_file" ]]; then
+    last_log="$(tail -n 1 "$consult_log_file" 2>/dev/null || true)"
+  else
+    last_log=""
+  fi
+
+  echo 'scope: consult'
+  printf 'state: %s\n' "$state"
+  printf 'updated_at: %s\n' "${updated_at:-none}"
+  printf 'blocking: %s\n' "$blocking"
+  printf 'lines: %s\n' "$lines"
+  if [[ -n "$last_log" ]]; then
+    printf 'last_log: %s\n' "$(printf '%s' "$last_log" | jq -r '"\(.timestamp) \(.issuer) \(.command) state=\(.state)"' 2>/dev/null || echo present)"
+  else
+    echo 'last_log: none'
+  fi
+  echo 'allowed_commands: /consult /log /apply /defer'
+}
+
 print_scope() {
   local line_ids line_id
   case "$scope" in
@@ -426,6 +465,9 @@ print_scope() {
       echo
       echo '[gate]'
       print_gate
+      echo
+      echo '[consult]'
+      print_consult
       ;;
     line:*)
       print_line "${scope#line:}"
@@ -440,9 +482,7 @@ print_scope() {
       print_pr "${scope#pr:#}"
       ;;
     consult)
-      echo 'scope: consult'
-      echo 'state: active/inactive must be derived from command history and is not implemented yet.'
-      echo 'allowed_commands: /consult /log /apply /defer'
+      print_consult
       ;;
     *)
       echo "error: unsupported scope: $scope" >&2

@@ -44,3 +44,4 @@ stop_by_pattern "worker-coordinator" "/workspaces/ojos-ai-packages-dev/scripts/w
 stop_by_pattern "orchestrator-worker" "/workspaces/ojos-ai-packages-dev/scripts/worker/orchestrator-worker.sh"
 stop_by_pattern "line-worker" "/workspaces/ojos-ai-packages-dev/scripts/worker/line-worker.sh --line"
 stop_by_pattern "closer-worker" "/workspaces/ojos-ai-packages-dev/scripts/worker/closer-worker.sh"
+stop_by_pattern "auto-enqueue-worker" "/workspaces/ojos-ai-packages-dev/scripts/worker/auto-enqueue-worker.sh"

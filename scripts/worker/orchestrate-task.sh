@@ -392,14 +392,13 @@ EOF
       FILES=(
         "packages/devcontainer-bootstrap/bootstrap.sh"
         "packages/devcontainer-bootstrap/README.md"
-        "packages/devcontainer-bootstrap/README.ja.md"
       )
       IMPLEMENTATION_GOAL=$(cat <<'EOF'
 - Implement minimal-mode parity for AI tools provisioning in DCB:
   - ensure minimal mode includes a valid scripts/install-ai-tools.sh template path
   - eliminate unknown template key errors during minimal generation
   - keep minimal devcontainer postCreateCommand wiring deterministic
-  - update README and README.ja to clarify minimal/standard/full AI provisioning behavior
+  - update README to clarify minimal/standard/full AI provisioning behavior
 EOF
 )
       ;;
@@ -408,28 +407,25 @@ EOF
         "scripts/gate/asf-doctor.sh"
         "packages/agent-swarm-framework/runtime-core/files/scripts/gate/asf-doctor.sh"
         "packages/agent-swarm-framework/README.md"
-        "packages/agent-swarm-framework/README.ja.md"
       )
       IMPLEMENTATION_GOAL=$(cat <<'EOF'
 - Harden ASF dependency contract for jq/gh:
   - treat jq and gh as required in doctor checks
   - keep remediation messages explicit and actionable
-  - align README/README.ja dependency guidance with doctor behavior
+  - align README dependency guidance with doctor behavior
 EOF
 )
       ;;
     engine_provisioning_matrix)
       FILES=(
         "packages/agent-swarm-framework/README.md"
-        "packages/agent-swarm-framework/README.ja.md"
         "packages/devcontainer-bootstrap/README.md"
-        "packages/devcontainer-bootstrap/README.ja.md"
       )
       IMPLEMENTATION_GOAL=$(cat <<'EOF'
 - Add unified engine provisioning matrix across ASF/DCB:
   - include claude/gemini/codex command and credential mapping
   - include minimal/standard/full provisioning path and failure behavior
-  - keep English/Japanese descriptions synchronized
+  - keep descriptions synchronized
 EOF
 )
       ;;
@@ -438,13 +434,12 @@ EOF
         "packages/devcontainer-bootstrap/bootstrap.sh"
         "packages/devcontainer-bootstrap/doctor.sh"
         "packages/devcontainer-bootstrap/README.md"
-        "packages/devcontainer-bootstrap/README.ja.md"
       )
       IMPLEMENTATION_GOAL=$(cat <<'EOF'
 - Add PHP language support to DCB bootstrap while keeping existing languages unchanged:
   - add php to --languages validation and language feature expansion in bootstrap templates
   - wire PHP devcontainer feature for generated devcontainer.json where language flags are rendered
-  - update mode behavior documentation in README and README.ja
+  - update mode behavior documentation in README
   - keep package-neutral implementation (no framework-specific Composer/Laravel setup)
   - add/update generated check scripts where needed so php runtime availability can be verified
 EOF
@@ -709,9 +704,9 @@ run_checks() {
         write_state "blocked" "copilot" "php docs missing in README.md"
         exit 1
       fi
-      if ! grep -qi 'php' "$ROOT_DIR/packages/devcontainer-bootstrap/README.ja.md"; then
-        log "PHP language docs missing in README.ja.md"
-        write_state "blocked" "copilot" "php docs missing in README.ja.md"
+      if ! grep -qi 'php' "$ROOT_DIR/packages/devcontainer-bootstrap/README.md"; then
+        log "PHP language docs missing in README.md"
+        write_state "blocked" "copilot" "php docs missing in README.md"
         exit 1
       fi
       if ! grep -q 'for lang in node go python php; do' "$ROOT_DIR/packages/devcontainer-bootstrap/doctor.sh"; then
