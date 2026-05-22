@@ -1,0 +1,14 @@
+{
+  "version": "1.0",
+  "policy": {
+    "generatedLayoutMode": "reference-only",
+    "existingProjectPolicy": "respect-existing",
+    "topLevelDefaults": {
+      "source": "src",
+      "docs": "docs",
+      "tests": "tests"
+    },
+    "subdirectoryProfile": "none",
+    "enforcement": "warning"
+  }
+}

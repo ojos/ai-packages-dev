@@ -160,10 +160,10 @@ cmd_use() {
     exit 1
   fi
 
-  # Register the account for github.com using the selected token.
+  # 選択したトークンで github.com のアカウントを登録する。
   printf '%s' "$token" | gh auth login --hostname github.com --with-token >/dev/null
 
-  # If available, switch explicitly to the target user for deterministic behavior.
+  # 可能な場合は対象ユーザーへ明示切替し、挙動を決定的にする。
   if gh auth switch --help >/dev/null 2>&1; then
     gh auth switch --hostname github.com --user "$login" >/dev/null
   fi
@@ -177,10 +177,10 @@ cmd_use() {
     git config --"$git_scope" user.email "$git_email"
   fi
 
-  # Resolve GITHUB_OWNER: use profile-specific value if set, otherwise fall back to login.
+  # GITHUB_OWNER 解決: プロファイル専用値を優先し、未設定時は login を使用。
   local owner_env="GITHUB_OWNER_${upper}"
   local resolved_owner="${!owner_env:-$login}"
-  # Keep a lightweight marker in git config for diagnostics.
+  # 診断用に軽量なマーカーを git config に保存。
   git config --"$git_scope" github.account "$login"
   git config --"$git_scope" github.owner "$resolved_owner"
 
@@ -193,7 +193,7 @@ cmd_use() {
 }
 
 list_profile_suffixes() {
-  # Preserve environment iteration order so the first defined token can act as the default.
+  # 環境変数の列挙順を維持し、最初のトークンを既定候補として扱えるようにする。
   env | awk -F= '/^GITHUB_TOKEN_[A-Z0-9_]+=/ {sub(/^GITHUB_TOKEN_/,"",$1); print $1}'
 }
 
@@ -231,7 +231,7 @@ resolve_profile_for_repo() {
   fi
 
   if [[ "$count" -gt 1 ]]; then
-    # Fallback: use the first declared GITHUB_TOKEN_* as the default profile.
+    # フォールバック: 最初に定義された GITHUB_TOKEN_* を既定プロファイルにする。
     printf '%s' "$(printf '%s\n' "$suffixes" | sed -n '1p' | tr '[:upper:]' '[:lower:]')"
     return 0
   fi

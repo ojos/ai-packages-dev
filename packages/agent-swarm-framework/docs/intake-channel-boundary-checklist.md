@@ -1,76 +1,76 @@
-# Intake Channel Boundary Checklist
+# Intake チャネル境界チェックリスト
 
-This checklist converts boundary decisions into implementation tasks.
-Use it to keep ASF core and channel adapters separated consistently.
+このチェックリストは、境界方針を実装タスクへ落とすための運用用ドキュメントである。
+ASF コアとチャネルアダプターの責務分離を継続的に維持するために使う。
 
-## Scope
+## 対象範囲
 
-- Applies to IDE-first ASF development now.
-- Applies to Slack adapter design and implementation later.
+- 現在の IDE 主導 ASF 開発に適用する。
+- 将来の Slack アダプター設計・実装にも適用する。
 
-## A. Design Gate (before coding)
+## A. 設計ゲート（実装前）
 
-- [ ] Responsibility split is explicit:
-  - [ ] ASF core responsibilities are listed.
-  - [ ] Adapter responsibilities are listed.
-- [ ] No channel-specific nouns in core design docs.
-- [ ] Intake I/O contract fields are defined and versioned.
-- [ ] Validation source of truth is assigned to ASF core.
-- [ ] Error model is shared across IDE and adapter paths.
+- [ ] 責務分離が明示されている:
+  - [ ] ASF コア責務の一覧がある。
+  - [ ] アダプター責務の一覧がある。
+- [ ] コア設計文書にチャネル固有名詞が混入していない。
+- [ ] Intake I/O 契約フィールドが定義され、バージョン管理されている。
+- [ ] バリデーションの正規判定源が ASF コアであると明示されている。
+- [ ] エラーモデルが IDE 経路とアダプター経路で共通化されている。
 
-Definition of done for A:
-- A design note includes: core scope, adapter scope, and contract schema owner.
+A の完了条件:
+- 設計メモに「コア範囲」「アダプター範囲」「契約スキーマ責任者」が記載されている。
 
-## B. Core Implementation Gate
+## B. コア実装ゲート
 
-- [ ] Command/state transition logic is implemented only once in core.
-- [ ] Core does not import adapter SDK dependencies.
-- [ ] Core accepts normalized command payloads (channel-agnostic).
-- [ ] Core writes audit logs independent of entry channel.
-- [ ] Core tests cover both IDE-origin and adapter-origin payload examples.
+- [ ] コマンド/状態遷移ロジックはコアで一度だけ実装されている。
+- [ ] コアがアダプター SDK 依存を import していない。
+- [ ] コアがチャネル非依存の正規化済みペイロードを受け取れる。
+- [ ] コア監査ログが入口チャネルに依存せず記録される。
+- [ ] コアテストに IDE 起点とアダプター起点の入力例が含まれている。
 
-Definition of done for B:
-- Core tests pass with at least one IDE and one adapter-shaped input fixture.
+B の完了条件:
+- 少なくとも IDE 形状 1件とアダプター形状 1件の入力フィクスチャでコアテストが通る。
 
-## C. Adapter Implementation Gate (Slack or other)
+## C. アダプター実装ゲート（Slack 等）
 
-- [ ] Adapter converts channel events into normalized Intake/command payloads.
-- [ ] Adapter does not re-implement transition rules.
-- [ ] Adapter calls core validation before execution requests.
-- [ ] Adapter-specific auth and identity mapping are isolated in adapter layer.
-- [ ] Mobile-friendly confirmation flow exists for destructive actions.
+- [ ] アダプターがチャネルイベントを正規 Intake/command ペイロードへ変換する。
+- [ ] アダプターで状態遷移ルールを再実装していない。
+- [ ] 実行要求前に必ずコアのバリデーションを呼ぶ。
+- [ ] アダプター固有の認証・ID対応はアダプター層に隔離されている。
+- [ ] 破壊的アクションに対してモバイル向け確認フローがある。
 
-Definition of done for C:
-- Adapter can submit intake and receive validation errors from core without custom rule forks.
+C の完了条件:
+- アダプターが独自ルール分岐なしで intake 提出とコア由来のエラー受信を実行できる。
 
-## D. Enforcement Gate
+## D. 強制ゲート
 
-- [ ] Execution boundary enforcement remains active (commit/push gate).
-- [ ] Mandatory intake trigger point is documented for each channel.
-- [ ] Bypass policy exists with required audit fields.
-- [ ] Emergency mode does not bypass core validation logs.
+- [ ] 実行境界の強制（commit/push ゲート）が有効なままである。
+- [ ] チャネルごとの intake 必須化トリガーが文書化されている。
+- [ ] bypass ポリシーと監査必須項目が定義されている。
+- [ ] 緊急モードでもコアのバリデーションログを迂回しない。
 
-Definition of done for D:
-- Enforcement behavior is testable and documented with one success and one reject scenario.
+D の完了条件:
+- 強制挙動について成功シナリオと拒否シナリオが文書・テストで確認できる。
 
-## E. Release Gate
+## E. リリースゲート
 
-- [ ] Core release notes include contract compatibility statement.
-- [ ] Adapter release notes include supported contract version.
-- [ ] Backward compatibility policy is explicit for contract changes.
-- [ ] README/docs link both boundary memo and this checklist.
+- [ ] コアのリリースノートに契約互換性の記載がある。
+- [ ] アダプターのリリースノートに対応契約バージョンの記載がある。
+- [ ] 契約変更時の後方互換ポリシーが明示されている。
+- [ ] README/docs から境界メモと本チェックリストへ到達できる。
 
-Definition of done for E:
-- A release reviewer can verify compatibility from docs alone.
+E の完了条件:
+- レビュー担当者がドキュメントのみで互換性を判定できる。
 
-## Regression Quick Checks
+## 回帰クイックチェック
 
-1. If adapter is disabled, IDE-first path still works end-to-end.
-2. If adapter is enabled, command validation results match IDE path behavior.
-3. No channel-specific dependency appears under `packages/agent-swarm-framework/runtime-core/**`.
+1. アダプター無効時でも IDE 主導フローが end-to-end で動く。
+2. アダプター有効時でもコマンド判定結果が IDE 経路と一致する。
+3. `packages/agent-swarm-framework/runtime-core/**` にチャネル固有依存が存在しない。
 
-## Ownership Recommendation
+## 推奨オーナーシップ
 
-- Core owner: ASF maintainers.
-- Adapter owner: channel integration maintainers.
-- Contract owner: shared ownership with explicit approval rule from core owner.
+- コア責任者: ASF メンテナー。
+- アダプター責任者: チャネル連携メンテナー。
+- 契約責任者: コア責任者の承認ルールを伴う共同管理。

@@ -76,6 +76,8 @@ ATTEMPT_FILE="$RUNTIME_DIR/orchestrator-attempts.tsv"
 DEAD_LETTER_FILE="$RUNTIME_DIR/orchestrator-dead-letter.jsonl"
 DECOMPOSE_QUEUE_FILE="$RUNTIME_DIR/orchestrator-decompose-queued.ids"
 DECOMPOSE_DONE_FILE="$RUNTIME_DIR/orchestrator-decompose-done.ids"
+CONSULT_STATE_FILE="$RUNTIME_DIR/consult-state.json"
+CONSULT_GUARD_FILE="$RUNTIME_DIR/consult-guard.json"
 
 ensure_single_instance() {
   if [[ -f "$PID_FILE" ]]; then
@@ -624,6 +626,122 @@ dispatch_script_path() {
   echo ""
 }
 
+ensure_consult_guard_file() {
+  if [[ ! -f "$CONSULT_GUARD_FILE" ]]; then
+    cat >"$CONSULT_GUARD_FILE" <<'EOF'
+{
+  "paused_lines": []
+}
+EOF
+  fi
+}
+
+guard_contains_line() {
+  local line_id="$1"
+  ensure_consult_guard_file
+  jq -e --arg line "$line_id" '.paused_lines | index($line) != null' "$CONSULT_GUARD_FILE" >/dev/null 2>&1
+}
+
+guard_add_line() {
+  local line_id="$1"
+  ensure_consult_guard_file
+  local tmp
+  tmp="$(mktemp)"
+  jq --arg line "$line_id" '.paused_lines = ((.paused_lines // []) + [$line] | unique)' "$CONSULT_GUARD_FILE" >"$tmp"
+  mv "$tmp" "$CONSULT_GUARD_FILE"
+}
+
+guard_clear_lines() {
+  ensure_consult_guard_file
+  local tmp
+  tmp="$(mktemp)"
+  jq '.paused_lines = []' "$CONSULT_GUARD_FILE" >"$tmp"
+  mv "$tmp" "$CONSULT_GUARD_FILE"
+}
+
+guard_lines() {
+  ensure_consult_guard_file
+  jq -r '.paused_lines[]?' "$CONSULT_GUARD_FILE" 2>/dev/null || true
+}
+
+consult_state_active_and_blocking() {
+  [[ -f "$CONSULT_STATE_FILE" ]] || return 1
+  local state blocking
+  state="$(jq -r '.state // "inactive"' "$CONSULT_STATE_FILE" 2>/dev/null || echo inactive)"
+  blocking="$(jq -r '.blocking // false' "$CONSULT_STATE_FILE" 2>/dev/null || echo false)"
+  [[ "$state" == "active" && "$blocking" == "true" ]]
+}
+
+consult_target_lines() {
+  [[ -f "$CONSULT_STATE_FILE" ]] || {
+    echo "all"
+    return
+  }
+
+  local lines
+  lines="$(jq -r '.lines[]?' "$CONSULT_STATE_FILE" 2>/dev/null | xargs echo)"
+  if [[ -z "$lines" ]]; then
+    echo "all"
+  else
+    echo "$lines"
+  fi
+}
+
+dispatch_control_action() {
+  local command="$1"
+  local target_scope="$2"
+  local dispatch_script
+  dispatch_script="$(dispatch_script_path)"
+  [[ -n "$dispatch_script" ]] || return 1
+
+  bash "$dispatch_script" --issuer orchestrator --action "$command" --scope "$target_scope" --options '{"execute":true}' >/dev/null 2>&1
+}
+
+sync_blocking_consult_guard() {
+  local line_id
+  if consult_state_active_and_blocking; then
+    for line_id in $(consult_target_lines); do
+      if guard_contains_line "$line_id"; then
+        continue
+      fi
+
+      if [[ "$line_id" == "all" ]]; then
+        if dispatch_control_action "/pause" "all"; then
+          guard_add_line "all"
+          log_process "consult blocking: paused scope=all"
+        else
+          log_process "consult blocking: failed to pause scope=all"
+        fi
+      else
+        if dispatch_control_action "/pause" "line:${line_id}"; then
+          guard_add_line "$line_id"
+          log_process "consult blocking: paused line=${line_id}"
+        else
+          log_process "consult blocking: failed to pause line=${line_id}"
+        fi
+      fi
+    done
+    return
+  fi
+
+  for line_id in $(guard_lines); do
+    if [[ "$line_id" == "all" ]]; then
+      if dispatch_control_action "/resume" "all"; then
+        log_process "consult unblock: resumed scope=all"
+      else
+        log_process "consult unblock: failed to resume scope=all"
+      fi
+    else
+      if dispatch_control_action "/resume" "line:${line_id}"; then
+        log_process "consult unblock: resumed line=${line_id}"
+      else
+        log_process "consult unblock: failed to resume line=${line_id}"
+      fi
+    fi
+  done
+  guard_clear_lines
+}
+
 already_processed() {
   local id="$1"
   grep -Fxq "$id" "$PROCESSED_FILE"
@@ -1091,6 +1209,7 @@ compact_queue_file() {
 log_process "worker started"
 
 while true; do
+  sync_blocking_consult_guard
   process_once
   scale_line_workers_if_needed "periodic"
 

@@ -12,8 +12,8 @@ options:
   -h, --help        Show help
 
 notes:
-  - Updates the RELEASE_STATUS managed block in README.
-  - Requires gh auth and repository access.
+  - README 内の RELEASE_STATUS 管理ブロックを更新する。
+  - 実行には gh 認証と対象リポジトリアクセス権が必要。
 EOF
 }
 
@@ -76,7 +76,7 @@ cat >"$BLOCK_FILE" <<EOF
 
 リリース実行手順は各パッケージの \`docs/\` または \`.github/workflows/\` を参照する。
 
-### Release Status (English)
+### リリース状況
 
 - \`devcontainer-bootstrap\`: published up to \`$DCB_TAG\` at \`$OWNER/devcontainer-bootstrap\`
 - \`agent-swarm-framework\`: published up to \`$ASF_TAG\` at \`$OWNER/agent-swarm-framework\`

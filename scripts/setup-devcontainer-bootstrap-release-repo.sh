@@ -88,10 +88,6 @@ copy_release_files() {
     cp "$src/README.md" "$dst/README.md"
   fi
 
-  if [[ -f "$src/README.ja.md" ]]; then
-    cp "$src/README.ja.md" "$dst/README.ja.md"
-  fi
-
   cp "$src/.github/workflows/release.yml" "$dst/.github/workflows/release.yml"
 }
 
@@ -194,9 +190,6 @@ main() {
   git add bootstrap.sh doctor.sh .github/workflows/release.yml
   if [[ -f README.md ]]; then
     git add README.md
-  fi
-  if [[ -f README.ja.md ]]; then
-    git add README.ja.md
   fi
 
   if ! git diff --cached --quiet; then

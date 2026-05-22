@@ -10,6 +10,7 @@ RUNTIME_DIR="$ROOT_DIR/orchestration/runtime"
 LINE_STATE_FILE="$RUNTIME_DIR/line-states.json"
 SLOTS_FILE="$RUNTIME_DIR/line-worker-slots.json"
 CONSULT_STATE_FILE="$RUNTIME_DIR/consult-state.json"
+CONSULT_LOG_FILE="$RUNTIME_DIR/consult-log.jsonl"
 ACTION_QUEUE_FILE="$RUNTIME_DIR/pending-actions.jsonl"
 
 issuer=""
@@ -158,10 +159,37 @@ ensure_consult_state_file() {
     cat >"$CONSULT_STATE_FILE" <<'EOF'
 {
   "state": "inactive",
-  "updated_at": ""
+  "updated_at": "",
+  "blocking": false,
+  "lines": []
 }
 EOF
   fi
+}
+
+normalize_consult_lines() {
+  local options_json="$1"
+  printf '%s' "$options_json" | jq -c '
+    (.lines // .affectedLines // ["all"]) |
+    if type == "string" then [.] elif type == "array" then map(tostring) else ["all"] end
+  ' 2>/dev/null || printf '["all"]'
+}
+
+append_consult_log() {
+  local new_state="$1"
+  local options_json="$2"
+  local safe_options
+
+  safe_options="$(printf '%s' "$options_json" | jq -c '{topic,decision,applyNow,deferIssue,affectedLines,blocking,lines,priority,note}' 2>/dev/null || echo '{}')"
+
+  printf '%s\n' "$(jq -cn \
+    --arg ts "$(now_iso)" \
+    --arg issuer "$issuer" \
+    --arg command "$action" \
+    --arg scope "$scope" \
+    --arg state "$new_state" \
+    --argjson options "$safe_options" \
+    '{timestamp:$ts, issuer:$issuer, command:$command, scope:$scope, state:$state, options:$options}')" >>"$CONSULT_LOG_FILE"
 }
 
 set_line_state() {
@@ -199,12 +227,31 @@ set_line_state() {
 
 set_consult_state() {
   local new_state="$1"
+  local options_json="${2:-\{\}}"
+  local blocking="false"
+  local lines='[]'
 
   ensure_consult_state_file
 
+  if [[ "$new_state" == "active" ]]; then
+    blocking="$(printf '%s' "$options_json" | jq -r '.blocking // false' 2>/dev/null || echo false)"
+    if [[ "$blocking" == "true" ]]; then
+      lines="$(normalize_consult_lines "$options_json")"
+    else
+      blocking="false"
+    fi
+  fi
+
   tmp="$(mktemp)"
-  jq --arg s "$new_state" --arg t "$(now_iso)" '.state = $s | .updated_at = $t' "$CONSULT_STATE_FILE" >"$tmp"
+  jq --arg s "$new_state" \
+     --arg t "$(now_iso)" \
+     --argjson blocking "$blocking" \
+     --argjson lines "$lines" \
+     '.state = $s | .updated_at = $t | .blocking = $blocking | .lines = $lines' \
+     "$CONSULT_STATE_FILE" >"$tmp"
   mv "$tmp" "$CONSULT_STATE_FILE"
+
+  append_consult_log "$new_state" "$options_json"
 }
 
 queue_action() {
@@ -279,26 +326,26 @@ case "$action" in
     echo "dispatched: $action $scope"
     ;;
   "/consult")
-    set_consult_state "active"
+    set_consult_state "active" "$options"
     log_line_events_for_scope "consult" "unchanged" "consult session started"
     echo "dispatched: $action $scope"
     ;;
   "/log")
-    set_consult_state "logged"
+    set_consult_state "logged" "$options"
     log_line_events_for_scope "consult" "unchanged" "consult logged"
     echo "dispatched: $action $scope"
     ;;
   "/apply")
-    set_consult_state "applied"
+    set_consult_state "applied" "$options"
     log_line_events_for_scope "consult" "unchanged" "consult applied"
     echo "dispatched: $action $scope"
     ;;
   "/defer")
-    set_consult_state "deferred"
+    set_consult_state "deferred" "$options"
     log_line_events_for_scope "consult" "unchanged" "consult deferred"
     echo "dispatched: $action $scope"
     ;;
-  "/review"|"/merge"|"/close pr"|"/approve"|"/reject"|"/hold"|"/add line"|"/reassign"|"/escalate"|"/hotfix"|"/backlog"|"/implement")
+  "/intake"|"/review"|"/merge"|"/close pr"|"/approve"|"/reject"|"/hold"|"/add line"|"/reassign"|"/escalate"|"/hotfix"|"/backlog"|"/implement")
     queue_action "accepted and queued for external/system integration"
     echo "queued: $action $scope"
     ;;

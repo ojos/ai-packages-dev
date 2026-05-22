@@ -2,20 +2,6 @@
 
 `packages/agent-swarm-framework/install.sh` は、マルチエージェント開発パッケージを対象リポジトリに適用するメインスクリプトです。
 
-English:
-`packages/agent-swarm-framework/install.sh` is the main entrypoint to apply the multi-agent package into a target repository.
-
----
-
-## At A Glance (English)
-
-1. Collect config from interactive wizard or `--config` JSON.
-2. Validate config with `config.schema.json`.
-3. Generate preview in `.preview/<projectSlug>/`.
-4. Review per-category add/overwrite files.
-5. Apply selected categories into `--target-dir`.
-6. Optionally create GitHub milestones/issues (or skip with `--skip-github`).
-
 ---
 
 ## 動作概要
@@ -165,6 +151,10 @@ bash install.sh \
 | `--config` | `<json-file>` | なし | 設定 JSON ファイルのパス |
 | `--bootstrap-from` | `<url>` | main ブランチ archive URL | standalone 実行時の package 取得元 |
 | `--retrofit-safe` | — | false | 既存プロジェクト向け安全プリセットを適用 |
+| `--with-dotfiles` | — | false | ASF 適用時に dotfiles 共通ルールを同時導入 |
+| `--without-dotfiles` | — | false | dotfiles 同時導入を明示的に無効化 |
+| `--dotfiles-from` | `<path\|url>` | 自動検出 | dotfiles ソース（ディレクトリ/ファイル/アーカイブURL）を指定 |
+| `--dotfiles-conflict-policy` | `skip\|overwrite\|prompt` | `skip` | dotfiles 導入時に既存ファイルと衝突した場合の挙動 |
 | `--non-interactive` | — | false | 非インタラクティブモード（`--config` と併用必須） |
 | `--skip-github` | — | false | GitHub milestone/issue 作成をスキップ |
 | `-h` / `--help` | — | — | ヘルプを表示して終了 |

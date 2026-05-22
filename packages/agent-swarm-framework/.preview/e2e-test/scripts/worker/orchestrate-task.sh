@@ -52,6 +52,12 @@ resolve_role_engine() {
   local default_engine
   default_engine="$(role_default_engine "$role")"
 
+  # Stabilize known issue classes on gemini in headless line-worker execution.
+  if [[ "$role" == "implementer" ]] && [[ "$task_kind" =~ ^(dcb_minimal_ai_tools_parity|asf_doctor_dependency_contract|engine_provisioning_matrix|dcb_php_language_support)$ ]]; then
+    echo "gemini"
+    return
+  fi
+
   if [[ -f "$ENGINE_ROUTING_FILE" ]]; then
     jq -r --arg role "$role" --arg task "$task_kind" --arg def "$default_engine" '
       (.taskEngineOverrides[$task][$role] // .roleEngines[$role] // $def)
@@ -92,8 +98,20 @@ run_engine_with_prompt_file() {
         rm -f "$stderr_tmp"
         return 1
       fi
+      local engine_extra_flags=()
+      local stdin_prompt=""
+      if [[ "$engine" == "gemini" ]]; then
+        engine_extra_flags=(--skip-trust --approval-mode plan)
+        stdin_prompt="Use stdin content as the primary prompt context."
+      fi
+
       # Prefer stdin mode to avoid argv size limits on large prompts.
-      if cat "$prompt_file" | "$engine" -p > "$output_file" 2>"$stderr_tmp"; then
+      if [[ "$engine" == "claude" ]]; then
+        if cat "$prompt_file" | claude --print --permission-mode plan > "$output_file" 2>"$stderr_tmp"; then
+          rm -f "$stderr_tmp"
+          return 0
+        fi
+      elif cat "$prompt_file" | "$engine" "${engine_extra_flags[@]}" -p "$stdin_prompt" > "$output_file" 2>"$stderr_tmp"; then
         rm -f "$stderr_tmp"
         return 0
       fi
@@ -110,7 +128,12 @@ run_engine_with_prompt_file() {
       fi
 
       prompt="$(cat "$prompt_file")"
-      if "$engine" -p "$prompt" > "$output_file" 2>>"$stderr_tmp"; then
+      if [[ "$engine" == "claude" ]]; then
+        if claude --print --permission-mode plan "$prompt" > "$output_file" 2>>"$stderr_tmp"; then
+          rm -f "$stderr_tmp"
+          return 0
+        fi
+      elif "$engine" "${engine_extra_flags[@]}" -p "$prompt" > "$output_file" 2>>"$stderr_tmp"; then
         rm -f "$stderr_tmp"
         return 0
       fi
@@ -132,20 +155,39 @@ run_engine_with_prompt_file() {
 # Issue mode or Plan mode
 if [[ -n "$ISSUE_NUMBER" && -z "$PLAN_FILE" ]]; then
   # Issue mode: fetch and infer
-  ISSUE_JSON="$(gh issue view "$ISSUE_NUMBER" --json title,body)"
+  ISSUE_JSON="$(gh issue view "$ISSUE_NUMBER" --json title,body,labels)"
   ISSUE_TITLE="$(printf '%s' "$ISSUE_JSON" | jq -r '.title')"
   ISSUE_BODY="$(printf '%s' "$ISSUE_JSON" | jq -r '.body')"
   
   PLAN_TEXT="$ISSUE_BODY"
   PLAN_SOURCE_LABEL="Issue #$ISSUE_NUMBER"
+
+  # Deterministic issue-number mapping for known implementation tracks.
+  case "$ISSUE_NUMBER" in
+    44) TASK_KIND="dcb_minimal_ai_tools_parity" ;;
+    45) TASK_KIND="asf_doctor_dependency_contract" ;;
+    46) TASK_KIND="engine_provisioning_matrix" ;;
+    55) TASK_KIND="dcb_php_language_support" ;;
+    *) TASK_KIND="" ;;
+  esac
   
   # Infer task kind from issue title
-  if [[ "$ISSUE_TITLE" =~ [Bb]ackend ]] && [[ "$ISSUE_TITLE" =~ エラー|error|処理 ]]; then
+  if [[ -n "$TASK_KIND" ]]; then
+    :
+  elif [[ "$ISSUE_TITLE" =~ [Bb]ackend ]] && [[ "$ISSUE_TITLE" =~ エラー|error|処理 ]]; then
     TASK_KIND="backend_error_handling"
   elif [[ "$ISSUE_TITLE" =~ [Ff]rontend ]] && [[ "$ISSUE_TITLE" =~ 状態|state ]]; then
     TASK_KIND="frontend_state_finalize"
   elif [[ "$ISSUE_TITLE" =~ レビュー|review ]]; then
     TASK_KIND="review_standardization"
+  elif [[ "$ISSUE_TITLE" =~ DCB[[:space:]]+minimal[[:space:]]+AI[[:space:]]+tools[[:space:]]+provisioning[[:space:]]+parity ]]; then
+    TASK_KIND="dcb_minimal_ai_tools_parity"
+  elif [[ "$ISSUE_TITLE" =~ doctor[[:space:]]+dependency[[:space:]]+contract|jq/gh[[:space:]]+required ]]; then
+    TASK_KIND="asf_doctor_dependency_contract"
+  elif [[ "$ISSUE_TITLE" =~ unified[[:space:]]+engine[[:space:]]+provisioning[[:space:]]+matrix ]]; then
+    TASK_KIND="engine_provisioning_matrix"
+  elif [[ "$ISSUE_TITLE" =~ [Pp][Hh][Pp][[:space:]]+language[[:space:]]+support|DCB[[:space:]]+bootstrap ]]; then
+    TASK_KIND="dcb_php_language_support"
   else
     TASK_KIND="minimal_roundtrip"
   fi
@@ -346,6 +388,68 @@ EOF
 EOF
 )
       ;;
+    dcb_minimal_ai_tools_parity)
+      FILES=(
+        "packages/devcontainer-bootstrap/bootstrap.sh"
+        "packages/devcontainer-bootstrap/README.md"
+        "packages/devcontainer-bootstrap/README.ja.md"
+      )
+      IMPLEMENTATION_GOAL=$(cat <<'EOF'
+- Implement minimal-mode parity for AI tools provisioning in DCB:
+  - ensure minimal mode includes a valid scripts/install-ai-tools.sh template path
+  - eliminate unknown template key errors during minimal generation
+  - keep minimal devcontainer postCreateCommand wiring deterministic
+  - update README and README.ja to clarify minimal/standard/full AI provisioning behavior
+EOF
+)
+      ;;
+    asf_doctor_dependency_contract)
+      FILES=(
+        "scripts/gate/asf-doctor.sh"
+        "packages/agent-swarm-framework/runtime-core/files/scripts/gate/asf-doctor.sh"
+        "packages/agent-swarm-framework/README.md"
+        "packages/agent-swarm-framework/README.ja.md"
+      )
+      IMPLEMENTATION_GOAL=$(cat <<'EOF'
+- Harden ASF dependency contract for jq/gh:
+  - treat jq and gh as required in doctor checks
+  - keep remediation messages explicit and actionable
+  - align README/README.ja dependency guidance with doctor behavior
+EOF
+)
+      ;;
+    engine_provisioning_matrix)
+      FILES=(
+        "packages/agent-swarm-framework/README.md"
+        "packages/agent-swarm-framework/README.ja.md"
+        "packages/devcontainer-bootstrap/README.md"
+        "packages/devcontainer-bootstrap/README.ja.md"
+      )
+      IMPLEMENTATION_GOAL=$(cat <<'EOF'
+- Add unified engine provisioning matrix across ASF/DCB:
+  - include claude/gemini/codex command and credential mapping
+  - include minimal/standard/full provisioning path and failure behavior
+  - keep English/Japanese descriptions synchronized
+EOF
+)
+      ;;
+    dcb_php_language_support)
+      FILES=(
+        "packages/devcontainer-bootstrap/bootstrap.sh"
+        "packages/devcontainer-bootstrap/doctor.sh"
+        "packages/devcontainer-bootstrap/README.md"
+        "packages/devcontainer-bootstrap/README.ja.md"
+      )
+      IMPLEMENTATION_GOAL=$(cat <<'EOF'
+- Add PHP language support to DCB bootstrap while keeping existing languages unchanged:
+  - add php to --languages validation and language feature expansion in bootstrap templates
+  - wire PHP devcontainer feature for generated devcontainer.json where language flags are rendered
+  - update mode behavior documentation in README and README.ja
+  - keep package-neutral implementation (no framework-specific Composer/Laravel setup)
+  - add/update generated check scripts where needed so php runtime availability can be verified
+EOF
+)
+      ;;
   esac
 }
 
@@ -540,6 +644,82 @@ run_checks() {
         exit 1
       fi
       ;;
+    dcb_minimal_ai_tools_parity)
+      log "Run DCB minimal parity checks"
+      if ! bash -n "$ROOT_DIR/packages/devcontainer-bootstrap/bootstrap.sh"; then
+        log "bootstrap.sh syntax check failed"
+        write_state "blocked" "copilot" "bootstrap.sh syntax check failed"
+        exit 1
+      fi
+      if ! grep -q "'minimal:scripts/install-ai-tools.sh'" "$ROOT_DIR/packages/devcontainer-bootstrap/bootstrap.sh"; then
+        log "minimal install-ai-tools template key missing"
+        write_state "blocked" "copilot" "minimal install-ai-tools template key missing"
+        exit 1
+      fi
+      ;;
+    asf_doctor_dependency_contract)
+      log "Run ASF doctor dependency checks"
+      if ! bash -n "$ROOT_DIR/scripts/gate/asf-doctor.sh"; then
+        log "asf-doctor.sh syntax check failed"
+        write_state "blocked" "copilot" "asf-doctor.sh syntax check failed"
+        exit 1
+      fi
+      if ! grep -q "check_cmd_required jq" "$ROOT_DIR/scripts/gate/asf-doctor.sh"; then
+        log "jq is not required in asf-doctor"
+        write_state "blocked" "copilot" "jq required contract missing"
+        exit 1
+      fi
+      if ! grep -q "check_cmd_required gh" "$ROOT_DIR/scripts/gate/asf-doctor.sh"; then
+        log "gh is not required in asf-doctor"
+        write_state "blocked" "copilot" "gh required contract missing"
+        exit 1
+      fi
+      ;;
+    engine_provisioning_matrix)
+      log "Run engine provisioning matrix checks"
+      if ! grep -qi "claude" "$ROOT_DIR/packages/agent-swarm-framework/README.md" || \
+         ! grep -qi "gemini" "$ROOT_DIR/packages/agent-swarm-framework/README.md" || \
+         ! grep -qi "codex" "$ROOT_DIR/packages/agent-swarm-framework/README.md"; then
+        log "ASF README engine matrix coverage missing"
+        write_state "blocked" "copilot" "ASF README engine matrix coverage missing"
+        exit 1
+      fi
+      if ! grep -qi "minimal" "$ROOT_DIR/packages/devcontainer-bootstrap/README.md" || \
+         ! grep -qi "standard" "$ROOT_DIR/packages/devcontainer-bootstrap/README.md" || \
+         ! grep -qi "full" "$ROOT_DIR/packages/devcontainer-bootstrap/README.md"; then
+        log "DCB README mode matrix coverage missing"
+        write_state "blocked" "copilot" "DCB README mode matrix coverage missing"
+        exit 1
+      fi
+      ;;
+    dcb_php_language_support)
+      log "Run DCB PHP language support checks"
+      if ! bash -n "$ROOT_DIR/packages/devcontainer-bootstrap/bootstrap.sh"; then
+        log "bootstrap.sh syntax check failed"
+        write_state "blocked" "copilot" "bootstrap.sh syntax check failed"
+        exit 1
+      fi
+      if ! grep -q '__IF_RUNTIME_PHP__' "$ROOT_DIR/packages/devcontainer-bootstrap/bootstrap.sh"; then
+        log "PHP runtime placeholder missing in bootstrap templates"
+        write_state "blocked" "copilot" "php runtime placeholder missing"
+        exit 1
+      fi
+      if ! grep -qi 'php' "$ROOT_DIR/packages/devcontainer-bootstrap/README.md"; then
+        log "PHP language docs missing in README.md"
+        write_state "blocked" "copilot" "php docs missing in README.md"
+        exit 1
+      fi
+      if ! grep -qi 'php' "$ROOT_DIR/packages/devcontainer-bootstrap/README.ja.md"; then
+        log "PHP language docs missing in README.ja.md"
+        write_state "blocked" "copilot" "php docs missing in README.ja.md"
+        exit 1
+      fi
+      if ! grep -q 'for lang in node go python php; do' "$ROOT_DIR/packages/devcontainer-bootstrap/doctor.sh"; then
+        log "doctor.sh PHP runtime detection missing"
+        write_state "blocked" "copilot" "doctor.sh php runtime detection missing"
+        exit 1
+      fi
+      ;;
   esac
 }
 
@@ -652,9 +832,20 @@ else
 fi
 
 if ! validate_payload; then
-  log "$IMPLEMENTER_ENGINE did not produce valid JSON payload"
-  write_state "blocked" "$IMPLEMENTER_ENGINE" "invalid JSON payload from $IMPLEMENTER_ENGINE"
-  exit 1
+  if [[ "$IMPLEMENTER_ENGINE" == "gemini" ]]; then
+    log "gemini payload invalid, retrying implementer fallback (claude)"
+    if run_engine_with_prompt_file "implementer" "claude" "$IMPLEMENT_INPUT" "$RAW_IMPL_FILE" && validate_payload; then
+      log "fallback implementer (claude) produced valid payload"
+    else
+      log "fallback implementer (claude) failed to produce valid JSON payload"
+      write_state "blocked" "claude" "invalid JSON payload after gemini fallback"
+      exit 1
+    fi
+  else
+    log "$IMPLEMENTER_ENGINE did not produce valid JSON payload"
+    write_state "blocked" "$IMPLEMENTER_ENGINE" "invalid JSON payload from $IMPLEMENTER_ENGINE"
+    exit 1
+  fi
 fi
 
 apply_payload
@@ -677,19 +868,24 @@ REVIEW_INPUT="$LOG_DIR/$TASK_ID-review-input.txt"
   git -C "$ROOT_DIR" --no-pager diff -- "${FILES[@]}"
 } > "$REVIEW_INPUT"
 
-if run_engine_with_prompt_file "reviewer" "$REVIEWER_ENGINE" "$REVIEW_INPUT" "$REVIEW_FILE"; then
+if run_engine_with_prompt_file "reviewer" "$REVIEWER_ENGINE" "$REVIEW_INPUT" "$REVIEW_FILE" && [[ -s "$REVIEW_FILE" ]]; then
   :
 else
   review_exit=$?
-  log "$REVIEWER_ENGINE review failed (exit code: $review_exit)"
-  write_state "blocked" "$REVIEWER_ENGINE" "review command failed (exit code: $review_exit)"
-  exit 1
-fi
-
-if [[ ! -s "$REVIEW_FILE" ]]; then
-  log "$REVIEWER_ENGINE returned empty review"
-  write_state "blocked" "$REVIEWER_ENGINE" "review output is empty"
-  exit 1
+  if [[ "$REVIEWER_ENGINE" == "gemini" ]]; then
+    log "gemini review failed/empty, retrying reviewer fallback (claude)"
+    if run_engine_with_prompt_file "reviewer" "claude" "$REVIEW_INPUT" "$REVIEW_FILE" && [[ -s "$REVIEW_FILE" ]]; then
+      log "fallback reviewer (claude) produced review output"
+    else
+      log "fallback reviewer (claude) failed"
+      write_state "blocked" "claude" "review command failed after gemini fallback"
+      exit 1
+    fi
+  else
+    log "$REVIEWER_ENGINE review failed (exit code: $review_exit)"
+    write_state "blocked" "$REVIEWER_ENGINE" "review command failed (exit code: $review_exit)"
+    exit 1
+  fi
 fi
 
 if review_has_high_findings; then
@@ -706,6 +902,17 @@ write_state "done" "$ORCHESTRATOR_ENGINE"
 if [[ -n "$ISSUE_NUMBER" ]]; then
   log "Create Draft PR for issue #$ISSUE_NUMBER"
   CURRENT_BRANCH="$(git -C "$ROOT_DIR" branch --show-current)"
+
+  # Ensure ASF preflight marker exists for hook-enforced repositories.
+  if [[ -x "$ROOT_DIR/scripts/asf-workflow.sh" ]]; then
+    bash "$ROOT_DIR/scripts/asf-workflow.sh" preflight >> "$LOG_FILE" 2>&1 || true
+  fi
+
+  git -C "$ROOT_DIR" add -- "${FILES[@]}"
+  if ! git -C "$ROOT_DIR" diff --cached --quiet; then
+    git -C "$ROOT_DIR" commit -m "chore(line): execute issue #$ISSUE_NUMBER"
+  fi
+  git -C "$ROOT_DIR" push -u origin "$CURRENT_BRANCH"
   PR_TITLE="$(gh issue view "$ISSUE_NUMBER" --json title -q .title)"
   REVIEW_REL="${REVIEW_FILE#$ROOT_DIR/}"
   gh pr create \

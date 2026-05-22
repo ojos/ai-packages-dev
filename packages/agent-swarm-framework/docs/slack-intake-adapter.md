@@ -1,14 +1,14 @@
-# Slack Intake Adapter (Dedicated-First, Shared-Compatible)
+# Slack Intake Adapter（Dedicated-First, Shared-Compatible）
 
-## English Summary
-This document defines phase-1 adapter contract and operation model for Slack intake integration with ASF.
+## 日本語概要
+この文書は、ASF への Slack intake 統合に向けた phase-1 のアダプター契約と運用モデルを定義します。
 
-## Goals
-- Dedicated workspace is the primary operation model.
-- Shared private-channel mode remains compatible.
-- Adapter emits normalized payload for existing ASF intake flow.
+## 目的
+- dedicated workspace を主運用モデルとする。
+- shared private-channel モードにも互換対応する。
+- 既存 ASF intake フローへ正規化ペイロードを出力する。
 
-## Input Contract (Slack -> Adapter)
+## 入力契約（Slack -> Adapter）
 - event_id
 - team_id
 - channel_id
@@ -16,7 +16,7 @@ This document defines phase-1 adapter contract and operation model for Slack int
 - text
 - ts
 
-## Output Contract (Adapter -> ASF)
+## 出力契約（Adapter -> ASF）
 - channel_type: slack
 - source.workspace_mode: dedicated | shared
 - source.channel_id
@@ -25,27 +25,27 @@ This document defines phase-1 adapter contract and operation model for Slack int
 - intake.command_text
 - safety.auth_validated: true | false
 
-## Safety Rules
-- Reject unauthorized channel/user by policy.
-- If runner unavailable, emit deferred/queued outcome with explicit message.
-- Keep core workflow channel-independent.
+## Safety ルール
+- ポリシーで未許可の channel/user は拒否する。
+- runner unavailable 時は deferred/queued の明示結果を返す。
+- コアワークフローはチャネル非依存を維持する。
 
-## Rollout Notes
-- Phase-1 scope is contract + operation guardrails.
-- Runtime implementation hooks can be added in subsequent issue steps.
+## ロールアウト備考
+- Phase-1 は契約定義と運用ガードレールを対象とする。
+- 実行時実装フックは後続ステップで追加可能。
 
 ## Phase-2 Runtime Hook (2026-04-20)
 
-### Runtime Hook Path
+### Runtime Hook パス
 - `runtime-core/files/scripts/gate/slack-intake-hook.sh`
 
-### Behavior
-- validates channel/user metadata
-- rejects when `safety.auth_validated != true`
-- emits deferred outcome when `runtime.runner_available != true`
-- emits dispatch-ready normalized intake payload when safe
+### 挙動
+- channel/user メタデータを検証する
+- `safety.auth_validated != true` の場合は reject する
+- `runtime.runner_available != true` の場合は deferred を返す
+- 安全条件が満たされる場合は dispatch 可能な正規化 intake payload を返す
 
-### Rollback
-1. stop workers with `bash scripts/worker/workers-stop.sh`
-2. disable caller path to slack-intake-hook until validation policy is corrected
-3. replay deferred queue after runner recovery
+### ロールバック
+1. `bash scripts/worker/workers-stop.sh` でワーカー停止
+2. 検証ポリシー修正まで slack-intake-hook 呼び出しを無効化
+3. runner 復旧後に deferred queue を再投入

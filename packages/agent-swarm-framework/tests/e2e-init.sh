@@ -6,6 +6,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PACKAGE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+REPO_ROOT="$(cd "$PACKAGE_ROOT/../.." && pwd)"
 VERIFY_SCRIPT="$SCRIPT_DIR/verify-install.sh"
 INIT_SCRIPT="$PACKAGE_ROOT/init.sh"
 INSTALL_SCRIPT="$PACKAGE_ROOT/install.sh"
@@ -137,6 +138,112 @@ for skipped in \
     exit 1
   fi
 done
+
+echo
+# ---- Step 6: dotfiles 同時導入テスト ----
+echo
+echo "--- Step 6: dotfiles 同時導入テスト（--with-dotfiles）---"
+TARGET_DOTFILES="$TMPDIR_BASE/target-dotfiles"
+mkdir -p "$TARGET_DOTFILES"
+
+bash "$INSTALL_SCRIPT" \
+  --non-interactive \
+  --config "$CONFIG_FILE" \
+  --target-dir "$TARGET_DOTFILES" \
+  --skip-github \
+  --with-dotfiles \
+  --dotfiles-from "$REPO_ROOT/dotfiles/ai/common/shared-ai-rules.md" \
+  --dotfiles-conflict-policy skip
+
+for expected in \
+  "dotfiles/ai/common/shared-ai-rules.md" \
+  ".github/project-ai-rules.md" \
+  ".github/copilot-instructions.md" \
+  "CLAUDE.md"; do
+  if [[ -f "$TARGET_DOTFILES/$expected" ]]; then
+    echo "  [PASS] dotfiles 導入: $expected"
+  else
+    echo "  [FAIL] dotfiles 導入漏れ: $expected"
+    exit 1
+  fi
+done
+
+# ---- Step 7: dotfiles 衝突ポリシーテスト ----
+echo
+echo "--- Step 7: dotfiles 衝突ポリシーテスト（skip / overwrite）---"
+echo "custom-claude-entry" > "$TARGET_DOTFILES/CLAUDE.md"
+
+bash "$INSTALL_SCRIPT" \
+  --non-interactive \
+  --config "$CONFIG_FILE" \
+  --target-dir "$TARGET_DOTFILES" \
+  --skip-github \
+  --with-dotfiles \
+  --dotfiles-from "$REPO_ROOT/dotfiles/ai/common/shared-ai-rules.md" \
+  --dotfiles-conflict-policy skip
+
+if grep -q "custom-claude-entry" "$TARGET_DOTFILES/CLAUDE.md"; then
+  echo "  [PASS] conflict policy skip: 既存ファイル維持"
+else
+  echo "  [FAIL] conflict policy skip: 既存ファイルが維持されなかった"
+  exit 1
+fi
+
+bash "$INSTALL_SCRIPT" \
+  --non-interactive \
+  --config "$CONFIG_FILE" \
+  --target-dir "$TARGET_DOTFILES" \
+  --skip-github \
+  --with-dotfiles \
+  --dotfiles-from "$REPO_ROOT/dotfiles/ai/common/shared-ai-rules.md" \
+  --dotfiles-conflict-policy overwrite
+
+if grep -q "Claude 実行環境向け入口ファイル" "$TARGET_DOTFILES/CLAUDE.md"; then
+  echo "  [PASS] conflict policy overwrite: 既存ファイル上書き"
+else
+  echo "  [FAIL] conflict policy overwrite: 上書きされなかった"
+  exit 1
+fi
+
+# ---- Step 8: dotfiles 衝突ポリシーテスト（prompt）----
+echo
+echo "--- Step 8: dotfiles 衝突ポリシーテスト（prompt）---"
+echo "custom-claude-entry-prompt" > "$TARGET_DOTFILES/CLAUDE.md"
+
+# prompt テスト: カテゴリ適用は y、dotfiles 上書き確認は n を送る
+PROMPT_INPUT=$'y\ny\ny\ny\nn\nn\nn\nn\n'
+printf '%s' "$PROMPT_INPUT" | bash "$INSTALL_SCRIPT" \
+  --config "$CONFIG_FILE" \
+  --target-dir "$TARGET_DOTFILES" \
+  --skip-github \
+  --with-dotfiles \
+  --dotfiles-from "$REPO_ROOT/dotfiles/ai/common/shared-ai-rules.md" \
+  --dotfiles-conflict-policy prompt
+
+if grep -q "custom-claude-entry-prompt" "$TARGET_DOTFILES/CLAUDE.md"; then
+  echo "  [PASS] conflict policy prompt: 上書き確認で拒否したため既存ファイル維持"
+else
+  echo "  [FAIL] conflict policy prompt: 既存ファイルが維持されなかった"
+  exit 1
+fi
+
+# prompt テスト: dotfiles 側の上書き確認を y で承認
+echo "custom-claude-entry-prompt-yes" > "$TARGET_DOTFILES/CLAUDE.md"
+PROMPT_INPUT_YES=$'y\ny\ny\ny\ny\ny\ny\ny\n'
+printf '%s' "$PROMPT_INPUT_YES" | bash "$INSTALL_SCRIPT" \
+  --config "$CONFIG_FILE" \
+  --target-dir "$TARGET_DOTFILES" \
+  --skip-github \
+  --with-dotfiles \
+  --dotfiles-from "$REPO_ROOT/dotfiles/ai/common/shared-ai-rules.md" \
+  --dotfiles-conflict-policy prompt
+
+if grep -q "Claude 実行環境向け入口ファイル" "$TARGET_DOTFILES/CLAUDE.md"; then
+  echo "  [PASS] conflict policy prompt: 上書き確認で承認したためファイル上書き"
+else
+  echo "  [FAIL] conflict policy prompt: 上書き承認時に更新されなかった"
+  exit 1
+fi
 
 echo
 echo "=== E2E テスト完了: すべて PASS ==="

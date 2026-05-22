@@ -72,7 +72,7 @@ missing_fields: [...]
 
 **Artifacts**:
 - `packages/agent-swarm-framework/docs/CONVERSATION_GATE_REASON_CODES.md`
-- `packages/agent-swarm-framework/docs/CONVERSATION_GATE_REASON_CODES.ja.md`
+- `packages/agent-swarm-framework/docs/CONVERSATION_GATE_REASON_CODES.md`
 
 **Status**: ✅ Merged and deployed
 

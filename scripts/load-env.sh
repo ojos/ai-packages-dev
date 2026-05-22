@@ -1,27 +1,27 @@
 #!/bin/bash
 
-# Load environment variables from .env file if it exists
-# This script enables project-specific environment variables to override remoteEnv settings.
-# 
-# Usage:
-#   bash scripts/load-env.sh          # Execute as subprocess
-#   source scripts/load-env.sh        # Source in current shell (preferred for env vars)
+# .env ファイルが存在する場合に環境変数を読み込む
+# このスクリプトにより、プロジェクト固有の環境変数で remoteEnv 設定を上書きできる
 #
-# Behavior:
-#   - If .env exists in project root, source it with `set -a` to export all variables
-#   - All variables in .env will override any existing environment variables (project priority)
-#   - If .env does not exist, silently continue (no error)
+# 使い方:
+#   bash scripts/load-env.sh          # サブプロセスとして実行
+#   source scripts/load-env.sh        # 現在のシェルへ読み込み（環境変数反映に推奨）
+#
+# 動作:
+#   - プロジェクトルートに .env がある場合、`set -a` で全変数を export して読み込む
+#   - .env の変数は既存環境変数より優先される（プロジェクト優先）
+#   - .env がない場合はエラーにせず継続する
 
 load_env_vars() {
   if [ -f .env ]; then
-    # set -a: automatically export all variable assignments
-    # set +a: return to normal behavior after sourcing
+    # set -a: 以降の変数代入を自動 export
+    # set +a: 読み込み後に通常動作へ戻す
     set -a
     source .env
     set +a
   fi
 }
 
-# If sourced, define and call function in current shell
-# If executed as subprocess, call function and export to child
+# source 実行時は現在シェルで関数を実行
+# サブプロセス実行時は子プロセス環境に対して反映
 load_env_vars

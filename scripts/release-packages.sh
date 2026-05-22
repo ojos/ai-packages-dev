@@ -55,11 +55,10 @@ extract_semver() {
 validate_dcb_docs() {
   local dcb_tag="$1"
   local en="packages/devcontainer-bootstrap/README.md"
-  local ja="packages/devcontainer-bootstrap/README.ja.md"
   local pinned="- \`$dcb_tag\`"
 
-  grep -q "Latest stable release:" "$en" || {
-    echo "error: missing 'Latest stable release' section in $en" >&2
+  grep -q "Latest stable release:\|最新安定リリース:" "$en" || {
+    echo "error: missing release section header in $en" >&2
     exit 1
   }
   grep -Fq -- "$pinned" "$en" || {
@@ -68,19 +67,6 @@ validate_dcb_docs() {
   }
   grep -q "TAG=$dcb_tag" "$en" || {
     echo "error: DCB README.md TAG does not match $dcb_tag" >&2
-    exit 1
-  }
-
-  grep -q "最新安定リリース:" "$ja" || {
-    echo "error: missing '最新安定リリース' section in $ja" >&2
-    exit 1
-  }
-  grep -Fq -- "$pinned" "$ja" || {
-    echo "error: DCB README.ja.md latest release does not match $dcb_tag" >&2
-    exit 1
-  }
-  grep -q "TAG=$dcb_tag" "$ja" || {
-    echo "error: DCB README.ja.md TAG does not match $dcb_tag" >&2
     exit 1
   }
 }
@@ -219,7 +205,6 @@ prepare_asf_release_repo() {
   cp packages/agent-swarm-framework/config.schema.json "$dir/"
   cp packages/agent-swarm-framework/VERSION "$dir/"
   cp packages/agent-swarm-framework/README.md "$dir/"
-  cp packages/agent-swarm-framework/README.ja.md "$dir/"
   cp packages/agent-swarm-framework/retrofit-config.sample.json "$dir/"
   cp -R packages/agent-swarm-framework/runtime-core "$dir/"
   cp -R packages/agent-swarm-framework/agent-skills "$dir/"
@@ -237,9 +222,6 @@ prepare_dcb_release_repo() {
   cp packages/devcontainer-bootstrap/bootstrap.sh "$dir/"
   cp packages/devcontainer-bootstrap/doctor.sh "$dir/"
   cp packages/devcontainer-bootstrap/README.md "$dir/"
-  if [[ -f packages/devcontainer-bootstrap/README.ja.md ]]; then
-    cp packages/devcontainer-bootstrap/README.ja.md "$dir/"
-  fi
   cp packages/devcontainer-bootstrap/.github/workflows/release.yml "$dir/.github/workflows/"
 }
 

@@ -50,14 +50,24 @@ start_worker() {
   fi
 
   nohup bash -lc "$cmd" >>"$log_file" 2>&1 &
-  local pid=$!
-  echo "$pid" >"$pid_file"
-  echo "started: $name (pid=$pid)"
+
+  # Worker scripts are single-instance and write their own PID files.
+  # Do not pre-write pid files here, or line/orchestrator workers can self-detect
+  # a false duplicate instance and exit immediately.
+  sleep 0.2
+  local worker_pid
+  worker_pid="$(cat "$pid_file" 2>/dev/null || true)"
+  if [[ -n "$worker_pid" ]]; then
+    echo "started: $name (pid=$worker_pid)"
+  else
+    echo "started: $name (pid=pending)"
+  fi
 }
 
 start_worker "worker-coordinator" "$SCRIPT_DIR/worker-coordinator.sh --interval $interval"
 start_worker "orchestrator-worker" "$SCRIPT_DIR/orchestrator-worker.sh --interval $interval"
 start_worker "closer-worker" "$SCRIPT_DIR/closer-worker.sh --interval $interval"
+start_worker "auto-enqueue-worker" "$SCRIPT_DIR/auto-enqueue-worker.sh --interval 60"
 
 initial_count="${INITIAL_LINE_WORKERS:-2}"
 WORKER_INTERVAL="$interval" "$LINE_SCALER" --count "$initial_count"

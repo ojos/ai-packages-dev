@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+
+WORKFLOW_SCRIPT="$ROOT_DIR/scripts/asf-workflow.sh"
+DOCTOR_SCRIPT="$ROOT_DIR/scripts/gate/asf-doctor.sh"
+WORKERS_START="$ROOT_DIR/scripts/worker/workers-start.sh"
+WORKERS_STOP="$ROOT_DIR/scripts/worker/workers-stop.sh"
+DELEGATE_ISSUE_IMPL="$ROOT_DIR/scripts/worker/delegate-issue-implementation.sh"
+
+usage() {
+  cat <<'EOF'
+usage:
+  bash scripts/asf <command> [options]
+
+commands:
+  doctor [--strict]
+  preflight
+  status [--line <all|line-id>]
+  up [--interval <sec>]
+  down
+  restart [--interval <sec>]
+  dead-letter [options]
+  workers-start [--interval <sec>]
+  workers-stop
+  delegate-implementation --issue-number <N> --task-command <cmd> [options]
+
+notes:
+  - workflow commands delegate to scripts/asf-workflow.sh
+  - doctor delegates to scripts/gate/asf-doctor.sh
+EOF
+}
+
+require_exec() {
+  local p="$1"
+  [[ -x "$p" ]] || {
+    echo "error: required executable not found: $p" >&2
+    exit 1
+  }
+}
+
+main() {
+  local cmd="${1:-}"
+  [[ -n "$cmd" ]] || {
+    usage
+    exit 1
+  }
+  shift || true
+
+  case "$cmd" in
+    -h|--help|help)
+      usage
+      ;;
+    doctor)
+      require_exec "$DOCTOR_SCRIPT"
+      bash "$DOCTOR_SCRIPT" "$@"
+      ;;
+    preflight|status|up|down|restart|dead-letter)
+      require_exec "$WORKFLOW_SCRIPT"
+      bash "$WORKFLOW_SCRIPT" "$cmd" "$@"
+      ;;
+    workers-start)
+      require_exec "$WORKERS_START"
+      bash "$WORKERS_START" "$@"
+      ;;
+    workers-stop)
+      require_exec "$WORKERS_STOP"
+      bash "$WORKERS_STOP" "$@"
+      ;;
+    delegate-implementation)
+      require_exec "$DELEGATE_ISSUE_IMPL"
+      bash "$DELEGATE_ISSUE_IMPL" "$@"
+      ;;
+    *)
+      echo "error: unknown command: $cmd" >&2
+      usage
+      exit 1
+      ;;
+  esac
+}
+
+main "$@"
