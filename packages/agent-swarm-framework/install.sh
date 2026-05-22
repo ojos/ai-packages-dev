@@ -41,6 +41,7 @@ options:
   --dotfiles-from <path|url> Dotfiles source (directory/file path or archive URL)
   --dotfiles-conflict-policy <skip|overwrite|prompt>
                               Policy when dotfiles target file already exists (default: skip)
+  Note: dotfiles are maintained in the separate repository ojos/ai-dotfiles
   --non-interactive          Do not ask questions; requires --config
   --skip-github              Skip milestone/issue creation step
   -h, --help                 Show help
