@@ -45,11 +45,6 @@ bash packages/agent-swarm-framework/install.sh \
 補足:
 - `--retrofit-safe` は安全プリセットを強制適用する。
   - `executionMode=local`
-  - `remoteProvider=none`
-  - `automationStage=plan`
-  - `mergePolicy=manual`
-  - `orchestratorMode=local`
-  - `--skip-github` 自動有効化
 - カテゴリ適用の既定値も安全側に切り替える。
   - `runtime-core` / `agent-skills`: 適用
   - `executors` / `template-project`: スキップ
