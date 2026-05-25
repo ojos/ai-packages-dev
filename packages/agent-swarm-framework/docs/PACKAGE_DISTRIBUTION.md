@@ -41,7 +41,7 @@
   - `bash packages/agent-swarm-framework/install.sh --non-interactive --config <config.json> --target-dir <path>`
 
 ## Responsibility Boundary
-- `dotfiles` is a separate repository (`ojos/ai-dotfiles`) that owns shared AI rules and guidance templates; see [dotfiles/README.md](../../../dotfiles/README.md).
+- `dotfiles` is a separate repository (`ojos/ai-dotfiles`) that owns shared AI rules and guidance templates; see [ai-dotfiles README](https://github.com/ojos/ai-dotfiles/blob/main/README.md).
 - `runtime-core/`: runtime scripts and queue/worker orchestration primitives
 - `agent-skills/`: role-specific instruction packs
 - `executors/`: remote execution adapters

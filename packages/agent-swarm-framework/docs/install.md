@@ -136,7 +136,7 @@ bash install.sh \
 - install.sh 単体で実行された場合、同梱 package レイアウトが見つからなければ archive を取得して再実行する。
 - 取得元 URL は `--bootstrap-from <url>` または環境変数 `AGENT_SWARM_FRAMEWORK_ARCHIVE_URL` で指定できる。
 - 未指定時は main ブランチ archive を使用する。
-- `dotfiles` は ASF と別リポジトリの共通ルール資産であり、同時導入する場合は [dotfiles/README.md](../../../dotfiles/README.md) も参照する。
+- `dotfiles` は ASF と別リポジトリの共通ルール資産であり、同時導入する場合は [ai-dotfiles README](https://github.com/ojos/ai-dotfiles/blob/main/README.md) も参照する。
 
 ### オプション一覧
 
