@@ -36,7 +36,7 @@
 
 ## 推奨タスクスキル
 
-- `../task-skills/issue-triage.md`
+- `../task-playbooks/issue-triage.md`
 
 ## 責務
 

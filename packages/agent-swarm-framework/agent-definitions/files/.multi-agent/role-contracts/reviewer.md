@@ -35,7 +35,7 @@
 
 ## 推奨タスクスキル
 
-- `../task-skills/pr-review.md`
+- `../task-playbooks/pr-review.md`
 
 ---
 
