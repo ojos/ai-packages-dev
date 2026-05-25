@@ -10,7 +10,7 @@ This guide clarifies how to instruct the Copilot agent (this agent) to perform s
 
 - Role contract: 各ロールが「いつ何を判断するか」を定義する契約
 - Task skill: 各タスクを「どう実行するか」を定義する再利用手順
-- ASF では `.multi-agent/role-contracts/` を role contract の正規パスとし、実行手順は `.multi-agent/task-skills/` を使う
+- ASF では `.multi-agent/role-contracts/` を role contract の正規パスとし、実行手順は `.multi-agent/task-playbooks/` を使う
 
 ### セッション開始時の重複排除ゲート / Session-Start De-duplication Gate
 

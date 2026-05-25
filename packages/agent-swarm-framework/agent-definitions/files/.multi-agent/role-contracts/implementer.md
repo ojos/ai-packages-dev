@@ -36,7 +36,7 @@
 
 ## 推奨タスクスキル
 
-- `../task-skills/plan-breakdown.md`
+- `../task-playbooks/plan-breakdown.md`
 
 ---
 

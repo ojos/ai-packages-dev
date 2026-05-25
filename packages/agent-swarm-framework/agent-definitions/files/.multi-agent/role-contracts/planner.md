@@ -36,8 +36,8 @@
 
 ## 推奨タスクスキル
 
-- `../task-skills/plan-breakdown.md`
-- `../task-skills/issue-triage.md`
+- `../task-playbooks/plan-breakdown.md`
+- `../task-playbooks/issue-triage.md`
 
 ---
 

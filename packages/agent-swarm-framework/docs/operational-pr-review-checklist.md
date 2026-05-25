@@ -1,6 +1,6 @@
 # Operational PR Review Checklist
 
-このチェックリストは、role-contracts と task-skills の責務分離を運用で維持するための実務チェック項目です。
+このチェックリストは、role-contracts と task-playbooks の責務分離を運用で維持するための実務チェック項目です。
 
 ## 目的
 
@@ -11,7 +11,7 @@
 ## 対象
 
 - role-contracts を追加・更新する PR
-- task-skills を追加・更新する PR
+- task-playbooks を追加・更新する PR
 - 参照ドキュメント、テスト、スクリプトを伴う構造変更 PR
 
 ## 使い方
@@ -23,24 +23,24 @@
 ## チェック項目
 
 1. 変更分類は明確か
-- role-contracts の変更か、task-skills の変更か、または両方かを明記している。
+- role-contracts の変更か、task-playbooks の変更か、または両方かを明記している。
 
 2. 配置先は正しいか
 - role-contracts は .multi-agent/role-contracts 配下にある。
-- task-skills は .multi-agent/task-skills 配下にある。
+- task-playbooks は .multi-agent/task-playbooks 配下にある。
 
 3. role-contracts の必須セクションは揃っているか
 - 目的、入力、出力、禁止事項、エスカレーション条件、完了定義が存在する。
 
-4. task-skills の必須セクションは揃っているか
+4. task-playbooks の必須セクションは揃っているか
 - 目的、入力、手順、出力、注意事項が存在する。
 
 5. 責務混在がないか
 - role-contracts に逐次実装手順を埋め込んでいない。
-- task-skills に権限境界やロール判定ロジックを埋め込んでいない。
+- task-playbooks に権限境界やロール判定ロジックを埋め込んでいない。
 
 6. 参照関係は妥当か
-- role-contracts 側の推奨タスクスキル参照が、実在する task-skills を指している。
+- role-contracts 側の推奨タスクプレイブック参照が、実在する task-playbooks を指している。
 - 不要な循環参照や重複参照がない。
 
 7. 旧パス参照が残っていないか

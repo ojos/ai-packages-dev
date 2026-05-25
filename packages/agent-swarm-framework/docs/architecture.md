@@ -61,7 +61,7 @@ packages/agent-swarm-framework/
 │           │   ├── closer.md
 │           │   ├── intake-manager.md
 │           │   └── consult-facilitator.md
-│           └── task-skills/
+│           └── task-playbooks/
 │               ├── issue-triage.md
 │               ├── plan-breakdown.md
 │               ├── pr-review.md
@@ -108,7 +108,7 @@ packages/agent-swarm-framework/
 ### agent-definitions
 
 - **役割**: ロール契約とタスク手順を Markdown で定義
-- **配置先**: `.multi-agent/role-contracts/`（ロール契約）と `.multi-agent/task-skills/`（再利用手順）
+- **配置先**: `.multi-agent/role-contracts/`（ロール契約）と `.multi-agent/task-playbooks/`（再利用手順）
 - **ロール一覧**: `orchestrator` / `planner` / `implementer` / `reviewer` / `closer` / `intake-manager` / `consult-facilitator`
 - **初期タスク手順**: `issue-triage` / `plan-breakdown` / `pr-review` / `issue-close-policy`
 
@@ -229,5 +229,6 @@ install.sh 実行
 - [VISION_AUTONOMOUS_ORCHESTRATION.md](./VISION_AUTONOMOUS_ORCHESTRATION.md) — 自律オーケストレーション最終ビジョン
 - [STATE_MANAGEMENT.md](./STATE_MANAGEMENT.md) — 状態管理詳細
 - [github-actions.md](./github-actions.md) — GitHub Actions executor 詳細
-- [ROLE_CONTRACT_TASK_SKILL_GUIDELINES.md](./ROLE_CONTRACT_TASK_SKILL_GUIDELINES.md) — ロール契約とタスクスキルの作成規範
+- [ROLE_CONTRACT_TASK_PLAYBOOK_GUIDELINES.md](./ROLE_CONTRACT_TASK_PLAYBOOK_GUIDELINES.md) — ロール契約とタスクプレイブックの作成規範
 - [operational-pr-review-checklist.md](./operational-pr-review-checklist.md) — PR レビュー運用チェックリスト
+- [manual-trend-ingestion-workflow.md](./manual-trend-ingestion-workflow.md) — トレンド手動取り込みワークフロー

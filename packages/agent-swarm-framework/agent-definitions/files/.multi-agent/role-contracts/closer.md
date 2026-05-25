@@ -36,8 +36,8 @@
 
 ## 推奨タスクスキル
 
-- `../task-skills/issue-close-policy.md`
-- `../task-skills/pr-review.md`
+- `../task-playbooks/issue-close-policy.md`
+- `../task-playbooks/pr-review.md`
 
 ---
 

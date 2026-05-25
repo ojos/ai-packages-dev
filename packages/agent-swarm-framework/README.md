@@ -117,10 +117,10 @@ dotfiles（ai-dotfiles）は、全プロジェクト共通の AI ルールや共
 
 ASF は単体利用も可能ですが、dotfiles を併用する場合は、dotfiles を基盤ポリシー、ASF をワークフローレイヤーとして扱います。
 
-## ロール契約とタスクスキル
+## ロール契約とタスクプレイブック
 
 - `.multi-agent/role-contracts/*.md` はロール契約を定義する。
-- `.multi-agent/task-skills/*.md` はタスク単位の再利用スキルを定義する。
+- `.multi-agent/task-playbooks/*.md` はタスク単位の再利用手順を定義する。
 
 ## 詳細ドキュメント
 
@@ -130,8 +130,9 @@ ASF は単体利用も可能ですが、dotfiles を併用する場合は、dotf
 - [docs/github-actions.md](docs/github-actions.md) — GitHub Actions executor 詳細
 - [docs/runtime-operations.md](docs/runtime-operations.md) — リリース手順・更新運用・互換性ルール
 - [docs/STATE_MANAGEMENT.md](docs/STATE_MANAGEMENT.md) — 状態管理詳細
-- [docs/ROLE_CONTRACT_TASK_SKILL_GUIDELINES.md](docs/ROLE_CONTRACT_TASK_SKILL_GUIDELINES.md) — ロール契約とタスクスキルの作成規範
+- [docs/ROLE_CONTRACT_TASK_PLAYBOOK_GUIDELINES.md](docs/ROLE_CONTRACT_TASK_PLAYBOOK_GUIDELINES.md) — ロール契約とタスクプレイブックの作成規範
 - [docs/operational-pr-review-checklist.md](docs/operational-pr-review-checklist.md) — PR レビュー運用チェックリスト
+- [docs/manual-trend-ingestion-workflow.md](docs/manual-trend-ingestion-workflow.md) — トレンド手動取り込みワークフロー
 
 ---
 
