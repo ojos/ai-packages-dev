@@ -230,3 +230,4 @@ install.sh 実行
 - [STATE_MANAGEMENT.md](./STATE_MANAGEMENT.md) — 状態管理詳細
 - [github-actions.md](./github-actions.md) — GitHub Actions executor 詳細
 - [ROLE_CONTRACT_TASK_SKILL_GUIDELINES.md](./ROLE_CONTRACT_TASK_SKILL_GUIDELINES.md) — ロール契約とタスクスキルの作成規範
+- [operational-pr-review-checklist.md](./operational-pr-review-checklist.md) — PR レビュー運用チェックリスト
