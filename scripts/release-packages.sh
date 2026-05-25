@@ -207,7 +207,7 @@ prepare_asf_release_repo() {
   cp packages/agent-swarm-framework/README.md "$dir/"
   cp packages/agent-swarm-framework/retrofit-config.sample.json "$dir/"
   cp -R packages/agent-swarm-framework/runtime-core "$dir/"
-  cp -R packages/agent-swarm-framework/agent-skills "$dir/"
+  cp -R packages/agent-swarm-framework/agent-definitions "$dir/"
   cp -R packages/agent-swarm-framework/executors "$dir/"
   cp -R packages/agent-swarm-framework/template-project "$dir/"
   cp -R packages/agent-swarm-framework/docs "$dir/"

@@ -5,7 +5,7 @@
 **現状**: dotfiles と ASF が両方 AI behavior を定義している
 - `dotfiles/ai/common/shared-ai-rules.md` — 汎用言語方針・命名規則
 - `packages/agent-swarm-framework/docs/CONVERSATION_GATE_REASON_CODES.md` — ASF 固有の reason_code
-- `packages/agent-swarm-framework/agent-skills/` — ASF specific skills
+- `packages/agent-swarm-framework/agent-definitions/` — ASF specific definitions
 
 **質問**: これらが単一 package として独立すべきか、結合すべきか？
 
@@ -30,7 +30,7 @@
 |------|--------|------|
 | Conversation gate reason_codes | `docs/CONVERSATION_GATE_REASON_CODES.md` | **ASF 固有** |
 | Delegation pattern rules | `copilot-instructions.md` (in ASF template) | **ASF 固有** |
-| Agent skills | `agent-skills/files/` | **ASF 固有** |
+| Agent definitions | `agent-definitions/files/` | **ASF 固有** |
 | Workflow coordination | `runtime-core/scripts/` | **ASF 固有** |
 
 **特性**: Workflow orchestration, coordination, skills → **Workflow engine**

@@ -1,4 +1,4 @@
-# agent-skills
+# agent-definitions
 
 ロール契約とタスクスキルを保持するカテゴリです。
 

@@ -256,4 +256,4 @@ Step 9: ASF フローへ自動移行
 
 - Step 7（ユーザー承認）なしに issue を作成してはなりません。
 - intake issue は `type: orchestrator-intake` ラベルを必ず持ちます。
-- intake-manager スキルの権限境界（`agent-skills/files/.multi-agent/role-contracts/intake-manager.md`）に従います。
+- intake-manager スキルの権限境界（`agent-definitions/files/.multi-agent/role-contracts/intake-manager.md`）に従います。

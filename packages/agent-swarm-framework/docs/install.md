@@ -46,7 +46,7 @@ bash packages/agent-swarm-framework/install.sh \
 - `--retrofit-safe` は安全プリセットを強制適用する。
   - `executionMode=local`
 - カテゴリ適用の既定値も安全側に切り替える。
-  - `runtime-core` / `agent-skills`: 適用
+  - `runtime-core` / `agent-definitions`: 適用
   - `executors` / `template-project`: スキップ
   - `--non-interactive` 時は上記既定値で自動適用される
 - サンプルは `packages/agent-swarm-framework/retrofit-config.sample.json` を参照。
@@ -62,7 +62,7 @@ Step 3: レビュー/マージ自動化へ拡張
 ### 途中導入での非破壊ルール
 
 1. 既存運用を壊さないため、カテゴリ適用は段階的に行う。
-- 先に `runtime-core` と `agent-skills`
+- 先に `runtime-core` と `agent-definitions`
 - 次に `template-project`
 - 最後に `executors`
 
@@ -85,7 +85,7 @@ Step 3: レビュー/マージ自動化へ拡張
 
 - [ ] `git status` がクリーン
 - [ ] 初回は `--retrofit-safe` を使う
-- [ ] 初回適用は `runtime-core` / `agent-skills` のみ
+- [ ] 初回適用は `runtime-core` / `agent-definitions` のみ
 - [ ] 反映後に `workflow.sh status` で状態確認
 - [ ] 問題なければ `automationStage` を `implement` へ引き上げ
 

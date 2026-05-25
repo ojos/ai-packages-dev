@@ -49,7 +49,7 @@ packages/agent-swarm-framework/
 │               ├── worker-dead-letter.sh
 │               ├── workers-start.sh
 │               └── workers-stop.sh
-├── agent-skills/                   # ロール契約・タスクスキル定義カテゴリ
+├── agent-definitions/              # ロール契約・タスク手順・外部フィード定義カテゴリ
 │   ├── README.md
 │   └── files/
 │       └── .multi-agent/
@@ -86,7 +86,7 @@ packages/agent-swarm-framework/
     └── <projectSlug>/              # install.sh 実行時に自動生成
       ├── .agent-swarm-framework.config.json
       ├── .agent-swarm-framework.manifest.json
-        └── （runtime-core / agent-skills / executors / template-project の展開物）
+        └── （runtime-core / agent-definitions / executors / template-project の展開物）
 ```
 
 ---
@@ -105,12 +105,12 @@ packages/agent-swarm-framework/
 | `monitor/` | ライン状況・インシデント・マージキューの監視 |
 | `worker/` | LINE ワーカー・クローザーワーカー・オーケストレーター |
 
-### agent-skills
+### agent-definitions
 
-- **役割**: ロール契約とタスクスキルを Markdown で定義
-- **配置先**: `.multi-agent/role-contracts/`（ロール契約）と `.multi-agent/task-skills/`（再利用スキル）
+- **役割**: ロール契約とタスク手順を Markdown で定義
+- **配置先**: `.multi-agent/role-contracts/`（ロール契約）と `.multi-agent/task-skills/`（再利用手順）
 - **ロール一覧**: `orchestrator` / `planner` / `implementer` / `reviewer` / `closer` / `intake-manager` / `consult-facilitator`
-- **初期タスクスキル**: `issue-triage` / `plan-breakdown` / `pr-review` / `issue-close-policy`
+- **初期タスク手順**: `issue-triage` / `plan-breakdown` / `pr-review` / `issue-close-policy`
 
 ### executors
 
@@ -139,7 +139,7 @@ install.sh 実行
     │
     ├─ カテゴリ確認ループ
     │   ├─ runtime-core     → [y/N] → --target-dir に適用
-    │   ├─ agent-skills     → [y/N] → --target-dir に適用
+    │   ├─ agent-definitions → [y/N] → --target-dir に適用
     │   ├─ executors        → [y/N] → --target-dir に適用（条件付き）
     │   └─ template-project → [y/N] → --target-dir に適用
     │
