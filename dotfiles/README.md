@@ -21,12 +21,12 @@
 このパッケージは、共有の環境設定と言語レベルの AI ルールを提供します。
 ワークフロー固有のオーケストレーション方針は ASF 側の責務です。
 
-ASF（Agent Swarm Framework）は、複数エージェントの実行・委譲・ワークフロー協調を担う別リポジトリです。詳細は [packages/agent-swarm-framework/README.md](../packages/agent-swarm-framework/README.md) を参照してください。
+ASF（Agent Swarm Framework）は、複数エージェントの実行・委譲・ワークフロー協調を担う別リポジトリです。詳細は [agent-swarm-framework README](https://github.com/ojos/agent-swarm-framework/blob/main/README.md) を参照してください。
 
 - dotfiles の責務: 共通 AI 記述ルール、共通指示スタイル、再利用可能な環境規約
 - ASF の責務: 委譲ワークフロー、conversation-gate reason code、ロール協調挙動
 
-ASF 固有のワークフロー方針は [packages/agent-swarm-framework/README.md](../packages/agent-swarm-framework/README.md) を参照してください。
+ASF 固有のワークフロー方針は [agent-swarm-framework README](https://github.com/ojos/agent-swarm-framework/blob/main/README.md) を参照してください。
 
 ## 管理対象
 

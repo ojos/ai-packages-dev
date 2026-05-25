@@ -158,7 +158,7 @@ bash packages/agent-swarm-framework/tests/conversation-entry.sh
 - [Agent Command Guide](docs/AGENT_COMMAND_GUIDE.md) — How to interpret user commands
 - [Delegation Pattern Rules](.github/copilot-instructions.md) — ASF workflow enforcement
 - [GitHub Issue Template](.github/ISSUE_TEMPLATE/implementation.md) — Template for new implementation issues
-- [Reason Code Guide](packages/agent-swarm-framework/docs/CONVERSATION_GATE_REASON_CODES.md) — Canonical reason_code registry
+- [Reason Code Guide](https://github.com/ojos/agent-swarm-framework/blob/main/docs/CONVERSATION_GATE_REASON_CODES.md) — Canonical reason_code registry
 
 ---
 
