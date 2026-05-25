@@ -51,7 +51,7 @@ EOF
 package_layout_ready() {
   [[ -f "$PACKAGE_ROOT/config.schema.json" ]] &&
   [[ -d "$PACKAGE_ROOT/runtime-core" ]] &&
-  [[ -d "$PACKAGE_ROOT/agent-skills" ]] &&
+  [[ -d "$PACKAGE_ROOT/agent-definitions" ]] &&
   [[ -d "$PACKAGE_ROOT/executors" ]] &&
   [[ -d "$PACKAGE_ROOT/template-project" ]]
 }
@@ -392,7 +392,7 @@ EOF
 default_apply_for_category() {
   local category="$1"
   if [[ "$RETROFIT_SAFE" == "true" ]]; then
-    if [[ "$category" == "runtime-core" || "$category" == "agent-skills" ]]; then
+    if [[ "$category" == "runtime-core" || "$category" == "agent-definitions" ]]; then
       printf 'y'
       return
     fi
@@ -557,8 +557,8 @@ copy_category_preview() {
     runtime-core)
       cp -R "$PACKAGE_ROOT/runtime-core/files/." "$preview_root/"
       ;;
-    agent-skills)
-      cp -R "$PACKAGE_ROOT/agent-skills/files/." "$preview_root/"
+    agent-definitions)
+      cp -R "$PACKAGE_ROOT/agent-definitions/files/." "$preview_root/"
       ;;
     executors)
       cp -R "$PACKAGE_ROOT/executors/github-actions/files/." "$preview_root/"
@@ -577,7 +577,7 @@ build_preview() {
 
   printf '%s\n' "$config_json" > "$preview_root/.agent-swarm-framework.config.json"
   jq -n --argjson cfg "$config_json" '{generatedAt:(now|todateiso8601), config:$cfg}' > "$preview_root/.agent-swarm-framework.manifest.json"
-  for category in runtime-core agent-skills executors template-project; do
+  for category in runtime-core agent-definitions executors template-project; do
     if [[ "$category" == "executors" ]]; then
       local remote_provider
       remote_provider="$(printf '%s' "$config_json" | jq -r '.remoteProvider')"
@@ -658,15 +658,15 @@ build_preview "$CONFIG_JSON" "$PREVIEW_DIR"
 echo
 echo "Preview generated: $PREVIEW_DIR"
 echo "Target repository: $TARGET_DIR"
-echo "Categories available: runtime-core, agent-skills, executors, template-project"
+echo "Categories available: runtime-core, agent-definitions, executors, template-project"
 if [[ "$RETROFIT_SAFE" == "true" ]]; then
-  echo "Apply policy (retrofit-safe): runtime-core/agent-skills=default apply, executors/template-project=default skip"
+  echo "Apply policy (retrofit-safe): runtime-core/agent-definitions=default apply, executors/template-project=default skip"
 elif [[ "$NON_INTERACTIVE" == "true" ]]; then
   echo "Apply policy (non-interactive): enabled categories are auto-applied"
 fi
 echo
 
-for category in runtime-core agent-skills executors template-project; do
+for category in runtime-core agent-definitions executors template-project; do
   if ! category_enabled "$category" "$CONFIG_JSON"; then
     echo "Skipped unavailable category: $category"
     echo

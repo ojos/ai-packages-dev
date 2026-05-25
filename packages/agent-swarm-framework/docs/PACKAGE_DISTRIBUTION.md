@@ -9,7 +9,7 @@
 - `init.sh`
 - `config.schema.json`
 - `runtime-core/`
-- `agent-skills/`
+- `agent-definitions/`
 - `executors/`
 - `template-project/`
 - `docs/`
@@ -43,6 +43,6 @@
 ## Responsibility Boundary
 - `dotfiles` is a separate repository (`ojos/ai-dotfiles`) that owns shared AI rules and guidance templates; see [ai-dotfiles README](https://github.com/ojos/ai-dotfiles/blob/main/README.md).
 - `runtime-core/`: runtime scripts and queue/worker orchestration primitives
-- `agent-skills/`: role-specific instruction packs
+- `agent-definitions/`: role contracts, task playbooks, and external skill feeds
 - `executors/`: remote execution adapters
 - `template-project/`: reusable project bootstrap assets

@@ -114,7 +114,7 @@ bash "$INSTALL_SCRIPT" \
   --config "$PACKAGE_ROOT/retrofit-config.sample.json" \
   --target-dir "$TARGET_RETROFIT"
 
-# runtime-core / agent-skills は適用される
+# runtime-core / agent-definitions は適用される
 for expected in \
   "scripts/gate/workflow.sh" \
   "scripts/monitor/monitor-overview.sh" \

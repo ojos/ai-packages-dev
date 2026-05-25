@@ -33,7 +33,7 @@ ai-packages-dev/
 │       ├── init.sh                  # プロジェクト初期化 CLI
 │       ├── config.schema.json       # 設定スキーマ
 │       ├── runtime-core/            # 実行基盤スクリプト
-│       ├── agent-skills/            # ロール別スキル定義
+│       ├── agent-definitions/       # ロール契約・タスク手順・外部フィード定義
 │       ├── executors/               # リモート実行アダプタ
 │       ├── template-project/        # プロジェクト雛形
 │       ├── tests/                   # E2E テスト
