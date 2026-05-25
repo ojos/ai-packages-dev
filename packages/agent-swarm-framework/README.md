@@ -133,6 +133,7 @@ ASF は単体利用も可能ですが、dotfiles を併用する場合は、dotf
 - [docs/ROLE_CONTRACT_TASK_PLAYBOOK_GUIDELINES.md](docs/ROLE_CONTRACT_TASK_PLAYBOOK_GUIDELINES.md) — ロール契約とタスクプレイブックの作成規範
 - [docs/operational-pr-review-checklist.md](docs/operational-pr-review-checklist.md) — PR レビュー運用チェックリスト
 - [docs/manual-trend-ingestion-workflow.md](docs/manual-trend-ingestion-workflow.md) — トレンド手動取り込みワークフロー
+- [docs/trend-ingestion-records/README.md](docs/trend-ingestion-records/README.md) — トレンド取り込み判定記録
 
 ---
 

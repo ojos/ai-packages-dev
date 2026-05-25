@@ -232,3 +232,4 @@ install.sh 実行
 - [ROLE_CONTRACT_TASK_PLAYBOOK_GUIDELINES.md](./ROLE_CONTRACT_TASK_PLAYBOOK_GUIDELINES.md) — ロール契約とタスクプレイブックの作成規範
 - [operational-pr-review-checklist.md](./operational-pr-review-checklist.md) — PR レビュー運用チェックリスト
 - [manual-trend-ingestion-workflow.md](./manual-trend-ingestion-workflow.md) — トレンド手動取り込みワークフロー
+- [trend-ingestion-records/README.md](./trend-ingestion-records/README.md) — トレンド取り込み判定記録

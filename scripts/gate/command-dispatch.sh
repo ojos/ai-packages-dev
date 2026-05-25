@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 VALIDATOR="$SCRIPT_DIR/command-validate.sh"
-STATUS_SCRIPT="$SCRIPT_DIR/status.sh"
+STATUS_SCRIPT="$SCRIPT_DIR/../monitor/status.sh"
 RUNTIME_DIR="$ROOT_DIR/orchestration/runtime"
 LINE_STATE_FILE="$RUNTIME_DIR/line-states.json"
 SLOTS_FILE="$RUNTIME_DIR/line-worker-slots.json"

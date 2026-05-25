@@ -77,6 +77,10 @@ bash packages/agent-swarm-framework/tests/run-shell-tests.sh
 - 検証結果
 - ロールバック条件
 
+判定記録の保存先:
+
+- `packages/agent-swarm-framework/docs/trend-ingestion-records/`
+
 ## 判定記録テンプレート
 
 ```markdown
