@@ -10,7 +10,7 @@ packages/agent-swarm-framework/
 ├── config.schema.json      # 設定 JSON Schema（正規パス）
 ├── README.md               # このファイル
 ├── runtime-core/           # 実行基盤（workflow / command / monitor / worker）
-├── agent-skills/           # ロール別の基本 skill（7 ロール）
+├── agent-skills/           # ロール契約（7 ロール）+ タスクスキル
 ├── executors/              # リモート実行アダプタ（github-actions）
 ├── template-project/       # 設定・Issue・milestone 雛形
 └── docs/                   # ドキュメント
@@ -117,6 +117,11 @@ dotfiles（ai-dotfiles）は、全プロジェクト共通の AI ルールや共
 
 ASF は単体利用も可能ですが、dotfiles を併用する場合は、dotfiles を基盤ポリシー、ASF をワークフローレイヤーとして扱います。
 
+## ロール契約とタスクスキル
+
+- `.multi-agent/role-contracts/*.md` はロール契約を定義する。
+- `.multi-agent/task-skills/*.md` はタスク単位の再利用スキルを定義する。
+
 ## 詳細ドキュメント
 
 - [docs/install.md](docs/install.md) — CLI リファレンス・設定フィールド仕様
@@ -125,6 +130,7 @@ ASF は単体利用も可能ですが、dotfiles を併用する場合は、dotf
 - [docs/github-actions.md](docs/github-actions.md) — GitHub Actions executor 詳細
 - [docs/runtime-operations.md](docs/runtime-operations.md) — リリース手順・更新運用・互換性ルール
 - [docs/STATE_MANAGEMENT.md](docs/STATE_MANAGEMENT.md) — 状態管理詳細
+- [docs/ROLE_CONTRACT_TASK_SKILL_GUIDELINES.md](docs/ROLE_CONTRACT_TASK_SKILL_GUIDELINES.md) — ロール契約とタスクスキルの作成規範
 
 ---
 

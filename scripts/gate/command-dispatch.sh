@@ -20,7 +20,7 @@ options='{}'
 
 usage() {
   cat <<'EOF'
-usage: ./scripts/command-dispatch.sh --issuer <human|orchestrator|closer|implementer> --action <command> --scope <target> [--options <json>]
+usage: ./scripts/command-dispatch.sh --issuer <human|intake-manager|consult-facilitator|orchestrator|closer|implementer> --action <command> --scope <target> [--options <json>]
 
 examples:
   ./scripts/command-dispatch.sh --issuer orchestrator --action "/status" --scope line:auto-001 --options '{"once":true}'

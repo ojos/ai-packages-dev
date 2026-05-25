@@ -6,6 +6,12 @@ This guide clarifies how to instruct the Copilot agent (this agent) to perform s
 
 ## クイックリファレンス / Quick Reference
 
+### 用語整理 / Terminology
+
+- Role contract: 各ロールが「いつ何を判断するか」を定義する契約
+- Task skill: 各タスクを「どう実行するか」を定義する再利用手順
+- ASF では `.multi-agent/role-contracts/` を role contract の正規パスとし、実行手順は `.multi-agent/task-skills/` を使う
+
 ### セッション開始時の重複排除ゲート / Session-Start De-duplication Gate
 
 タスクを Todo に起票する前に、必ず以下を実施する。
@@ -57,9 +63,10 @@ Todo 起票ルール / Todo registration rules:
 
 ### Issue 言語ルール（標準）
 
-- `implementation:` / `feature:` issue は日英併記を必須とする
-- 冒頭に `English Summary` を置く
-- 規範・受け入れ条件は英語で記述し、日本語は同義補足として併記する
+- GitHub issue は日本語で統一する
+- `implementation:` / `feature:` issue も日本語で統一する
+- 規範・判定基準・受け入れ条件は日本語で明確に記述する
+- 正本は `.github/project-ai-rules.md` とし、このガイドはそれに従う
 
 ### 実装委譲の標準実行ルール
 
