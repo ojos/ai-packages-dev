@@ -21,6 +21,7 @@
 - plan-breakdown
 - pr-review
 - issue-close-policy
+- web-modernization-modern-web-guidance
 
 ---
 
