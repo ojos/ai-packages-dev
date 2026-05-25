@@ -1,20 +1,37 @@
 # agent-skills
 
-ロール別の基本 skill を保持するカテゴリです。
+ロール契約とタスクスキルを保持するカテゴリです。
 
-## 含まれるもの
+## 構成
+
+- `.multi-agent/role-contracts/*.md`: ロール別の振る舞い契約（role contract）
+- `.multi-agent/task-skills/*.md`: タスク単位の再利用スキル（task skill）
+
+## ロール契約（7 ロール）
 - orchestrator
 - planner
 - implementer
 - reviewer
 - closer
+- intake-manager
+- consult-facilitator
+
+## タスクスキル（初期セット）
+- issue-triage
+- plan-breakdown
+- pr-review
+- issue-close-policy
 
 ---
 
-## skillのカスタマイズ・拡張方法
-- 各skillファイル（.md）は導入先プロジェクトで自由に編集・追加可能
-- 役割ごとに「プロンプト例」「推奨運用」「Tips」などを追記して現場に最適化
+## カスタマイズ・拡張方法
+- 各 Markdown ファイルは導入先プロジェクトで自由に編集・追加可能
+- ロール契約は「いつ何を判断するか」を定義し、タスクスキルは「どう実行するか」を定義する
 - 例: reviewer.mdに「レビュー観点テンプレート」や「自動チェックリスト」を追加
+
+## ロール契約テンプレート（推奨）
+- 各ロール契約は次の必須セクションを持つ: `目的` / `入力` / `出力` / `禁止事項` / `エスカレーション条件` / `完了定義`
+- 実装手順や具体コマンドは、必要に応じて `実用プロンプト例` として補足する
 
 ## 活用例
 - 導入先で独自のskillセットを作成し、AIエージェントや人間レビュワーの指針として活用

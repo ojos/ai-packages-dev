@@ -118,7 +118,7 @@ bash "$INSTALL_SCRIPT" \
 for expected in \
   "scripts/gate/workflow.sh" \
   "scripts/monitor/monitor-overview.sh" \
-  ".multi-agent/skills/orchestrator.md"; do
+  ".multi-agent/role-contracts/orchestrator.md"; do
   if [[ -f "$TARGET_RETROFIT/$expected" ]]; then
     echo "  [PASS] retrofit-safe 適用: $expected"
   else
