@@ -58,7 +58,7 @@ package_layout_ready() {
 
 bootstrap_standalone_mode() {
   local archive_url="${BOOTSTRAP_FROM:-${AGENT_SWARM_FRAMEWORK_ARCHIVE_URL:-$DEFAULT_BOOTSTRAP_FROM}}"
-  local tmp_root archive_file extracted_root candidate_install candidate_root
+  local tmp_root archive_file extracted_root candidate_install candidate_root found_layout
 
   if [[ "${AGENT_SWARM_FRAMEWORK_BOOTSTRAPPED:-}" == "1" ]]; then
     echo "error: standalone bootstrap failed to locate package layout after extraction" >&2
@@ -76,16 +76,17 @@ bootstrap_standalone_mode() {
   curl -fsSL "$archive_url" -o "$archive_file"
   tar -xzf "$archive_file" -C "$tmp_root"
 
-  candidate_install="$(find "$tmp_root" -type f -path '*/packages/agent-swarm-framework/install.sh' | head -n 1 || true)"
-  if [[ -z "$candidate_install" ]]; then
-    candidate_install="$(find "$tmp_root" -type f -path '*/agent-swarm-framework/install.sh' | head -n 1 || true)"
-  fi
-  [[ -n "$candidate_install" ]] || { echo "error: install.sh not found in downloaded archive" >&2; exit 1; }
+  found_layout="false"
+  while IFS= read -r candidate_install; do
+    candidate_root="$(cd "$(dirname "$candidate_install")" && pwd)"
+    if [[ -f "$candidate_root/config.schema.json" ]] && [[ -d "$candidate_root/runtime-core" ]] && [[ -d "$candidate_root/agent-definitions" ]] && [[ -d "$candidate_root/executors" ]] && [[ -d "$candidate_root/template-project" ]]; then
+      extracted_root="$candidate_root"
+      found_layout="true"
+      break
+    fi
+  done < <(find "$tmp_root" -type f \( -path '*/packages/agent-swarm-framework/install.sh' -o -path '*/agent-swarm-framework/install.sh' -o -name 'install.sh' \) | sort)
 
-  candidate_root="$(cd "$(dirname "$candidate_install")" && pwd)"
-  extracted_root="$candidate_root"
-
-  if [[ ! -f "$extracted_root/config.schema.json" ]] || [[ ! -d "$extracted_root/runtime-core" ]]; then
+  if [[ "$found_layout" != "true" ]]; then
     echo "error: downloaded archive does not contain a valid agent-swarm-framework package" >&2
     exit 1
   fi
