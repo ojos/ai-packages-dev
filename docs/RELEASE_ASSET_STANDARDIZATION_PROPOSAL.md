@@ -7,12 +7,10 @@ This document proposes a package-neutral release asset policy across all package
 
 Observed state on 2026-05-08:
 - `devcontainer-bootstrap`: historical releases had missing custom assets on some tags.
-- `agent-swarm-framework`: custom assets are currently not attached.
 - `ai-dotfiles`: custom assets are currently not attached.
 
 2026-05-08 時点の観測:
 - `devcontainer-bootstrap`: 一部タグで custom assets 欠落が発生した履歴がある。
-- `agent-swarm-framework`: 現在 custom assets 未添付。
 - `ai-dotfiles`: 現在 custom assets 未添付。
 
 Problem:
@@ -38,7 +36,7 @@ Problem:
 
 ### Option A: Keep current behavior
 
-- ASF/dotfiles continue without custom assets.
+- dotfiles continues without custom assets.
 - DCB keeps script assets only.
 
 Pros:
@@ -61,7 +59,7 @@ Pros:
 - Still package-neutral and tool-agnostic.
 
 Cons:
-- Requires small release pipeline updates for ASF/dotfiles.
+- Requires small release pipeline updates for dotfiles.
 
 ### Option C: Full executable assets per package
 
@@ -108,7 +106,7 @@ Rationale:
 
 ```json
 {
-  "package": "agent-swarm-framework|ai-dotfiles|devcontainer-bootstrap",
+  "package": "ai-dotfiles|devcontainer-bootstrap",
   "tag": "vX.Y.Z",
   "commit": "<git-sha>",
   "created_at": "<ISO8601>",
@@ -123,13 +121,13 @@ Rationale:
 
 ### Phase 1: Policy + tooling update (this repository)
 
-- Extend `scripts/release-packages.sh` to generate standard assets for ASF/dotfiles.
+- Extend `scripts/release-packages.sh` to generate standard assets for dotfiles.
 - Add a release audit command that checks required asset presence by repo/tag.
 - Keep DCB existing script assets as package-specific optional assets.
 
 ### Phase 2: Backfill existing releases
 
-- For ASF and dotfiles, backfill missing required assets for maintained historical tags.
+- For dotfiles, backfill missing required assets for maintained historical tags.
 - Record backfill result in release notes or ops log.
 
 ### Phase 3: Gate enforcement
@@ -166,7 +164,7 @@ Rationale:
 ## Suggested Next Action
 
 Create an implementation issue titled:
-- `implementation: standardize package release assets across ASF/dotfiles/DCB`
+- `implementation: standardize package release assets across dotfiles/DCB`
 
 Include:
 - scope.in: update release script, add audit command, backfill latest tags.

@@ -1,21 +1,21 @@
 # ai-dotfiles Release Notes Template
 
 ## Summary
-- Stable release for shared AI environment and language policy assets.
+- Stable release for shared AI operating norms.
 
 ## Highlights
 - Shared rules updates
-- Boundary ownership clarified against ASF
-- Public README cross-repo links fixed for standalone package repository navigation
+- Role contracts, task playbooks, review workflow, and intake discipline are now part of this package
+- Package scope clarified: source of truth for norms, no runtime
 
 ## Included Changes
-- shared-ai-rules and related instructions
-- README boundary section updates
-- README.md now points to the published agent-swarm-framework repository instead of monorepo-relative paths
+- shared-ai-rules and related norms
+- role-contracts / task-playbooks / review-workflow / intake
+- README scope section updates
 
 ## Verification
 - [ ] identity check complete
-- [ ] README EN/JA synced
+- [ ] internal relative links resolve
 
 ## Notes
 - Fill exact tag and commit range before publishing.
