@@ -12,9 +12,7 @@
 
 | ファイル | 概要 |
 |---|---|
-| `docs/ASF_RETIREMENT_PLAN.md` | ASF を廃止し dotfiles / DCB へ統合する退役計画と実施記録。 |
-| `docs/CONTRIBUTOR_IDENTITY_REWRITE_PLAN.md` | コントリビューター情報の履歴整理方針と実施計画。 |
-| `docs/RELEASE_ASSET_STANDARDIZATION_PROPOSAL.md` | リリース成果物の標準化提案。 |
+| `docs/ASF_RETIREMENT_RECORD.md` | ASF を廃止し dotfiles / DCB へ統合した退役の判断根拠と実施記録。 |
 | `docs/RELEASE_EXECUTION_RUNBOOK.md` | リリース実行時の運用手順書。 |
 | `docs/release-notes-ai-dotfiles.md` | dotfiles リリースノート。 |
 | `docs/release-notes-devcontainer-bootstrap.md` | DCB リリースノート。 |

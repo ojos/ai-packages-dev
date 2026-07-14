@@ -79,7 +79,7 @@ ASF は 2026-07 に退役しました。
 - 稼働実績が停止していた（全期間で 91 イベント、コマンド履歴は 10 日分、最終稼働 2026-05-25）
 
 保全価値のある規範（ロール契約・intake 規律・reason code）は dotfiles へ、dotfiles の配布経路は DCB へ移しました。
-退役の判断根拠と実施記録は [docs/ASF_RETIREMENT_PLAN.md](docs/ASF_RETIREMENT_PLAN.md) にあります。
+退役の判断根拠と実施記録は [docs/ASF_RETIREMENT_RECORD.md](docs/ASF_RETIREMENT_RECORD.md) にあります。
 
 ---
 
