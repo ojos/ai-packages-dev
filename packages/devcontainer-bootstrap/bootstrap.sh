@@ -33,6 +33,7 @@ DOTFILES_FROM=""
 DOTFILES_CONFLICT_POLICY="skip"
 DOTFILES_REL_ROOT="dotfiles/ai/common"
 DOTFILES_COMMON_DIR=""
+DOTFILES_TMP_ROOT=""
 
 usage() {
   cat <<'EOF'
@@ -833,7 +834,7 @@ upsert_gitignore() {
   block="$(build_gitignore_block)"
   tmp="$(mktemp)"
 
-  [[ -f "$gitignore_path" ]] && prev_mode="$(stat -c %a "$gitignore_path" 2>/dev/null || true)"
+  [[ -f "$gitignore_path" ]] && prev_mode="$(file_mode_octal "$gitignore_path")"
 
   if [[ -f "$gitignore_path" ]]; then
     awk -v start="$GITIGNORE_BEGIN" -v end="$GITIGNORE_END" '
@@ -862,6 +863,23 @@ upsert_gitignore() {
 # ── Shared AI rules (dotfiles) distribution ───────────────────────────────────
 # This script distributes the rules; the separate dotfiles repository owns them.
 
+# Octal permission bits of a file, or empty when they cannot be determined.
+# GNU coreutils uses -c; BSD/macOS uses -f. GNU also accepts -f, but as
+# --file-system, which prints unrelated text — so each result is validated to be
+# octal digits before it is accepted.
+file_mode_octal() {
+  local mode
+  for mode in \
+    "$(stat -c %a "$1" 2>/dev/null || true)" \
+    "$(stat -f %Lp "$1" 2>/dev/null || true)"; do
+    case "$mode" in
+      '' | *[!0-7]* ) ;;
+      * ) printf '%s' "$mode"; return 0 ;;
+    esac
+  done
+  printf ''
+}
+
 should_install_dotfiles() {
   [[ "$WITH_DOTFILES" == "true" ]]
 }
@@ -876,6 +894,9 @@ detect_dotfiles_common_dir() {
       require_cmd curl
       require_cmd tar
       tmp_root="$(mktemp -d)"
+      # The resolved path lives inside tmp_root, so it can only be removed on exit.
+      DOTFILES_TMP_ROOT="$tmp_root"
+      trap 'rm -rf "$DOTFILES_TMP_ROOT"' EXIT
       archive_file="$tmp_root/dotfiles.tar.gz"
       curl -fsSL "$source_hint" -o "$archive_file"
       tar -xzf "$archive_file" -C "$tmp_root"
@@ -915,7 +936,7 @@ detect_dotfiles_common_dir() {
 }
 
 apply_file_with_policy() {
-  local src="$1" dest="$2" label="$3" answer prev_mode
+  local src="$1" dest="$2" answer prev_mode
 
   mkdir -p "$(dirname "$dest")"
 
@@ -928,7 +949,8 @@ apply_file_with_policy() {
   fi
 
   # Overwriting an existing file must not change its mode.
-  prev_mode="$(stat -c %a "$dest" 2>/dev/null || echo 644)"
+  prev_mode="$(file_mode_octal "$dest")"
+  prev_mode="${prev_mode:-644}"
 
   case "$DOTFILES_CONFLICT_POLICY" in
     skip)
@@ -1139,7 +1161,7 @@ install_dotfiles_rules() {
     [[ -n "$src" ]] || continue
     rel="${src#"$common_dir"/}"
     dest="$OUTPUT_DIR/$DOTFILES_REL_ROOT/$rel"
-    apply_file_with_policy "$src" "$dest" "$DOTFILES_REL_ROOT/$rel"
+    apply_file_with_policy "$src" "$dest"
     count=$((count + 1))
   done < <(find "$common_dir" -type f -name '*.md' | sort)
 
@@ -1147,24 +1169,26 @@ install_dotfiles_rules() {
 
   tmp="$(mktemp)"
   dotfiles_project_rules_content > "$tmp"
-  apply_file_with_policy "$tmp" "$OUTPUT_DIR/.github/project-ai-rules.md" ".github/project-ai-rules.md"
+  apply_file_with_policy "$tmp" "$OUTPUT_DIR/.github/project-ai-rules.md"
   rm -f "$tmp"
 
   tmp="$(mktemp)"
   dotfiles_entry_content "Claude" > "$tmp"
-  apply_file_with_policy "$tmp" "$OUTPUT_DIR/CLAUDE.md" "CLAUDE.md"
+  apply_file_with_policy "$tmp" "$OUTPUT_DIR/CLAUDE.md"
   rm -f "$tmp"
 
   tmp="$(mktemp)"
   dotfiles_entry_content "Copilot" > "$tmp"
-  apply_file_with_policy "$tmp" "$OUTPUT_DIR/.github/copilot-instructions.md" ".github/copilot-instructions.md"
+  apply_file_with_policy "$tmp" "$OUTPUT_DIR/.github/copilot-instructions.md"
   rm -f "$tmp"
 
   tmp="$(mktemp)"
   dotfiles_gemini_review_content > "$tmp"
-  apply_file_with_policy "$tmp" "$OUTPUT_DIR/scripts/gemini-review.sh" "scripts/gemini-review.sh"
+  apply_file_with_policy "$tmp" "$OUTPUT_DIR/scripts/gemini-review.sh"
   rm -f "$tmp"
-  [[ -f "$OUTPUT_DIR/scripts/gemini-review.sh" ]] && chmod +x "$OUTPUT_DIR/scripts/gemini-review.sh"
+  if [[ -f "$OUTPUT_DIR/scripts/gemini-review.sh" ]]; then
+    chmod +x "$OUTPUT_DIR/scripts/gemini-review.sh"
+  fi
 }
 
 write_file() {
