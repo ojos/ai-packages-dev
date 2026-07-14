@@ -193,8 +193,6 @@ vite.config.ts.timestamp-*
 
 # Local handover note (kept in workspace but never committed)
 GETTING_STARTED.md
-ASF_INTAKE_AND_CONSULT_EXPORT_2026-04-14.md
 
-# Local ASF runtime artifacts
-scripts/orchestration/runtime/
-scripts/orchestration/command-history/
+# Claude Code のローカル設定（セッションごとの権限許可リスト等）
+.claude/

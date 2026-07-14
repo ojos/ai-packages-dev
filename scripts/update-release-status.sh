@@ -63,7 +63,6 @@ get_latest_tag() {
 }
 
 DCB_TAG="$(get_latest_tag devcontainer-bootstrap)"
-ASF_TAG="$(get_latest_tag agent-swarm-framework)"
 DOTFILES_TAG="$(get_latest_tag ai-dotfiles)"
 
 BLOCK_FILE="$(mktemp)"
@@ -71,7 +70,6 @@ cat >"$BLOCK_FILE" <<EOF
 | パッケージ | 配布状態 |
 |---|---|
 | devcontainer-bootstrap | $OWNER/devcontainer-bootstrap で $DCB_TAG まで公開済み |
-| agent-swarm-framework | $OWNER/agent-swarm-framework で $ASF_TAG まで公開済み |
 | dotfiles | $OWNER/ai-dotfiles で $DOTFILES_TAG まで公開済み |
 
 リリース実行手順は各パッケージの \`docs/\` または \`.github/workflows/\` を参照する。
@@ -79,7 +77,6 @@ cat >"$BLOCK_FILE" <<EOF
 ### リリース状況
 
 - \`devcontainer-bootstrap\`: published up to \`$DCB_TAG\` at \`$OWNER/devcontainer-bootstrap\`
-- \`agent-swarm-framework\`: published up to \`$ASF_TAG\` at \`$OWNER/agent-swarm-framework\`
 - \`dotfiles\`: published up to \`$DOTFILES_TAG\` at \`$OWNER/ai-dotfiles\`
 EOF
 
@@ -109,5 +106,4 @@ rm -f "$BLOCK_FILE"
 
 echo "[ok] updated release status block in $README_PATH"
 echo "[info] devcontainer-bootstrap=$DCB_TAG"
-echo "[info] agent-swarm-framework=$ASF_TAG"
 echo "[info] ai-dotfiles=$DOTFILES_TAG"

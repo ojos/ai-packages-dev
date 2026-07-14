@@ -6,6 +6,10 @@
 #     -o bootstrap.sh && bash bootstrap.sh --project-name myapp --languages node,go --mode standard
 set -euo pipefail
 
+# Resolved for locating a sibling dotfiles checkout. When this script is fetched
+# standalone (curl), no sibling exists and --dotfiles-from is required.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 PROJECT_NAME=""
 MODE="standard"
 OUTPUT_DIR=""
@@ -23,6 +27,13 @@ BASE_IMAGE=""
 GITIGNORE_BEGIN="# >>> devcontainer-bootstrap managed section >>>"
 GITIGNORE_END="# <<< devcontainer-bootstrap managed section <<<"
 GITIGNORE_REPO_RAW_BASE="https://raw.githubusercontent.com/github/gitignore/main"
+
+WITH_DOTFILES=""
+DOTFILES_FROM=""
+DOTFILES_CONFLICT_POLICY="skip"
+DOTFILES_REL_ROOT="dotfiles/ai/common"
+DOTFILES_COMMON_DIR=""
+DOTFILES_TMP_ROOT=""
 
 usage() {
   cat <<'EOF'
@@ -43,7 +54,17 @@ options:
   --force                     Overwrite existing files
   --no-gitignore              管理対象の .gitignore セクションを更新しない
   --gitignore-targets <csv>   Additional template names to use (e.g. VisualStudioCode,JetBrains)
+  --with-dotfiles             Install shared AI rules (dotfiles) and entry files
+  --without-dotfiles          Do not install shared AI rules
+  --dotfiles-from <path|url>  Dotfiles source (directory path or archive URL)
+  --dotfiles-conflict-policy <skip|overwrite|prompt>
+                              Policy when a rules file already exists (default: skip)
   -h, --help                  Show help
+
+notes:
+  Shared AI rules are maintained in a separate repository. This script places
+  them into the generated project; it is a distribution mechanism, not the
+  source of truth.
 EOF
 }
 
@@ -61,6 +82,10 @@ while [[ $# -gt 0 ]]; do
     --force)            FORCE="true"; shift ;;
     --no-gitignore)     MANAGE_GITIGNORE="false"; shift ;;
     --gitignore-targets)   GITIGNORE_TARGETS="$2"; shift 2 ;;
+    --with-dotfiles)    WITH_DOTFILES="true"; shift ;;
+    --without-dotfiles) WITH_DOTFILES="false"; shift ;;
+    --dotfiles-from)    DOTFILES_FROM="$2"; shift 2 ;;
+    --dotfiles-conflict-policy) DOTFILES_CONFLICT_POLICY="$2"; shift 2 ;;
     -h|--help)          usage; exit 0 ;;
     *) echo "error: unknown option: $1" >&2; usage; exit 1 ;;
   esac
@@ -92,6 +117,10 @@ done
 case "$MODE" in
   minimal|standard|full) ;;
   *) echo "error: invalid --mode: $MODE" >&2; exit 1 ;;
+esac
+case "$DOTFILES_CONFLICT_POLICY" in
+  skip|overwrite|prompt) ;;
+  *) echo "error: --dotfiles-conflict-policy must be one of: skip, overwrite, prompt" >&2; exit 1 ;;
 esac
 [[ -z "$OUTPUT_DIR" ]] && OUTPUT_DIR="$PWD/$PROJECT_NAME"
 
@@ -800,10 +829,12 @@ build_gitignore_block() {
 
 upsert_gitignore() {
   local gitignore_path="$OUTPUT_DIR/.gitignore"
-  local tmp block
+  local tmp block prev_mode=""
 
   block="$(build_gitignore_block)"
   tmp="$(mktemp)"
+
+  [[ -f "$gitignore_path" ]] && prev_mode="$(file_mode_octal "$gitignore_path")"
 
   if [[ -f "$gitignore_path" ]]; then
     awk -v start="$GITIGNORE_BEGIN" -v end="$GITIGNORE_END" '
@@ -822,8 +853,342 @@ upsert_gitignore() {
     printf '%s\n' "$GITIGNORE_END"
   } >> "$tmp"
 
+  # mktemp creates 0600 and mv preserves it, which would clobber the mode of an existing
+  # .gitignore. Restore what was there; use 644 only for a file we created.
   mv "$tmp" "$gitignore_path"
+  chmod "${prev_mode:-644}" "$gitignore_path"
   echo "write: $gitignore_path (managed section)"
+}
+
+# ── Shared AI rules (dotfiles) distribution ───────────────────────────────────
+# This script distributes the rules; the separate dotfiles repository owns them.
+
+# Octal permission bits of a file, or empty when they cannot be determined.
+# GNU coreutils uses -c; BSD/macOS uses -f. GNU also accepts -f, but as
+# --file-system, which prints unrelated text — so each result is validated to be
+# octal digits before it is accepted.
+file_mode_octal() {
+  local mode
+  for mode in \
+    "$(stat -c %a "$1" 2>/dev/null || true)" \
+    "$(stat -f %Lp "$1" 2>/dev/null || true)"; do
+    case "$mode" in
+      '' | *[!0-7]* ) ;;
+      * ) printf '%s' "$mode"; return 0 ;;
+    esac
+  done
+  printf ''
+}
+
+should_install_dotfiles() {
+  [[ "$WITH_DOTFILES" == "true" ]]
+}
+
+# Resolve the directory that contains ai/common, from a path, URL, or sibling checkout.
+detect_dotfiles_common_dir() {
+  local source_hint="$1"
+  local tmp_root archive_file found candidate
+
+  if [[ -n "$source_hint" ]]; then
+    if [[ "$source_hint" =~ ^https?:// ]]; then
+      require_cmd curl
+      require_cmd tar
+      tmp_root="$(mktemp -d)"
+      # The resolved path lives inside tmp_root, so it can only be removed on exit.
+      DOTFILES_TMP_ROOT="$tmp_root"
+      trap 'rm -rf "$DOTFILES_TMP_ROOT"' EXIT
+      archive_file="$tmp_root/dotfiles.tar.gz"
+      curl -fsSL "$source_hint" -o "$archive_file"
+      tar -xzf "$archive_file" -C "$tmp_root"
+      found="$(find "$tmp_root" -type d -path '*/ai/common' | head -n 1 || true)"
+      [[ -n "$found" ]] || {
+        echo "error: ai/common not found in dotfiles archive: $source_hint" >&2
+        exit 1
+      }
+      printf '%s' "$found"
+      return
+    fi
+
+    if [[ -d "$source_hint" ]]; then
+      found="$(find "$source_hint" -type d -path '*/ai/common' | head -n 1 || true)"
+      [[ -n "$found" ]] || {
+        echo "error: ai/common not found under directory: $source_hint" >&2
+        exit 1
+      }
+      printf '%s' "$found"
+      return
+    fi
+
+    echo "error: --dotfiles-from not found: $source_hint" >&2
+    exit 1
+  fi
+
+  for candidate in \
+    "$SCRIPT_DIR/../../dotfiles/ai/common" \
+    "$SCRIPT_DIR/../../../dotfiles/ai/common"; do
+    if [[ -d "$candidate" ]]; then
+      printf '%s' "$candidate"
+      return
+    fi
+  done
+
+  printf ''
+}
+
+apply_file_with_policy() {
+  local src="$1" dest="$2" answer prev_mode
+
+  mkdir -p "$(dirname "$dest")"
+
+  if [[ ! -f "$dest" ]]; then
+    cp "$src" "$dest"
+    # Sources come from mktemp (0600); a file we create should be readable like the rest.
+    chmod 644 "$dest"
+    echo "write: $dest"
+    return 0
+  fi
+
+  # Overwriting an existing file must not change its mode.
+  prev_mode="$(file_mode_octal "$dest")"
+  prev_mode="${prev_mode:-644}"
+
+  case "$DOTFILES_CONFLICT_POLICY" in
+    skip)
+      echo "skip (exists): $dest"
+      ;;
+    overwrite)
+      cp "$src" "$dest"
+      chmod "$prev_mode" "$dest"
+      echo "write: $dest (overwrite)"
+      ;;
+    prompt)
+      read -r -p "File exists: $dest. Overwrite? [y/N]: " answer
+      if [[ "$answer" == "y" || "$answer" == "Y" ]]; then
+        cp "$src" "$dest"
+        chmod "$prev_mode" "$dest"
+        echo "write: $dest (overwrite)"
+      else
+        echo "skip (declined): $dest"
+      fi
+      ;;
+  esac
+}
+
+dotfiles_entry_content() {
+  local runtime_label="$1"
+  cat <<EOF
+# ${runtime_label} 実行環境向け入口ファイル
+
+次の順序でルールを適用します（下位から上位へ優先）。
+
+1. \`${DOTFILES_REL_ROOT}/shared-ai-rules.md\`（全体共通ルール）
+2. \`.github/project-ai-rules.md\`（プロジェクト共通ルール）
+3. このファイル（実行環境固有の最小差分）
+
+- このファイルは最小構成に保ち、実行環境固有の差分のみを扱います。
+- このファイルでロール責務を再定義しません。ロール責務は \`${DOTFILES_REL_ROOT}/role-contracts/\` を参照します。
+EOF
+}
+
+dotfiles_project_rules_content() {
+  cat <<EOF
+# プロジェクト共通 AI ルール
+
+- このファイルはプロジェクト共通ルールの正本です。
+- 全体共通ルールは \`${DOTFILES_REL_ROOT}/shared-ai-rules.md\` を参照します。
+- ロール責務は \`${DOTFILES_REL_ROOT}/role-contracts/\` を参照します。
+- タスク手順は \`${DOTFILES_REL_ROOT}/task-playbooks/\` を参照します。
+- レビュー運用は \`${DOTFILES_REL_ROOT}/review-workflow.md\` を参照します。
+- 実行環境入口ファイル（\`CLAUDE.md\` 等）はこのファイルを参照し、最小差分のみを記述します。
+
+## このプロジェクト固有の値
+
+（ここにプロジェクト固有の制約・検証手順を記述します）
+
+## 機密の具体化
+
+共通規範「機密の取り扱い」を、このプロジェクトで具体化します。
+
+- 機密の読み取り元: （例: \`.env\` / シークレット管理サービス）
+- 追跡除外の対象: （例: \`.env\`）
+- 共有する雛形: （例: 値のない \`.env.example\`）
+
+## 生成物の具体化
+
+- コミットしない生成物: （例: ビルド成果物、メディアファイル）
+- 再生成手順: （コマンドを記載）
+
+## 作業状況の記録先
+
+共通規範「作業状況の記録」を、このプロジェクトで具体化します。
+単一ファイルへの集中更新は並列実行と衝突するため、追記のみの形式や作業単位ごとの分割を検討します。
+
+- 未完了の作業: （記録先を記載）
+- 完了した作業の履歴: （記録先を記載）
+EOF
+}
+
+# Resolve once, before any file is written, so a bad source fails without side effects.
+resolve_dotfiles_source_or_die() {
+  DOTFILES_COMMON_DIR="$(detect_dotfiles_common_dir "$DOTFILES_FROM")"
+  if [[ -z "$DOTFILES_COMMON_DIR" ]]; then
+    echo "error: dotfiles source not found. specify --dotfiles-from <path|url>." >&2
+    exit 1
+  fi
+}
+
+# Second-opinion reviewer for the cross-model gate. The norm lives in the rules
+# package (review-workflow.md); this is the executable side of it.
+dotfiles_gemini_review_content() {
+  cat <<'TMPL'
+#!/usr/bin/env bash
+# gemini-review.sh — 別ベンダーのモデルによる第二意見（クロスモデル二段ゲートの ②段目）
+#
+# 規範: dotfiles/ai/common/review-workflow.md
+# 目的: 実装したモデル自身の自己レビューは盲点を共有するため、別ベンダーのモデルで
+#       独立にクロスチェックする。push 前のローカル事前ゲートで使う。
+#
+# 使い方:
+#   bash scripts/gemini-review.sh              # ステージ済み差分をレビュー
+#   bash scripts/gemini-review.sh --range main..HEAD
+#
+# 終了コード:
+#   0 = LGTM（重大な指摘なし。push 可）
+#   1 = 重大な指摘あり、または実行不能
+set -euo pipefail
+
+RANGE=""
+MODEL="${GEMINI_REVIEW_MODEL:-}"
+
+usage() {
+  cat <<'EOF'
+usage: bash scripts/gemini-review.sh [options]
+
+options:
+  --range <git-range>   レビュー対象の差分範囲（既定: ステージ済み差分）
+  --model <name>        使用モデル（既定: gemini CLI の既定。GEMINI_REVIEW_MODEL でも指定可）
+  -h, --help            ヘルプ
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --range) RANGE="$2"; shift 2 ;;
+    --model) MODEL="$2"; shift 2 ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "error: unknown option: $1" >&2; usage; exit 1 ;;
+  esac
+done
+
+command -v gemini >/dev/null 2>&1 || {
+  echo "error: gemini CLI not found. run scripts/install-ai-tools.sh" >&2
+  exit 1
+}
+[[ -n "${GEMINI_API_KEY:-}" ]] || {
+  echo "error: GEMINI_API_KEY is not set" >&2
+  exit 1
+}
+
+if [[ -n "$RANGE" ]]; then
+  diff_text="$(git diff "$RANGE")"
+  scope="$RANGE"
+else
+  diff_text="$(git diff --cached)"
+  scope="staged"
+fi
+
+if [[ -z "${diff_text//[[:space:]]/}" ]]; then
+  echo "[gemini-review] no diff to review ($scope)"
+  exit 0
+fi
+
+# ゲート対象は review-workflow.md の限定に合わせる。
+read -r -d '' PROMPT <<'EOF' || true
+
+上記は git の差分です。コードレビューを行ってください。
+
+指摘対象は次の 4 点に限定します。それ以外は報告しないでください。
+- 致命バグ
+- 脆弱性
+- 型エラー
+- エッジケースの見落とし
+
+報告しないもの:
+- 好みのリファクタリング
+- 命名や可読性の軽微な提案
+- 差分の範囲外にある既存コードの問題
+
+出力形式:
+- 上記 4 点に該当する指摘が 1 件もなければ、`LGTM` とだけ出力してください。
+- 指摘がある場合は、各指摘について「該当ファイルと行」「何が問題か」「なぜ問題か（再現条件や影響）」を簡潔に記述してください。
+EOF
+
+echo "[gemini-review] reviewing $scope"
+# 差分を stdin で渡すだけで、モデルにツール実行は不要。信頼済みフォルダの確認は
+# 対話を要求するため、非対話実行では明示的に読み取り専用として扱う。
+args=(--skip-trust -p "$PROMPT")
+[[ -n "$MODEL" ]] && args=(-m "$MODEL" "${args[@]}")
+
+output="$(printf '%s' "$diff_text" | gemini "${args[@]}" 2>&1)" || {
+  echo "error: gemini review failed" >&2
+  printf '%s\n' "$output" >&2
+  exit 1
+}
+
+printf '%s\n' "$output"
+
+# 通過判定はモデルの出力ゆれに耐える必要がある。LGTM とだけ返すよう指示していても、
+# **LGTM** / `LGTM` / LGTM. のように装飾されることがある。装飾・空白・句点を除いてから
+# 行単位で厳密一致させる（文中の LGTM は通過させない）。
+if printf '%s\n' "$output" \
+  | sed 's/[`*_#]//g; s/[[:space:]]//g; s/[.。]$//' \
+  | grep -qix 'LGTM'; then
+  echo "[gemini-review] LGTM"
+  exit 0
+fi
+
+echo "[gemini-review] findings reported. fix them in a single iteration before push." >&2
+exit 1
+TMPL
+}
+
+install_dotfiles_rules() {
+  local common_dir="$DOTFILES_COMMON_DIR" rel dest tmp count=0
+
+  echo "[bootstrap] shared AI rules from: $common_dir"
+
+  while IFS= read -r src; do
+    [[ -n "$src" ]] || continue
+    rel="${src#"$common_dir"/}"
+    dest="$OUTPUT_DIR/$DOTFILES_REL_ROOT/$rel"
+    apply_file_with_policy "$src" "$dest"
+    count=$((count + 1))
+  done < <(find "$common_dir" -type f -name '*.md' | sort)
+
+  echo "[bootstrap] shared AI rules: $count file(s)"
+
+  tmp="$(mktemp)"
+  dotfiles_project_rules_content > "$tmp"
+  apply_file_with_policy "$tmp" "$OUTPUT_DIR/.github/project-ai-rules.md"
+  rm -f "$tmp"
+
+  tmp="$(mktemp)"
+  dotfiles_entry_content "Claude" > "$tmp"
+  apply_file_with_policy "$tmp" "$OUTPUT_DIR/CLAUDE.md"
+  rm -f "$tmp"
+
+  tmp="$(mktemp)"
+  dotfiles_entry_content "Copilot" > "$tmp"
+  apply_file_with_policy "$tmp" "$OUTPUT_DIR/.github/copilot-instructions.md"
+  rm -f "$tmp"
+
+  tmp="$(mktemp)"
+  dotfiles_gemini_review_content > "$tmp"
+  apply_file_with_policy "$tmp" "$OUTPUT_DIR/scripts/gemini-review.sh"
+  rm -f "$tmp"
+  if [[ -f "$OUTPUT_DIR/scripts/gemini-review.sh" ]]; then
+    chmod +x "$OUTPUT_DIR/scripts/gemini-review.sh"
+  fi
 }
 
 write_file() {
@@ -843,6 +1208,8 @@ write_file() {
   else
     mv "$tmp" "$out"
   fi
+  # mktemp creates 0600 and mv preserves it; normalize so generated files are readable.
+  chmod 644 "$out"
   [[ "$out" == *.sh ]] && chmod +x "$out"
   echo "write: $out"
 }
@@ -851,6 +1218,11 @@ write_file() {
 
 echo "[bootstrap] mode=$MODE languages=${LANGUAGES[*]}"
 echo "[bootstrap] output=$OUTPUT_DIR"
+
+# Fail before writing anything if the rules source was requested but is unusable.
+if should_install_dotfiles; then
+  resolve_dotfiles_source_or_die
+fi
 
 # Collect and sort relative paths for the selected mode (bash 3 compatible)
 sorted_rels="$(mode_rel_paths "$MODE" | sort)"
@@ -872,6 +1244,18 @@ EOF
       echo "plan: github/gitignore templates = implicit (macOS + language-based)"
     fi
   fi
+
+  if should_install_dotfiles; then
+    echo "plan: shared AI rules from $DOTFILES_COMMON_DIR"
+    while IFS= read -r src; do
+      [[ -n "$src" ]] || continue
+      echo "plan: $OUTPUT_DIR/$DOTFILES_REL_ROOT/${src#"$DOTFILES_COMMON_DIR"/}"
+    done < <(find "$DOTFILES_COMMON_DIR" -type f -name '*.md' | sort)
+    echo "plan: $OUTPUT_DIR/.github/project-ai-rules.md"
+    echo "plan: $OUTPUT_DIR/CLAUDE.md"
+    echo "plan: $OUTPUT_DIR/.github/copilot-instructions.md"
+    echo "plan: $OUTPUT_DIR/scripts/gemini-review.sh"
+  fi
   exit 0
 fi
 
@@ -884,6 +1268,10 @@ EOF
 
 if [[ "$MANAGE_GITIGNORE" == "true" ]]; then
   upsert_gitignore
+fi
+
+if should_install_dotfiles; then
+  install_dotfiles_rules
 fi
 
 echo "[bootstrap] completed"

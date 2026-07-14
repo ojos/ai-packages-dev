@@ -7,14 +7,12 @@ usage:
   bash scripts/release-packages.sh \
     --owner <github-owner> \
     --dcb-version <vX.Y.Z> \
-    --asf-version <vX.Y.Z> \
     --dotfiles-version <vX.Y.Z> \
     --execute
 
 options:
   --owner <owner>               GitHub owner (required)
   --dcb-version <vX.Y.Z>        DCB release tag (required)
-  --asf-version <vX.Y.Z>        ASF release tag (required)
   --dotfiles-version <vX.Y.Z>   dotfiles release tag (required)
   --execute                     Actually execute release operations
   --audit                       Audit release assets across all repos and exit
@@ -69,18 +67,6 @@ validate_dcb_docs() {
     echo "error: DCB README.md TAG does not match $dcb_tag" >&2
     exit 1
   }
-}
-
-validate_asf_version() {
-  local asf_tag="$1"
-  local expected
-  expected="$(extract_semver "$asf_tag")"
-  local actual
-  actual="$(tr -d '\n' < packages/agent-swarm-framework/VERSION)"
-  if [[ "$actual" != "$expected" ]]; then
-    echo "error: ASF VERSION mismatch. VERSION=$actual expected=$expected" >&2
-    exit 1
-  fi
 }
 
 validate_markdown_links_in_tree() {
@@ -195,25 +181,6 @@ JSON
   popd >/dev/null
 }
 
-prepare_asf_release_repo() {
-  local dir="$1"
-  rm -rf "$dir"
-  mkdir -p "$dir"
-
-  cp packages/agent-swarm-framework/install.sh "$dir/"
-  cp packages/agent-swarm-framework/init.sh "$dir/"
-  cp packages/agent-swarm-framework/config.schema.json "$dir/"
-  cp packages/agent-swarm-framework/VERSION "$dir/"
-  cp packages/agent-swarm-framework/README.md "$dir/"
-  cp packages/agent-swarm-framework/retrofit-config.sample.json "$dir/"
-  cp -R packages/agent-swarm-framework/runtime-core "$dir/"
-  cp -R packages/agent-swarm-framework/agent-definitions "$dir/"
-  cp -R packages/agent-swarm-framework/executors "$dir/"
-  cp -R packages/agent-swarm-framework/template-project "$dir/"
-  cp -R packages/agent-swarm-framework/docs "$dir/"
-  cp -R packages/agent-swarm-framework/tests "$dir/"
-}
-
 prepare_dcb_release_repo() {
   local dir="$1"
   rm -rf "$dir"
@@ -302,7 +269,7 @@ tag_and_release() {
 # Prints a report and exits non-zero if any required asset is missing.
 audit_release_assets() {
   local owner="$1"
-  local repos=("$owner/agent-swarm-framework" "$owner/ai-dotfiles" "$owner/devcontainer-bootstrap")
+  local repos=("$owner/ai-dotfiles" "$owner/devcontainer-bootstrap")
   local failed=0
 
   echo "[audit] checking required release assets: ${REQUIRED_RELEASE_ASSETS[*]}"
@@ -335,7 +302,6 @@ audit_release_assets() {
 
 OWNER=""
 DCB_TAG=""
-ASF_TAG=""
 DOTFILES_TAG=""
 EXECUTE="false"
 AUDIT="false"
@@ -344,7 +310,6 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --owner) OWNER="$2"; shift 2 ;;
     --dcb-version) DCB_TAG="$2"; shift 2 ;;
-    --asf-version) ASF_TAG="$2"; shift 2 ;;
     --dotfiles-version) DOTFILES_TAG="$2"; shift 2 ;;
     --execute) EXECUTE="true"; shift ;;
     --audit) AUDIT="true"; shift ;;
@@ -365,7 +330,7 @@ if [[ "$AUDIT" == "true" ]]; then
   exit $?
 fi
 
-[[ -n "$OWNER" && -n "$DCB_TAG" && -n "$ASF_TAG" && -n "$DOTFILES_TAG" ]] || {
+[[ -n "$OWNER" && -n "$DCB_TAG" && -n "$DOTFILES_TAG" ]] || {
   echo "error: required options are missing" >&2
   usage
   exit 1
@@ -378,13 +343,10 @@ require_cmd tar
 require_cmd sha256sum
 require_clean_worktree
 extract_semver "$DCB_TAG" >/dev/null
-extract_semver "$ASF_TAG" >/dev/null
 extract_semver "$DOTFILES_TAG" >/dev/null
 validate_dcb_docs "$DCB_TAG"
-validate_asf_version "$ASF_TAG"
 validate_markdown_links_in_tree "$(pwd)/dotfiles"
 validate_markdown_links_in_tree "$(pwd)/packages/devcontainer-bootstrap"
-validate_markdown_links_in_tree "$(pwd)/packages/agent-swarm-framework"
 
 echo "[ok] preflight checks passed"
 
@@ -395,11 +357,9 @@ fi
 
 ROOT_DIR="$(pwd)"
 DCB_DIR="/tmp/dcb-release"
-ASF_DIR="/tmp/asf-release"
 DOTFILES_DIR="/tmp/dotfiles-release"
 
 DCB_VER="$(extract_semver "$DCB_TAG")"
-ASF_VER="$(extract_semver "$ASF_TAG")"
 DOTFILES_VER="$(extract_semver "$DOTFILES_TAG")"
 
 prepare_dcb_release_repo "$DCB_DIR"
@@ -411,14 +371,6 @@ tag_and_release "$DCB_DIR" "$OWNER/devcontainer-bootstrap" "$DCB_TAG" "Release $
   "$DCB_DIR/RELEASE-MANIFEST.json" \
   "$DCB_DIR/SHA256SUMS" \
   "$DCB_DIR/PACKAGE_ARCHIVE.tar.gz"
-
-prepare_asf_release_repo "$ASF_DIR"
-generate_standard_assets "$ASF_DIR" "agent-swarm-framework" "$ASF_VER"
-init_and_push_release_repo "$ASF_DIR" "$OWNER/agent-swarm-framework" public
-tag_and_release "$ASF_DIR" "$OWNER/agent-swarm-framework" "$ASF_TAG" "Release $ASF_TAG" \
-  "$ASF_DIR/RELEASE-MANIFEST.json" \
-  "$ASF_DIR/SHA256SUMS" \
-  "$ASF_DIR/PACKAGE_ARCHIVE.tar.gz"
 
 prepare_dotfiles_release_repo "$DOTFILES_DIR"
 generate_standard_assets "$DOTFILES_DIR" "ai-dotfiles" "$DOTFILES_VER"
@@ -438,7 +390,7 @@ else
 fi
 
 echo "[ok] completed releases"
-for r in "$OWNER/devcontainer-bootstrap" "$OWNER/agent-swarm-framework" "$OWNER/ai-dotfiles"; do
+for r in "$OWNER/devcontainer-bootstrap" "$OWNER/ai-dotfiles"; do
   echo "[repo] $r"
   gh release list --repo "$r" --limit 3 || true
   echo "---"
