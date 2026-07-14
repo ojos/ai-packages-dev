@@ -6,6 +6,10 @@
 #     -o bootstrap.sh && bash bootstrap.sh --project-name myapp --languages node,go --mode standard
 set -euo pipefail
 
+# Resolved for locating a sibling dotfiles checkout. When this script is fetched
+# standalone (curl), no sibling exists and --dotfiles-from is required.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 PROJECT_NAME=""
 MODE="standard"
 OUTPUT_DIR=""
@@ -23,6 +27,12 @@ BASE_IMAGE=""
 GITIGNORE_BEGIN="# >>> devcontainer-bootstrap managed section >>>"
 GITIGNORE_END="# <<< devcontainer-bootstrap managed section <<<"
 GITIGNORE_REPO_RAW_BASE="https://raw.githubusercontent.com/github/gitignore/main"
+
+WITH_DOTFILES=""
+DOTFILES_FROM=""
+DOTFILES_CONFLICT_POLICY="skip"
+DOTFILES_REL_ROOT="dotfiles/ai/common"
+DOTFILES_COMMON_DIR=""
 
 usage() {
   cat <<'EOF'
@@ -43,7 +53,17 @@ options:
   --force                     Overwrite existing files
   --no-gitignore              管理対象の .gitignore セクションを更新しない
   --gitignore-targets <csv>   Additional template names to use (e.g. VisualStudioCode,JetBrains)
+  --with-dotfiles             Install shared AI rules (dotfiles) and entry files
+  --without-dotfiles          Do not install shared AI rules
+  --dotfiles-from <path|url>  Dotfiles source (directory path or archive URL)
+  --dotfiles-conflict-policy <skip|overwrite|prompt>
+                              Policy when a rules file already exists (default: skip)
   -h, --help                  Show help
+
+notes:
+  Shared AI rules are maintained in a separate repository. This script places
+  them into the generated project; it is a distribution mechanism, not the
+  source of truth.
 EOF
 }
 
@@ -61,6 +81,10 @@ while [[ $# -gt 0 ]]; do
     --force)            FORCE="true"; shift ;;
     --no-gitignore)     MANAGE_GITIGNORE="false"; shift ;;
     --gitignore-targets)   GITIGNORE_TARGETS="$2"; shift 2 ;;
+    --with-dotfiles)    WITH_DOTFILES="true"; shift ;;
+    --without-dotfiles) WITH_DOTFILES="false"; shift ;;
+    --dotfiles-from)    DOTFILES_FROM="$2"; shift 2 ;;
+    --dotfiles-conflict-policy) DOTFILES_CONFLICT_POLICY="$2"; shift 2 ;;
     -h|--help)          usage; exit 0 ;;
     *) echo "error: unknown option: $1" >&2; usage; exit 1 ;;
   esac
@@ -92,6 +116,10 @@ done
 case "$MODE" in
   minimal|standard|full) ;;
   *) echo "error: invalid --mode: $MODE" >&2; exit 1 ;;
+esac
+case "$DOTFILES_CONFLICT_POLICY" in
+  skip|overwrite|prompt) ;;
+  *) echo "error: --dotfiles-conflict-policy must be one of: skip, overwrite, prompt" >&2; exit 1 ;;
 esac
 [[ -z "$OUTPUT_DIR" ]] && OUTPUT_DIR="$PWD/$PROJECT_NAME"
 
@@ -826,6 +854,165 @@ upsert_gitignore() {
   echo "write: $gitignore_path (managed section)"
 }
 
+# ── Shared AI rules (dotfiles) distribution ───────────────────────────────────
+# This script distributes the rules; the separate dotfiles repository owns them.
+
+should_install_dotfiles() {
+  [[ "$WITH_DOTFILES" == "true" ]]
+}
+
+# Resolve the directory that contains ai/common, from a path, URL, or sibling checkout.
+detect_dotfiles_common_dir() {
+  local source_hint="$1"
+  local tmp_root archive_file found candidate
+
+  if [[ -n "$source_hint" ]]; then
+    if [[ "$source_hint" =~ ^https?:// ]]; then
+      require_cmd curl
+      require_cmd tar
+      tmp_root="$(mktemp -d)"
+      archive_file="$tmp_root/dotfiles.tar.gz"
+      curl -fsSL "$source_hint" -o "$archive_file"
+      tar -xzf "$archive_file" -C "$tmp_root"
+      found="$(find "$tmp_root" -type d -path '*/ai/common' | head -n 1 || true)"
+      [[ -n "$found" ]] || {
+        echo "error: ai/common not found in dotfiles archive: $source_hint" >&2
+        exit 1
+      }
+      printf '%s' "$found"
+      return
+    fi
+
+    if [[ -d "$source_hint" ]]; then
+      found="$(find "$source_hint" -type d -path '*/ai/common' | head -n 1 || true)"
+      [[ -n "$found" ]] || {
+        echo "error: ai/common not found under directory: $source_hint" >&2
+        exit 1
+      }
+      printf '%s' "$found"
+      return
+    fi
+
+    echo "error: --dotfiles-from not found: $source_hint" >&2
+    exit 1
+  fi
+
+  for candidate in \
+    "$SCRIPT_DIR/../../dotfiles/ai/common" \
+    "$SCRIPT_DIR/../../../dotfiles/ai/common"; do
+    if [[ -d "$candidate" ]]; then
+      printf '%s' "$candidate"
+      return
+    fi
+  done
+
+  printf ''
+}
+
+apply_file_with_policy() {
+  local src="$1" dest="$2" label="$3" answer
+
+  mkdir -p "$(dirname "$dest")"
+
+  if [[ ! -f "$dest" ]]; then
+    cp "$src" "$dest"
+    echo "write: $dest"
+    return 0
+  fi
+
+  case "$DOTFILES_CONFLICT_POLICY" in
+    skip)
+      echo "skip (exists): $dest"
+      ;;
+    overwrite)
+      cp "$src" "$dest"
+      echo "write: $dest (overwrite)"
+      ;;
+    prompt)
+      read -r -p "File exists: $dest. Overwrite? [y/N]: " answer
+      if [[ "$answer" == "y" || "$answer" == "Y" ]]; then
+        cp "$src" "$dest"
+        echo "write: $dest (overwrite)"
+      else
+        echo "skip (declined): $dest"
+      fi
+      ;;
+  esac
+}
+
+dotfiles_entry_content() {
+  local runtime_label="$1"
+  cat <<EOF
+# ${runtime_label} 実行環境向け入口ファイル
+
+次の順序でルールを適用します（下位から上位へ優先）。
+
+1. \`${DOTFILES_REL_ROOT}/shared-ai-rules.md\`（全体共通ルール）
+2. \`.github/project-ai-rules.md\`（プロジェクト共通ルール）
+3. このファイル（実行環境固有の最小差分）
+
+- このファイルは最小構成に保ち、実行環境固有の差分のみを扱います。
+- このファイルでロール責務を再定義しません。ロール責務は \`${DOTFILES_REL_ROOT}/role-contracts/\` を参照します。
+EOF
+}
+
+dotfiles_project_rules_content() {
+  cat <<EOF
+# プロジェクト共通 AI ルール
+
+- このファイルはプロジェクト共通ルールの正本です。
+- 全体共通ルールは \`${DOTFILES_REL_ROOT}/shared-ai-rules.md\` を参照します。
+- ロール責務は \`${DOTFILES_REL_ROOT}/role-contracts/\` を参照します。
+- タスク手順は \`${DOTFILES_REL_ROOT}/task-playbooks/\` を参照します。
+- レビュー運用は \`${DOTFILES_REL_ROOT}/review-workflow.md\` を参照します。
+- 実行環境入口ファイル（\`CLAUDE.md\` 等）はこのファイルを参照し、最小差分のみを記述します。
+
+## このプロジェクト固有の値
+
+（ここにプロジェクト固有の制約・検証手順を記述します）
+EOF
+}
+
+# Resolve once, before any file is written, so a bad source fails without side effects.
+resolve_dotfiles_source_or_die() {
+  DOTFILES_COMMON_DIR="$(detect_dotfiles_common_dir "$DOTFILES_FROM")"
+  if [[ -z "$DOTFILES_COMMON_DIR" ]]; then
+    echo "error: dotfiles source not found. specify --dotfiles-from <path|url>." >&2
+    exit 1
+  fi
+}
+
+install_dotfiles_rules() {
+  local common_dir="$DOTFILES_COMMON_DIR" rel dest tmp count=0
+
+  echo "[bootstrap] shared AI rules from: $common_dir"
+
+  while IFS= read -r src; do
+    [[ -n "$src" ]] || continue
+    rel="${src#"$common_dir"/}"
+    dest="$OUTPUT_DIR/$DOTFILES_REL_ROOT/$rel"
+    apply_file_with_policy "$src" "$dest" "$DOTFILES_REL_ROOT/$rel"
+    count=$((count + 1))
+  done < <(find "$common_dir" -type f -name '*.md' | sort)
+
+  echo "[bootstrap] shared AI rules: $count file(s)"
+
+  tmp="$(mktemp)"
+  dotfiles_project_rules_content > "$tmp"
+  apply_file_with_policy "$tmp" "$OUTPUT_DIR/.github/project-ai-rules.md" ".github/project-ai-rules.md"
+  rm -f "$tmp"
+
+  tmp="$(mktemp)"
+  dotfiles_entry_content "Claude" > "$tmp"
+  apply_file_with_policy "$tmp" "$OUTPUT_DIR/CLAUDE.md" "CLAUDE.md"
+  rm -f "$tmp"
+
+  tmp="$(mktemp)"
+  dotfiles_entry_content "Copilot" > "$tmp"
+  apply_file_with_policy "$tmp" "$OUTPUT_DIR/.github/copilot-instructions.md" ".github/copilot-instructions.md"
+  rm -f "$tmp"
+}
+
 write_file() {
   local rel="$1" content="$2" out tmp
   out="$OUTPUT_DIR/$rel"
@@ -852,6 +1039,11 @@ write_file() {
 echo "[bootstrap] mode=$MODE languages=${LANGUAGES[*]}"
 echo "[bootstrap] output=$OUTPUT_DIR"
 
+# Fail before writing anything if the rules source was requested but is unusable.
+if should_install_dotfiles; then
+  resolve_dotfiles_source_or_die
+fi
+
 # Collect and sort relative paths for the selected mode (bash 3 compatible)
 sorted_rels="$(mode_rel_paths "$MODE" | sort)"
 
@@ -872,6 +1064,17 @@ EOF
       echo "plan: github/gitignore templates = implicit (macOS + language-based)"
     fi
   fi
+
+  if should_install_dotfiles; then
+    echo "plan: shared AI rules from $DOTFILES_COMMON_DIR"
+    while IFS= read -r src; do
+      [[ -n "$src" ]] || continue
+      echo "plan: $OUTPUT_DIR/$DOTFILES_REL_ROOT/${src#"$DOTFILES_COMMON_DIR"/}"
+    done < <(find "$DOTFILES_COMMON_DIR" -type f -name '*.md' | sort)
+    echo "plan: $OUTPUT_DIR/.github/project-ai-rules.md"
+    echo "plan: $OUTPUT_DIR/CLAUDE.md"
+    echo "plan: $OUTPUT_DIR/.github/copilot-instructions.md"
+  fi
   exit 0
 fi
 
@@ -884,6 +1087,10 @@ EOF
 
 if [[ "$MANAGE_GITIGNORE" == "true" ]]; then
   upsert_gitignore
+fi
+
+if should_install_dotfiles; then
+  install_dotfiles_rules
 fi
 
 echo "[bootstrap] completed"
