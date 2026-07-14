@@ -29,14 +29,21 @@
 - https://github.com/ojos/devcontainer-bootstrap
 
 最新安定リリース:
-- `v0.1.15`
+- `v0.2.0`
 
 ```bash
-TAG=v0.1.15
+TAG=v0.2.0
 curl -sSL "https://github.com/ojos/devcontainer-bootstrap/releases/download/${TAG}/bootstrap.sh" -o bootstrap.sh
 curl -sSL "https://github.com/ojos/devcontainer-bootstrap/releases/download/${TAG}/SHA256SUMS" -o SHA256SUMS
 sha256sum -c SHA256SUMS
 bash bootstrap.sh --project-name myapp --languages node,go --mode standard
+```
+
+AI 共通ルールも配置する場合は、ルールの取得元を指定します。
+
+```bash
+bash bootstrap.sh --project-name myapp --languages node,go --mode standard \
+  --with-dotfiles --dotfiles-from https://github.com/ojos/ai-dotfiles/archive/refs/tags/v0.3.0.tar.gz
 ```
 
 ## 入力仕様
