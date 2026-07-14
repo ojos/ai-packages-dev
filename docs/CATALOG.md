@@ -12,6 +12,7 @@
 | ファイル | 概要 |
 |---|---|
 | `docs/AGENT_COMMAND_GUIDE.md` | エージェント運用で使うコマンドの実行ガイド。 |
+| `docs/ASF_RETIREMENT_PLAN.md` | ASF を廃止し dotfiles / DCB へ統合する退役計画。 |
 | `docs/CONTRIBUTOR_IDENTITY_REWRITE_PLAN.md` | コントリビューター情報の履歴整理方針と実施計画。 |
 | `docs/DESIGN_SUMMARY_CONVERSATION_GATE.md` | conversation-gate 設計の要点整理。 |
 | `docs/PACKAGE_BOUNDARY_REVIEW.md` | パッケージ責務境界のレビュー記録。 |
