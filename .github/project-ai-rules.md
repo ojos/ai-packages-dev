@@ -6,8 +6,6 @@
 
 - `.github/PROJECT_DEFINITION.md` をプロジェクト固有の最上位定義として読み、必ず従います。
 - 汎用ルール（言語方針・命名規則）は `dotfiles/ai/common/shared-ai-rules.md` を参照します。
-- packages 構造・ASF ワークフロー規則の汎用雛形は `packages/agent-swarm-framework/template-project/files/.github/PROJECT_DEFINITION.md` を参照します。
-- ASF 汎用運用規則（実装委譲、@intake、終了時整理、運用厳格度）の正本は上記 template-project 側とします。
 - 利便性のための編集よりも、上記ポリシーを優先します。
 - `packages/**` に固有名詞を混入し得る編集は、ユーザー確認なしで実施しません。
 
@@ -16,15 +14,12 @@
 - パッケージ層（`packages/**`）は汎用・再利用可能に保ちます。
 - 固有値はプロジェクト層ファイルにのみ配置します。
 - Dev Container のプロファイル名対応では、パッケージ既定値変更ではなく、プロジェクト層設定と実行時オプションを優先します。
-- 本リポジトリでの開発運用は ASF ワークフローを標準とし、原則として `scripts/gate/workflow.sh` または `scripts/asf-workflow.sh` を使用します。
-- ASF 実行時は前提チェック（設定ファイル・スクリプト・`gh auth`）を満たしていることを確認します。
 - 主要ドキュメント更新時は、日本語での一貫性を維持します。
 
 ### ドキュメント分離運用
 
 - `packages/**/README.md` を正本として扱います。
 - README は `README.md` を単一の正本として運用します。
-- `packages/agent-swarm-framework/docs/*.md` も同様に正本を優先し、翻訳は任意で運用します。
 - 翻訳版を追加する場合は、正本更新時に意味の一致を確認します。
 
 ### Issue 言語運用
@@ -69,17 +64,16 @@ bash scripts/setup-ai-directory-policy.sh
 - `recommended`: 推奨トップレベル構造を生成時に適用
 - `reference-only`: 推奨を参照のみ（警告中心）
 
-## ASF ワークフロー: 実装委譲パターン
+## 実装委譲パターン
 
-このエージェントは ASF ワークフローに従い、実装作業は line worker への委譲を原則とします。
+実装作業は、独立して進められる単位へ分解し、サブエージェントへ委譲することを原則とします。
 
 ### 実装委譲の判定
 
 **委譲対象**:
-- GitHub issue が作成され、実装スコープが明記されている
-- Issue title が `implementation:` / `feature:` で始まる
+- 実装スコープが明記されている作業
 - コード生成・変更を伴う作業（新規作成、既存コード修正）
-- GitHub issue の code review が必要な場合
+- 独立して並列実行できる作業
 
 **自分で実装してよい対象**:
 - ドキュメント作成・編集（README、ガイド、方針文書など）
@@ -91,47 +85,17 @@ bash scripts/setup-ai-directory-policy.sh
 
 | コマンド | 意図 | エージェント動作 |
 |---|---|---|
-| 進めて下さい | ASF workflow に沿って次フェーズへ | Issue 作成 → 委譲判定 → （line worker または自実装） |
+| 進めて下さい | 次フェーズへ | 委譲判定 →（サブエージェントまたは自実装） |
 | やってしまえ | 直接実装する | 委譲をスキップして直接実装 |
 | 確認して | 分析・レビューのみ | 委譲なしで実施 |
 | #N を実装して | 特定 issue の実装 | Issue scope 確認後、委譲判定 |
 
-### 委譲フロー
+### 並列実行時の作業分離
 
-```
-設計完了
-  ↓
-GitHub issue 作成（実装スコープ明記）
-  ↓
-実行可能な line task へ変換（scripts/worker/delegate-issue-implementation.sh）
-  ↓
-GitHub issue へ runtime delegation 記録
-  ↓
-Line worker の PR を待機
-  ↓
-Code review + approval
-  ↓
-Merge
-```
-
-### 実行委譲の標準経路
-
-Issue 作成やコメント追加だけでは line worker は実行を開始しません。
-実装 issue を line worker が実行可能なタスクに変換するには次を使用します。
-
-```bash
-bash scripts/worker/delegate-issue-implementation.sh \
-  --issue-number <N> \
-  --line auto-001 \
-  --task-command "<shell-command>"
-```
-
-### 条件付き自動 enqueue
-
-- `implementation:` / `feature:` issue で `line-task` + `auto-enqueue` ラベルが付与され、
-  日本語要約 / 受け入れ条件 / `task_command:` が定義されている場合、
-  auto-enqueue worker が実行可能タスクへ自動変換します。
-- 安全条件を満たさない issue は自動実行しません（手動委譲を使用）。
+- 着手前にタスク間の依存関係を洗い出し、独立して進められる単位へ分割します。
+- 実装を伴うサブエージェントへ並列委譲する場合、親セッションが `isolation: "worktree"` を指定し、機構でエージェント単位の作業ツリー分離を保証します。
+- 指示文による呼びかけに頼りません。機構が結果そのものを生む場合は、機構を使います。
+- 読み取り専用の調査エージェントには不要です。
 
 ### Issue クローズ方針
 
@@ -139,15 +103,14 @@ bash scripts/worker/delegate-issue-implementation.sh \
 - クローズ理由は `completed`, `superseded`, `duplicate`, `invalid`, `deferred` のいずれかに分類します。
 - `superseded` / `duplicate` では置き換え先 issue 番号を明記します。
 - 実装系 issue のクローズ時は、検証結果（テスト/実行結果）を最低1行含めます。
-- 標準化されたクローズ処理は `scripts/worker/close-issue-with-policy.sh` を使用します。
 
 ### 終了時整理方針
 
 - 実行中は `issue:PR:merge` が一時的に 1:1:1 でなくても許容します。
-- ただし作業終了時には、未採用 PR・実装済み Issue・キュー残件を必ず整理してクリーン状態へ戻します。
+- ただし作業終了時には、未採用 PR・実装済み Issue を必ず整理してクリーン状態へ戻します。
 - 実装済み issue は理由と検証結果を付けてクローズします。
 - 採用 PR はマージし、不要 PR は理由付きでクローズします。
-- 終了前に open issue / open PR / pending queue / dead-letter の状態を確認します。
+- 終了前に open issue / open PR の状態を確認します。
 - 最終判定の基準は「再開可能かつ追跡可能なクリーン状態」です。
 
 ### 運用厳格度方針
@@ -157,27 +120,10 @@ bash scripts/worker/delegate-issue-implementation.sh \
 - 任意運用を選んだ場合でも、作業終了時には終了時整理方針に従って必ず正規化します。
 - 途中の簡略運用を行った場合は、クローズ時コメントに「後追い正規化」の実施結果を明記します。
 
-### 自実装の記録
-
-自分で実装する場合も Consult log に記録します。
-
-```bash
-bash scripts/gate/command-dispatch.sh \
-  --issuer [agent-name] \
-  --action /delegate \
-  --scope "issue:#N" \
-  --options '{
-    "decision": "self_implement",
-    "reason": "document_edit|trivial_fix|no_worker_available",
-    "scope_description": "[簡潔な説明]"
-  }'
-```
-
 ### エラーハンドリング
 
-- Line worker が不可用な場合: ユーザーに通知し、委譲できないことを報告します。
 - Issue scope が不明確な場合: 委譲前にユーザーへ scope 確認を求めます。
-- Code review が必要だが reviewer 不在の場合: consult log に escalate flag を設定します。
+- レビューの要否や判定に迷う場合: 独断で進めず、ユーザーへエスカレーションします。
 
 ## @intake コマンド
 
@@ -248,8 +194,8 @@ Step 8: ユーザー承認後に issue 化 + /intake dispatch
     --issue-title "<タイトル>" \
     --confirm true
 
-Step 9: ASF フローへ自動移行
-  - issue 作成完了後、通常の ASF delegation フローへ引き継ぐ
+Step 9: 実装委譲へ移行
+  - issue 作成完了後、「実装委譲パターン」へ引き継ぐ
 ```
 
 ### 制約

@@ -15,13 +15,11 @@
 | `scripts/asf` | ASF 統一 CLI エントリポイント。 |
 | `scripts/asf-workflow.sh` | ASF ワークフロー実行ヘルパー。 |
 | `scripts/gate/asf-doctor.sh` | ASF 依存と前提条件の健全性チェック。 |
-| `scripts/gate/asf-enforcement-check.sh` | ASF 運用ルールの強制チェック。 |
 | `scripts/gate/auto-gate.sh` | 自動ゲート判定実行。 |
 | `scripts/gate/command-dispatch.sh` | コマンドのルーティングとディスパッチ。 |
 | `scripts/gate/command-validate.sh` | 受信コマンドのバリデーション。 |
 | `scripts/gate/conversation-entry.sh` | 会話入力から intake 変換を実行。 |
 | `scripts/gate/conversation-gate.sh` | 会話ゲート判定。 |
-| `scripts/gate/install-git-hooks.sh` | Git hooks の導入スクリプト。 |
 | `scripts/gate/workflow.sh` | ゲート経由の標準ワークフロー。 |
 | `scripts/github-account-switch.sh` | GitHub アカウント/プロファイル切替。 |
 | `scripts/install-ai-tools.sh` | AI CLI ツール導入。 |
