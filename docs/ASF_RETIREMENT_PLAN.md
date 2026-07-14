@@ -175,16 +175,35 @@ ASF の pre-commit hook がその反例です。「`asf-workflow.sh` を実行�
 
 ## 6. 着手前に解消すべき既存の不整合
 
-### 6.1 ロール契約の二重管理（要解消）
+### 6.1 ロール契約の二重管理 — **解消済み（2026-07-14）**
 
-7 つのロール契約が 2 箇所に存在します。
+7 つのロール契約が 2 箇所に存在していました。
 
 - `packages/agent-swarm-framework/agent-definitions/files/.multi-agent/role-contracts/*.md`（パッケージ層）
 - `.multi-agent/skills/*.md`（プロジェクト層、最終更新 2026-05-22）
 
-内容が一致しているかは未検証です。**移植前に正本を確定し、差分があれば統合**します。
+**実測の結果、二重管理ではなく移行漏れでした。** `role-contracts` は `skills` の strict superset であり、`skills` に固有の内容は 1 行も存在しませんでした（差分 3 行はすべて表記揺れ）。
 
-### 6.2 修正しない既知バグ
+| ロール | skills の行数 | role-contracts に不在の行 |
+|---|---|---|
+| closer / consult-facilitator / intake-manager / orchestrator / planner | 13〜30 | 0 |
+| implementer | 13 | 1（「上書き設定」→「overrides」の表記差のみ。`implementer.md:4` に同義の記述あり） |
+| reviewer | 12 | 2（「高/中/低」→「High/Medium/Low」の表記差のみ） |
+
+加えて `packages/agent-swarm-framework/docs/operational-pr-review-checklist.md:47` が「7. 旧パス参照が残っていないか / `.multi-agent/skills` の参照が残っていない。」とレビュー項目に定めており、**skills の廃止はプロジェクトが既に決定済み**でした。2026-05-25 の命名統一（`d9bb2ed` / `0878a98`）で `role-contracts` へ移行した際、ディレクトリの削除のみが漏れていたものです。
+
+**正本 = `role-contracts`（パッケージ層）**として確定し、`.multi-agent/skills/` を削除しました。
+
+### 6.2 移植時に戻すべき言語の後退
+
+命名統一の際、日本語だった記述の一部が英語へ置き換わっています。`shared-ai-rules.md` は日本語を正本と定めているため、**フェーズ 2 の移植時に日本語へ戻します**。
+
+| 箇所 | 現状 | 移植時 |
+|---|---|---|
+| `role-contracts/implementer.md:4` | 「project 固有要件は導入先の overrides を参照する。」 | 「プロジェクト固有要件は導入先の上書き設定を参照する。」 |
+| `role-contracts/reviewer.md` | 「High/Medium/Low の観点で整理する。」 | 「高/中/低 の観点で整理する。」 |
+
+### 6.3 修正しない既知バグ
 
 以下は退役対象の層にあるため**修正しません**。
 
@@ -194,7 +213,7 @@ ASF の pre-commit hook がその反例です。「`asf-workflow.sh` を実行�
 
 これらが 3 ヶ月間検出されなかったこと自体が、退役判断の根拠の一部です。
 
-### 6.3 陳腐化した計画文書の扱い
+### 6.4 陳腐化した計画文書の扱い
 
 以下は本計画と矛盾します。フェーズ 4 でアーカイブまたは削除します。
 
