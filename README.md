@@ -1,13 +1,13 @@
 # ai-packages-dev
 
-dotfiles / DevContainer Bootstrap (DCB) / Agent Swarm Framework (ASF) の 3 パッケージを共同開発するためのモノリポジトリです。
+dotfiles / DevContainer Bootstrap (DCB) の 2 パッケージを共同開発するためのモノリポジトリです。
 
 各パッケージは独立して配布可能な設計ですが、相互補完することで AI コーディング導入のシナジーを生み出すために、開発は 1 リポジトリに集約します。
 
 ## English Summary
 
-This repository is a monorepo for collaborative development of three packages:
-dotfiles, DevContainer Bootstrap (DCB), and Agent Swarm Framework (ASF).
+This repository is a monorepo for collaborative development of two packages:
+dotfiles and DevContainer Bootstrap (DCB).
 
 Each package is distributable on its own, but they are developed together to reduce AI coding onboarding cost through combined usage.
 
@@ -17,38 +17,29 @@ Each package is distributable on its own, but they are developed together to red
 
 ```
 ai-packages-dev/
-├── dotfiles/                        # Layer 1: AI 共通ルール・役割定義
+├── dotfiles/                        # AI 運用規範の正本
 │   └── ai/common/
-│       ├── shared-ai-rules.md       # 全エージェント共通ルール
-│       ├── claude-instructions.md   # 実装担当向け指示
-│       └── gemini-instructions.md   # レビュー担当向け指示
+│       ├── shared-ai-rules.md       # 共通規範
+│       ├── role-contracts/          # ロール責務の契約 7 種
+│       ├── task-playbooks/          # タスク手順 4 種
+│       ├── review-workflow.md       # レビュー運用
+│       └── intake/                  # intake 規律・判定 reason code
 ├── packages/
-│   ├── devcontainer-bootstrap/      # Layer 2: Dev Container 一括生成ツール
-│   │   ├── bootstrap.sh             # メインスクリプト
-│   │   ├── doctor.sh                # 自己診断スクリプト
-│   │   └── .github/workflows/
-│   │       └── release.yml          # タグ連動リリース workflow
-│   └── agent-swarm-framework/       # Layer 3: マルチエージェント実行基盤
-│       ├── install.sh               # エントリポイント
-│       ├── init.sh                  # プロジェクト初期化 CLI
-│       ├── config.schema.json       # 設定スキーマ
-│       ├── runtime-core/            # 実行基盤スクリプト
-│       ├── agent-definitions/       # ロール契約・タスク手順・外部フィード定義
-│       ├── executors/               # リモート実行アダプタ
-│       ├── template-project/        # プロジェクト雛形
-│       ├── tests/                   # E2E テスト
-│       ├── docs/                    # パッケージドキュメント
-│       └── VERSION                  # バージョンファイル (現在: 0.1.0)
+│   └── devcontainer-bootstrap/      # 環境生成と規範配布
+│       ├── bootstrap.sh             # メインスクリプト
+│       ├── doctor.sh                # 自己診断スクリプト
+│       └── .github/workflows/
+│           └── release.yml          # タグ連動リリース workflow
 └── scripts/
     ├── github-account-switch.sh     # GitHub マルチアカウント切替
+    ├── release-packages.sh          # 2 パッケージのリリース実行
     └── setup-devcontainer-bootstrap-release-repo.sh  # DCB 公開リポジトリ初期化
 ```
 
 ### Package Layout (English)
 
-- `dotfiles/`: shared AI rules and role definitions
-- `packages/devcontainer-bootstrap/`: one-command Dev Container generator
-- `packages/agent-swarm-framework/`: multi-agent execution framework
+- `dotfiles/`: source of truth for AI operating norms
+- `packages/devcontainer-bootstrap/`: one-command Dev Container generator and norm distributor
 - `scripts/`: operational helper scripts
 
 ---
@@ -57,66 +48,38 @@ ai-packages-dev/
 
 | パッケージ | 役割 | 配布先リポジトリ |
 |---|---|---|
-| dotfiles | AI 開発共通ルールの Source of Truth | ojos/ai-dotfiles |
-| devcontainer-bootstrap (DCB) | Dev Container 環境を 1 コマンドで生成 | ojos/devcontainer-bootstrap |
-| agent-swarm-framework (ASF) | マルチエージェント並列開発の実行基盤 | ojos/agent-swarm-framework |
+| dotfiles | AI 運用規範の正本。ランタイムを持たない | ojos/ai-dotfiles |
+| devcontainer-bootstrap (DCB) | Dev Container 環境を 1 コマンドで生成し、規範を配置する | ojos/devcontainer-bootstrap |
 
-**設計思想:**  
-1. 新プロジェクトに DCB で Dev Container 環境を構築する  
-2. ASF をインストールしてマルチエージェント運用を開始する  
-3. dotfiles を参照して AI エージェント間の共通ルールを適用する
+**設計思想:**
 
-各パッケージは独立して利用できるが、3 つを組み合わせることで AI コーディング導入の初期コストを最小化できる。
+1. 新プロジェクトに DCB で Dev Container 環境を構築する（`--with-dotfiles` で規範も同時に配置）
+2. 配置された規範に沿って、実行環境のネイティブ機能で運用する
+
+**DCB = 配布機構 / dotfiles = 正本**という分担です。DCB は規範の内容を定義せず、配置のみを担います。
+規範は実行基盤・状態面・ベンダーの選択を強制しません。
 
 ### Roles And Relationship (English)
 
-1. Build a Dev Container environment with DCB.
-2. Install ASF and start multi-agent workflow operations.
-3. Apply shared agent rules from dotfiles.
+1. Build a Dev Container environment with DCB (`--with-dotfiles` also places the shared norms).
+2. Operate with the runtime's native capabilities, following the placed norms.
 
-The three packages are intentionally independent but designed to work best together.
+DCB is the distribution mechanism; dotfiles is the source of truth.
 
 ---
 
-## dotfiles と ASF の境界判断
+## 経緯: Agent Swarm Framework の退役
 
-結論: `dotfiles` と `ASF` は分離維持を正とする。
+このリポジトリはかつて 3 パッケージ体制で、Agent Swarm Framework (ASF) がマルチエージェント実行基盤を担っていました。
+ASF は 2026-07 に退役しました。
 
-判断理由:
+理由は次の 2 点です。
 
-- `dotfiles` は AI 開発共通ルールの Source of Truth を担い、実行ランタイムを持たない。
-- `ASF` はマルチエージェント実行基盤（状態遷移・実行制御・監査）を担う。
-- 役割を分離することで、パッケージ中立性・再利用性・リリース独立性を維持できる。
+- ASF の実行基盤が担っていた機能（並列サブエージェント、worktree 分離、オーケストレーション、監視、GitHub 連携）が、各 AI ベンダーの標準機能に置き換わった
+- 稼働実績が停止していた（全期間で 91 イベント、コマンド履歴は 10 日分、最終稼働 2026-05-25）
 
-責務境界:
-
-- `dotfiles` に置くもの:
-    - 共通ポリシー、指示テンプレート、役割ガイド
-- `ASF` に置くもの:
-    - コマンド検証、状態管理、実行ワークフロー、運用スクリプト
-- 重複禁止:
-    - `dotfiles` 側へ実行制御ロジックを持ち込まない
-    - `ASF` 側へプロジェクト固有ポリシーを埋め込まない
-
-### Boundary Decision (English)
-
-Decision: keep `dotfiles` and `ASF` separated.
-
-Rationale:
-
-- `dotfiles` owns shared AI rules and guidance templates, without runtime execution responsibilities.
-- `ASF` owns runtime orchestration responsibilities such as command validation, state transitions, and workflow operations.
-- Separation preserves package neutrality, reuse, and independent release cadence.
-
-Boundary rules:
-
-- Keep in `dotfiles`:
-    - Shared policy, instruction templates, role guidance
-- Keep in `ASF`:
-    - Command validation, state handling, execution workflow, operational scripts
-- Do not duplicate:
-    - Runtime control logic in `dotfiles`
-    - Project-specific policy values in `ASF`
+保全価値のある規範（ロール契約・intake 規律・reason code）は dotfiles へ、dotfiles の配布経路は DCB へ移しました。
+退役の判断根拠と実施記録は [docs/ASF_RETIREMENT_PLAN.md](docs/ASF_RETIREMENT_PLAN.md) にあります。
 
 ---
 
@@ -145,7 +108,6 @@ Boundary rules:
 | パッケージ | 配布状態 |
 |---|---|
 | devcontainer-bootstrap | ojos/devcontainer-bootstrap で v0.1.15 まで公開済み |
-| agent-swarm-framework | ojos/agent-swarm-framework で v0.1.4 まで公開済み |
 | dotfiles | ojos/ai-dotfiles で v0.2.1 まで公開済み |
 
 リリース実行手順は各パッケージの `docs/` または `.github/workflows/` を参照する。
@@ -153,7 +115,6 @@ Boundary rules:
 ### リリース状況
 
 - `devcontainer-bootstrap`: published up to `v0.1.15` at `ojos/devcontainer-bootstrap`
-- `agent-swarm-framework`: published up to `v0.1.4` at `ojos/agent-swarm-framework`
 - `dotfiles`: published up to `v0.2.1` at `ojos/ai-dotfiles`
 <!-- RELEASE_STATUS:END -->
 

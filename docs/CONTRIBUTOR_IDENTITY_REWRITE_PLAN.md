@@ -10,21 +10,17 @@ Name: Ido
 Email: ido@ojos.jp
 ```
 
-## 対象リポジトリ（4 つ）
+## 対象リポジトリ（3 つ）
 
 1. **ojos/ai-packages-dev** (dev repo)
    - Status: 一部 commits が古い identity で記録
    - Scope: すべての history rewrite
 
-2. **ojos/agent-swarm-framework** (ASF package)
+2. **ojos/ai-dotfiles** (dotfiles package)
    - Status: 古い identity残存の可能性
    - Scope: すべての history rewrite
 
-3. **ojos/ai-dotfiles** (dotfiles package)
-   - Status: 古い identity残存の可能性
-   - Scope: すべての history rewrite
-
-4. **ojos/devcontainer-bootstrap** (devcontainer package)
+3. **ojos/devcontainer-bootstrap** (devcontainer package)
    - Status: 古い identity残存の可能性
    - Scope: すべての history rewrite
 
@@ -88,8 +84,7 @@ git log --all --format='%an <%ae>' | grep bascule-aizu
 推奨順序:
 1. ojos/ai-dotfiles
 2. ojos/devcontainer-bootstrap
-3. ojos/agent-swarm-framework
-4. ojos/ai-packages-dev (last)
+3. ojos/ai-packages-dev (last)
 
 ---
 
@@ -127,9 +122,8 @@ git log --all --format='%an <%ae>' | grep bascule-aizu
 |------|-----------|-----------|
 | ai-dotfiles | Low (small repo) | 5 min |
 | devcontainer-bootstrap | Low (small repo) | 5 min |
-| agent-swarm-framework | Medium (larger repo) | 15 min |
 | ai-packages-dev | High (dev repo, large) | 20 min |
-| **Total** | **Medium** | **~45 min** |
+| **Total** | **Medium** | **~30 min** |
 
 ---
 
@@ -146,7 +140,6 @@ After completion:
 
 ## Notes
 
-- 前セッションで ASF repo でテスト実行済み → 手法確認済み
 - Mailmap approach = non-destructive (original commits preserved, just shown differently)
 - GitHub 側では automatic rewrite は not needed（filter-repo は local + push）
 

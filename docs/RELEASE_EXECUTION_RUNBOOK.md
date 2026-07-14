@@ -7,7 +7,6 @@ This runbook defines the exact execution flow for final package releases after i
 
 Target repositories:
 - `ojos/ai-packages-dev` (coordination)
-- `ojos/agent-swarm-framework`
 - `ojos/ai-dotfiles`
 - `ojos/devcontainer-bootstrap`
 
@@ -29,15 +28,12 @@ Package-specific additional assets (e.g. `bootstrap.sh`, `doctor.sh` for DCB) ar
 ## Gate Conditions (Must Pass)
 
 Run releases only when all conditions are true:
-- Issue `#12` merged (conversation-gate core)
-- Issue `#13` merged (conversation-entry adapter)
 - Identity rewrite check reports old identity count = 0 for all target repos
 - Working tree clean in the release-driving workspace
 
 ## Tagging Convention
 
 Recommended convention:
-- `agent-swarm-framework/vX.Y.Z`
 - `ai-dotfiles/vX.Y.Z`
 - `devcontainer-bootstrap/vX.Y.Z`
 
@@ -47,7 +43,6 @@ Reason:
 ## Version Baseline
 
 Current observed baseline:
-- `agent-swarm-framework`: `0.1.1`
 - `ai-dotfiles`: unknown (no accessible `VERSION` file via API at prep time)
 - `devcontainer-bootstrap`: unknown (no accessible `VERSION` file via API at prep time)
 
@@ -89,28 +84,13 @@ Create/append release notes for each package with:
 # Example in target repo
 set -euo pipefail
 
-git tag agent-swarm-framework/v1.0.0
-git push origin agent-swarm-framework/v1.0.0
+git tag ai-dotfiles/v1.0.0
+git push origin ai-dotfiles/v1.0.0
 ```
 
 Repeat with package-specific prefixes.
 
-#### 3-A) agent-swarm-framework
-
-```bash
-set -euo pipefail
-WORK=/tmp/release-asf
-rm -rf "$WORK"
-git clone https://github.com/ojos/agent-swarm-framework.git "$WORK"
-cd "$WORK"
-
-TAG="agent-swarm-framework/v1.0.0"
-git fetch --tags
-git tag "$TAG"
-git push origin "$TAG"
-```
-
-#### 3-B) ai-dotfiles
+#### 3-A) ai-dotfiles
 
 ```bash
 set -euo pipefail
@@ -125,7 +105,7 @@ git tag "$TAG"
 git push origin "$TAG"
 ```
 
-#### 3-C) devcontainer-bootstrap
+#### 3-B) devcontainer-bootstrap
 
 ```bash
 set -euo pipefail
@@ -151,27 +131,13 @@ cd /workspaces/ojos-ai-packages-dev
 bash scripts/release-packages.sh \
   --owner ojos \
   --dcb-version v0.1.12 \
-  --asf-version v0.1.1 \
   --dotfiles-version v0.1.0 \
   --execute
 ```
 
 The script automatically generates and attaches `RELEASE-MANIFEST.json`, `SHA256SUMS`, and `PACKAGE_ARCHIVE.tar.gz` for every package. For existing releases it uploads assets with `--clobber` and edits the release metadata; for new releases it creates the release with assets in one step.
 
-#### 4-A) agent-swarm-framework (manual fallback)
-
-```bash
-set -euo pipefail
-gh release create agent-swarm-framework/v1.0.0 \
-  --repo ojos/agent-swarm-framework \
-  --title "agent-swarm-framework v1.0.0" \
-  --notes-file /workspaces/ojos-ai-packages-dev/docs/release-notes-agent-swarm-framework.md \
-  /tmp/asf-release/RELEASE-MANIFEST.json \
-  /tmp/asf-release/SHA256SUMS \
-  /tmp/asf-release/PACKAGE_ARCHIVE.tar.gz
-```
-
-#### 4-B) ai-dotfiles (manual fallback)
+#### 4-A) ai-dotfiles (manual fallback)
 
 ```bash
 set -euo pipefail
@@ -184,7 +150,7 @@ gh release create ai-dotfiles/v1.0.0 \
   /tmp/dotfiles-release/PACKAGE_ARCHIVE.tar.gz
 ```
 
-#### 4-C) devcontainer-bootstrap (manual fallback)
+#### 4-B) devcontainer-bootstrap (manual fallback)
 
 ```bash
 set -euo pipefail
@@ -212,9 +178,6 @@ Expected output — every line should read `[audit] OK`:
 
 ```
 [audit] checking required release assets: RELEASE-MANIFEST.json SHA256SUMS PACKAGE_ARCHIVE.tar.gz
-[audit] OK    ojos/agent-swarm-framework@vX.Y.Z  RELEASE-MANIFEST.json
-[audit] OK    ojos/agent-swarm-framework@vX.Y.Z  SHA256SUMS
-[audit] OK    ojos/agent-swarm-framework@vX.Y.Z  PACKAGE_ARCHIVE.tar.gz
 [audit] OK    ojos/ai-dotfiles@vX.Y.Z  RELEASE-MANIFEST.json
 [audit] OK    ojos/ai-dotfiles@vX.Y.Z  SHA256SUMS
 [audit] OK    ojos/ai-dotfiles@vX.Y.Z  PACKAGE_ARCHIVE.tar.gz
@@ -240,7 +203,7 @@ If release content is incorrect:
 ## Ownership
 
 - decision/coordination: consult-facilitator
-- implementation: line workers
+- implementation: implementer role
 - review/approval: reviewer role
 - release execution: maintainer with repo admin/tag permissions
 

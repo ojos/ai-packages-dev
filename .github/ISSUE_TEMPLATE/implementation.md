@@ -1,7 +1,7 @@
 ---
 name: 実装タスク
-about: ASF ワークフロー内で委譲レビューを伴う実装作業
-labels: implementation,asf-workflow
+about: レビューを伴う実装作業
+labels: implementation
 ---
 
 ## 要約（必須）
@@ -12,22 +12,17 @@ labels: implementation,asf-workflow
 
 <!-- 背景や補足説明を記載する。要約との矛盾がないこと。 -->
 
-## 実行ディスパッチ注意
-
-<!-- Issue を作成しただけでは line 実行は開始されない。スコープ確定後に scripts/worker/delegate-issue-implementation.sh で実行可能タスクを投入する。 -->
-
 ## 📋 実装スコープ
 
 <!-- スコープを明確にすると委譲判断が容易になる -->
 
 ### 作成/更新対象ファイル
-- [ ] 対象ファイルまたはワイルドカードを記載（例: `scripts/gate/**.sh`, `packages/agent-swarm-framework/...`）
+- [ ] 対象ファイルまたはワイルドカードを記載（例: `packages/devcontainer-bootstrap/*.sh`）
 
 ### 受け入れ条件
 - [ ] （条件を記載）
 - [ ] テストがすべて成功する
-- [ ] root/runtime-core の整合性を維持する（該当時）
-- [ ] マージ前にコードレビューを完了する
+- [ ] マージ前にレビューを完了する
 
 ### 必要なテスト範囲
 - [ ] Unit tests: 実施 / 非実施
@@ -43,12 +38,9 @@ labels: implementation,asf-workflow
 
 ## 🤝 委譲メタデータ
 
-### エージェント協調向け
-
 **委譲ステータス**:
-- [ ] 実装前に code review が必要（**line worker へ委譲**）
-- [ ] エージェントの自実装で対応可能（小規模/ドキュメント）
-- [ ] line worker 割り当て待ち
+- [ ] サブエージェントへ委譲する
+- [ ] 自実装で対応可能（小規模 / ドキュメント）
 
 **想定工数**:
 - [ ] small (< 1 hour)
@@ -59,30 +51,15 @@ labels: implementation,asf-workflow
 - [ ] NO（並行実行可）
 - [ ] YES（blocking: [issue番号を列挙]）
 
+**並列実行**
+- [ ] 独立して並列実行できる
+- [ ] 依存があり直列で進める必要がある（依存先を記載）
+
+<!-- 実装を伴うサブエージェントへ並列委譲する場合は、作業ツリーの分離を機構で保証すること。
+     dotfiles/ai/common/role-contracts/implementer.md の「作業ツリーの分離」を参照。 -->
+
 ---
 
 ## 📝 実装メモ
 
 <!-- 任意: 実装担当向けの補足情報を記載 -->
-
----
-
-## Runtime 委譲（Auto-Enqueue 任意有効）
-
-安全条件を満たす場合のみ auto-enqueue を有効化する。
-
-- [ ] Add labels: `line-task` and `auto-enqueue`
-- [ ] Dependencies are closed
-- [ ] 要約が記載されている
-- [ ] 受け入れ条件が充足している
-
-auto-enqueue 必須項目:
-
-task_command: <single-line shell command>
-line: auto-001
-
-例:
-
-task_command: bash packages/agent-swarm-framework/tests/conversation-entry.sh >/dev/null
-line: auto-001
-
