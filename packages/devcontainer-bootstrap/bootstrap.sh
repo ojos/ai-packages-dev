@@ -885,18 +885,22 @@ should_install_dotfiles() {
 }
 
 # Resolve the directory that contains ai/common, from a path, URL, or sibling checkout.
+# $2 is a caller-owned scratch dir, used only for the URL case. It must be created and
+# cleaned up by the caller: this function runs inside a command substitution, so a trap
+# registered here would fire in that subshell and delete the extracted files immediately.
 detect_dotfiles_common_dir() {
   local source_hint="$1"
-  local tmp_root archive_file found candidate
+  local tmp_root="${2:-}"
+  local archive_file found candidate
 
   if [[ -n "$source_hint" ]]; then
     if [[ "$source_hint" =~ ^https?:// ]]; then
       require_cmd curl
       require_cmd tar
-      tmp_root="$(mktemp -d)"
-      # The resolved path lives inside tmp_root, so it can only be removed on exit.
-      DOTFILES_TMP_ROOT="$tmp_root"
-      trap 'rm -rf "$DOTFILES_TMP_ROOT"' EXIT
+      [[ -n "$tmp_root" ]] || {
+        echo "error: internal: scratch dir not provided for URL source" >&2
+        exit 1
+      }
       archive_file="$tmp_root/dotfiles.tar.gz"
       curl -fsSL "$source_hint" -o "$archive_file"
       tar -xzf "$archive_file" -C "$tmp_root"
@@ -1029,8 +1033,15 @@ EOF
 }
 
 # Resolve once, before any file is written, so a bad source fails without side effects.
+# Called from the main shell (never inside a command substitution) so that the cleanup
+# trap belongs to the process that still needs the extracted files.
 resolve_dotfiles_source_or_die() {
-  DOTFILES_COMMON_DIR="$(detect_dotfiles_common_dir "$DOTFILES_FROM")"
+  if [[ "$DOTFILES_FROM" =~ ^https?:// ]]; then
+    DOTFILES_TMP_ROOT="$(mktemp -d)"
+    trap 'rm -rf "$DOTFILES_TMP_ROOT"' EXIT
+  fi
+
+  DOTFILES_COMMON_DIR="$(detect_dotfiles_common_dir "$DOTFILES_FROM" "$DOTFILES_TMP_ROOT")"
   if [[ -z "$DOTFILES_COMMON_DIR" ]]; then
     echo "error: dotfiles source not found. specify --dotfiles-from <path|url>." >&2
     exit 1
@@ -1165,6 +1176,12 @@ install_dotfiles_rules() {
     count=$((count + 1))
   done < <(find "$common_dir" -type f -name '*.md' | sort)
 
+  # Placing zero rules while reporting success would leave entry files pointing at
+  # files that do not exist. Treat it as a failure rather than a quiet no-op.
+  if [[ "$count" -eq 0 ]]; then
+    echo "error: no rule files found under $common_dir" >&2
+    exit 1
+  fi
   echo "[bootstrap] shared AI rules: $count file(s)"
 
   tmp="$(mktemp)"
