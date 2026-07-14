@@ -34,6 +34,25 @@
 - 完了の記録には、クローズ理由と検証結果を含めます（下記「Issue クローズ方針」）
 - 単一ファイルへの状況集約は行いません。並列実行時のコンフリクトを避けるためです
 
+## レビューの起動方法
+
+共通規範「レビューワークフロー」（`dotfiles/ai/common/review-workflow.md`）のクロスモデル二段ゲートを、このリポジトリで具体化します。
+
+push / PR 作成の前に、次の 2 段を通します。
+
+1. **主レビュー**: Claude Code の `/code-review`（セキュリティに関わる差分は `/security-review` も）でステージ済み差分をレビューし、その場で修正します。
+2. **第二意見**: 別ベンダーのモデルによるクロスチェックを実行します。
+
+```bash
+bash scripts/gemini-review.sh              # ステージ済み差分
+bash scripts/gemini-review.sh --range main..HEAD
+```
+
+- `GEMINI_API_KEY` が必要です（`.env` から `scripts/load-env.sh` が読み込みます）。
+- `gemini` CLI は `scripts/install-ai-tools.sh` が導入します。
+- 終了コード 0（`LGTM`）で通過、1 で重大な指摘ありです。
+- 両段とも対象は致命バグ・脆弱性・型エラー・エッジケースの見落としに限ります。修正は 1 イテレーションで完結させます。
+
 ### ドキュメント分離運用
 
 - `packages/**/README.md` を正本として扱います。

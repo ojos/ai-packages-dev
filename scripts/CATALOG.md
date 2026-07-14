@@ -11,6 +11,7 @@
 
 | ファイル | 概要 |
 |---|---|
+| `scripts/gemini-review.sh` | 別ベンダーのモデルによる第二意見（クロスモデル二段ゲートの2段目）。 |
 | `scripts/github-account-switch.sh` | GitHub アカウント/プロファイル切替。 |
 | `scripts/install-ai-tools.sh` | AI CLI ツール導入。 |
 | `scripts/load-env.sh` | 環境変数ロード。 |
