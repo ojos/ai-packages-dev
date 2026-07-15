@@ -22,9 +22,24 @@ done
 
 TEST_TMP_ROOT="$(mktemp -d)"
 export TEST_TMP_ROOT
+
+# テストが停止処理へ到達せず終わった場合（アサーション失敗による早期 return、
+# 中断など）に備え、ランナー側でも配下のプロセスを確実に始末する。
+# 供給元は python でも node でもあり得るため、特定のコマンド名では絞らない。
 cleanup() {
-  # 取り残した HTTP サーバがあれば止める
-  pkill -P $$ -f 'http.server' 2>/dev/null || true
+  local kids
+  kids="$(pgrep -P $$ 2>/dev/null || true)"
+  if [[ -n "$kids" ]]; then
+    # テストファイル（bash）は既に終了しているため、ここで残るのは
+    # 孫として取り残されたサーバのみ。
+    echo "$kids" | while read -r p; do kill "$p" 2>/dev/null || true; done
+  fi
+  # テストが起動した HTTP サーバのうち、親を失ったものを掃除する。
+  # TEST_TMP_ROOT 配下を配信しているものだけを対象にし、無関係なプロセスは触らない。
+  for p in $(pgrep -f "$TEST_TMP_ROOT" 2>/dev/null || true); do
+    [[ "$p" == "$$" ]] && continue
+    kill "$p" 2>/dev/null || true
+  done
   rm -rf "$TEST_TMP_ROOT"
 }
 trap cleanup EXIT

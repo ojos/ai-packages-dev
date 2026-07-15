@@ -176,6 +176,11 @@ stop_http_server() {
   fi
 }
 
+# アサーション失敗や中断でテストが stop_http_server へ到達しない場合に備え、
+# 各テストファイルの終了時にも必ず停止させる。掴んだままのポートが残ると、
+# 次の実行やこの環境自体に影響する。
+trap stop_http_server EXIT
+
 # 規範ファイルの数を数える。
 count_rules() {
   find "$1" -type f -name '*.md' 2>/dev/null | wc -l | tr -d ' '
