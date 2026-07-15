@@ -77,6 +77,23 @@ profile_to_upper() {
   printf '%s' "$1" | tr '[:lower:]' '[:upper:]'
 }
 
+# git push の認証を、いま選択した gh のアカウントへ向ける。
+#
+# gh auth login --with-token は非対話のため git を設定しない。これを補わないと、
+# gh と git identity だけが切り替わり、push の認証は既存の credential.helper
+# （エディタが仕込むものなど）が返す別アカウントのまま残る。切替えたつもりで
+# 別人として push しようとして 403 になる。
+#
+# git はヘルパーを定義順に試し、最初に応答したものを採用する。上位スコープに
+# ヘルパーがあると必ずそちらが勝つため、空文字を先に入れて一覧をリセットする。
+setup_git_credentials() {
+  local git_scope="$1"
+  command -v gh >/dev/null 2>&1 || return 0
+  git config --"$git_scope" --unset-all credential.helper 2>/dev/null || true
+  git config --"$git_scope" --add credential.helper ''
+  git config --"$git_scope" --add credential.helper '!gh auth git-credential'
+}
+
 # GITHUB_TOKEN_* が設定済みのプロファイルを列挙
 cmd_list() {
   local found=0
@@ -184,12 +201,15 @@ cmd_use() {
   git config --"$git_scope" github.account "$login"
   git config --"$git_scope" github.owner "$resolved_owner"
 
+  setup_git_credentials "$git_scope"
+
   echo "[github-account] active profile: $profile"
   echo "[github-account] active login:   $login"
   echo "[github-account] owner:          $resolved_owner"
   echo "[github-account] git scope:      $git_scope"
   echo "[github-account] git user.name:  $(git config --"$git_scope" user.name 2>/dev/null || echo '<unchanged>')"
   echo "[github-account] git user.email: $(git config --"$git_scope" user.email 2>/dev/null || echo '<unchanged>')"
+  echo "[github-account] git push auth:  gh ($login)"
 }
 
 list_profile_suffixes() {
@@ -264,10 +284,13 @@ apply_direct_env_identity() {
   git config --"$git_scope" github.account "$login"
   git config --"$git_scope" github.owner "$owner"
 
+  setup_git_credentials "$git_scope"
+
   echo "[github-account] auto mode: direct env token selected"
   echo "[github-account] active login:   $login"
   echo "[github-account] owner:          $owner"
   echo "[github-account] git scope:      $git_scope"
+  echo "[github-account] git push auth:  gh ($login)"
   return 0
 }
 
