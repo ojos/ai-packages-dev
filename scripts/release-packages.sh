@@ -69,6 +69,23 @@ validate_dcb_docs() {
   }
 }
 
+# 公開リポジトリには tests/ も規範ソースも渡らないため、リリース前のこの位置が
+# 機能テストを通せる唯一のゲートになる。v0.2.0 は構文チェックのみで公開され、
+# URL 経路が壊れていた。
+run_dcb_tests() {
+  local runner="packages/devcontainer-bootstrap/tests/run-tests.sh"
+  [[ -x "$runner" || -f "$runner" ]] || {
+    echo "error: DCB tests not found: $runner" >&2
+    exit 1
+  }
+  echo "[preflight] running DCB tests"
+  bash "$runner" >/dev/null || {
+    echo "error: DCB tests failed. run: bash $runner" >&2
+    exit 1
+  }
+  echo "[ok] DCB tests passed"
+}
+
 validate_markdown_links_in_tree() {
   local base_dir="$1"
   python3 - "$base_dir" <<'PY'
@@ -347,6 +364,7 @@ extract_semver "$DOTFILES_TAG" >/dev/null
 validate_dcb_docs "$DCB_TAG"
 validate_markdown_links_in_tree "$(pwd)/dotfiles"
 validate_markdown_links_in_tree "$(pwd)/packages/devcontainer-bootstrap"
+run_dcb_tests
 
 echo "[ok] preflight checks passed"
 

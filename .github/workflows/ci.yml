@@ -1,0 +1,96 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  shell:
+    name: Shell syntax and lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Syntax check
+        run: |
+          fail=0
+          while IFS= read -r f; do
+            bash -n "$f" || { echo "syntax error: $f"; fail=1; }
+          done < <(git ls-files '*.sh')
+          exit $fail
+
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+
+      - name: Shellcheck
+        run: shellcheck -x packages/devcontainer-bootstrap/bootstrap.sh packages/devcontainer-bootstrap/doctor.sh
+
+  dcb-tests:
+    name: devcontainer-bootstrap tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run tests
+        run: bash packages/devcontainer-bootstrap/tests/run-tests.sh
+
+  consistency:
+    name: Docs and catalog consistency
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: CATALOG lists every tracked file
+        run: |
+          fail=0
+          for f in $(git ls-files 'docs/*.md'); do
+            grep -q "\`$f\`" docs/CATALOG.md || { echo "not listed in docs/CATALOG.md: $f"; fail=1; }
+          done
+          for f in $(git ls-files 'scripts/*.sh'); do
+            grep -q "\`$f\`" scripts/CATALOG.md || { echo "not listed in scripts/CATALOG.md: $f"; fail=1; }
+          done
+          exit $fail
+
+      - name: CATALOG has no dangling entries
+        run: |
+          fail=0
+          for f in $(grep -o '`docs/[^`]*`' docs/CATALOG.md | tr -d '`'); do
+            [ -e "$f" ] || { echo "listed but missing: $f"; fail=1; }
+          done
+          for f in $(grep -o '`scripts/[^`]*`' scripts/CATALOG.md | tr -d '`'); do
+            [ -e "$f" ] || { echo "listed but missing: $f"; fail=1; }
+          done
+          exit $fail
+
+      - name: Relative markdown links resolve
+        run: |
+          fail=0
+          for f in $(git ls-files '*.md'); do
+            d=$(dirname "$f")
+            for l in $(grep -oE '\]\([^)#:]+\.md[)#]' "$f" | sed 's/^](//; s/[)#]$//'); do
+              case "$l" in http*) continue ;; esac
+              [ -f "$d/$l" ] || [ -f "$l" ] || { echo "dangling link: $f -> $l"; fail=1; }
+            done
+          done
+          exit $fail
+
+  neutrality:
+    name: Package neutrality
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # プロジェクト固有の値がパッケージ層と規範層へ混入していないことを検証する。
+      # .github/PROJECT_DEFINITION.md が定めるクイック検証の自動化。
+      - name: No project-specific names in packages or dotfiles
+        run: |
+          if grep -rniE 'bascule|ojos' packages/ dotfiles/ --include='*.sh' --include='*.md' --include='*.json' \
+            | grep -v 'ojos/devcontainer-bootstrap' \
+            | grep -v 'ojos/ai-dotfiles'; then
+            echo "project-specific names must not leak into packages/ or dotfiles/"
+            exit 1
+          fi
