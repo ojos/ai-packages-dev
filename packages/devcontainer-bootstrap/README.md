@@ -140,7 +140,7 @@ bash bootstrap.sh --project-name myapp --languages node,go --mode standard \
 
 ```bash
 bash scripts/github-account-switch.sh list
-bash scripts/github-account-switch.sh use ojos
+bash scripts/github-account-switch.sh use <profile>
 ```
 
 ## Feature フラグ
