@@ -4,23 +4,28 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 usage:
-  bash scripts/release-packages.sh \
-    --owner <github-owner> \
-    --dcb-version <vX.Y.Z> \
-    --dotfiles-version <vX.Y.Z> \
-    --execute
+  # release one package
+  bash scripts/release-packages.sh --owner <github-owner> --dcb-version <vX.Y.Z> --execute
+  bash scripts/release-packages.sh --owner <github-owner> --dotfiles-version <vX.Y.Z> --execute
+
+  # release both in one run
+  bash scripts/release-packages.sh --owner <github-owner> \
+    --dcb-version <vX.Y.Z> --dotfiles-version <vX.Y.Z> --execute
 
 options:
   --owner <owner>               GitHub owner (required)
-  --dcb-version <vX.Y.Z>        DCB release tag (required)
-  --dotfiles-version <vX.Y.Z>   dotfiles release tag (required)
+  --dcb-version <vX.Y.Z>        DCB release tag
+  --dotfiles-version <vX.Y.Z>   dotfiles release tag
   --execute                     Actually execute release operations
   --audit                       Audit release assets across all repos and exit
   -h, --help                    Show help
 
 notes:
+  - Specify at least one of --dcb-version / --dotfiles-version.
+    Only the specified packages are touched; the others are left untouched.
+  - Published versions are immutable. Re-releasing an existing version fails
+    during preflight, before any side effect.
   - Without --execute, this script only validates inputs and exits.
-  - This script enforces release-version consistency checks before publishing.
   - Use --audit to check asset completeness across all repos without releasing.
 EOF
 }
@@ -67,6 +72,30 @@ validate_dcb_docs() {
     echo "error: DCB README.md TAG does not match $dcb_tag" >&2
     exit 1
   }
+}
+
+# 公開済みのリリースは不変とする。
+#
+# 同じタグで再実行すると、tag_and_release が gh release upload --clobber で資産を
+# 差し替える。タグは動かないのに中身だけが変わるため、利用者がタグを固定しても
+# 内容の同一性が保証されない。実際に dotfiles v0.3.0 の資産が、DCB の別リリースに
+# 巻き込まれて 4 分間で 2 回書き換わった。
+#
+# PACKAGE_ARCHIVE.tar.gz は tar がタイムスタンプを埋めるため同じ内容でもハッシュが
+# 変わる。したがって「内容が同じなら上書きしてよい」という冪等判定は成立せず、
+# 上書きは常に別物への差し替えになる。
+#
+# この検査は preflight で行う。init_and_push_release_repo が公開 main を全置換した
+# 後に気づいても手遅れなため。
+require_version_unpublished() {
+  local repo="$1" tag="$2"
+  if gh release view "$tag" --repo "$repo" >/dev/null 2>&1; then
+    echo "error: $repo already has a release for $tag" >&2
+    echo "       公開済みのリリースは不変です。版を上げてください。" >&2
+    echo "       やり直す場合は、先に公開側の release を削除してください:" >&2
+    echo "         gh release delete $tag --repo $repo --cleanup-tag" >&2
+    exit 1
+  fi
 }
 
 # 公開リポジトリには tests/ も規範ソースも渡らないため、リリース前のこの位置が
@@ -281,17 +310,18 @@ tag_and_release() {
   fi
   popd >/dev/null
 
+  # 公開済みリリースは不変。preflight の require_version_unpublished が既に検査して
+  # いるが、ここでも守る。preflight から到達するまでの間に別経路で作られた場合や、
+  # 将来この関数が別の場所から呼ばれた場合に、黙って上書きしないようにする。
   if gh release view "$tag" --repo "$repo" >/dev/null 2>&1; then
-    if [[ ${#assets[@]} -gt 0 ]]; then
-      gh release upload "$tag" --repo "$repo" --clobber "${assets[@]}"
-    fi
-    gh release edit "$tag" --repo "$repo" --title "$tag" --notes "$notes"
+    echo "error: $repo already has a release for $tag; refusing to overwrite" >&2
+    exit 1
+  fi
+
+  if [[ ${#assets[@]} -gt 0 ]]; then
+    gh release create "$tag" --repo "$repo" --title "$tag" --notes "$notes" "${assets[@]}"
   else
-    if [[ ${#assets[@]} -gt 0 ]]; then
-      gh release create "$tag" --repo "$repo" --title "$tag" --notes "$notes" "${assets[@]}"
-    else
-      gh release create "$tag" --repo "$repo" --title "$tag" --notes "$notes"
-    fi
+    gh release create "$tag" --repo "$repo" --title "$tag" --notes "$notes"
   fi
 }
 
@@ -361,8 +391,16 @@ if [[ "$AUDIT" == "true" ]]; then
   exit $?
 fi
 
-[[ -n "$OWNER" && -n "$DCB_TAG" && -n "$DOTFILES_TAG" ]] || {
-  echo "error: required options are missing" >&2
+[[ -n "$OWNER" ]] || {
+  echo "error: --owner is required" >&2
+  usage
+  exit 1
+}
+
+# パッケージは独立してリリースできる。片方の修正が他方の公開物へ波及しないよう、
+# 指定されたパッケージだけを対象にする。
+[[ -n "$DCB_TAG" || -n "$DOTFILES_TAG" ]] || {
+  echo "error: specify at least one of --dcb-version or --dotfiles-version" >&2
   usage
   exit 1
 }
@@ -373,12 +411,25 @@ require_cmd bash
 require_cmd tar
 require_cmd sha256sum
 require_clean_worktree
-extract_semver "$DCB_TAG" >/dev/null
-extract_semver "$DOTFILES_TAG" >/dev/null
-validate_dcb_docs "$DCB_TAG"
-validate_markdown_links_in_tree "$(pwd)/dotfiles"
-validate_markdown_links_in_tree "$(pwd)/packages/devcontainer-bootstrap"
-run_dcb_tests
+
+# 検査は安い順に並べる。版の重複は問い合わせ 1 回で分かるため、テスト実行のような
+# 重い検査より先に判定する。手戻りが早いだけでなく、テストから release-packages.sh を
+# 呼んだときに run_dcb_tests が再びテスト一式を起動する再帰も避けられる。
+if [[ -n "$DCB_TAG" ]]; then
+  extract_semver "$DCB_TAG" >/dev/null
+  require_version_unpublished "$OWNER/devcontainer-bootstrap" "$DCB_TAG"
+  validate_dcb_docs "$DCB_TAG"
+  validate_markdown_links_in_tree "$(pwd)/packages/devcontainer-bootstrap"
+  # DCB は規範パッケージの templates/ を配布するため、規範側の健全性にも依存する。
+  validate_markdown_links_in_tree "$(pwd)/dotfiles"
+  run_dcb_tests
+fi
+
+if [[ -n "$DOTFILES_TAG" ]]; then
+  extract_semver "$DOTFILES_TAG" >/dev/null
+  require_version_unpublished "$OWNER/ai-dotfiles" "$DOTFILES_TAG"
+  validate_markdown_links_in_tree "$(pwd)/dotfiles"
+fi
 
 echo "[ok] preflight checks passed"
 
@@ -391,31 +442,34 @@ ROOT_DIR="$(pwd)"
 DCB_DIR="/tmp/dcb-release"
 DOTFILES_DIR="/tmp/dotfiles-release"
 
-DCB_VER="$(extract_semver "$DCB_TAG")"
-DOTFILES_VER="$(extract_semver "$DOTFILES_TAG")"
+if [[ -n "$DCB_TAG" ]]; then
+  DCB_VER="$(extract_semver "$DCB_TAG")"
+  prepare_dcb_release_repo "$DCB_DIR"
+  # ユーザーは bootstrap.sh と SHA256SUMS だけを取得する（README の手順）。
+  SUMS_TARGETS=(bootstrap.sh doctor.sh)
+  generate_standard_assets "$DCB_DIR" "devcontainer-bootstrap" "$DCB_VER"
+  init_and_push_release_repo "$DCB_DIR" "$OWNER/devcontainer-bootstrap" public
+  tag_and_release "$DCB_DIR" "$OWNER/devcontainer-bootstrap" "$DCB_TAG" "Release $DCB_TAG" \
+    "$DCB_DIR/bootstrap.sh" \
+    "$DCB_DIR/doctor.sh" \
+    "$DCB_DIR/RELEASE-MANIFEST.json" \
+    "$DCB_DIR/SHA256SUMS" \
+    "$DCB_DIR/PACKAGE_ARCHIVE.tar.gz"
+fi
 
-prepare_dcb_release_repo "$DCB_DIR"
-# ユーザーは bootstrap.sh と SHA256SUMS だけを取得する（README の手順）。
-SUMS_TARGETS=(bootstrap.sh doctor.sh)
-generate_standard_assets "$DCB_DIR" "devcontainer-bootstrap" "$DCB_VER"
-init_and_push_release_repo "$DCB_DIR" "$OWNER/devcontainer-bootstrap" public
-tag_and_release "$DCB_DIR" "$OWNER/devcontainer-bootstrap" "$DCB_TAG" "Release $DCB_TAG" \
-  "$DCB_DIR/bootstrap.sh" \
-  "$DCB_DIR/doctor.sh" \
-  "$DCB_DIR/RELEASE-MANIFEST.json" \
-  "$DCB_DIR/SHA256SUMS" \
-  "$DCB_DIR/PACKAGE_ARCHIVE.tar.gz"
-
-prepare_dotfiles_release_repo "$DOTFILES_DIR"
-# dotfiles はタグ固定で取り込む運用のため、資産のダウンロードを前提としない。
-# 現状は互換のため README を対象にしておく。資産そのものの要否は未決（RELEASE_PROCESS_REVIEW）。
-SUMS_TARGETS=(README.md)
-generate_standard_assets "$DOTFILES_DIR" "ai-dotfiles" "$DOTFILES_VER"
-init_and_push_release_repo "$DOTFILES_DIR" "$OWNER/ai-dotfiles" public
-tag_and_release "$DOTFILES_DIR" "$OWNER/ai-dotfiles" "$DOTFILES_TAG" "Release $DOTFILES_TAG" \
-  "$DOTFILES_DIR/RELEASE-MANIFEST.json" \
-  "$DOTFILES_DIR/SHA256SUMS" \
-  "$DOTFILES_DIR/PACKAGE_ARCHIVE.tar.gz"
+if [[ -n "$DOTFILES_TAG" ]]; then
+  DOTFILES_VER="$(extract_semver "$DOTFILES_TAG")"
+  prepare_dotfiles_release_repo "$DOTFILES_DIR"
+  # dotfiles はタグ固定で取り込む運用のため、資産のダウンロードを前提としない。
+  # 現状は互換のため README を対象にしておく。資産そのものの要否は未決（RELEASE_PROCESS_REVIEW）。
+  SUMS_TARGETS=(README.md)
+  generate_standard_assets "$DOTFILES_DIR" "ai-dotfiles" "$DOTFILES_VER"
+  init_and_push_release_repo "$DOTFILES_DIR" "$OWNER/ai-dotfiles" public
+  tag_and_release "$DOTFILES_DIR" "$OWNER/ai-dotfiles" "$DOTFILES_TAG" "Release $DOTFILES_TAG" \
+    "$DOTFILES_DIR/RELEASE-MANIFEST.json" \
+    "$DOTFILES_DIR/SHA256SUMS" \
+    "$DOTFILES_DIR/PACKAGE_ARCHIVE.tar.gz"
+fi
 
 cd "$ROOT_DIR"
 
