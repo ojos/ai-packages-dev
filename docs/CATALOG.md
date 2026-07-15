@@ -14,6 +14,7 @@
 |---|---|
 | `docs/ASF_RETIREMENT_RECORD.md` | ASF を廃止し dotfiles / DCB へ統合した退役の判断根拠と実施記録。 |
 | `docs/RELEASE_EXECUTION_RUNBOOK.md` | リリース実行時の運用手順書。 |
+| `docs/RELEASE_FIX_PLAN.md` | パッケージ単位リリースと不変性回復の作業計画。 |
 | `docs/RELEASE_PROCESS_REVIEW.md` | リリース作成の構造的な問題の整理と未決論点（進行中）。 |
 | `docs/release-notes-ai-dotfiles.md` | dotfiles リリースノート。 |
 | `docs/release-notes-devcontainer-bootstrap.md` | DCB リリースノート。 |

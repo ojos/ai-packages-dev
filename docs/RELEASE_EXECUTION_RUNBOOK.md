@@ -122,20 +122,41 @@ git push origin "$TAG"
 
 ### 4) GitHub Release Publication
 
-Use `scripts/release-packages.sh` to publish all packages in a single idempotent operation:
+Use `scripts/release-packages.sh` to publish. Packages are released independently: only the
+packages you name are touched.
 
 ```bash
 set -euo pipefail
 cd /workspaces/ojos-ai-packages-dev
 
+# release one package
+bash scripts/release-packages.sh --owner ojos --dcb-version v0.3.0 --execute
+
+# or release both in one run
 bash scripts/release-packages.sh \
   --owner ojos \
-  --dcb-version v0.1.12 \
-  --dotfiles-version v0.1.0 \
+  --dcb-version v0.3.0 \
+  --dotfiles-version v0.4.0 \
   --execute
 ```
 
-The script automatically generates and attaches `RELEASE-MANIFEST.json`, `SHA256SUMS`, and `PACKAGE_ARCHIVE.tar.gz` for every package. For existing releases it uploads assets with `--clobber` and edits the release metadata; for new releases it creates the release with assets in one step.
+Specify at least one of `--dcb-version` / `--dotfiles-version`. Naming only one leaves the
+other package's published artifacts untouched.
+
+**Published versions are immutable.** Re-releasing an existing version fails during preflight,
+before any side effect. This is deliberate: re-running previously replaced the assets of an
+already-published release while the tag stayed put, so a pinned tag no longer guaranteed the
+same content.
+
+To redo a release, either bump the version or remove the published release first:
+
+```bash
+gh release delete <tag> --repo <owner>/<repo> --cleanup-tag
+```
+
+The script generates and attaches `RELEASE-MANIFEST.json`, `SHA256SUMS`, and
+`PACKAGE_ARCHIVE.tar.gz`. `SHA256SUMS` covers only the files the README tells users to
+download, so the documented verification step succeeds.
 
 #### 4-A) ai-dotfiles (manual fallback)
 

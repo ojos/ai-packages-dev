@@ -26,8 +26,8 @@ assert_file_exists "$RELEASE_SH"
 # DCB のリリース直前に宣言されているものを取る。冒頭の空初期化や dotfiles 用の
 # 宣言と取り違えないよう、DCB の資産生成呼び出しの直前にある宣言を対象にする。
 export DCB_SUMS_TARGETS
-DCB_SUMS_TARGETS="$(grep -B2 'generate_standard_assets "\$DCB_DIR"' "$RELEASE_SH" \
-  | grep -oE '^SUMS_TARGETS=\([^)]*\)' | head -1 | sed 's/^SUMS_TARGETS=(//; s/)$//')"
+DCB_SUMS_TARGETS="$(grep -B3 'generate_standard_assets "\$DCB_DIR"' "$RELEASE_SH" \
+  | grep -oE 'SUMS_TARGETS=\([^)]*\)' | head -1 | sed 's/^SUMS_TARGETS=(//; s/)$//')"
 
 it "SHA256SUMS の対象がスクリプトで明示されている"
 if [[ -n "$DCB_SUMS_TARGETS" ]]; then
@@ -124,6 +124,113 @@ if [[ -f "$PKG_DIR/.github/workflows/release.yml" ]]; then
   fail "パッケージに release.yml が残っている（公開側へ渡ると二重所有になる）"
 else
   pass
+fi
+
+
+# ── パッケージ単位のリリース ──────────────────────────────────────────────────
+# 片方のパッケージを直すたびに他方の公開物が巻き込まれると、タグを固定しても
+# 内容の同一性が保証されない。実際に dotfiles v0.3.0 の資産が DCB のリリースに
+# 巻き込まれて上書きされた。
+
+it "パッケージ単位のリリースが可能（両方必須ではない）"
+if grep -q 'specify at least one of --dcb-version or --dotfiles-version' "$RELEASE_SH"; then
+  pass
+else
+  fail "両方のバージョン指定が必須のままになっている"
+fi
+
+it "どちらも指定しないと失敗する"
+out="$(bash "$RELEASE_SH" --owner test 2>&1)"
+if [[ $? -ne 0 ]]; then
+  assert_contains "$out" "at least one" "エラー出力"
+else
+  fail "指定なしでも通ってしまった"
+fi
+
+it "--owner なしは失敗する"
+out="$(bash "$RELEASE_SH" --dcb-version v9.9.9 2>&1)"
+if [[ $? -ne 0 ]]; then
+  assert_contains "$out" "owner is required" "エラー出力"
+else
+  fail "--owner なしでも通ってしまった"
+fi
+
+it "対象パッケージだけを処理する構造になっている"
+# DCB / dotfiles それぞれの実行ブロックが条件分岐の中にあること
+if grep -q 'if \[\[ -n "\$DCB_TAG" \]\]; then' "$RELEASE_SH" \
+   && grep -q 'if \[\[ -n "\$DOTFILES_TAG" \]\]; then' "$RELEASE_SH"; then
+  pass
+else
+  fail "実行ブロックがパッケージごとに分岐していない"
+fi
+
+# ── 公開済みリリースの不変性 ──────────────────────────────────────────────────
+
+it "公開済みバージョンの検査が存在する"
+if grep -q 'require_version_unpublished' "$RELEASE_SH"; then pass; else fail "検査がない"; fi
+
+it "検査が副作用の前（preflight）にある"
+# init_and_push_release_repo は公開 main を全置換する。それより後に気づいても手遅れ。
+guard="$(grep -n 'require_version_unpublished "\$OWNER' "$RELEASE_SH" | head -1 | cut -d: -f1)"
+push="$(grep -n '^  init_and_push_release_repo' "$RELEASE_SH" | head -1 | cut -d: -f1)"
+if [[ -n "$guard" && -n "$push" && "$guard" -lt "$push" ]]; then
+  pass
+else
+  fail "検査（$guard 行）が公開 main の置換（$push 行）より後、または欠落"
+fi
+
+it "既存リリースを上書きしない"
+# tag_and_release から --clobber 経路が消えていること。コメント行は対象外。
+if grep -vE '^\s*#' "$RELEASE_SH" | grep -q 'gh release upload .*--clobber'; then
+  fail "--clobber による資産上書きが残っている"
+else
+  pass
+fi
+
+it "公開済みなら副作用ゼロで止まる"
+# 実トークンにも公開リポジトリにも触れずに検証する。
+# - gh: release view へ「存在する」と応答し、他のコマンドが呼ばれたら記録する
+#       （呼ばれること自体が副作用の兆候）
+# - git: status を clean と応答する。作業ツリーの汚れでテストの結果が変わらないようにする
+stub="$(new_workdir)/bin"
+mkdir -p "$stub"
+cat > "$stub/gh" <<'STUB'
+#!/usr/bin/env bash
+if [[ "${1:-}" == "release" && "${2:-}" == "view" ]]; then exit 0; fi
+echo "STUB: unexpected gh call: $*" >&2
+exit 0
+STUB
+real_git="$(command -v git)"
+cat > "$stub/git" <<STUB
+#!/usr/bin/env bash
+if [[ "\${1:-}" == "status" ]]; then exit 0; fi
+exec "$real_git" "\$@"
+STUB
+chmod +x "$stub/gh" "$stub/git"
+
+# 版の重複は preflight の先頭で判定されるため、README の版と一致しない任意の版でよい。
+out="$(cd "$REPO_ROOT" && PATH="$stub:$PATH" timeout 60 bash "$RELEASE_SH" \
+        --owner test --dcb-version v9.9.9 --execute 2>&1)"
+code=$?
+if [[ $code -eq 0 ]]; then
+  fail "公開済みでも成功してしまった"
+elif printf '%s' "$out" | grep -q 'unexpected gh call'; then
+  fail "止まる前に gh の別コマンドが呼ばれた（副作用の恐れ）:
+$(printf '%s' "$out" | grep 'unexpected' | head -3)"
+else
+  assert_contains "$out" "already has a release" "エラー出力"
+fi
+
+it "版の重複はテスト実行より先に判定される"
+# release-packages.sh の preflight から run_dcb_tests がテスト一式を起動するため、
+# テストがこのスクリプトを呼ぶと再帰する。版の重複を先に判定することで、
+# 再帰へ到達する前に止まる。順序が崩れると無限再帰でハングする。
+guard="$(grep -n 'require_version_unpublished "\$OWNER/devcontainer-bootstrap"' "$RELEASE_SH" | head -1 | cut -d: -f1)"
+tests_line="$(grep -n '^  run_dcb_tests$' "$RELEASE_SH" | head -1 | cut -d: -f1)"
+if [[ -n "$guard" && -n "$tests_line" && "$guard" -lt "$tests_line" ]]; then
+  pass
+else
+  fail "版の重複判定（$guard 行）が run_dcb_tests（$tests_line 行）より後、または欠落"
 fi
 
 exit_with_result
