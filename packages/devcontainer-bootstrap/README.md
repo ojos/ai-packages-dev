@@ -34,10 +34,14 @@
 最新安定リリース:
 - `v0.2.1`
 
+`SHA256SUMS` は `bootstrap.sh` と `doctor.sh` を対象とするため、検証するにはその 2 つを取得します。
+
 ```bash
 TAG=v0.2.1
-curl -sSL "https://github.com/ojos/devcontainer-bootstrap/releases/download/${TAG}/bootstrap.sh" -o bootstrap.sh
-curl -sSL "https://github.com/ojos/devcontainer-bootstrap/releases/download/${TAG}/SHA256SUMS" -o SHA256SUMS
+BASE="https://github.com/ojos/devcontainer-bootstrap/releases/download/${TAG}"
+curl -sSL "${BASE}/bootstrap.sh" -o bootstrap.sh
+curl -sSL "${BASE}/doctor.sh" -o doctor.sh
+curl -sSL "${BASE}/SHA256SUMS" -o SHA256SUMS
 sha256sum -c SHA256SUMS
 bash bootstrap.sh --project-name myapp --languages node,go --mode standard
 ```

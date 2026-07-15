@@ -167,12 +167,26 @@ generate_standard_assets() {
     -czf "$archive_tmp" .
   mv "$archive_tmp" PACKAGE_ARCHIVE.tar.gz
 
-  # SHA256SUMS — covers all regular files except itself and the manifest
-  find . -type f \
-    ! -name SHA256SUMS \
-    ! -name 'RELEASE-MANIFEST.json' \
-    ! -path './.git/*' \
-    | sort | xargs sha256sum > SHA256SUMS
+  # SHA256SUMS — ユーザーが実際にダウンロードするファイルのみを対象にする。
+  #
+  # 対象を広げると、documented な手順が壊れる。DCB の README は bootstrap.sh と
+  # SHA256SUMS だけを取得して sha256sum -c を実行するよう指示しており、SHA256SUMS が
+  # 手元に無いファイルを列挙していると FAILED になり非ゼロ終了する。
+  # 検証ファイルは「検証する人が持っているもの」を列挙しなければ意味がない。
+  #
+  # 追加の資産（PACKAGE_ARCHIVE.tar.gz）のハッシュは RELEASE-MANIFEST.json 側が持つ。
+  if [[ ${#SUMS_TARGETS[@]} -eq 0 ]]; then
+    echo "error: internal: SUMS_TARGETS not set for $pkg_name" >&2
+    exit 1
+  fi
+  local t
+  for t in "${SUMS_TARGETS[@]}"; do
+    [[ -f "$t" ]] || {
+      echo "error: checksum target not found in release tree: $t" >&2
+      exit 1
+    }
+  done
+  sha256sum "${SUMS_TARGETS[@]}" > SHA256SUMS
 
   # RELEASE-MANIFEST.json
   local archive_sha
@@ -201,12 +215,11 @@ JSON
 prepare_dcb_release_repo() {
   local dir="$1"
   rm -rf "$dir"
-  mkdir -p "$dir/.github/workflows"
+  mkdir -p "$dir"
 
   cp packages/devcontainer-bootstrap/bootstrap.sh "$dir/"
   cp packages/devcontainer-bootstrap/doctor.sh "$dir/"
   cp packages/devcontainer-bootstrap/README.md "$dir/"
-  cp packages/devcontainer-bootstrap/.github/workflows/release.yml "$dir/.github/workflows/"
 }
 
 prepare_dotfiles_release_repo() {
@@ -322,6 +335,7 @@ DCB_TAG=""
 DOTFILES_TAG=""
 EXECUTE="false"
 AUDIT="false"
+SUMS_TARGETS=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -381,6 +395,8 @@ DCB_VER="$(extract_semver "$DCB_TAG")"
 DOTFILES_VER="$(extract_semver "$DOTFILES_TAG")"
 
 prepare_dcb_release_repo "$DCB_DIR"
+# ユーザーは bootstrap.sh と SHA256SUMS だけを取得する（README の手順）。
+SUMS_TARGETS=(bootstrap.sh doctor.sh)
 generate_standard_assets "$DCB_DIR" "devcontainer-bootstrap" "$DCB_VER"
 init_and_push_release_repo "$DCB_DIR" "$OWNER/devcontainer-bootstrap" public
 tag_and_release "$DCB_DIR" "$OWNER/devcontainer-bootstrap" "$DCB_TAG" "Release $DCB_TAG" \
@@ -391,6 +407,9 @@ tag_and_release "$DCB_DIR" "$OWNER/devcontainer-bootstrap" "$DCB_TAG" "Release $
   "$DCB_DIR/PACKAGE_ARCHIVE.tar.gz"
 
 prepare_dotfiles_release_repo "$DOTFILES_DIR"
+# dotfiles はタグ固定で取り込む運用のため、資産のダウンロードを前提としない。
+# 現状は互換のため README を対象にしておく。資産そのものの要否は未決（RELEASE_PROCESS_REVIEW）。
+SUMS_TARGETS=(README.md)
 generate_standard_assets "$DOTFILES_DIR" "ai-dotfiles" "$DOTFILES_VER"
 init_and_push_release_repo "$DOTFILES_DIR" "$OWNER/ai-dotfiles" public
 tag_and_release "$DOTFILES_DIR" "$OWNER/ai-dotfiles" "$DOTFILES_TAG" "Release $DOTFILES_TAG" \
