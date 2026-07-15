@@ -175,6 +175,9 @@ Markdown ファイルの命名は、文書の役割に応じて以下の規則�
 | タスク手順 | `task-playbooks/` |
 | レビュー運用 | `review-workflow.md` |
 | intake 規律・判定根拠 | `intake/` |
+| 導入用の雛形 | `templates/` |
+
+0 章の 3 層構造は、`templates/` の雛形をコピーすることで配線できます。手順は本パッケージの README を参照してください。
 
 ## 13. 非目標
 

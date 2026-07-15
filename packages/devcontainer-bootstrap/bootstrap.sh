@@ -998,58 +998,18 @@ apply_file_with_policy() {
   esac
 }
 
-dotfiles_entry_content() {
-  local runtime_label="$1"
-  cat <<EOF
-# ${runtime_label} 実行環境向け入口ファイル
-
-次の順序でルールを適用します（下位から上位へ優先）。
-
-1. \`${DOTFILES_REL_ROOT}/shared-ai-rules.md\`（全体共通ルール）
-2. \`.github/project-ai-rules.md\`（プロジェクト共通ルール）
-3. このファイル（実行環境固有の最小差分）
-
-- このファイルは最小構成に保ち、実行環境固有の差分のみを扱います。
-- このファイルでロール責務を再定義しません。ロール責務は \`${DOTFILES_REL_ROOT}/role-contracts/\` を参照します。
-EOF
-}
-
-dotfiles_project_rules_content() {
-  cat <<EOF
-# プロジェクト共通 AI ルール
-
-- このファイルはプロジェクト共通ルールの正本です。
-- 全体共通ルールは \`${DOTFILES_REL_ROOT}/shared-ai-rules.md\` を参照します。
-- ロール責務は \`${DOTFILES_REL_ROOT}/role-contracts/\` を参照します。
-- タスク手順は \`${DOTFILES_REL_ROOT}/task-playbooks/\` を参照します。
-- レビュー運用は \`${DOTFILES_REL_ROOT}/review-workflow.md\` を参照します。
-- 実行環境入口ファイル（\`CLAUDE.md\` 等）はこのファイルを参照し、最小差分のみを記述します。
-
-## このプロジェクト固有の値
-
-（ここにプロジェクト固有の制約・検証手順を記述します）
-
-## 機密の具体化
-
-共通規範「機密の取り扱い」を、このプロジェクトで具体化します。
-
-- 機密の読み取り元: （例: \`.env\` / シークレット管理サービス）
-- 追跡除外の対象: （例: \`.env\`）
-- 共有する雛形: （例: 値のない \`.env.example\`）
-
-## 生成物の具体化
-
-- コミットしない生成物: （例: ビルド成果物、メディアファイル）
-- 再生成手順: （コマンドを記載）
-
-## 作業状況の記録先
-
-共通規範「作業状況の記録」を、このプロジェクトで具体化します。
-単一ファイルへの集中更新は並列実行と衝突するため、追記のみの形式や作業単位ごとの分割を検討します。
-
-- 未完了の作業: （記録先を記載）
-- 完了した作業の履歴: （記録先を記載）
-EOF
+# 入口ファイルとレビュースクリプトの雛形は、規範パッケージが持つ。
+# DCB は配置するだけで内容を持たない。内容を持つと正本が 2 つになり、規範側の
+# 変更に追随できずにずれる。
+require_dotfiles_template() {
+  local name="$1" path
+  path="$DOTFILES_COMMON_DIR/templates/$name"
+  [[ -f "$path" ]] || {
+    echo "error: template not found in rules source: templates/$name" >&2
+    echo "       規範パッケージがこの版に必要な雛形を持っていません。" >&2
+    exit 1
+  }
+  printf '%s' "$path"
 }
 
 # Resolve once, before any file is written, so a bad source fails without side effects.
@@ -1070,119 +1030,6 @@ resolve_dotfiles_source_or_die() {
 
 # Second-opinion reviewer for the cross-model gate. The norm lives in the rules
 # package (review-workflow.md); this is the executable side of it.
-dotfiles_gemini_review_content() {
-  cat <<'TMPL'
-#!/usr/bin/env bash
-# gemini-review.sh — 別ベンダーのモデルによる第二意見（クロスモデル二段ゲートの ②段目）
-#
-# 規範: dotfiles/ai/common/review-workflow.md
-# 目的: 実装したモデル自身の自己レビューは盲点を共有するため、別ベンダーのモデルで
-#       独立にクロスチェックする。push 前のローカル事前ゲートで使う。
-#
-# 使い方:
-#   bash scripts/gemini-review.sh              # ステージ済み差分をレビュー
-#   bash scripts/gemini-review.sh --range main..HEAD
-#
-# 終了コード:
-#   0 = LGTM（重大な指摘なし。push 可）
-#   1 = 重大な指摘あり、または実行不能
-set -euo pipefail
-
-RANGE=""
-MODEL="${GEMINI_REVIEW_MODEL:-}"
-
-usage() {
-  cat <<'EOF'
-usage: bash scripts/gemini-review.sh [options]
-
-options:
-  --range <git-range>   レビュー対象の差分範囲（既定: ステージ済み差分）
-  --model <name>        使用モデル（既定: gemini CLI の既定。GEMINI_REVIEW_MODEL でも指定可）
-  -h, --help            ヘルプ
-EOF
-}
-
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --range) RANGE="$2"; shift 2 ;;
-    --model) MODEL="$2"; shift 2 ;;
-    -h|--help) usage; exit 0 ;;
-    *) echo "error: unknown option: $1" >&2; usage; exit 1 ;;
-  esac
-done
-
-command -v gemini >/dev/null 2>&1 || {
-  echo "error: gemini CLI not found. run scripts/install-ai-tools.sh" >&2
-  exit 1
-}
-[[ -n "${GEMINI_API_KEY:-}" ]] || {
-  echo "error: GEMINI_API_KEY is not set" >&2
-  exit 1
-}
-
-if [[ -n "$RANGE" ]]; then
-  diff_text="$(git diff "$RANGE")"
-  scope="$RANGE"
-else
-  diff_text="$(git diff --cached)"
-  scope="staged"
-fi
-
-if [[ -z "${diff_text//[[:space:]]/}" ]]; then
-  echo "[gemini-review] no diff to review ($scope)"
-  exit 0
-fi
-
-# ゲート対象は review-workflow.md の限定に合わせる。
-read -r -d '' PROMPT <<'EOF' || true
-
-上記は git の差分です。コードレビューを行ってください。
-
-指摘対象は次の 4 点に限定します。それ以外は報告しないでください。
-- 致命バグ
-- 脆弱性
-- 型エラー
-- エッジケースの見落とし
-
-報告しないもの:
-- 好みのリファクタリング
-- 命名や可読性の軽微な提案
-- 差分の範囲外にある既存コードの問題
-
-出力形式:
-- 上記 4 点に該当する指摘が 1 件もなければ、`LGTM` とだけ出力してください。
-- 指摘がある場合は、各指摘について「該当ファイルと行」「何が問題か」「なぜ問題か（再現条件や影響）」を簡潔に記述してください。
-EOF
-
-echo "[gemini-review] reviewing $scope"
-# 差分を stdin で渡すだけで、モデルにツール実行は不要。信頼済みフォルダの確認は
-# 対話を要求するため、非対話実行では明示的に読み取り専用として扱う。
-args=(--skip-trust -p "$PROMPT")
-[[ -n "$MODEL" ]] && args=(-m "$MODEL" "${args[@]}")
-
-output="$(printf '%s' "$diff_text" | gemini "${args[@]}" 2>&1)" || {
-  echo "error: gemini review failed" >&2
-  printf '%s\n' "$output" >&2
-  exit 1
-}
-
-printf '%s\n' "$output"
-
-# 通過判定はモデルの出力ゆれに耐える必要がある。LGTM とだけ返すよう指示していても、
-# **LGTM** / `LGTM` / LGTM. のように装飾されることがある。装飾・空白・句点を除いてから
-# 行単位で厳密一致させる（文中の LGTM は通過させない）。
-if printf '%s\n' "$output" \
-  | sed 's/[`*_#]//g; s/[[:space:]]//g; s/[.。]$//' \
-  | grep -qix 'LGTM'; then
-  echo "[gemini-review] LGTM"
-  exit 0
-fi
-
-echo "[gemini-review] findings reported. fix them in a single iteration before push." >&2
-exit 1
-TMPL
-}
-
 install_dotfiles_rules() {
   local common_dir="$DOTFILES_COMMON_DIR" rel dest tmp count=0
 
@@ -1204,25 +1051,18 @@ install_dotfiles_rules() {
   fi
   echo "[bootstrap] shared AI rules: $count file(s)"
 
-  tmp="$(mktemp)"
-  dotfiles_project_rules_content > "$tmp"
-  apply_file_with_policy "$tmp" "$OUTPUT_DIR/.github/project-ai-rules.md"
-  rm -f "$tmp"
+  # 雛形は規範パッケージから取る。DCB はどこへ置くかだけを決める。
+  local tpl
+  tpl="$(require_dotfiles_template project-ai-rules.md)"
+  apply_file_with_policy "$tpl" "$OUTPUT_DIR/.github/project-ai-rules.md"
 
-  tmp="$(mktemp)"
-  dotfiles_entry_content "Claude" > "$tmp"
-  apply_file_with_policy "$tmp" "$OUTPUT_DIR/CLAUDE.md"
-  rm -f "$tmp"
+  # 入口ファイルは実行環境ごとに 1 つ。内容は同一で、雛形も 1 つ。
+  tpl="$(require_dotfiles_template entry.md)"
+  apply_file_with_policy "$tpl" "$OUTPUT_DIR/CLAUDE.md"
+  apply_file_with_policy "$tpl" "$OUTPUT_DIR/.github/copilot-instructions.md"
 
-  tmp="$(mktemp)"
-  dotfiles_entry_content "Copilot" > "$tmp"
-  apply_file_with_policy "$tmp" "$OUTPUT_DIR/.github/copilot-instructions.md"
-  rm -f "$tmp"
-
-  tmp="$(mktemp)"
-  dotfiles_gemini_review_content > "$tmp"
-  apply_file_with_policy "$tmp" "$OUTPUT_DIR/scripts/gemini-review.sh"
-  rm -f "$tmp"
+  tpl="$(require_dotfiles_template gemini-review.sh)"
+  apply_file_with_policy "$tpl" "$OUTPUT_DIR/scripts/gemini-review.sh"
   if [[ -f "$OUTPUT_DIR/scripts/gemini-review.sh" ]]; then
     chmod +x "$OUTPUT_DIR/scripts/gemini-review.sh"
   fi
