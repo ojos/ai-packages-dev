@@ -40,6 +40,22 @@
 - リポジトリ外の一時クローンでコミットするスクリプトは、`git -c user.name=... -c user.email=...` などで identity を明示します。
 - push / リリース実行の前に `git log -1 --format='%an <%ae>'` で作者情報を確認します。`aizu@bascule.co.jp` 等の別 identity を検出した場合は中断し、修正してからやり直します。
 
+## GitHub 認証（gh CLI / トークン）
+
+gh CLI の認証はトークンで行い、登録は `scripts/github-account-switch.sh` を唯一の経路とします。
+
+前提となる仕組み:
+
+- gh が環境変数として自動認識するのは `GH_TOKEN` / `GITHUB_TOKEN` のみです。`GITHUB_TOKEN_<PROFILE>`（例: `GITHUB_TOKEN_OJOS`）は本プロジェクトの独自命名のため、gh は自動では使いません。
+- switch スクリプトが `gh auth login --with-token` でトークンを gh へ登録します。gh はその**コピー**を `~/.config/gh/hosts.yml` に保存するため、トークンをローテーションすると保存側だけが失効した状態になり得ます。
+
+順守事項:
+
+- トークン再発行時は、ホスト側環境変数 `GITHUB_TOKEN_<PROFILE>` を更新し、コンテナへ再接続します（`scripts/on-attach.sh` が `auto` を実行して gh へ再登録します）。再接続せずに反映する場合は `bash scripts/github-account-switch.sh auto --git-scope local` を実行します。
+- `gh auth status` が失敗（トークン失効）した場合、手動の `gh auth login` ではなく、まず上記 switch スクリプトの再実行で復旧します。
+- `GH_TOKEN` / `GITHUB_TOKEN` を恒久的に設定しません。gh に登録済みのアカウントより優先され、プロファイル切替を無効化するためです。
+- gh が使えない場合でも、`GITHUB_TOKEN_<PROFILE>` を用いた API / git 直接操作（curl、トークン付き URL の push）は可能です。ただし恒久的なリリース操作はスクリプト経由とする「外部サービスの状態管理」の規約に従います。
+
 ## 作業状況の記録先
 
 共通規範「作業状況の記録」を、このリポジトリで具体化します。
