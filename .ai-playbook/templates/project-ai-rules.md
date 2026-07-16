@@ -5,11 +5,11 @@
 
 ## 参照先
 
-- 全体共通ルール: `dotfiles/ai/common/shared-ai-rules.md`
-- ロール責務: `dotfiles/ai/common/role-contracts/`
-- タスク手順: `dotfiles/ai/common/task-playbooks/`
-- レビュー運用: `dotfiles/ai/common/review-workflow.md`
-- intake 規律・判定根拠: `dotfiles/ai/common/intake/`
+- 全体共通ルール: `.ai-playbook/shared-ai-rules.md`
+- ロール責務: `.ai-playbook/role-contracts/`
+- タスク手順: `.ai-playbook/task-playbooks/`
+- レビュー運用: `.ai-playbook/review-workflow.md`
+- intake 規律・判定根拠: `.ai-playbook/intake/`
 
 実行環境の入口ファイル（`CLAUDE.md` 等）はこのファイルを参照し、最小差分のみを記述します。
 
@@ -37,6 +37,14 @@
 
 - 未完了の作業: （記録先を記載）
 - 完了した作業の履歴: （記録先を記載）
+
+## 外部サービスの状態管理
+
+共通規範「外部サービスの状態管理」を、このプロジェクトで具体化します。
+
+- 対象の外部状態: （例: クラウドリソース、公開リポジトリ、リリース）
+- 宣言・適用の手段: （例: Terraform、専用スクリプト）
+- 手動操作の扱い: 状態確認・調査に留め、恒久的な変更は宣言側を通す
 
 ## レビューの起動方法
 

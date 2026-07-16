@@ -17,7 +17,7 @@
 | `scripts/load-env.sh` | 環境変数ロード。 |
 | `scripts/on-attach.sh` | attach 時の初期化処理。 |
 | `scripts/post-rebuild-check.sh` | リビルド後チェック。 |
-| `scripts/release-packages.sh` | dotfiles / DCB のリリース実行と監査。 |
+| `scripts/release-packages.sh` | ai-playbook / DCB のリリース実行と監査。 |
 | `scripts/setup-ai-directory-policy.sh` | AI 用ディレクトリ方針ウィザード。 |
 | `scripts/setup-devcontainer-bootstrap-release-repo.sh` | DCB リリースリポジトリ準備。 |
 | `scripts/update-release-status.sh` | README のリリース状況更新。 |

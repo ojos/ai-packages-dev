@@ -1,4 +1,4 @@
-# ai-dotfiles
+# ai-playbook
 
 全プロジェクト共通の AI 開発設定を管理するためのリポジトリです。
 
@@ -29,12 +29,12 @@
 
 | 対象 | 内容 |
 |---|---|
-| `ai/common/shared-ai-rules.md` | 共通規範（コーディング規約・機密・作業状況・テスト・コミット・命名・質問運用・重複排除ゲート・機構化の判断基準） |
-| `ai/common/role-contracts/` | ロール責務の契約 7 種（目的・入力・出力・禁止事項・エスカレーション条件・完了定義） |
-| `ai/common/task-playbooks/` | タスク手順 4 種（issue triage / 計画分解 / PR レビュー / issue クローズ方針） |
-| `ai/common/review-workflow.md` | クロスモデル二段ゲートによるレビュー運用 |
-| `ai/common/intake/` | intake テンプレート、相談テンプレート、判定 reason code |
-| `ai/common/templates/` | 導入用の雛形（入口ファイル・プロジェクト共通ルール・第二意見レビュー） |
+| `shared-ai-rules.md` | 共通規範（コーディング規約・機密・作業状況・テスト・コミット・命名・質問運用・重複排除ゲート・機構化の判断基準） |
+| `role-contracts/` | ロール責務の契約 7 種（目的・入力・出力・禁止事項・エスカレーション条件・完了定義） |
+| `task-playbooks/` | タスク手順 4 種（issue triage / 計画分解 / PR レビュー / issue クローズ方針） |
+| `review-workflow.md` | クロスモデル二段ゲートによるレビュー運用 |
+| `intake/` | intake テンプレート、相談テンプレート、判定 reason code |
+| `templates/` | 導入用の雛形（入口ファイル・プロジェクト共通ルール・第二意見レビュー） |
 
 共通ルールの補足として、AI からの質問は一問ずつ行い、各質問には意図を添え、回答は選択肢優先で提示します。
 
@@ -111,7 +111,7 @@
 
 推奨導入方法:
 - submodule、subtree、または手動同期を使い、必ずバージョン固定する。
-- 導入に必要な雛形は `ai/common/templates/` にある。コピーするだけで 3 層構造が成立する（下記）。
+- 導入に必要な雛形は `templates/` にある。コピーするだけで 3 層構造が成立する（下記）。
 
 見直しトリガー:
 - 実行可能資産が増え、決定的なセットアップ手順が必要になった時点で installer 追加を再検討する。
@@ -122,7 +122,7 @@
 
 ### 1. 規範を配置する
 
-submodule / subtree / 手動同期のいずれかで、このパッケージを `dotfiles/` へ取り込む（タグと SHA を固定）。
+submodule / subtree / 手動同期のいずれかで、このパッケージを `.ai-playbook/` へ取り込む（タグと SHA を固定）。
 
 ### 2. 3 層構造を配線する
 
@@ -131,11 +131,11 @@ submodule / subtree / 手動同期のいずれかで、このパッケージを 
 
 ```bash
 # 2 層目: プロジェクト共通ルール
-cp dotfiles/ai/common/templates/project-ai-rules.md .github/project-ai-rules.md
+cp .ai-playbook/templates/project-ai-rules.md .github/project-ai-rules.md
 
 # 3 層目: 実行環境の入口ファイル（使う実行環境の数だけ）
-cp dotfiles/ai/common/templates/entry.md CLAUDE.md
-cp dotfiles/ai/common/templates/entry.md .github/copilot-instructions.md
+cp .ai-playbook/templates/entry.md CLAUDE.md
+cp .ai-playbook/templates/entry.md .github/copilot-instructions.md
 ```
 
 ### 3. プロジェクト固有の値を埋める
@@ -147,7 +147,7 @@ cp dotfiles/ai/common/templates/entry.md .github/copilot-instructions.md
 `review-workflow.md` のクロスモデル二段ゲートを使う場合、別ベンダーのモデルで実行する手段を配置します。
 
 ```bash
-cp dotfiles/ai/common/templates/gemini-review.sh scripts/
+cp .ai-playbook/templates/gemini-review.sh scripts/
 chmod +x scripts/gemini-review.sh
 ```
 
@@ -155,7 +155,7 @@ chmod +x scripts/gemini-review.sh
 
 ### 新規プロジェクトの場合
 
-新規に環境ごと立ち上げる場合は、DevContainer Bootstrap（DCB）の `--with-dotfiles` が上記 1〜4 をまとめて実施します。
+新規に環境ごと立ち上げる場合は、DevContainer Bootstrap（DCB）の `--with-playbook` が上記 1〜4 をまとめて実施します。
 DCB は雛形の内容を持たず、このパッケージの `templates/` をコピーするだけです。正本はこのパッケージ側にあります。
 
 DCB は devcontainer と特定言語（node / go / python / php）を前提とするため、それ以外の環境では上記の手順を使ってください。
@@ -169,4 +169,4 @@ DCB は devcontainer と特定言語（node / go / python / php）を前提と�
 
 詳細な共通 AI ルールは次を参照してください。
 
-- [ai/common/shared-ai-rules.md](ai/common/shared-ai-rules.md)
+- [shared-ai-rules.md](shared-ai-rules.md)
