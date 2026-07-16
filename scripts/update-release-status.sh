@@ -57,13 +57,26 @@ require_cmd awk
   exit 1
 }
 
-get_latest_tag() {
-  local repo="$1"
-  gh api "repos/$OWNER/$repo/releases/latest" --jq '.tag_name' 2>/dev/null || echo "<none>"
+# DCB は GitHub Release で配布するため、最新 Release のタグを正とする。
+get_latest_release() {
+  local repo="$1" out
+  # 404（Release 未作成）や権限エラー時、gh は本文を stdout に出しつつ非ゼロ終了する。
+  # コマンド置換がその本文を拾わないよう、代入の失敗で明示的に空へ倒す。
+  out="$(gh api "repos/$OWNER/$repo/releases/latest" --jq '.tag_name' 2>/dev/null)" || out=""
+  [[ -n "$out" ]] && printf '%s' "$out" || printf '<none>'
 }
 
-DCB_TAG="$(get_latest_tag devcontainer-bootstrap)"
-PLAYBOOK_TAG="$(get_latest_tag ai-playbook)"
+# ai-playbook は Release を作らずタグのみで配布する。最新の semver タグを正とする。
+# tags API はタグを semver 順に返さないため、vX.Y.Z を抽出して sort -V で最大を採る。
+get_latest_semver_tag() {
+  local repo="$1" out
+  out="$(gh api --paginate "repos/$OWNER/$repo/tags" --jq '.[].name' 2>/dev/null \
+        | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)" || out=""
+  [[ -n "$out" ]] && printf '%s' "$out" || printf '<none>'
+}
+
+DCB_TAG="$(get_latest_release devcontainer-bootstrap)"
+PLAYBOOK_TAG="$(get_latest_semver_tag ai-playbook)"
 
 BLOCK_FILE="$(mktemp)"
 cat >"$BLOCK_FILE" <<EOF
