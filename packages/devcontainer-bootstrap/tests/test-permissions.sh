@@ -15,7 +15,7 @@ echo "test-permissions"
 # ── 新規生成 ──────────────────────────────────────────────────────────────────
 
 out="$(new_workdir)/p"
-run_bootstrap "$out" --with-dotfiles >/dev/null 2>&1
+run_bootstrap "$out" --with-playbook >/dev/null 2>&1
 
 it "生成された .gitignore は 644"
 assert_mode "$out/.gitignore" "644"
@@ -30,7 +30,7 @@ it "生成された gemini-review.sh は 755"
 assert_mode "$out/scripts/gemini-review.sh" "755"
 
 it "配置された規範は 644"
-assert_mode "$out/dotfiles/ai/common/shared-ai-rules.md" "644"
+assert_mode "$out/.ai-playbook/shared-ai-rules.md" "644"
 
 it "生成された入口ファイルは 644"
 assert_mode "$out/CLAUDE.md" "644"
@@ -54,14 +54,14 @@ grep -q 'node_modules' "$out/.gitignore" && pass || fail "既存の内容が失�
 
 it "overwrite でも既存規範ファイルのモードを保持する"
 out="$(new_workdir)/p"
-mkdir -p "$out/dotfiles/ai/common"
-printf 'old\n' > "$out/dotfiles/ai/common/shared-ai-rules.md"
-chmod 664 "$out/dotfiles/ai/common/shared-ai-rules.md"
-run_bootstrap "$out" --with-dotfiles --dotfiles-conflict-policy overwrite >/dev/null 2>&1
-assert_mode "$out/dotfiles/ai/common/shared-ai-rules.md" "664"
+mkdir -p "$out/.ai-playbook"
+printf 'old\n' > "$out/.ai-playbook/shared-ai-rules.md"
+chmod 664 "$out/.ai-playbook/shared-ai-rules.md"
+run_bootstrap "$out" --with-playbook --playbook-conflict-policy overwrite >/dev/null 2>&1
+assert_mode "$out/.ai-playbook/shared-ai-rules.md" "664"
 
 it "overwrite で内容は置き換わる"
-grep -q 'AI 共通開発ガイドライン' "$out/dotfiles/ai/common/shared-ai-rules.md" \
+grep -q 'AI 共通開発ガイドライン' "$out/.ai-playbook/shared-ai-rules.md" \
   && pass || fail "内容が上書きされていない"
 
 exit_with_result

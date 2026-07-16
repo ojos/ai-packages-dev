@@ -6,22 +6,22 @@ usage() {
 usage:
   # release one package
   bash scripts/release-packages.sh --owner <github-owner> --dcb-version <vX.Y.Z> --execute
-  bash scripts/release-packages.sh --owner <github-owner> --dotfiles-version <vX.Y.Z> --execute
+  bash scripts/release-packages.sh --owner <github-owner> --playbook-version <vX.Y.Z> --execute
 
   # release both in one run
   bash scripts/release-packages.sh --owner <github-owner> \
-    --dcb-version <vX.Y.Z> --dotfiles-version <vX.Y.Z> --execute
+    --dcb-version <vX.Y.Z> --playbook-version <vX.Y.Z> --execute
 
 options:
   --owner <owner>               GitHub owner (required)
   --dcb-version <vX.Y.Z>        DCB release tag
-  --dotfiles-version <vX.Y.Z>   dotfiles release tag
+  --playbook-version <vX.Y.Z>   ai-playbook tag (source-only, no release)
   --execute                     Actually execute release operations
   --audit                       Audit release assets across all repos and exit
   -h, --help                    Show help
 
 notes:
-  - Specify at least one of --dcb-version / --dotfiles-version.
+  - Specify at least one of --dcb-version / --playbook-version.
     Only the specified packages are touched; the others are left untouched.
   - Published versions are immutable. Re-releasing an existing version fails
     during preflight, before any side effect.
@@ -94,6 +94,19 @@ require_version_unpublished() {
     echo "       公開済みのリリースは不変です。版を上げてください。" >&2
     echo "       やり直す場合は、先に公開側の release を削除してください:" >&2
     echo "         gh release delete $tag --repo $repo --cleanup-tag" >&2
+    exit 1
+  fi
+}
+
+# Release を作らずタグのみで配布するパッケージ（ai-playbook）向け。
+# 不変性の対象は Release ではなくタグそのもの。
+require_tag_unpublished() {
+  local repo="$1" tag="$2"
+  if gh api "repos/$repo/git/refs/tags/$tag" >/dev/null 2>&1; then
+    echo "error: $repo already has tag $tag" >&2
+    echo "       公開済みのタグは不変です。版を上げてください。" >&2
+    echo "       やり直す場合は、先に公開側のタグを削除してください:" >&2
+    echo "         git push $repo :refs/tags/$tag" >&2
     exit 1
   fi
 }
@@ -176,6 +189,28 @@ PY
 # Required assets every package release must include.
 REQUIRED_RELEASE_ASSETS=("RELEASE-MANIFEST.json" "SHA256SUMS" "PACKAGE_ARCHIVE.tar.gz")
 
+# ソースを公開リポジトリへ反映し、タグを push する。GitHub Release は作らない。
+# 文書パッケージ（ai-playbook）向け。消費者は git タグを固定して取り込むため、
+# タグそのものが配布物になる。
+push_source_and_tag() {
+  local dir="$1" repo="$2" tag="$3"
+
+  init_and_push_release_repo "$dir" "$repo" public
+
+  pushd "$dir" >/dev/null
+  # 既存タグは動かさない。公開済みのタグが別の内容を指すと、固定した利用者の
+  # 取り込み結果が変わる。unpublished 検査は preflight 済みだが、ここでも守る。
+  if git ls-remote --tags origin | grep -q "refs/tags/$tag\$"; then
+    echo "error: $repo already has tag $tag; refusing to move it" >&2
+    popd >/dev/null
+    exit 1
+  fi
+  git tag "$tag"
+  git push origin "$tag"
+  popd >/dev/null
+  echo "[ok] $repo tagged $tag (source-only, no release)"
+}
+
 # Generate the three standard release assets in <dir> for a given package.
 # Usage: generate_standard_assets <dir> <package-name> <version>
 generate_standard_assets() {
@@ -251,11 +286,12 @@ prepare_dcb_release_repo() {
   cp packages/devcontainer-bootstrap/README.md "$dir/"
 }
 
-prepare_dotfiles_release_repo() {
+prepare_playbook_release_repo() {
   local dir="$1"
   rm -rf "$dir"
   mkdir -p "$dir"
-  cp -R dotfiles/. "$dir/"
+  # 配布リポジトリのルート = .ai-playbook の中身。ドット始まりの正本を展開する。
+  cp -R .ai-playbook/. "$dir/"
 }
 
 init_and_push_release_repo() {
@@ -329,7 +365,8 @@ tag_and_release() {
 # Prints a report and exits non-zero if any required asset is missing.
 audit_release_assets() {
   local owner="$1"
-  local repos=("$owner/ai-dotfiles" "$owner/devcontainer-bootstrap")
+  # ai-playbook は Release 資産を持たない（タグのみ配布）ため監査対象外。
+  local repos=("$owner/devcontainer-bootstrap")
   local failed=0
 
   echo "[audit] checking required release assets: ${REQUIRED_RELEASE_ASSETS[*]}"
@@ -362,7 +399,7 @@ audit_release_assets() {
 
 OWNER=""
 DCB_TAG=""
-DOTFILES_TAG=""
+PLAYBOOK_TAG=""
 EXECUTE="false"
 AUDIT="false"
 SUMS_TARGETS=()
@@ -371,7 +408,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --owner) OWNER="$2"; shift 2 ;;
     --dcb-version) DCB_TAG="$2"; shift 2 ;;
-    --dotfiles-version) DOTFILES_TAG="$2"; shift 2 ;;
+    --playbook-version) PLAYBOOK_TAG="$2"; shift 2 ;;
     --execute) EXECUTE="true"; shift ;;
     --audit) AUDIT="true"; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -399,8 +436,8 @@ fi
 
 # パッケージは独立してリリースできる。片方の修正が他方の公開物へ波及しないよう、
 # 指定されたパッケージだけを対象にする。
-[[ -n "$DCB_TAG" || -n "$DOTFILES_TAG" ]] || {
-  echo "error: specify at least one of --dcb-version or --dotfiles-version" >&2
+[[ -n "$DCB_TAG" || -n "$PLAYBOOK_TAG" ]] || {
+  echo "error: specify at least one of --dcb-version or --playbook-version" >&2
   usage
   exit 1
 }
@@ -421,14 +458,14 @@ if [[ -n "$DCB_TAG" ]]; then
   validate_dcb_docs "$DCB_TAG"
   validate_markdown_links_in_tree "$(pwd)/packages/devcontainer-bootstrap"
   # DCB は規範パッケージの templates/ を配布するため、規範側の健全性にも依存する。
-  validate_markdown_links_in_tree "$(pwd)/dotfiles"
+  validate_markdown_links_in_tree "$(pwd)/.ai-playbook"
   run_dcb_tests
 fi
 
-if [[ -n "$DOTFILES_TAG" ]]; then
-  extract_semver "$DOTFILES_TAG" >/dev/null
-  require_version_unpublished "$OWNER/ai-dotfiles" "$DOTFILES_TAG"
-  validate_markdown_links_in_tree "$(pwd)/dotfiles"
+if [[ -n "$PLAYBOOK_TAG" ]]; then
+  extract_semver "$PLAYBOOK_TAG" >/dev/null
+  require_tag_unpublished "$OWNER/ai-playbook" "$PLAYBOOK_TAG"
+  validate_markdown_links_in_tree "$(pwd)/.ai-playbook"
 fi
 
 echo "[ok] preflight checks passed"
@@ -440,7 +477,7 @@ fi
 
 ROOT_DIR="$(pwd)"
 DCB_DIR="/tmp/dcb-release"
-DOTFILES_DIR="/tmp/dotfiles-release"
+PLAYBOOK_DIR="/tmp/playbook-release"
 
 if [[ -n "$DCB_TAG" ]]; then
   DCB_VER="$(extract_semver "$DCB_TAG")"
@@ -457,18 +494,14 @@ if [[ -n "$DCB_TAG" ]]; then
     "$DCB_DIR/PACKAGE_ARCHIVE.tar.gz"
 fi
 
-if [[ -n "$DOTFILES_TAG" ]]; then
-  DOTFILES_VER="$(extract_semver "$DOTFILES_TAG")"
-  prepare_dotfiles_release_repo "$DOTFILES_DIR"
-  # dotfiles はタグ固定で取り込む運用のため、資産のダウンロードを前提としない。
-  # 現状は互換のため README を対象にしておく。資産そのものの要否は未決（RELEASE_PROCESS_RECORD）。
-  SUMS_TARGETS=(README.md)
-  generate_standard_assets "$DOTFILES_DIR" "ai-dotfiles" "$DOTFILES_VER"
-  init_and_push_release_repo "$DOTFILES_DIR" "$OWNER/ai-dotfiles" public
-  tag_and_release "$DOTFILES_DIR" "$OWNER/ai-dotfiles" "$DOTFILES_TAG" "Release $DOTFILES_TAG" \
-    "$DOTFILES_DIR/RELEASE-MANIFEST.json" \
-    "$DOTFILES_DIR/SHA256SUMS" \
-    "$DOTFILES_DIR/PACKAGE_ARCHIVE.tar.gz"
+if [[ -n "$PLAYBOOK_TAG" ]]; then
+  # ai-playbook は submodule / subtree でタグ固定して取り込む文書パッケージ。
+  # 消費者はリリース資産をダウンロードせず、git タグそのものが配布物になる。
+  # したがって GitHub Release も 3 資産も作らず、ソースを公開リポジトリへ反映して
+  # タグを push するだけにする。DCB の --playbook-from も git 由来の
+  # archive/refs/tags/ tarball を使うため、Release は不要（RELEASE_PROCESS_RECORD）。
+  prepare_playbook_release_repo "$PLAYBOOK_DIR"
+  push_source_and_tag "$PLAYBOOK_DIR" "$OWNER/ai-playbook" "$PLAYBOOK_TAG"
 fi
 
 cd "$ROOT_DIR"
@@ -481,7 +514,7 @@ else
 fi
 
 echo "[ok] completed releases"
-for r in "$OWNER/devcontainer-bootstrap" "$OWNER/ai-dotfiles"; do
+for r in "$OWNER/devcontainer-bootstrap" "$OWNER/ai-playbook"; do
   echo "[repo] $r"
   gh release list --repo "$r" --limit 3 || true
   echo "---"

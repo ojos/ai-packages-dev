@@ -7,213 +7,107 @@ This runbook defines the exact execution flow for final package releases after i
 
 Target repositories:
 - `ojos/ai-packages-dev` (coordination)
-- `ojos/ai-dotfiles`
+- `ojos/ai-playbook`
 - `ojos/devcontainer-bootstrap`
 
 Related proposal:
 - `docs/RELEASE_ASSET_STANDARDIZATION_PROPOSAL.md`
 
-## Required Release Asset Contract
+## 配布方式（パッケージごとに異なる）
 
-Every release across all packages **must** include the following three assets:
+パッケージは消費モデルが異なるため、配布方式も異なる。均一の資産契約は課さない。
 
-| Asset | Description |
-|---|---|
-| `RELEASE-MANIFEST.json` | Package name, version, asset list, and SHA-256 checksums |
-| `SHA256SUMS` | SHA-256 checksums of all files in the release tree |
-| `PACKAGE_ARCHIVE.tar.gz` | Full release tree as a compressed tarball |
+| パッケージ | 配布方式 | 消費者が取得するもの |
+|---|---|---|
+| `devcontainer-bootstrap` | GitHub Release + 資産 | `bootstrap.sh` / `doctor.sh` / `SHA256SUMS`（curl でダウンロード） |
+| `ai-playbook` | git タグのみ（Release なし・資産なし） | git タグ（submodule / subtree / archive tarball で固定して取り込む） |
 
-Package-specific additional assets (e.g. `bootstrap.sh`, `doctor.sh` for DCB) are permitted alongside the three required assets.
+DCB の `SHA256SUMS` は、README がダウンロードさせるファイル（`bootstrap.sh` / `doctor.sh`）だけを対象にする。
+検証する人が手元に持たないファイルを列挙すると `sha256sum -c` が失敗するため。
+ai-playbook はリリース資産を持たない。DCB の `--playbook-from` も git 由来の `archive/refs/tags/` tarball を使う。
 
-## Gate Conditions (Must Pass)
+背景と経緯は [RELEASE_PROCESS_RECORD](RELEASE_PROCESS_RECORD.md) を参照。
 
-Run releases only when all conditions are true:
-- Identity rewrite check reports old identity count = 0 for all target repos
-- Working tree clean in the release-driving workspace
+## ゲート条件（すべて満たすこと）
 
-## Tagging Convention
+- 作業ツリーが clean（`scripts/release-packages.sh` の preflight が検査する）
+- 指定バージョンが未公開（DCB は Release、ai-playbook はタグの有無で判定。preflight が検査する）
 
-Recommended convention:
-- `ai-dotfiles/vX.Y.Z`
+## 不変性
+
+**公開済みバージョンは不変。** 同じバージョンでの再リリースは preflight で失敗し、副作用は出ない。
+タグを固定した利用者にとって内容が変わらないことを保証するため。やり直すには版を上げるか、公開側を削除する。
+
+## タグ命名
+
+- `ai-playbook/vX.Y.Z`
 - `devcontainer-bootstrap/vX.Y.Z`
 
-Reason:
-- avoids ambiguity in multi-package release streams
+## バージョンの正本
 
-## Version Baseline
-
-Current observed baseline:
-- `ai-dotfiles`: unknown (no accessible `VERSION` file via API at prep time)
-- `devcontainer-bootstrap`: unknown (no accessible `VERSION` file via API at prep time)
-
-Action before release:
-- confirm canonical version source per repo (`VERSION` file or package manifest)
+- DCB: `packages/devcontainer-bootstrap/README.md` の固定バージョン（preflight が照合する）
+- ai-playbook: リリース時に指定するタグ
 
 ## Execution Steps
 
-### 1) Preflight
+### 1) 事前確認
+
+- 作業ツリーが clean であること。
+- DCB を出す場合、`packages/devcontainer-bootstrap/README.md` の固定バージョンが目的の版と一致すること。
+- 目的のバージョンが未公開であること（公開済みは不変。再公開は preflight で失敗する）。
+
+これらは `scripts/release-packages.sh` の preflight が自動で検査する。
+
+### 2) リリースノート
+
+各パッケージの変更点を `docs/release-notes-*.md` に追記する。
+
+### 3) リリース実行
+
+`scripts/release-packages.sh` が、ソースの反映・タグ付け・（DCB のみ）Release 作成をまとめて行う。
+手動でのタグ作成や clone は不要。
 
 ```bash
 set -euo pipefail
 cd /workspaces/ojos-ai-packages-dev
 
-git status --short --branch
-
-gh issue view 12 --json state
-
-gh issue view 13 --json state
-
-gh pr list --state open --search 'repo:ojos/ai-packages-dev #12 in:body'
-gh pr list --state open --search 'repo:ojos/ai-packages-dev #13 in:body'
-```
-
-Expected:
-- issue 12/13 closed
-- no blocking open PRs
-
-### 2) Changelog Assembly
-
-Create/append release notes for each package with:
-- Added: conversation gate core/entry and delegation workflow docs
-- Changed: boundary clarification updates
-- Internal: delegation standardization and issue template updates
-
-### 3) Tag Creation (Per Repo)
-
-```bash
-# Example in target repo
-set -euo pipefail
-
-git tag ai-dotfiles/v1.0.0
-git push origin ai-dotfiles/v1.0.0
-```
-
-Repeat with package-specific prefixes.
-
-#### 3-A) ai-dotfiles
-
-```bash
-set -euo pipefail
-WORK=/tmp/release-dotfiles
-rm -rf "$WORK"
-git clone https://github.com/ojos/ai-dotfiles.git "$WORK"
-cd "$WORK"
-
-TAG="ai-dotfiles/v1.0.0"
-git fetch --tags
-git tag "$TAG"
-git push origin "$TAG"
-```
-
-#### 3-B) devcontainer-bootstrap
-
-```bash
-set -euo pipefail
-WORK=/tmp/release-dcb
-rm -rf "$WORK"
-git clone https://github.com/ojos/devcontainer-bootstrap.git "$WORK"
-cd "$WORK"
-
-TAG="devcontainer-bootstrap/v1.0.0"
-git fetch --tags
-git tag "$TAG"
-git push origin "$TAG"
-```
-
-### 4) GitHub Release Publication
-
-Use `scripts/release-packages.sh` to publish. Packages are released independently: only the
-packages you name are touched.
-
-```bash
-set -euo pipefail
-cd /workspaces/ojos-ai-packages-dev
-
-# release one package
+# 片方だけ
 bash scripts/release-packages.sh --owner ojos --dcb-version v0.3.0 --execute
+bash scripts/release-packages.sh --owner ojos --playbook-version v0.4.0 --execute
 
-# or release both in one run
-bash scripts/release-packages.sh \
-  --owner ojos \
-  --dcb-version v0.3.0 \
-  --dotfiles-version v0.4.0 \
-  --execute
+# 両方
+bash scripts/release-packages.sh --owner ojos \
+  --dcb-version v0.3.0 --playbook-version v0.4.0 --execute
 ```
 
-Specify at least one of `--dcb-version` / `--dotfiles-version`. Naming only one leaves the
-other package's published artifacts untouched.
+`--dcb-version` / `--playbook-version` は最低 1 つ。指定したパッケージだけを触り、他方の公開物には手を触れない。
 
-**Published versions are immutable.** Re-releasing an existing version fails during preflight,
-before any side effect. This is deliberate: re-running previously replaced the assets of an
-already-published release while the tag stayed put, so a pinned tag no longer guaranteed the
-same content.
+パッケージごとの挙動:
 
-To redo a release, either bump the version or remove the published release first:
+- **DCB**: 公開リポジトリへソースを反映し、タグを push し、GitHub Release を作成して
+  `bootstrap.sh` / `doctor.sh` / `SHA256SUMS` / `RELEASE-MANIFEST.json` / `PACKAGE_ARCHIVE.tar.gz` を添付する。
+- **ai-playbook**: 公開リポジトリへソースを反映し、タグを push する。Release も資産も作らない。
+
+やり直す場合は版を上げる。どうしても同じ版でやり直すなら、先に公開側を削除する:
 
 ```bash
-gh release delete <tag> --repo <owner>/<repo> --cleanup-tag
+# DCB（Release + タグ）
+gh release delete <tag> --repo ojos/devcontainer-bootstrap --cleanup-tag
+# ai-playbook（タグのみ）
+git push https://github.com/ojos/ai-playbook.git :refs/tags/<tag>
 ```
 
-The script generates and attaches `RELEASE-MANIFEST.json`, `SHA256SUMS`, and
-`PACKAGE_ARCHIVE.tar.gz`. `SHA256SUMS` covers only the files the README tells users to
-download, so the documented verification step succeeds.
+### 4) 事後確認
 
-#### 4-A) ai-dotfiles (manual fallback)
+- DCB の Release 資産が揃っているか監査する（ai-playbook は Release を持たないため対象外）:
 
 ```bash
-set -euo pipefail
-gh release create ai-dotfiles/v1.0.0 \
-  --repo ojos/ai-dotfiles \
-  --title "ai-dotfiles v1.0.0" \
-  --notes-file /workspaces/ojos-ai-packages-dev/docs/release-notes-ai-dotfiles.md \
-  /tmp/dotfiles-release/RELEASE-MANIFEST.json \
-  /tmp/dotfiles-release/SHA256SUMS \
-  /tmp/dotfiles-release/PACKAGE_ARCHIVE.tar.gz
-```
-
-#### 4-B) devcontainer-bootstrap (manual fallback)
-
-```bash
-set -euo pipefail
-gh release create devcontainer-bootstrap/v1.0.0 \
-  --repo ojos/devcontainer-bootstrap \
-  --title "devcontainer-bootstrap v1.0.0" \
-  --notes-file /workspaces/ojos-ai-packages-dev/docs/release-notes-devcontainer-bootstrap.md \
-  /tmp/dcb-release/bootstrap.sh \
-  /tmp/dcb-release/doctor.sh \
-  /tmp/dcb-release/RELEASE-MANIFEST.json \
-  /tmp/dcb-release/SHA256SUMS \
-  /tmp/dcb-release/PACKAGE_ARCHIVE.tar.gz
-```
-
-### 5) Asset Verification
-
-After publication, run the cross-repo asset audit to confirm all required assets are present:
-
-```bash
-set -euo pipefail
 bash scripts/release-packages.sh --owner ojos --audit
 ```
 
-Expected output — every line should read `[audit] OK`:
-
-```
-[audit] checking required release assets: RELEASE-MANIFEST.json SHA256SUMS PACKAGE_ARCHIVE.tar.gz
-[audit] OK    ojos/ai-dotfiles@vX.Y.Z  RELEASE-MANIFEST.json
-[audit] OK    ojos/ai-dotfiles@vX.Y.Z  SHA256SUMS
-[audit] OK    ojos/ai-dotfiles@vX.Y.Z  PACKAGE_ARCHIVE.tar.gz
-[audit] OK    ojos/devcontainer-bootstrap@vX.Y.Z  RELEASE-MANIFEST.json
-[audit] OK    ojos/devcontainer-bootstrap@vX.Y.Z  SHA256SUMS
-[audit] OK    ojos/devcontainer-bootstrap@vX.Y.Z  PACKAGE_ARCHIVE.tar.gz
-[audit] all required assets present
-```
-
-If any line reads `[audit] MISS`, the script exits non-zero. Re-run the release script with `--execute` to repair; it is idempotent and will upload the missing assets with `--clobber`.
-
-Additional checks:
-- verify release pages are published
-- verify tags are visible remotely
-- verify links from README/docs
+- 各リポジトリでタグがリモートに見えること。
+- DCB は README の手順（`curl` + `sha256sum -c`）が通ること。
+- ai-playbook は `archive/refs/tags/<tag>.tar.gz` が取得でき、`.ai-playbook` を含むこと。
 
 ## Rollback Policy
 

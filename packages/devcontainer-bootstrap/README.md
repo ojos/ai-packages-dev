@@ -18,13 +18,13 @@
 このパッケージは、次の 2 つを担います。
 
 1. **DevContainer 環境の生成** — devcontainer 設定、補助スクリプト、`.gitignore` の管理セクション
-2. **AI 共通ルールの配布**（`--with-dotfiles`）— 別リポジトリで管理される共通ルールを、生成先へ配置する
+2. **AI 共通ルールの配布**（`--with-playbook`）— 別リポジトリで管理される共通ルールを、生成先へ配置する
 
-2 について、このパッケージは**配布機構であって正本ではありません**。ルールの正本は dotfiles リポジトリ側にあります。
-このパッケージはルールの内容も、入口ファイルの雛形も持ちません。dotfiles の `templates/` をそのままコピーするだけです。
+2 について、このパッケージは**配布機構であって正本ではありません**。ルールの正本は ai-playbook リポジトリ側にあります。
+このパッケージはルールの内容も、入口ファイルの雛形も持ちません。ai-playbook の `templates/` をそのままコピーするだけです。
 
-そのため、AI ルールだけが必要な場合は、このパッケージを介さず dotfiles を直接導入できます。
-このパッケージは devcontainer と対応言語（node / go / python / php）を前提とするため、それ以外の環境では dotfiles 側の導入手順を使ってください。
+そのため、AI ルールだけが必要な場合は、このパッケージを介さず ai-playbook を直接導入できます。
+このパッケージは devcontainer と対応言語（node / go / python / php）を前提とするため、それ以外の環境では ai-playbook 側の導入手順を使ってください。
 
 ## 公開リリースからの利用
 
@@ -50,7 +50,7 @@ AI 共通ルールも配置する場合は、ルールの取得元を指定し�
 
 ```bash
 bash bootstrap.sh --project-name myapp --languages node,go --mode standard \
-  --with-dotfiles --dotfiles-from https://github.com/ojos/ai-dotfiles/archive/refs/tags/v0.3.0.tar.gz
+  --with-playbook --playbook-from https://github.com/ojos/ai-playbook/archive/refs/tags/v0.1.0.tar.gz
 ```
 
 ## 入力仕様
@@ -64,28 +64,28 @@ bash bootstrap.sh --project-name myapp --languages node,go --mode standard \
 - `--output-dir <path>`（省略時: カレントディレクトリ直下に `<project-name>/` を作成して展開）
 - `--base-image <image>`（自動判定結果を上書きして明示指定）
 - `--github-profiles <csv>`（GitHub マルチアカウント用 profile 名。既定: `primary,secondary`）
-- `--with-dotfiles` / `--without-dotfiles`（AI 共通ルールの配置。既定: 配置しない）
-- `--dotfiles-from <path|url>`（ルールの取得元。ディレクトリまたはアーカイブ URL）
-- `--dotfiles-conflict-policy <skip|overwrite|prompt>`（既存ファイルがある場合の扱い。既定: `skip`）
+- `--with-playbook` / `--without-playbook`（AI 共通ルールの配置。既定: 配置しない）
+- `--playbook-from <path|url>`（ルールの取得元。ディレクトリまたはアーカイブ URL）
+- `--playbook-conflict-policy <skip|overwrite|prompt>`（既存ファイルがある場合の扱い。既定: `skip`）
 
 ### AI 共通ルールの配置
 
-`--with-dotfiles` を指定すると、共通ルールと入口ファイルを生成先へ配置します。**既定では配置しません**（オプトイン）。
+`--with-playbook` を指定すると、共通ルールと入口ファイルを生成先へ配置します。**既定では配置しません**（オプトイン）。
 
 配置されるもの:
 
 | 配置先 | 内容 |
 |---|---|
-| `dotfiles/ai/common/**` | 共通規範、ロール契約、タスクプレイブック、レビュー運用、intake 規律 |
+| `.ai-playbook/**` | 共通規範、ロール契約、タスクプレイブック、レビュー運用、intake 規律 |
 | `.github/project-ai-rules.md` | プロジェクト共通ルールの雛形 |
 | `CLAUDE.md` / `.github/copilot-instructions.md` | 実行環境の入口ファイル（3 層の優先順位を配線） |
 
 取得元は次の順で解決します。
 
-1. `--dotfiles-from` に指定したディレクトリまたはアーカイブ URL
-2. 隣接する dotfiles チェックアウト（`bootstrap.sh` から見て `../../dotfiles` または `../../../dotfiles`）
+1. `--playbook-from` に指定したディレクトリまたはアーカイブ URL
+2. 隣接する ai-playbook チェックアウト（`bootstrap.sh` から見て `../../.ai-playbook` または `../../../.ai-playbook`）
 
-`curl` で `bootstrap.sh` を単体取得して実行する場合は隣接チェックアウトが存在しないため、`--dotfiles-from` の指定が必要です。
+`curl` で `bootstrap.sh` を単体取得して実行する場合は隣接チェックアウトが存在しないため、`--playbook-from` の指定が必要です。
 取得元が解決できない場合は、**ファイルを 1 つも書き込まずに終了します**。
 
 ### モード別 AI CLI 導入挙動
@@ -131,16 +131,16 @@ bash bootstrap.sh --project-name myapp --languages node,go --mode standard \
 # GitHub マルチアカウント profile を指定する場合
 ./bootstrap.sh --project-name myapp --languages node --mode full --github-profiles work,personal
 
-# AI 共通ルールも一緒に配置する場合（隣接する dotfiles チェックアウトから取得）
-./bootstrap.sh --project-name myapp --languages node --mode standard --with-dotfiles
+# AI 共通ルールも一緒に配置する場合（隣接する ai-playbook チェックアウトから取得）
+./bootstrap.sh --project-name myapp --languages node --mode standard --with-playbook
 
 # ルールの取得元を明示する場合（単体取得して実行する場合はこちらが必要）
 ./bootstrap.sh --project-name myapp --languages node --mode standard \
-  --with-dotfiles --dotfiles-from https://github.com/<owner>/<dotfiles-repo>/archive/refs/tags/v0.3.0.tar.gz
+  --with-playbook --playbook-from https://github.com/<owner>/ai-playbook/archive/refs/tags/<tag>.tar.gz
 
 # 既存プロジェクトへルールを追加し、既存ファイルは上書きしたい場合
 ./bootstrap.sh --project-name myapp --languages node --mode standard \
-  --output-dir /path/to/existing-workspace --with-dotfiles --dotfiles-conflict-policy overwrite
+  --output-dir /path/to/existing-workspace --with-playbook --playbook-conflict-policy overwrite
 ```
 
 生成後の切替例:
@@ -216,9 +216,9 @@ bash scripts/github-account-switch.sh use <profile>
 - `.gitignore` の managed セクション（言語構成に応じて自動更新）
 - README のセットアップ節更新
 
-`--with-dotfiles` 指定時は、加えて次を出力します。
+`--with-playbook` 指定時は、加えて次を出力します。
 
-- `dotfiles/ai/common/**`（AI 共通ルール一式）
+- `.ai-playbook/**`（AI 共通ルール一式）
 - `.github/project-ai-rules.md`
 - `CLAUDE.md` / `.github/copilot-instructions.md`
 
