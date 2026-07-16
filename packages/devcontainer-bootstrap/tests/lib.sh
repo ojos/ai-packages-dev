@@ -84,10 +84,27 @@ new_workdir() {
 make_playbook_tarball() {
   local stage archive
   stage="$(mktemp -d "$TEST_TMP_ROOT/tar.XXXXXX")"
-  mkdir -p "$stage/ai-playbook-test/.ai-playbook"
-  cp -R "$PLAYBOOK_SRC/." "$stage/ai-playbook-test/.ai-playbook/"
+  # 実配布と同じ構造にする。配布リポジトリのルート = .ai-playbook の中身なので、
+  # GitHub の archive tarball はバージョン名ディレクトリ直下に規範が並ぶ
+  # （ai-playbook-<ver>/shared-ai-rules.md）。ここで .ai-playbook/ を内包させると
+  # 実配布と乖離し、検出の不具合を素通りさせてしまう。
+  mkdir -p "$stage/ai-playbook-test"
+  cp -R "$PLAYBOOK_SRC/." "$stage/ai-playbook-test/"
   archive="$stage/playbook.tar.gz"
   tar -czf "$archive" -C "$stage" ai-playbook-test
+  printf '%s' "$archive"
+}
+
+# ラッパーディレクトリを持たないフラットな tarball を作る。手製アーカイブなど、
+# 展開すると直下に規範ファイルとサブディレクトリがそのまま並ぶ構造。ラッパー 1 個を
+# 決め打ちする検出だと、直下の最初のサブディレクトリ（例: intake/）を誤認する。
+make_flat_playbook_tarball() {
+  local stage archive
+  stage="$(mktemp -d "$TEST_TMP_ROOT/tar.XXXXXX")"
+  mkdir -p "$stage/content"
+  cp -R "$PLAYBOOK_SRC/." "$stage/content/"
+  archive="$stage/playbook.tar.gz"
+  tar -czf "$archive" -C "$stage/content" .
   printf '%s' "$archive"
 }
 
