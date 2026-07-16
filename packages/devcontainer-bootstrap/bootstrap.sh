@@ -904,14 +904,43 @@ should_install_playbook() {
   [[ "$WITH_PLAYBOOK" == "true" ]]
 }
 
-# Resolve the .ai-playbook directory, from a path, URL, or sibling checkout.
+# 規範ルートを、規範パッケージの内部ファイル名に依存せず構造だけで決める。
+# アンカーは DCB 自身の設置規約である .ai-playbook ディレクトリ名のみ。
+# base（アーカイブ展開先、または指定ディレクトリ）を見て:
+#   1) .ai-playbook/ を含むなら、それをルート（入れ子アーカイブ・モノレポ併設・親指定）。
+#   2) 直下がラッパー 1 ディレクトリのみ（通常ファイルなし）なら、それをルート
+#      （GitHub archive 形式。ルート = .ai-playbook の中身が ai-playbook-<ver>/ 直下に並ぶ）。
+#   3) それ以外（フラット展開、複数エントリ、直下にファイルあり）は base 自身をルート
+#      （チェックアウト直下・手製フラット tarball）。
+# いずれも規範の有無は判定しない。空ソースは呼び出し側の「規範 0 件」検査で弾く。
+resolve_playbook_root() {
+  # 末尾スラッシュを落とす。base を規範ルートとして返す経路で、後段の
+  # rel="${src#"$common_dir"/}" が二重スラッシュになりプレフィックス除去に失敗する
+  # （相対パスにフルパスが残り、配置先が壊れる）のを防ぐ。
+  local base="${1%/}" nested dirs files
+  [[ -n "$base" ]] || base="/"
+  nested="$(find "$base" -type d -name '.ai-playbook' | head -n 1 || true)"
+  if [[ -n "$nested" ]]; then
+    printf '%s' "$nested"
+    return
+  fi
+  dirs="$(find "$base" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')"
+  files="$(find "$base" -mindepth 1 -maxdepth 1 ! -type d | wc -l | tr -d ' ')"
+  if [[ "$dirs" -eq 1 && "$files" -eq 0 ]]; then
+    find "$base" -mindepth 1 -maxdepth 1 -type d | head -n 1
+  else
+    printf '%s' "$base"
+  fi
+}
+
+# Resolve the playbook directory, from a path, URL, or sibling checkout.
 # $2 is a caller-owned scratch dir, used only for the URL case. It must be created and
 # cleaned up by the caller: this function runs inside a command substitution, so a trap
 # registered here would fire in that subshell and delete the extracted files immediately.
 detect_playbook_dir() {
   local source_hint="$1"
   local tmp_root="${2:-}"
-  local archive_file found candidate
+  local archive_file extract_dir found candidate
 
   if [[ -n "$source_hint" ]]; then
     if [[ "$source_hint" =~ ^https?:// ]]; then
@@ -922,11 +951,15 @@ detect_playbook_dir() {
         exit 1
       }
       archive_file="$tmp_root/playbook.tar.gz"
+      # ダウンロードした tarball と展開結果を混ぜない。混ぜると展開直下の
+      # ファイル数判定に playbook.tar.gz が混入し、ルート判定を誤る。
+      extract_dir="$tmp_root/extract"
+      mkdir -p "$extract_dir"
       curl -fsSL "$source_hint" -o "$archive_file"
-      tar -xzf "$archive_file" -C "$tmp_root"
-      found="$(find "$tmp_root" -type d -name '.ai-playbook' | head -n 1 || true)"
+      tar -xzf "$archive_file" -C "$extract_dir"
+      found="$(resolve_playbook_root "$extract_dir")"
       [[ -n "$found" ]] || {
-        echo "error: .ai-playbook not found in archive: $source_hint" >&2
+        echo "error: no playbook directory found in archive: $source_hint" >&2
         exit 1
       }
       printf '%s' "$found"
@@ -934,12 +967,7 @@ detect_playbook_dir() {
     fi
 
     if [[ -d "$source_hint" ]]; then
-      found="$(find "$source_hint" -type d -name '.ai-playbook' | head -n 1 || true)"
-      [[ -n "$found" ]] || {
-        echo "error: .ai-playbook not found under directory: $source_hint" >&2
-        exit 1
-      }
-      printf '%s' "$found"
+      printf '%s' "$(resolve_playbook_root "$source_hint")"
       return
     fi
 

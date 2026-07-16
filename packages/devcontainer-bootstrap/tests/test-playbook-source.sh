@@ -30,6 +30,19 @@ fi
 it "URL 指定で入口ファイルの参照先が実在する"
 assert_file_exists "$out/.ai-playbook/shared-ai-rules.md"
 
+it "ラッパーの無いフラットな tarball でも規範が配置される"
+# 展開直下に規範ファイルとサブディレクトリがフラットに並ぶ手製アーカイブ。
+# ラッパー 1 個を決め打ちする検出だと直下のサブディレクトリを誤認する。
+outf="$(new_workdir)/p"
+archivef="$(make_flat_playbook_tarball)"
+if urlf="$(serve_file "$archivef")"; then
+  run_bootstrap "$outf" --with-playbook --playbook-from "$urlf" >/dev/null 2>&1
+  stop_http_server
+  assert_eq "$(count_rules "$outf/.ai-playbook")" "$EXPECTED_RULES" "配置された規範数"
+else
+  fail "ローカル HTTP サーバを起動できなかった"
+fi
+
 it "URL 指定で一時ディレクトリが残らない"
 before="$(ls -d /tmp/tmp.* 2>/dev/null | wc -l | tr -d ' ')"
 out2="$(new_workdir)/p"
@@ -50,6 +63,13 @@ out="$(new_workdir)/p"
 run_bootstrap "$out" --with-playbook --playbook-from "$PLAYBOOK_SRC" >/dev/null 2>&1
 assert_eq "$(count_rules "$out/.ai-playbook")" "$EXPECTED_RULES" "配置された規範数"
 
+it "末尾スラッシュ付きのディレクトリ指定でも規範が配置される"
+# 末尾スラッシュがルート判定を通り抜けると rel が二重スラッシュで壊れ、配置先が乱れる。
+out="$(new_workdir)/p"
+run_bootstrap "$out" --with-playbook --playbook-from "$PLAYBOOK_SRC/" >/dev/null 2>&1
+assert_eq "$(count_rules "$out/.ai-playbook")" "$EXPECTED_RULES" "配置された規範数"
+assert_file_exists "$out/.ai-playbook/shared-ai-rules.md"
+
 # ── 隣接チェックアウト経路（既定）─────────────────────────────────────────────
 
 it "指定なしで隣接チェックアウトから配置される"
@@ -68,8 +88,10 @@ it "ソース不在なら副作用を残さない"
 assert_file_absent "$out"
 
 it "規範が 0 件のソースは失敗する（沈黙した成功の防止）"
+# 規範を 1 件も配置しないまま成功扱いになることを防ぐ。空ディレクトリを指定すると
+# 検出は通るが、配置対象の規範が 0 件になり install 段で失敗する。
 empty="$(new_workdir)/empty"
-mkdir -p "$empty/.ai-playbook"
+mkdir -p "$empty"
 out="$(new_workdir)/p"
 output="$(run_bootstrap "$out" --with-playbook --playbook-from "$empty" 2>&1)"
 code=$?
