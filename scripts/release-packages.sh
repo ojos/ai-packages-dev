@@ -461,7 +461,7 @@ if [[ -n "$DOTFILES_TAG" ]]; then
   DOTFILES_VER="$(extract_semver "$DOTFILES_TAG")"
   prepare_dotfiles_release_repo "$DOTFILES_DIR"
   # dotfiles はタグ固定で取り込む運用のため、資産のダウンロードを前提としない。
-  # 現状は互換のため README を対象にしておく。資産そのものの要否は未決（RELEASE_PROCESS_REVIEW）。
+  # 現状は互換のため README を対象にしておく。資産そのものの要否は未決（RELEASE_PROCESS_RECORD）。
   SUMS_TARGETS=(README.md)
   generate_standard_assets "$DOTFILES_DIR" "ai-dotfiles" "$DOTFILES_VER"
   init_and_push_release_repo "$DOTFILES_DIR" "$OWNER/ai-dotfiles" public
