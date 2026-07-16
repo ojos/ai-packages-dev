@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # gemini-review.sh — 別ベンダーのモデルによる第二意見（クロスモデル二段ゲートの ②段目）
 #
-# 規範: dotfiles/ai/common/review-workflow.md
+# 規範: .ai-playbook/review-workflow.md
 # 目的: 実装したモデル自身の自己レビューは盲点を共有するため、別ベンダーのモデルで
 #       独立にクロスチェックする。push 前のローカル事前ゲートで使う。
 #

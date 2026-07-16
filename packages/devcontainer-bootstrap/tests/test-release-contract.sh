@@ -23,7 +23,7 @@ assert_file_exists "$RELEASE_SH"
 
 # スクリプトが実際に宣言している checksum 対象を読み取る。テスト側で決め打ちすると
 # スクリプトを変えても検出できない。
-# DCB のリリース直前に宣言されているものを取る。冒頭の空初期化や dotfiles 用の
+# DCB のリリース直前に宣言されているものを取る。冒頭の空初期化や ai-playbook 用の
 # 宣言と取り違えないよう、DCB の資産生成呼び出しの直前にある宣言を対象にする。
 export DCB_SUMS_TARGETS
 DCB_SUMS_TARGETS="$(grep -B3 'generate_standard_assets "\$DCB_DIR"' "$RELEASE_SH" \
@@ -133,7 +133,7 @@ fi
 # 巻き込まれて上書きされた。
 
 it "パッケージ単位のリリースが可能（両方必須ではない）"
-if grep -q 'specify at least one of --dcb-version or --dotfiles-version' "$RELEASE_SH"; then
+if grep -q 'specify at least one of --dcb-version or --playbook-version' "$RELEASE_SH"; then
   pass
 else
   fail "両方のバージョン指定が必須のままになっている"
@@ -156,9 +156,9 @@ else
 fi
 
 it "対象パッケージだけを処理する構造になっている"
-# DCB / dotfiles それぞれの実行ブロックが条件分岐の中にあること
+# DCB / ai-playbook それぞれの実行ブロックが条件分岐の中にあること
 if grep -q 'if \[\[ -n "\$DCB_TAG" \]\]; then' "$RELEASE_SH" \
-   && grep -q 'if \[\[ -n "\$DOTFILES_TAG" \]\]; then' "$RELEASE_SH"; then
+   && grep -q 'if \[\[ -n "\$PLAYBOOK_TAG" \]\]; then' "$RELEASE_SH"; then
   pass
 else
   fail "実行ブロックがパッケージごとに分岐していない"
@@ -171,12 +171,14 @@ if grep -q 'require_version_unpublished' "$RELEASE_SH"; then pass; else fail "�
 
 it "検査が副作用の前（preflight）にある"
 # init_and_push_release_repo は公開 main を全置換する。それより後に気づいても手遅れ。
-guard="$(grep -n 'require_version_unpublished "\$OWNER' "$RELEASE_SH" | head -1 | cut -d: -f1)"
-push="$(grep -n '^  init_and_push_release_repo' "$RELEASE_SH" | head -1 | cut -d: -f1)"
+# DCB の実行フローで、版の重複検査が DCB の全置換より前にあることを見る。
+# （関数定義内の呼び出しではなく、DCB を対象にした実行行を比較する）
+guard="$(grep -n 'require_version_unpublished "\$OWNER/devcontainer-bootstrap"' "$RELEASE_SH" | head -1 | cut -d: -f1)"
+push="$(grep -n 'init_and_push_release_repo "\$DCB_DIR"' "$RELEASE_SH" | head -1 | cut -d: -f1)"
 if [[ -n "$guard" && -n "$push" && "$guard" -lt "$push" ]]; then
   pass
 else
-  fail "検査（$guard 行）が公開 main の置換（$push 行）より後、または欠落"
+  fail "検査（$guard 行）が DCB の公開置換（$push 行）より後、または欠落"
 fi
 
 it "既存リリースを上書きしない"
@@ -219,6 +221,26 @@ elif printf '%s' "$out" | grep -q 'unexpected gh call'; then
 $(printf '%s' "$out" | grep 'unexpected' | head -3)"
 else
   assert_contains "$out" "already has a release" "エラー出力"
+fi
+
+it "ai-playbook もタグ検査が全置換より前にある"
+# ai-playbook は push_source_and_tag（内部で init_and_push_release_repo）で全置換する。
+# タグの重複検査がそれより前（preflight）にあること。
+pb_guard="$(grep -n 'require_tag_unpublished "\$OWNER/ai-playbook"' "$RELEASE_SH" | head -1 | cut -d: -f1)"
+pb_push="$(grep -n 'push_source_and_tag "\$PLAYBOOK_DIR"' "$RELEASE_SH" | head -1 | cut -d: -f1)"
+if [[ -n "$pb_guard" && -n "$pb_push" && "$pb_guard" -lt "$pb_push" ]]; then
+  pass
+else
+  fail "ai-playbook のタグ検査（$pb_guard 行）が全置換（$pb_push 行）より後、または欠落"
+fi
+
+it "ai-playbook は Release を作らない（タグのみ配布）"
+# ai-playbook の実行ブロックに generate_standard_assets / tag_and_release が無いこと。
+pb_block="$(sed -n '/if \[\[ -n "\$PLAYBOOK_TAG" \]\]; then/,/^fi$/p' "$RELEASE_SH" | tail -n +2)"
+if printf '%s' "$pb_block" | grep -qE 'generate_standard_assets|tag_and_release'; then
+  fail "ai-playbook が Release 資産を生成している（タグのみのはず）"
+else
+  pass
 fi
 
 it "版の重複はテスト実行より先に判定される"

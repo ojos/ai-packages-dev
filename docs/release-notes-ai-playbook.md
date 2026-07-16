@@ -1,4 +1,4 @@
-# ai-dotfiles Release Notes Template
+# ai-playbook Release Notes Template
 
 ## Summary
 - Stable release for shared AI operating norms.

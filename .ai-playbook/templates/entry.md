@@ -7,7 +7,7 @@
 
 次の順序でルールを適用します（下位から上位へ優先）。
 
-1. `dotfiles/ai/common/shared-ai-rules.md`（全体共通ルール）
+1. `.ai-playbook/shared-ai-rules.md`（全体共通ルール）
 2. `.github/project-ai-rules.md`（プロジェクト共通ルール）
 3. このファイル（実行環境固有の最小差分）
 
@@ -16,11 +16,11 @@
 ## この入口ファイルの責務
 
 - このファイルは最小構成に保ち、実行環境固有の差分のみを扱います。
-- このファイルでロール責務を再定義しません。ロール責務は `dotfiles/ai/common/role-contracts/` を参照します。
-- このファイルでタスク手順を再定義しません。タスク手順は `dotfiles/ai/common/task-playbooks/` を参照します。
-- このファイルでレビュー運用を再定義しません。レビュー運用は `dotfiles/ai/common/review-workflow.md` を参照します。
+- このファイルでロール責務を再定義しません。ロール責務は `.ai-playbook/role-contracts/` を参照します。
+- このファイルでタスク手順を再定義しません。タスク手順は `.ai-playbook/task-playbooks/` を参照します。
+- このファイルでレビュー運用を再定義しません。レビュー運用は `.ai-playbook/review-workflow.md` を参照します。
 
 ## 導入時の調整
 
-- 規範の配置先が `dotfiles/ai/common` 以外の場合は、上記のパスを実際の配置先へ置き換えます。
+- 規範の配置先が `.ai-playbook` 以外の場合は、上記のパスを実際の配置先へ置き換えます。
 - この節は、調整が済んだら削除してかまいません。

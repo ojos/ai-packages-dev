@@ -14,20 +14,20 @@ echo "test-conflict-and-dryrun"
 
 it "skip（既定）は既存ファイルを保護する"
 out="$(new_workdir)/p"
-mkdir -p "$out/dotfiles/ai/common"
-printf 'CUSTOM\n' > "$out/dotfiles/ai/common/shared-ai-rules.md"
-run_bootstrap "$out" --with-dotfiles >/dev/null 2>&1
-assert_eq "$(cat "$out/dotfiles/ai/common/shared-ai-rules.md")" "CUSTOM" "既存ファイルの内容"
+mkdir -p "$out/.ai-playbook"
+printf 'CUSTOM\n' > "$out/.ai-playbook/shared-ai-rules.md"
+run_bootstrap "$out" --with-playbook >/dev/null 2>&1
+assert_eq "$(cat "$out/.ai-playbook/shared-ai-rules.md")" "CUSTOM" "既存ファイルの内容"
 
 it "skip でも未配置のファイルは配置される"
-assert_file_exists "$out/dotfiles/ai/common/role-contracts/planner.md"
+assert_file_exists "$out/.ai-playbook/role-contracts/planner.md"
 
 it "overwrite は既存ファイルを置き換える"
 out="$(new_workdir)/p"
-mkdir -p "$out/dotfiles/ai/common"
-printf 'CUSTOM\n' > "$out/dotfiles/ai/common/shared-ai-rules.md"
-run_bootstrap "$out" --with-dotfiles --dotfiles-conflict-policy overwrite >/dev/null 2>&1
-if grep -q 'CUSTOM' "$out/dotfiles/ai/common/shared-ai-rules.md"; then
+mkdir -p "$out/.ai-playbook"
+printf 'CUSTOM\n' > "$out/.ai-playbook/shared-ai-rules.md"
+run_bootstrap "$out" --with-playbook --playbook-conflict-policy overwrite >/dev/null 2>&1
+if grep -q 'CUSTOM' "$out/.ai-playbook/shared-ai-rules.md"; then
   fail "上書きされていない"
 else
   pass
@@ -35,7 +35,7 @@ fi
 
 it "不正な衝突ポリシーは拒否される"
 out="$(new_workdir)/p"
-output="$(run_bootstrap "$out" --dotfiles-conflict-policy bogus 2>&1)"
+output="$(run_bootstrap "$out" --playbook-conflict-policy bogus 2>&1)"
 code=$?
 if [[ $code -ne 0 ]]; then
   assert_contains "$output" "must be one of" "エラー出力"
@@ -50,18 +50,18 @@ assert_file_absent "$out"
 
 it "dry-run はファイルを書き込まない"
 out="$(new_workdir)/p"
-run_bootstrap "$out" --with-dotfiles --dry-run >/dev/null 2>&1
+run_bootstrap "$out" --with-playbook --dry-run >/dev/null 2>&1
 assert_file_absent "$out"
 
 it "dry-run の計画と実際の書き込みが一致する"
 # plan: 行には出力先パス以外の情報行も混じるため、出力ディレクトリ配下の
 # パスを示す行だけを対象にする。.gitignore は追記更新で扱いが異なるため除く。
 base="$(new_workdir)"
-planned="$(run_bootstrap "$base/p" --with-dotfiles --dry-run 2>/dev/null \
+planned="$(run_bootstrap "$base/p" --with-playbook --dry-run 2>/dev/null \
   | sed -n "s|^plan: $base/p/||p" \
   | grep -v '^\.gitignore' \
   | sort)"
-run_bootstrap "$base/p" --with-dotfiles >/dev/null 2>&1
+run_bootstrap "$base/p" --with-playbook >/dev/null 2>&1
 actual="$(cd "$base/p" && find . -type f | sed 's|^\./||' | grep -v '^\.gitignore$' | sort)"
 if [[ "$planned" == "$actual" ]]; then
   pass
@@ -72,7 +72,7 @@ fi
 
 it "dry-run でもソース不在は検出される"
 out="$(new_workdir)/p"
-run_bootstrap "$out" --with-dotfiles --dotfiles-from /nonexistent --dry-run >/dev/null 2>&1
+run_bootstrap "$out" --with-playbook --playbook-from /nonexistent --dry-run >/dev/null 2>&1
 assert_eq "$?" "1" "終了コード"
 
 exit_with_result

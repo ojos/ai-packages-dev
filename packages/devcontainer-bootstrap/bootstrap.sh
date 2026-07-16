@@ -6,8 +6,8 @@
 #     -o bootstrap.sh && bash bootstrap.sh --project-name myapp --languages node,go --mode standard
 set -euo pipefail
 
-# Resolved for locating a sibling dotfiles checkout. When this script is fetched
-# standalone (curl), no sibling exists and --dotfiles-from is required.
+# Resolved for locating a sibling ai-playbook checkout. When this script is fetched
+# standalone (curl), no sibling exists and --playbook-from is required.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 PROJECT_NAME=""
@@ -28,12 +28,12 @@ GITIGNORE_BEGIN="# >>> devcontainer-bootstrap managed section >>>"
 GITIGNORE_END="# <<< devcontainer-bootstrap managed section <<<"
 GITIGNORE_REPO_RAW_BASE="https://raw.githubusercontent.com/github/gitignore/main"
 
-WITH_DOTFILES=""
-DOTFILES_FROM=""
-DOTFILES_CONFLICT_POLICY="skip"
-DOTFILES_REL_ROOT="dotfiles/ai/common"
-DOTFILES_COMMON_DIR=""
-DOTFILES_TMP_ROOT=""
+WITH_PLAYBOOK=""
+PLAYBOOK_FROM=""
+PLAYBOOK_CONFLICT_POLICY="skip"
+PLAYBOOK_REL_ROOT=".ai-playbook"
+PLAYBOOK_DIR=""
+PLAYBOOK_TMP_ROOT=""
 
 usage() {
   cat <<'EOF'
@@ -54,10 +54,10 @@ options:
   --force                     Overwrite existing files
   --no-gitignore              管理対象の .gitignore セクションを更新しない
   --gitignore-targets <csv>   Additional template names to use (e.g. VisualStudioCode,JetBrains)
-  --with-dotfiles             Install shared AI rules (dotfiles) and entry files
-  --without-dotfiles          Do not install shared AI rules
-  --dotfiles-from <path|url>  Dotfiles source (directory path or archive URL)
-  --dotfiles-conflict-policy <skip|overwrite|prompt>
+  --with-playbook             Install shared AI rules (ai-playbook) and entry files
+  --without-playbook          Do not install shared AI rules
+  --playbook-from <path|url>  Playbook source (directory path or archive URL)
+  --playbook-conflict-policy <skip|overwrite|prompt>
                               Policy when a rules file already exists (default: skip)
   -h, --help                  Show help
 
@@ -82,10 +82,10 @@ while [[ $# -gt 0 ]]; do
     --force)            FORCE="true"; shift ;;
     --no-gitignore)     MANAGE_GITIGNORE="false"; shift ;;
     --gitignore-targets)   GITIGNORE_TARGETS="$2"; shift 2 ;;
-    --with-dotfiles)    WITH_DOTFILES="true"; shift ;;
-    --without-dotfiles) WITH_DOTFILES="false"; shift ;;
-    --dotfiles-from)    DOTFILES_FROM="$2"; shift 2 ;;
-    --dotfiles-conflict-policy) DOTFILES_CONFLICT_POLICY="$2"; shift 2 ;;
+    --with-playbook)    WITH_PLAYBOOK="true"; shift ;;
+    --without-playbook) WITH_PLAYBOOK="false"; shift ;;
+    --playbook-from)    PLAYBOOK_FROM="$2"; shift 2 ;;
+    --playbook-conflict-policy) PLAYBOOK_CONFLICT_POLICY="$2"; shift 2 ;;
     -h|--help)          usage; exit 0 ;;
     *) echo "error: unknown option: $1" >&2; usage; exit 1 ;;
   esac
@@ -118,9 +118,9 @@ case "$MODE" in
   minimal|standard|full) ;;
   *) echo "error: invalid --mode: $MODE" >&2; exit 1 ;;
 esac
-case "$DOTFILES_CONFLICT_POLICY" in
+case "$PLAYBOOK_CONFLICT_POLICY" in
   skip|overwrite|prompt) ;;
-  *) echo "error: --dotfiles-conflict-policy must be one of: skip, overwrite, prompt" >&2; exit 1 ;;
+  *) echo "error: --playbook-conflict-policy must be one of: skip, overwrite, prompt" >&2; exit 1 ;;
 esac
 [[ -z "$OUTPUT_DIR" ]] && OUTPUT_DIR="$PWD/$PROJECT_NAME"
 
@@ -880,8 +880,8 @@ upsert_gitignore() {
   echo "write: $gitignore_path (managed section)"
 }
 
-# ── Shared AI rules (dotfiles) distribution ───────────────────────────────────
-# This script distributes the rules; the separate dotfiles repository owns them.
+# ── Shared AI rules (ai-playbook) distribution ───────────────────────────────────
+# This script distributes the rules; the separate ai-playbook repository owns them.
 
 # Octal permission bits of a file, or empty when they cannot be determined.
 # GNU coreutils uses -c; BSD/macOS uses -f. GNU also accepts -f, but as
@@ -900,15 +900,15 @@ file_mode_octal() {
   printf ''
 }
 
-should_install_dotfiles() {
-  [[ "$WITH_DOTFILES" == "true" ]]
+should_install_playbook() {
+  [[ "$WITH_PLAYBOOK" == "true" ]]
 }
 
-# Resolve the directory that contains ai/common, from a path, URL, or sibling checkout.
+# Resolve the .ai-playbook directory, from a path, URL, or sibling checkout.
 # $2 is a caller-owned scratch dir, used only for the URL case. It must be created and
 # cleaned up by the caller: this function runs inside a command substitution, so a trap
 # registered here would fire in that subshell and delete the extracted files immediately.
-detect_dotfiles_common_dir() {
+detect_playbook_dir() {
   local source_hint="$1"
   local tmp_root="${2:-}"
   local archive_file found candidate
@@ -921,12 +921,12 @@ detect_dotfiles_common_dir() {
         echo "error: internal: scratch dir not provided for URL source" >&2
         exit 1
       }
-      archive_file="$tmp_root/dotfiles.tar.gz"
+      archive_file="$tmp_root/playbook.tar.gz"
       curl -fsSL "$source_hint" -o "$archive_file"
       tar -xzf "$archive_file" -C "$tmp_root"
-      found="$(find "$tmp_root" -type d -path '*/ai/common' | head -n 1 || true)"
+      found="$(find "$tmp_root" -type d -name '.ai-playbook' | head -n 1 || true)"
       [[ -n "$found" ]] || {
-        echo "error: ai/common not found in dotfiles archive: $source_hint" >&2
+        echo "error: .ai-playbook not found in archive: $source_hint" >&2
         exit 1
       }
       printf '%s' "$found"
@@ -934,22 +934,22 @@ detect_dotfiles_common_dir() {
     fi
 
     if [[ -d "$source_hint" ]]; then
-      found="$(find "$source_hint" -type d -path '*/ai/common' | head -n 1 || true)"
+      found="$(find "$source_hint" -type d -name '.ai-playbook' | head -n 1 || true)"
       [[ -n "$found" ]] || {
-        echo "error: ai/common not found under directory: $source_hint" >&2
+        echo "error: .ai-playbook not found under directory: $source_hint" >&2
         exit 1
       }
       printf '%s' "$found"
       return
     fi
 
-    echo "error: --dotfiles-from not found: $source_hint" >&2
+    echo "error: --playbook-from not found: $source_hint" >&2
     exit 1
   fi
 
   for candidate in \
-    "$SCRIPT_DIR/../../dotfiles/ai/common" \
-    "$SCRIPT_DIR/../../../dotfiles/ai/common"; do
+    "$SCRIPT_DIR/../../.ai-playbook" \
+    "$SCRIPT_DIR/../../../.ai-playbook"; do
     if [[ -d "$candidate" ]]; then
       printf '%s' "$candidate"
       return
@@ -976,7 +976,7 @@ apply_file_with_policy() {
   prev_mode="$(file_mode_octal "$dest")"
   prev_mode="${prev_mode:-644}"
 
-  case "$DOTFILES_CONFLICT_POLICY" in
+  case "$PLAYBOOK_CONFLICT_POLICY" in
     skip)
       echo "skip (exists): $dest"
       ;;
@@ -1001,9 +1001,9 @@ apply_file_with_policy() {
 # 入口ファイルとレビュースクリプトの雛形は、規範パッケージが持つ。
 # DCB は配置するだけで内容を持たない。内容を持つと正本が 2 つになり、規範側の
 # 変更に追随できずにずれる。
-require_dotfiles_template() {
+require_playbook_template() {
   local name="$1" path
-  path="$DOTFILES_COMMON_DIR/templates/$name"
+  path="$PLAYBOOK_DIR/templates/$name"
   [[ -f "$path" ]] || {
     echo "error: template not found in rules source: templates/$name" >&2
     echo "       規範パッケージがこの版に必要な雛形を持っていません。" >&2
@@ -1015,30 +1015,33 @@ require_dotfiles_template() {
 # Resolve once, before any file is written, so a bad source fails without side effects.
 # Called from the main shell (never inside a command substitution) so that the cleanup
 # trap belongs to the process that still needs the extracted files.
-resolve_dotfiles_source_or_die() {
-  if [[ "$DOTFILES_FROM" =~ ^https?:// ]]; then
-    DOTFILES_TMP_ROOT="$(mktemp -d)"
-    trap 'rm -rf "$DOTFILES_TMP_ROOT"' EXIT
+resolve_playbook_source_or_die() {
+  if [[ "$PLAYBOOK_FROM" =~ ^https?:// ]]; then
+    PLAYBOOK_TMP_ROOT="$(mktemp -d)"
+    trap 'rm -rf "$PLAYBOOK_TMP_ROOT"' EXIT
   fi
 
-  DOTFILES_COMMON_DIR="$(detect_dotfiles_common_dir "$DOTFILES_FROM" "$DOTFILES_TMP_ROOT")"
-  if [[ -z "$DOTFILES_COMMON_DIR" ]]; then
-    echo "error: dotfiles source not found. specify --dotfiles-from <path|url>." >&2
+  PLAYBOOK_DIR="$(detect_playbook_dir "$PLAYBOOK_FROM" "$PLAYBOOK_TMP_ROOT")"
+  if [[ -z "$PLAYBOOK_DIR" ]]; then
+    echo "error: playbook source not found. specify --playbook-from <path|url>." >&2
     exit 1
   fi
 }
 
 # Second-opinion reviewer for the cross-model gate. The norm lives in the rules
 # package (review-workflow.md); this is the executable side of it.
-install_dotfiles_rules() {
-  local common_dir="$DOTFILES_COMMON_DIR" rel dest tmp count=0
+install_playbook_rules() {
+  local common_dir="$PLAYBOOK_DIR" rel dest tmp count=0
 
   echo "[bootstrap] shared AI rules from: $common_dir"
 
+  # 配布ルート直下の README.md はパッケージ自身の説明であり、利用者が取り込む規範
+  # ではない。フラット化で規範と同階層に並ぶため、明示的に除外する。
   while IFS= read -r src; do
     [[ -n "$src" ]] || continue
     rel="${src#"$common_dir"/}"
-    dest="$OUTPUT_DIR/$DOTFILES_REL_ROOT/$rel"
+    [[ "$rel" == "README.md" ]] && continue
+    dest="$OUTPUT_DIR/$PLAYBOOK_REL_ROOT/$rel"
     apply_file_with_policy "$src" "$dest"
     count=$((count + 1))
   done < <(find "$common_dir" -type f -name '*.md' | sort)
@@ -1053,15 +1056,15 @@ install_dotfiles_rules() {
 
   # 雛形は規範パッケージから取る。DCB はどこへ置くかだけを決める。
   local tpl
-  tpl="$(require_dotfiles_template project-ai-rules.md)"
+  tpl="$(require_playbook_template project-ai-rules.md)"
   apply_file_with_policy "$tpl" "$OUTPUT_DIR/.github/project-ai-rules.md"
 
   # 入口ファイルは実行環境ごとに 1 つ。内容は同一で、雛形も 1 つ。
-  tpl="$(require_dotfiles_template entry.md)"
+  tpl="$(require_playbook_template entry.md)"
   apply_file_with_policy "$tpl" "$OUTPUT_DIR/CLAUDE.md"
   apply_file_with_policy "$tpl" "$OUTPUT_DIR/.github/copilot-instructions.md"
 
-  tpl="$(require_dotfiles_template gemini-review.sh)"
+  tpl="$(require_playbook_template gemini-review.sh)"
   apply_file_with_policy "$tpl" "$OUTPUT_DIR/scripts/gemini-review.sh"
   if [[ -f "$OUTPUT_DIR/scripts/gemini-review.sh" ]]; then
     chmod +x "$OUTPUT_DIR/scripts/gemini-review.sh"
@@ -1097,8 +1100,8 @@ echo "[bootstrap] mode=$MODE languages=${LANGUAGES[*]}"
 echo "[bootstrap] output=$OUTPUT_DIR"
 
 # Fail before writing anything if the rules source was requested but is unusable.
-if should_install_dotfiles; then
-  resolve_dotfiles_source_or_die
+if should_install_playbook; then
+  resolve_playbook_source_or_die
 fi
 
 # Collect and sort relative paths for the selected mode (bash 3 compatible)
@@ -1122,12 +1125,14 @@ EOF
     fi
   fi
 
-  if should_install_dotfiles; then
-    echo "plan: shared AI rules from $DOTFILES_COMMON_DIR"
+  if should_install_playbook; then
+    echo "plan: shared AI rules from $PLAYBOOK_DIR"
     while IFS= read -r src; do
       [[ -n "$src" ]] || continue
-      echo "plan: $OUTPUT_DIR/$DOTFILES_REL_ROOT/${src#"$DOTFILES_COMMON_DIR"/}"
-    done < <(find "$DOTFILES_COMMON_DIR" -type f -name '*.md' | sort)
+      rel="${src#"$PLAYBOOK_DIR"/}"
+      [[ "$rel" == "README.md" ]] && continue
+      echo "plan: $OUTPUT_DIR/$PLAYBOOK_REL_ROOT/$rel"
+    done < <(find "$PLAYBOOK_DIR" -type f -name '*.md' | sort)
     echo "plan: $OUTPUT_DIR/.github/project-ai-rules.md"
     echo "plan: $OUTPUT_DIR/CLAUDE.md"
     echo "plan: $OUTPUT_DIR/.github/copilot-instructions.md"
@@ -1147,8 +1152,8 @@ if [[ "$MANAGE_GITIGNORE" == "true" ]]; then
   upsert_gitignore
 fi
 
-if should_install_dotfiles; then
-  install_dotfiles_rules
+if should_install_playbook; then
+  install_playbook_rules
 fi
 
 echo "[bootstrap] completed"

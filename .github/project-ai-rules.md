@@ -5,7 +5,7 @@
 ## 常時適用
 
 - `.github/PROJECT_DEFINITION.md` をプロジェクト固有の最上位定義として読み、必ず従います。
-- 汎用ルール（言語方針・命名規則）は `dotfiles/ai/common/shared-ai-rules.md` を参照します。
+- 汎用ルール（言語方針・命名規則）は `.ai-playbook/shared-ai-rules.md` を参照します。
 - 利便性のための編集よりも、上記ポリシーを優先します。
 - `packages/**` に固有名詞を混入し得る編集は、ユーザー確認なしで実施しません。
 
@@ -18,7 +18,7 @@
 
 ## 機密の具体化
 
-共通規範「機密の取り扱い」（`dotfiles/ai/common/shared-ai-rules.md`）を、このリポジトリで具体化します。
+共通規範「機密の取り扱い」（`.ai-playbook/shared-ai-rules.md`）を、このリポジトリで具体化します。
 
 - 機密の読み取り元: `.env`（`scripts/load-env.sh` が読み込む）、および GitHub CLI の認証情報
 - 追跡除外: `.env` および `.env.*`（`.gitignore` 済み）
@@ -36,7 +36,7 @@
 
 ## レビューの起動方法
 
-共通規範「レビューワークフロー」（`dotfiles/ai/common/review-workflow.md`）のクロスモデル二段ゲートを、このリポジトリで具体化します。
+共通規範「レビューワークフロー」（`.ai-playbook/review-workflow.md`）のクロスモデル二段ゲートを、このリポジトリで具体化します。
 
 push / PR 作成の前に、次の 2 段を通します。
 
@@ -196,7 +196,7 @@ Step 3: 設計妥当性の相談（条件付き）
   - 進行と記録は consult-facilitator ロール契約に従う
 
 Step 4: intake 票の下書き
-  - dotfiles/ai/common/intake/intake-template.md の必須構造を埋める
+  - .ai-playbook/intake/intake-template.md の必須構造を埋める
   - 必須: goal / scope.in / acceptance / priority
   - 任意: scope.out / constraints
 
@@ -228,5 +228,5 @@ Step 9: 実装委譲へ移行
 ### 制約
 
 - Step 7（ユーザー承認）なしに issue を作成してはなりません。
-- intake の要否判定と、その根拠の分類は `dotfiles/ai/common/intake/REASON_CODES.md` に従います。
-- intake-manager の権限境界（`dotfiles/ai/common/role-contracts/intake-manager.md`）に従います。
+- intake の要否判定と、その根拠の分類は `.ai-playbook/intake/REASON_CODES.md` に従います。
+- intake-manager の権限境界（`.ai-playbook/role-contracts/intake-manager.md`）に従います。

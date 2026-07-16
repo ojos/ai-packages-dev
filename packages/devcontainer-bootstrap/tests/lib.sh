@@ -12,7 +12,7 @@ TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PKG_DIR="$(cd "$TESTS_DIR/.." && pwd)"
 BOOTSTRAP="$PKG_DIR/bootstrap.sh"
 REPO_ROOT="$(cd "$PKG_DIR/../.." && pwd)"
-DOTFILES_SRC="$REPO_ROOT/dotfiles"
+PLAYBOOK_SRC="$REPO_ROOT/.ai-playbook"
 
 # 各テストが使う一時領域。run-tests.sh が最後に掃除する。
 : "${TEST_TMP_ROOT:?TEST_TMP_ROOT must be set by the runner}"
@@ -80,14 +80,14 @@ new_workdir() {
 }
 
 # 規範ソースの tar.gz を作り、パスを返す。公開アーカイブと同じく
-# トップレベルディレクトリを 1 段挟む（ai-dotfiles-<ver>/ai/common/...）。
-make_dotfiles_tarball() {
+# トップレベルディレクトリを 1 段挟む（ai-playbook-<ver>/.ai-playbook/...）。
+make_playbook_tarball() {
   local stage archive
   stage="$(mktemp -d "$TEST_TMP_ROOT/tar.XXXXXX")"
-  mkdir -p "$stage/ai-dotfiles-test"
-  cp -R "$DOTFILES_SRC/." "$stage/ai-dotfiles-test/"
-  archive="$stage/dotfiles.tar.gz"
-  tar -czf "$archive" -C "$stage" ai-dotfiles-test
+  mkdir -p "$stage/ai-playbook-test/.ai-playbook"
+  cp -R "$PLAYBOOK_SRC/." "$stage/ai-playbook-test/.ai-playbook/"
+  archive="$stage/playbook.tar.gz"
+  tar -czf "$archive" -C "$stage" ai-playbook-test
   printf '%s' "$archive"
 }
 
@@ -181,9 +181,10 @@ stop_http_server() {
 # 次の実行やこの環境自体に影響する。
 trap stop_http_server EXIT
 
-# 規範ファイルの数を数える。
+# 配置される規範ファイルの数を数える。配布ルート直下の README.md は
+# パッケージ自身の説明であり配置対象外なので、除外して実装と一致させる。
 count_rules() {
-  find "$1" -type f -name '*.md' 2>/dev/null | wc -l | tr -d ' '
+  find "$1" -type f -name '*.md' 2>/dev/null | grep -v '/README\.md$' | wc -l | tr -d ' '
 }
 
 # bootstrap.sh を最小構成で実行する。追加引数はそのまま渡す。
