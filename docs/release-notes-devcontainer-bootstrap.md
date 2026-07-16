@@ -1,5 +1,18 @@
 # devcontainer-bootstrap Release Notes
 
+## v0.3.1
+
+### Summary
+- `--with-playbook --playbook-from <ai-playbook タグ tarball>` が実配布の tarball 構造で動かない不具合を修正（v0.3.0 のリグレッション）。
+
+### Fixes
+- `detect_playbook_dir` が `.ai-playbook` というディレクトリ名だけを探していたため、配布リポジトリの archive tarball（`ai-playbook-<ver>/` 直下に規範が並ぶ＝ルート = `.ai-playbook` の中身）を検出できず失敗していた。ディレクトリ名に加え、GitHub archive 形式（単一トップディレクトリ直下が規範ルート）を構造で検出するよう修正。規範パッケージの内部ファイル名には依存しない。
+- テストの tarball 生成（`make_playbook_tarball`）が実配布と異なり `.ai-playbook/` を内包していたため不具合を素通りさせていた。実配布と同じ構造へ修正し、リグレッションを検出できるようにした。
+
+### Verification
+- [x] 公開済み `ojos/ai-playbook` v0.1.0 の archive tarball を実際に取得し、規範 18 件が `.ai-playbook/` へ配置され README が除外されることを確認。
+- [x] DCB テストスイート全 6 ファイル成功。
+
 ## v0.3.0
 
 ### Summary
