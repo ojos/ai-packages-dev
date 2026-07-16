@@ -63,21 +63,21 @@ get_latest_tag() {
 }
 
 DCB_TAG="$(get_latest_tag devcontainer-bootstrap)"
-DOTFILES_TAG="$(get_latest_tag ai-dotfiles)"
+PLAYBOOK_TAG="$(get_latest_tag ai-playbook)"
 
 BLOCK_FILE="$(mktemp)"
 cat >"$BLOCK_FILE" <<EOF
 | パッケージ | 配布状態 |
 |---|---|
 | devcontainer-bootstrap | $OWNER/devcontainer-bootstrap で $DCB_TAG まで公開済み |
-| dotfiles | $OWNER/ai-dotfiles で $DOTFILES_TAG まで公開済み |
+| ai-playbook | $OWNER/ai-playbook で $PLAYBOOK_TAG まで公開済み |
 
 リリース実行手順は各パッケージの \`docs/\` または \`.github/workflows/\` を参照する。
 
 ### リリース状況
 
 - \`devcontainer-bootstrap\`: published up to \`$DCB_TAG\` at \`$OWNER/devcontainer-bootstrap\`
-- \`dotfiles\`: published up to \`$DOTFILES_TAG\` at \`$OWNER/ai-dotfiles\`
+- \`ai-playbook\`: published up to \`$PLAYBOOK_TAG\` at \`$OWNER/ai-playbook\`
 EOF
 
 OUT_FILE="$(mktemp)"
@@ -106,4 +106,4 @@ rm -f "$BLOCK_FILE"
 
 echo "[ok] updated release status block in $README_PATH"
 echo "[info] devcontainer-bootstrap=$DCB_TAG"
-echo "[info] ai-dotfiles=$DOTFILES_TAG"
+echo "[info] ai-playbook=$PLAYBOOK_TAG"

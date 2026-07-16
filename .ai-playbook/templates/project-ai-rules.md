@@ -5,11 +5,11 @@
 
 ## 参照先
 
-- 全体共通ルール: `dotfiles/ai/common/shared-ai-rules.md`
-- ロール責務: `dotfiles/ai/common/role-contracts/`
-- タスク手順: `dotfiles/ai/common/task-playbooks/`
-- レビュー運用: `dotfiles/ai/common/review-workflow.md`
-- intake 規律・判定根拠: `dotfiles/ai/common/intake/`
+- 全体共通ルール: `.ai-playbook/shared-ai-rules.md`
+- ロール責務: `.ai-playbook/role-contracts/`
+- タスク手順: `.ai-playbook/task-playbooks/`
+- レビュー運用: `.ai-playbook/review-workflow.md`
+- intake 規律・判定根拠: `.ai-playbook/intake/`
 
 実行環境の入口ファイル（`CLAUDE.md` 等）はこのファイルを参照し、最小差分のみを記述します。
 

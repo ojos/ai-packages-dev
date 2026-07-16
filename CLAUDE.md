@@ -6,7 +6,7 @@
 
 次の順序でルールを適用します（下位から上位へ優先）。
 
-1. `dotfiles/ai/common/shared-ai-rules.md`（全体共通ルール）
+1. `.ai-playbook/shared-ai-rules.md`（全体共通ルール）
 2. `.github/project-ai-rules.md`（プロジェクト共通ルール）
 3. このファイル（Claude 実行環境固有の最小差分）
 

@@ -3,7 +3,7 @@
 #
 # 以前は DCB が入口ファイルと gemini-review.sh の内容を埋め込んでいた。その結果、
 # 規範（review-workflow.md）と実装（gemini-review.sh のプロンプト）が別パッケージへ
-# 複製され、正本が 2 つになっていた。また DCB が dotfiles の内部構造
+# 複製され、正本が 2 つになっていた。また DCB が規範パッケージの内部構造
 # （role-contracts/ 等）をハードコードしていたため、規範側の再編で静かに壊れる
 # 状態だった。
 #
@@ -15,7 +15,7 @@ set -uo pipefail
 
 echo "test-templates"
 
-TPL="$DOTFILES_SRC/ai/common/templates"
+TPL="$PLAYBOOK_SRC/templates"
 
 # ── 規範パッケージ側に雛形が揃っているか ─────────────────────────────────────
 
@@ -60,7 +60,7 @@ fi
 # ── 生成物は雛形と完全一致する（コピーであって再生成でない）──────────────────
 
 out="$(new_workdir)/p"
-run_bootstrap "$out" --with-dotfiles >/dev/null 2>&1
+run_bootstrap "$out" --with-playbook >/dev/null 2>&1
 
 it "CLAUDE.md は雛形と完全一致する"
 if diff -q "$out/CLAUDE.md" "$TPL/entry.md" >/dev/null 2>&1; then pass; else fail "雛形と一致しない"; fi
@@ -76,10 +76,10 @@ if diff -q "$out/scripts/gemini-review.sh" "$TPL/gemini-review.sh" >/dev/null 2>
 
 it "雛形が欠けている規範ソースは失敗する"
 broken="$(new_workdir)/broken"
-mkdir -p "$broken/ai/common"
-cp "$DOTFILES_SRC/ai/common/shared-ai-rules.md" "$broken/ai/common/"
+mkdir -p "$broken/.ai-playbook"
+cp "$PLAYBOOK_SRC/shared-ai-rules.md" "$broken/.ai-playbook/"
 out2="$(new_workdir)/p"
-output="$(run_bootstrap "$out2" --with-dotfiles --dotfiles-from "$broken" 2>&1)"
+output="$(run_bootstrap "$out2" --with-playbook --playbook-from "$broken" 2>&1)"
 if [[ $? -ne 0 ]]; then
   assert_contains "$output" "template not found" "エラー出力"
 else
@@ -92,20 +92,20 @@ fi
 
 it "DCB を使わずに雛形のコピーだけで 3 層が揃う"
 solo="$(new_workdir)/solo"
-mkdir -p "$solo/.github" "$solo/dotfiles"
-cp -R "$DOTFILES_SRC/ai" "$solo/dotfiles/"
-cp "$solo/dotfiles/ai/common/templates/project-ai-rules.md" "$solo/.github/project-ai-rules.md"
-cp "$solo/dotfiles/ai/common/templates/entry.md" "$solo/CLAUDE.md"
+mkdir -p "$solo/.github"
+cp -R "$PLAYBOOK_SRC" "$solo/.ai-playbook"
+cp "$solo/.ai-playbook/templates/project-ai-rules.md" "$solo/.github/project-ai-rules.md"
+cp "$solo/.ai-playbook/templates/entry.md" "$solo/CLAUDE.md"
 missing=""
-for f in dotfiles/ai/common/shared-ai-rules.md .github/project-ai-rules.md CLAUDE.md; do
+for f in .ai-playbook/shared-ai-rules.md .github/project-ai-rules.md CLAUDE.md; do
   [[ -f "$solo/$f" ]] || missing="$missing $f"
 done
 if [[ -z "$missing" ]]; then pass; else fail "3 層が揃わない:$missing"; fi
 
 it "単独導入でも入口ファイルの参照先が実在する"
 missing=""
-for f in dotfiles/ai/common/shared-ai-rules.md dotfiles/ai/common/role-contracts/planner.md \
-         dotfiles/ai/common/task-playbooks/pr-review.md dotfiles/ai/common/review-workflow.md; do
+for f in .ai-playbook/shared-ai-rules.md .ai-playbook/role-contracts/planner.md \
+         .ai-playbook/task-playbooks/pr-review.md .ai-playbook/review-workflow.md; do
   [[ -f "$solo/$f" ]] || missing="$missing $f"
 done
 if [[ -z "$missing" ]]; then pass; else fail "参照先が不在:$missing"; fi

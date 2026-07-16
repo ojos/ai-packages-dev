@@ -3,7 +3,7 @@
 このファイルは、プロジェクト固有の最上位定義です。
 
 > 汎用ルール（言語方針・命名規則）は以下に移管済み。
-> - `dotfiles/ai/common/shared-ai-rules.md` — ドキュメント言語方針・命名規則
+> - `.ai-playbook/shared-ai-rules.md` — ドキュメント言語方針・命名規則
 >
 > packages 構造・運用規則は `.github/project-ai-rules.md` を参照。
 

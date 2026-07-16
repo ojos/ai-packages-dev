@@ -56,7 +56,7 @@ labels: implementation
 - [ ] 依存があり直列で進める必要がある（依存先を記載）
 
 <!-- 実装を伴うサブエージェントへ並列委譲する場合は、作業ツリーの分離を機構で保証すること。
-     dotfiles/ai/common/role-contracts/implementer.md の「作業ツリーの分離」を参照。 -->
+     .ai-playbook/role-contracts/implementer.md の「作業ツリーの分離」を参照。 -->
 
 ---
 
