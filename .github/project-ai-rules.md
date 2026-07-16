@@ -26,6 +26,20 @@
 - GitHub トークンは `GITHUB_TOKEN_<PROFILE>` 環境変数で扱い、ファイルへ保存しません（`scripts/github-account-switch.sh`）
 - リリース実行時、シークレットの値をリリース資産へ含めません
 
+## Git identity（コミット作者情報）
+
+`ojos/*` リポジトリへのすべての git 操作（commit / tag / リリーススクリプト内の一時クローン含む）は、次の identity で行います。
+
+- `user.name` = `$GIT_AUTHOR_NAME_OJOS`（= `Ido`）
+- `user.email` = `$GIT_AUTHOR_EMAIL_OJOS`（= `ido@ojos.jp`）
+
+順守事項:
+
+- グローバル gitconfig へのフォールバックに依存しません。Dev Container はホストの `~/.gitconfig`（別アカウントの identity の場合がある）をコピーするためです。
+- コンテナ接続時に `scripts/on-attach.sh` がグローバル identity を `$GIT_AUTHOR_NAME_OJOS` / `$GIT_AUTHOR_EMAIL_OJOS` で強制上書きします。
+- リポジトリ外の一時クローンでコミットするスクリプトは、`git -c user.name=... -c user.email=...` などで identity を明示します。
+- push / リリース実行の前に `git log -1 --format='%an <%ae>'` で作者情報を確認します。`aizu@bascule.co.jp` 等の別 identity を検出した場合は中断し、修正してからやり直します。
+
 ## 作業状況の記録先
 
 共通規範「作業状況の記録」を、このリポジトリで具体化します。
