@@ -89,8 +89,8 @@ cat >"$BLOCK_FILE" <<EOF
 
 ### リリース状況
 
-- \`devcontainer-bootstrap\`: published up to \`$DCB_TAG\` at \`$OWNER/devcontainer-bootstrap\`
-- \`ai-playbook\`: published up to \`$PLAYBOOK_TAG\` at \`$OWNER/ai-playbook\`
+- \`devcontainer-bootstrap\`: \`$OWNER/devcontainer-bootstrap\` で \`$DCB_TAG\` まで公開済み
+- \`ai-playbook\`: \`$OWNER/ai-playbook\` で \`$PLAYBOOK_TAG\` まで公開済み
 EOF
 
 OUT_FILE="$(mktemp)"

@@ -4,15 +4,6 @@ ai-playbook / DevContainer Bootstrap (DCB) の 2 パッケージを共同開発�
 
 各パッケージは独立して配布可能な設計ですが、相互補完することで AI コーディング導入のシナジーを生み出すために、開発は 1 リポジトリに集約します。
 
-## English Summary
-
-This repository is a monorepo for collaborative development of two packages:
-ai-playbook and DevContainer Bootstrap (DCB).
-
-Each package is distributable on its own, but they are developed together to reduce AI coding onboarding cost through combined usage.
-
----
-
 ## パッケージ構成
 
 ```
@@ -35,14 +26,6 @@ ai-packages-dev/
     └── setup-devcontainer-bootstrap-release-repo.sh  # DCB 公開リポジトリ初期化
 ```
 
-### Package Layout (English)
-
-- `.ai-playbook/`: source of truth for AI operating norms (published to ojos/ai-playbook)
-- `packages/devcontainer-bootstrap/`: one-command Dev Container generator and norm distributor
-- `scripts/`: operational helper scripts
-
----
-
 ## パッケージの役割と関係
 
 | パッケージ | 役割 | 配布先リポジトリ |
@@ -57,15 +40,6 @@ ai-packages-dev/
 
 **DCB = 配布機構 / ai-playbook = 正本**という分担です。DCB は規範の内容を定義せず、配置のみを担います。
 規範は実行基盤・状態面・ベンダーの選択を強制しません。
-
-### Roles And Relationship (English)
-
-1. Build a Dev Container environment with DCB (`--with-playbook` also places the shared norms).
-2. Operate with the runtime's native capabilities, following the placed norms.
-
-DCB is the distribution mechanism; ai-playbook is the source of truth.
-
----
 
 ## 経緯: Agent Swarm Framework の退役
 
@@ -89,15 +63,6 @@ ASF は 2026-07 に退役しました。
 - **リリース:** 各パッケージは独立してタグを打ち、専用リリースリポジトリへ配布する
 - **秘匿情報:** トークン・シークレットはファイルに保存しない（環境変数または CLI 認証を使う）
 
-### Development Rules (English)
-
-- No direct push to `main`; use feature branch and PR.
-- Keep macOS bash 3.2+ compatibility and validate with `bash -n`.
-- Release each package independently to its dedicated release repository.
-- Never store secrets in files; use environment variables or CLI auth.
-
----
-
 ## リリースリポジトリとの関係
 
 このセクションは `bash scripts/update-release-status.sh` で更新する。
@@ -113,8 +78,8 @@ ASF は 2026-07 に退役しました。
 
 ### リリース状況
 
-- `devcontainer-bootstrap`: published up to `v0.1.0` at `ojos/devcontainer-bootstrap`
-- `ai-playbook`: published up to `v0.1.0` at `ojos/ai-playbook`
+- `devcontainer-bootstrap`: `ojos/devcontainer-bootstrap` で `v0.1.0` まで公開済み
+- `ai-playbook`: `ojos/ai-playbook` で `v0.1.0` まで公開済み
 <!-- RELEASE_STATUS:END -->
 
 ---

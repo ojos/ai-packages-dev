@@ -186,7 +186,7 @@ if failed:
 PY
 }
 
-# Required assets every package release must include.
+# すべてのパッケージリリースに必須のリリース資産。
 REQUIRED_RELEASE_ASSETS=("RELEASE-MANIFEST.json" "SHA256SUMS" "PACKAGE_ARCHIVE.tar.gz")
 
 # ソースを公開リポジトリへ反映し、タグを push する。GitHub Release は作らない。
@@ -211,8 +211,8 @@ push_source_and_tag() {
   echo "[ok] $repo tagged $tag (source-only, no release)"
 }
 
-# Generate the three standard release assets in <dir> for a given package.
-# Usage: generate_standard_assets <dir> <package-name> <version>
+# 指定パッケージの標準リリース資産 3 点を <dir> に生成する。
+# 使い方: generate_standard_assets <dir> <package-name> <version>
 generate_standard_assets() {
   local dir="$1"
   local pkg_name="$2"
@@ -221,7 +221,7 @@ generate_standard_assets() {
 
   pushd "$dir" >/dev/null
 
-  # PACKAGE_ARCHIVE.tar.gz — full tree minus the .git directory
+  # PACKAGE_ARCHIVE.tar.gz — .git ディレクトリを除いた全ツリー
   archive_tmp="$(mktemp)"
   tar \
     --exclude='./.git' \
@@ -361,8 +361,8 @@ tag_and_release() {
   fi
 }
 
-# Audit required release assets across all repos for the given owner.
-# Prints a report and exits non-zero if any required asset is missing.
+# 指定 owner の全リポジトリを対象に、必須リリース資産を監査する。
+# レポートを出力し、必須資産に欠けがあれば非ゼロで終了する。
 audit_release_assets() {
   local owner="$1"
   # ai-playbook は Release 資産を持たない（タグのみ配布）ため監査対象外。
