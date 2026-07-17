@@ -1,17 +1,13 @@
-# Release Execution Runbook
+# リリース実行ランブック
 
-This runbook defines the exact execution flow for final package releases after implementation issues are merged.
 このランブックは、実装 issue のマージ後に最終パッケージリリースを実行する手順を定義する。
 
-## Scope
+## 対象範囲
 
-Target repositories:
-- `ojos/ai-packages-dev` (coordination)
+対象リポジトリ:
+- `ojos/ai-packages-dev`（開発・調整）
 - `ojos/ai-playbook`
 - `ojos/devcontainer-bootstrap`
-
-Related proposal:
-- `docs/RELEASE_ASSET_STANDARDIZATION_PROPOSAL.md`
 
 ## 配布方式（パッケージごとに異なる）
 
@@ -49,7 +45,7 @@ ai-playbook はリリース資産を持たない。DCB の `--playbook-from` も
 - DCB: `packages/devcontainer-bootstrap/README.md` の固定バージョン（preflight が照合する）
 - ai-playbook: リリース時に指定するタグ
 
-## Execution Steps
+## 実行手順
 
 ### 1) 事前確認
 
@@ -110,16 +106,16 @@ bash scripts/release-packages.sh --owner ojos --audit
 - DCB は README の手順（`curl` + `sha256sum -c`）が通ること。
 - ai-playbook は `archive/refs/tags/<tag>.tar.gz` が取得でき、`.ai-playbook` を含むこと。
 
-## Rollback Policy
+## ロールバック方針
 
-If release content is incorrect:
-- publish corrective patch release (`vX.Y.(Z+1)`)
-- avoid rewriting published release tags unless critical
+リリース内容に誤りがあった場合:
+- 修正版のパッチリリース（`vX.Y.(Z+1)`）を公開する
+- 公開済みリリースタグの書き換えは、致命的な場合を除き行わない
 
-## Ownership
+## 責任分担
 
-- decision/coordination: consult-facilitator
-- implementation: implementer role
-- review/approval: reviewer role
-- release execution: maintainer with repo admin/tag permissions
+- 意思決定・調整: consult-facilitator
+- 実装: implementer ロール
+- レビュー・承認: reviewer ロール
+- リリース実行: リポジトリの admin / タグ権限を持つメンテナ
 
