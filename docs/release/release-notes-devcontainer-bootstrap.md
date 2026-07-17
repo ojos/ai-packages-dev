@@ -1,6 +1,6 @@
 # devcontainer-bootstrap Release Notes
 
-新世代（2026-07-17 リポジトリ再作成後）のリリースノートです。旧世代（〜v0.3.1）は [archive/release-notes-devcontainer-bootstrap.md](archive/release-notes-devcontainer-bootstrap.md) を参照。
+新世代（2026-07-17 リポジトリ再作成後）のリリースノートです。旧世代（〜v0.3.1）は [archive/release-notes-devcontainer-bootstrap.md](../archive/release-notes-devcontainer-bootstrap.md) を参照。
 
 ## v0.1.0
 

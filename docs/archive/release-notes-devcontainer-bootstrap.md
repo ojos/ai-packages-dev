@@ -3,7 +3,7 @@
 > **アーカイブ（2026-07-17）**: 旧世代配布（v0.1.15〜v0.3.1）のリリースノートです。
 > 配布リポジトリは削除・同名再作成されたため、これらのタグ・Release は現存しません。
 > 旧世代の全機能は新世代 v0.1.0 に含まれています。
-> 現行のノートは [release-notes-devcontainer-bootstrap](../release-notes-devcontainer-bootstrap.md) を参照。
+> 現行のノートは [release-notes-devcontainer-bootstrap](../release/release-notes-devcontainer-bootstrap.md) を参照。
 
 ## v0.3.1
 

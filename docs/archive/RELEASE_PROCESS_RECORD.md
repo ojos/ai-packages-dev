@@ -4,8 +4,8 @@
 > 配布リポジトリは削除・同名再作成されたため、本文中のタグ・Release・URL は現存しません。
 > 「公開されたままの破壊（v0.2.1）」は再作成により消滅しました。決着した設計原則
 > （公開リポジトリ = 成果物置き場、SUMS_TARGETS、不変性）は `release-packages.sh` と
-> [RELEASE_EXECUTION_RUNBOOK](../RELEASE_EXECUTION_RUNBOOK.md) に引き継がれています。
-> 現行の正本は [RELEASE_HISTORY](../RELEASE_HISTORY.md) を参照。
+> [RELEASE_EXECUTION_RUNBOOK](../release/RELEASE_EXECUTION_RUNBOOK.md) に引き継がれています。
+> 現行の正本は [RELEASE_HISTORY](../release/RELEASE_HISTORY.md) を参照。
 
 リリース作成部分の構造的な問題、決着した論点、実施内容、残る問題の記録です。
 
@@ -161,5 +161,5 @@ public 化に実質的な意味があるとすれば、アーキテクチャで�
 
 ## 関連
 
-- 退役の記録: [ASF_RETIREMENT_RECORD](../ASF_RETIREMENT_RECORD.md)
-- 実行手順: [RELEASE_EXECUTION_RUNBOOK](../RELEASE_EXECUTION_RUNBOOK.md)
+- 退役の記録: [ASF_RETIREMENT_RECORD](../records/ASF_RETIREMENT_RECORD.md)
+- 実行手順: [RELEASE_EXECUTION_RUNBOOK](../release/RELEASE_EXECUTION_RUNBOOK.md)
