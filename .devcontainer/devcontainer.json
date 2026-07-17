@@ -1,6 +1,9 @@
 {
   "name": "ojos-ai-packages-dev (standard)",
-  "image": "mcr.microsoft.com/devcontainers/base:ubuntu",
+  "dockerComposeFile": "compose.yaml",
+  "service": "app",
+  "workspaceFolder": "/workspaces/ojos-ai-packages-dev",
+  "shutdownAction": "stopCompose",
   "features": {
     "ghcr.io/devcontainers/features/common-utils:1": {
       "configureZsh": true

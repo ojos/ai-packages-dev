@@ -103,6 +103,13 @@ require_cmd sed
 require_cmd curl
 
 [[ -n "$PROJECT_NAME" ]] || { echo "error: --project-name is required" >&2; usage; exit 1; }
+# プロジェクト名は compose のマウントパス・workspaceFolder・sed 置換に流れるため、
+# それらを壊す文字を拒否する（| & は sed、: は compose の volume 記法、/ \ はパス、
+# " は生成 JSON の文字列リテラル）。
+if [[ "$PROJECT_NAME" == *['|&:/\"']* ]]; then
+  echo "error: --project-name must not contain any of: | & : / \\ \"" >&2
+  exit 1
+fi
 [[ ${#LANGUAGES[@]} -gt 0 ]] || { echo "error: --languages is required" >&2; usage; exit 1; }
 
 for i in "${!LANGUAGES[@]}"; do
@@ -191,6 +198,7 @@ mode_rel_paths() {
   case "$1" in
     minimal|standard|full)
       printf '%s\n' \
+        '.devcontainer/compose.yaml' \
         '.devcontainer/devcontainer.json' \
         'scripts/github-account-switch.sh' \
         'scripts/install-ai-tools.sh' \
@@ -208,11 +216,46 @@ get_template_content() {
   local mode="$1"
   local rel="$2"
   case "$mode:$rel" in
+    'minimal:.devcontainer/compose.yaml'|'standard:.devcontainer/compose.yaml')
+      cat <<'TMPL'
+services:
+  app:
+    image: __BASE_IMAGE__
+    volumes:
+      - ..:/workspaces/__PROJECT_NAME__:cached
+      # docker-outside-of-docker feature 用（compose 利用時は feature 側の mounts が適用されないため明示）
+      - /var/run/docker.sock:/var/run/docker-host.sock
+    command: sleep infinity
+TMPL
+      ;;
+    'full:.devcontainer/compose.yaml')
+      cat <<'TMPL'
+services:
+  app:
+    image: __BASE_IMAGE__
+    volumes:
+      - ..:/workspaces/__PROJECT_NAME__:cached
+      # docker-outside-of-docker feature 用（compose 利用時は feature 側の mounts が適用されないため明示）
+      - /var/run/docker.sock:/var/run/docker-host.sock
+      # AI CLI の認証・履歴を rebuild 間で保持する（compose 利用時 devcontainer.json の mounts は適用されない）
+      # ベースイメージ（devcontainers/base）の remoteUser は vscode
+      - claude-storage:/home/vscode/.claude
+      - gemini-storage:/home/vscode/.gemini
+    command: sleep infinity
+
+volumes:
+  claude-storage:
+  gemini-storage:
+TMPL
+      ;;
     'minimal:.devcontainer/devcontainer.json')
       cat <<'TMPL'
 {
   "name": "__PROJECT_NAME__ (minimal)",
-  "image": "__BASE_IMAGE__",
+  "dockerComposeFile": "compose.yaml",
+  "service": "app",
+  "workspaceFolder": "/workspaces/__PROJECT_NAME__",
+  "shutdownAction": "stopCompose",
   "features": {
     "ghcr.io/devcontainers/features/common-utils:1": {
       "configureZsh": true
@@ -470,7 +513,10 @@ TMPL
       cat <<'TMPL'
 {
   "name": "__PROJECT_NAME__ (standard)",
-  "image": "__BASE_IMAGE__",
+  "dockerComposeFile": "compose.yaml",
+  "service": "app",
+  "workspaceFolder": "/workspaces/__PROJECT_NAME__",
+  "shutdownAction": "stopCompose",
   "features": {
     "ghcr.io/devcontainers/features/common-utils:1": {
       "configureZsh": true
@@ -575,7 +621,10 @@ TMPL
       cat <<'TMPL'
 {
   "name": "__PROJECT_NAME__ (full)",
-  "image": "__BASE_IMAGE__",
+  "dockerComposeFile": "compose.yaml",
+  "service": "app",
+  "workspaceFolder": "/workspaces/__PROJECT_NAME__",
+  "shutdownAction": "stopCompose",
   "features": {
     "ghcr.io/devcontainers/features/common-utils:1": {
       "configureZsh": true
@@ -605,10 +654,6 @@ __GITHUB_PROFILE_ENV_BLOCK__
     "CLAUDE_CODE_OAUTH_TOKEN": "${localEnv:__CLAUDE_TOKEN_ENV__}",
     "LOCAL_WORKSPACE_FOLDER": "${localWorkspaceFolder}"
   },
-  "mounts": [
-    "source=claude-storage,target=/home/node/.claude,type=volume",
-    "source=gemini-storage,target=/home/node/.gemini,type=volume"
-  ],
   "postCreateCommand": "bash scripts/install-ai-tools.sh && bash scripts/post-rebuild-check.sh",
   "postAttachCommand": "bash scripts/on-attach.sh",
   "customizations": {

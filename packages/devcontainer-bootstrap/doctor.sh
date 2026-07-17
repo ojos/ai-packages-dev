@@ -74,6 +74,26 @@ if [[ -f "$TARGET_DIR/.devcontainer/devcontainer.json" ]]; then
   else
     warn "secrets policy: localEnv reference not found"
   fi
+
+  # compose 配線の検査。dockerComposeFile が無い旧 image ベース構成は検査しない（後方互換）。
+  compose_files="$(jq -r '.dockerComposeFile // empty | if type == "array" then .[] else . end' \
+    "$TARGET_DIR/.devcontainer/devcontainer.json" 2>/dev/null || true)"
+  if [[ -n "$compose_files" ]]; then
+    while IFS= read -r compose_file; do
+      [[ -n "$compose_file" ]] || continue
+      case "$compose_file" in
+        # 絶対パスは devcontainer.json からの相対解決を行わずそのまま検査する
+        /*)
+          if [[ -f "$compose_file" ]]; then
+            ok "dockerComposeFile exists: $compose_file"
+          else
+            ng "dockerComposeFile missing: $compose_file"
+          fi
+          ;;
+        *) require_file ".devcontainer/$compose_file" ;;
+      esac
+    done <<< "$compose_files"
+  fi
 fi
 
 section "Script checks"
