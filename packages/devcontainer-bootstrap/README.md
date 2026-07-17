@@ -209,7 +209,8 @@ bash scripts/github-account-switch.sh use <profile>
 4. ベースイメージは Docker サーバーの `os/arch` から自動判定（既定: `mcr.microsoft.com/devcontainers/base:ubuntu`、必要に応じて `--base-image` で上書き可能）
 
 ## 期待される出力
-- `.devcontainer/devcontainer.json`（言語別 feature を反映）
+- `.devcontainer/devcontainer.json`（言語別 feature を反映。docker-compose ベースで `compose.yaml` の `app` サービスを参照）
+- `.devcontainer/compose.yaml`（単一サービス `app` の compose 定義。compose 利用時は feature や devcontainer.json の mounts が適用されないため、docker socket や AI CLI 用ボリューム（full のみ）を compose 側で明示）
 - `scripts/github-account-switch.sh`
 - `scripts/on-attach.sh`
 - `scripts/post-rebuild-check.sh`

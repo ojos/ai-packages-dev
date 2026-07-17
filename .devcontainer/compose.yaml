@@ -1,8 +1,8 @@
 services:
-  dev:
+  app:
     image: mcr.microsoft.com/devcontainers/base:ubuntu
     volumes:
-      - ../..:/workspaces:cached
+      - ..:/workspaces/ojos-ai-packages-dev:cached
       # docker-outside-of-docker feature 用（compose 利用時は feature 側の mounts が適用されないため明示）
       - /var/run/docker.sock:/var/run/docker-host.sock
     command: sleep infinity
