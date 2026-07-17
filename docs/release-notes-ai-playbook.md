@@ -1,21 +1,20 @@
-# ai-playbook Release Notes Template
+# ai-playbook Release Notes
 
-## Summary
-- Stable release for shared AI operating norms.
+新世代（2026-07-17 リポジトリ再作成後）のリリースノートです。
 
-## Highlights
-- Shared rules updates
-- Role contracts, task playbooks, review workflow, and intake discipline are now part of this package
-- Package scope clarified: source of truth for norms, no runtime
+## v0.1.0
 
-## Included Changes
-- shared-ai-rules and related norms
-- role-contracts / task-playbooks / review-workflow / intake
-- README scope section updates
+### Summary
+- 配布リポジトリをクリーンな履歴で再作成した、新世代の初回リリース。タグのみ配布（Release・資産なし）。
 
-## Verification
-- [ ] identity check complete
-- [ ] internal relative links resolve
+### Highlights
+- 内容は旧世代 v0.1.0 と同一（shared-ai-rules、role-contracts、task-playbooks、review-workflow、intake の規範一式）。
+- 履歴・タグを新規に作成。コミット作者情報は `Ido <ido@ojos.jp>` に統一。
 
-## Notes
-- Fill exact tag and commit range before publishing.
+### Breaking Changes
+- 旧世代のタグ v0.1.0 とコミット SHA は無効。submodule / subtree / tarball で固定している場合は参照 SHA・タグ取得先を新世代へ更新する。
+
+### Verification
+- [x] preflight 全通過（規範のリンク検査、タグ不変性）
+- [x] archive tarball から規範一式が取得できることをリリース経路で確認
+- [x] コミット作者・コントリビューターが単一 identity であることを確認

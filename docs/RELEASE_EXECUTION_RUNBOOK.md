@@ -26,7 +26,8 @@ DCB の `SHA256SUMS` は、README がダウンロードさせるファイル（`
 検証する人が手元に持たないファイルを列挙すると `sha256sum -c` が失敗するため。
 ai-playbook はリリース資産を持たない。DCB の `--playbook-from` も git 由来の `archive/refs/tags/` tarball を使う。
 
-背景と経緯は [RELEASE_PROCESS_RECORD](RELEASE_PROCESS_RECORD.md) を参照。
+背景と経緯は [archive/RELEASE_PROCESS_RECORD.md](archive/RELEASE_PROCESS_RECORD.md)（旧世代の記録）を参照。
+現行のリリース履歴の正本は [RELEASE_HISTORY](RELEASE_HISTORY.md)。
 
 ## ゲート条件（すべて満たすこと）
 
@@ -72,12 +73,12 @@ set -euo pipefail
 cd /workspaces/ojos-ai-packages-dev
 
 # 片方だけ
-bash scripts/release-packages.sh --owner ojos --dcb-version v0.3.0 --execute
-bash scripts/release-packages.sh --owner ojos --playbook-version v0.4.0 --execute
+bash scripts/release-packages.sh --owner ojos --dcb-version v0.1.1 --execute
+bash scripts/release-packages.sh --owner ojos --playbook-version v0.2.0 --execute
 
 # 両方
 bash scripts/release-packages.sh --owner ojos \
-  --dcb-version v0.3.0 --playbook-version v0.4.0 --execute
+  --dcb-version v0.1.1 --playbook-version v0.2.0 --execute
 ```
 
 `--dcb-version` / `--playbook-version` は最低 1 つ。指定したパッケージだけを触り、他方の公開物には手を触れない。

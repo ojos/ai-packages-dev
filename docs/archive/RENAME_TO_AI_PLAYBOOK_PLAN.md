@@ -1,7 +1,11 @@
 # 規範パッケージの改名計画（dotfiles → ai-playbook）
 
+> **アーカイブ（2026-07-17）**: 改名は実施済みです（DCB 旧 v0.3.0 で追随、配布リポジトリ
+> `ojos/ai-playbook` 稼働中）。本書は計画時の記録として保存します。
+> 現行の正本は [RELEASE_HISTORY](../RELEASE_HISTORY.md) を参照。
+
 - 起案日: 2026-07-15
-- 状態: **計画。未着手**
+- 状態: **実施済み・アーカイブ**
 - 背景: [RELEASE_PROCESS_RECORD](RELEASE_PROCESS_RECORD.md)、および「dotfiles」という名前が実態（共有規範パッケージ）と食い違う問題
 
 ## goal
