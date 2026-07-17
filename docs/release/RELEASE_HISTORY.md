@@ -1,6 +1,6 @@
 # リリース履歴（正本）
 
-配布リポジトリの世代と公開バージョンの正本です。過去の詳細記録は [archive/](archive/) に保存しています。
+配布リポジトリの世代と公開バージョンの正本です。過去の詳細記録は [archive/](../archive/) に保存しています。
 
 ## 現行世代（正本）
 
@@ -42,6 +42,6 @@
 - 公開済みバージョンは不変。やり直しは版を上げる
 - リリースの恒久的操作は `scripts/release-packages.sh` を唯一の経路とする
 
-詳細: [archive/RELEASE_PROCESS_RECORD.md](archive/RELEASE_PROCESS_RECORD.md) /
-[archive/release-notes-devcontainer-bootstrap.md](archive/release-notes-devcontainer-bootstrap.md) /
-[archive/RENAME_TO_AI_PLAYBOOK_PLAN.md](archive/RENAME_TO_AI_PLAYBOOK_PLAN.md)
+詳細: [archive/RELEASE_PROCESS_RECORD.md](../archive/RELEASE_PROCESS_RECORD.md) /
+[archive/release-notes-devcontainer-bootstrap.md](../archive/release-notes-devcontainer-bootstrap.md) /
+[archive/RENAME_TO_AI_PLAYBOOK_PLAN.md](../archive/RENAME_TO_AI_PLAYBOOK_PLAN.md)

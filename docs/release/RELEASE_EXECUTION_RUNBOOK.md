@@ -22,7 +22,7 @@ DCB の `SHA256SUMS` は、README がダウンロードさせるファイル（`
 検証する人が手元に持たないファイルを列挙すると `sha256sum -c` が失敗するため。
 ai-playbook はリリース資産を持たない。DCB の `--playbook-from` も git 由来の `archive/refs/tags/` tarball を使う。
 
-背景と経緯は [archive/RELEASE_PROCESS_RECORD.md](archive/RELEASE_PROCESS_RECORD.md)（旧世代の記録）を参照。
+背景と経緯は [archive/RELEASE_PROCESS_RECORD.md](../archive/RELEASE_PROCESS_RECORD.md)（旧世代の記録）を参照。
 現行のリリース履歴の正本は [RELEASE_HISTORY](RELEASE_HISTORY.md)。
 
 ## ゲート条件（すべて満たすこと）

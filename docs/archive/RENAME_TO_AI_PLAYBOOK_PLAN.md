@@ -2,7 +2,7 @@
 
 > **アーカイブ（2026-07-17）**: 改名は実施済みです（DCB 旧 v0.3.0 で追随、配布リポジトリ
 > `ojos/ai-playbook` 稼働中）。本書は計画時の記録として保存します。
-> 現行の正本は [RELEASE_HISTORY](../RELEASE_HISTORY.md) を参照。
+> 現行の正本は [RELEASE_HISTORY](../release/RELEASE_HISTORY.md) を参照。
 
 - 起案日: 2026-07-15
 - 状態: **実施済み・アーカイブ**
