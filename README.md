@@ -106,14 +106,14 @@ ASF は 2026-07 に退役しました。
 <!-- RELEASE_STATUS:START -->
 | パッケージ | 配布状態 |
 |---|---|
-| devcontainer-bootstrap | ojos/devcontainer-bootstrap で v0.3.1 まで公開済み |
+| devcontainer-bootstrap | ojos/devcontainer-bootstrap で v0.1.0 まで公開済み |
 | ai-playbook | ojos/ai-playbook で v0.1.0 まで公開済み |
 
 リリース実行手順は各パッケージの `docs/` または `.github/workflows/` を参照する。
 
 ### リリース状況
 
-- `devcontainer-bootstrap`: published up to `v0.3.1` at `ojos/devcontainer-bootstrap`
+- `devcontainer-bootstrap`: published up to `v0.1.0` at `ojos/devcontainer-bootstrap`
 - `ai-playbook`: published up to `v0.1.0` at `ojos/ai-playbook`
 <!-- RELEASE_STATUS:END -->
 
