@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# doctor.sh — generated workspace self-diagnosis command
+# doctor.sh — 生成済みワークスペースの自己診断コマンド
 set -euo pipefail
 
 TARGET_DIR="$PWD"
@@ -104,7 +104,7 @@ for cmd in bash jq perl gh; do
   fi
 done
 
-# Dynamically detect configured languages from devcontainer.json features
+# devcontainer.json の features から設定済み言語を動的に検出する
 check_runtime_languages() {
   local devcontainer_json="$TARGET_DIR/.devcontainer/devcontainer.json"
   if [[ ! -f "$devcontainer_json" ]]; then
@@ -112,7 +112,7 @@ check_runtime_languages() {
     return
   fi
 
-  # Extract language runtimes from features (node, go, python, php)
+  # features から言語ランタイム（node, go, python, php）を抽出する
   for lang in node go python php; do
     if grep -q "\"ghcr.io/devcontainers/features/$lang:1\"" "$devcontainer_json" 2>/dev/null; then
       if command -v "$lang" >/dev/null 2>&1; then
