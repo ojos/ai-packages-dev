@@ -50,8 +50,10 @@ AI 共通ルールも配置する場合は、ルールの取得元を指定し�
 
 ```bash
 bash bootstrap.sh --project-name myapp --languages node,go --with-claude \
-  --with-playbook --playbook-from https://github.com/ojos/ai-playbook/archive/refs/tags/v0.1.1.tar.gz
+  --with-playbook --playbook-version v0.1.1
 ```
+
+`--playbook-version` は既定ソース `ojos/ai-playbook` のタグ tarball への糖衣で、長い archive URL を打たずに済みます。別 owner・任意の URL・ローカルディレクトリから取得する場合は、従来どおり `--playbook-from` を使います（`--playbook-version` とは排他）。
 
 > **破壊的変更（`--mode` 廃止）**: 従来の `--mode <minimal|standard|full>` は廃止しました。装備は
 > `--with-*` フラグで明示選択します。移行対応表は [mode オプションからの移行](#mode-オプションからの移行) を参照してください。
@@ -82,7 +84,8 @@ bash bootstrap.sh --project-name myapp --languages node,go --with-claude \
 - `--base-image <image>`（自動判定結果を上書きして明示指定）
 - `--github-profiles <csv>`（GitHub マルチアカウント用 profile 名。既定: `primary,secondary`）
 - `--with-playbook` / `--without-playbook`（AI 共通ルールの配置。既定: 配置しない）
-- `--playbook-from <path|url>`（ルールの取得元。ディレクトリまたはアーカイブ URL）
+- `--playbook-version <tag>`（既定ソース `ojos/ai-playbook` のタグ tarball への糖衣。`--playbook-from` とは排他）
+- `--playbook-from <path|url>`（ルールの取得元。ディレクトリまたはアーカイブ URL。別 owner・任意 URL・ローカル用）
 - `--playbook-conflict-policy <skip|overwrite|prompt>`（既存ファイルがある場合の扱い。既定: `skip`）
 
 ### AI 共通ルールの配置
@@ -190,7 +193,11 @@ bash scripts/loop-gate.sh
 # AI 共通ルールも一緒に配置する場合（隣接する ai-playbook チェックアウトから取得）
 ./bootstrap.sh --project-name myapp --languages node --with-playbook
 
-# ルールの取得元を明示する場合（単体取得して実行する場合はこちらが必要）
+# ルールの版を指定する場合（単体取得して実行する場合はこちらが必要。既定ソース ojos/ai-playbook）
+./bootstrap.sh --project-name myapp --languages node \
+  --with-playbook --playbook-version <tag>
+
+# 別 owner・任意 URL・ローカルから取得する場合（--playbook-version とは排他）
 ./bootstrap.sh --project-name myapp --languages node \
   --with-playbook --playbook-from https://github.com/<owner>/ai-playbook/archive/refs/tags/<tag>.tar.gz
 
