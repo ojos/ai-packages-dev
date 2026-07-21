@@ -50,6 +50,7 @@
 | ファイル | 種別 | 概要 |
 |---|---|---|
 | `docs/plans/DCB_RUST_SUPPORT.md` | 計画 | DCB の `--languages` へ rust を追加する仕様・作業計画。 |
+| `docs/plans/DCB_MODE_REMOVAL_WITH_FLAGS.md` | 計画 | DCB の `--mode` を廃止し装備を `--with-*` フラグ（cloud/AI ツール）へ分解する仕様・作業計画。 |
 
 ## アーカイブ（`docs/archive/`）
 
