@@ -2,6 +2,31 @@
 
 新世代（2026-07-17 リポジトリ再作成後）のリリースノートです。旧世代（〜v0.3.1）は [archive/release-notes-devcontainer-bootstrap.md](../archive/release-notes-devcontainer-bootstrap.md) を参照。
 
+## v0.4.0
+
+### Summary
+- `--mode <minimal|standard|full>` を廃止し、装備を `--with-*` フラグへ分解した**破壊的変更**。
+
+### Highlights
+- `--mode` 廃止（未知オプションとしてエラー）。3 mode 別テンプレを 1 つのパラメータ化テンプレへ集約し重複を解消。
+- docker のリッチさ（buildx + compose-switch）を全生成物で標準化。
+- cloud: `--with-aws` / `--with-gcp` を追加。Terraform はいずれかの cloud 指定時に暗黙同梱（両指定でも 1 回、cloud 無指定なら無し）。
+- AI ツール: `--with-claude` / `--with-gemini` / `--with-copilot` を追加。トークンによる自動導入を廃止し明示 opt-in のみ。各フラグは CLI + VS Code 拡張 + 設定の永続化（compose named volume）を同型で実施。
+- AI 認証の永続化を mode 非依存化（旧 full 限定を撤廃）。
+- `doctor.sh` に cloud CLI（aws/gcloud/terraform）可用性検査を追加。
+
+### Breaking Changes
+- **`--mode` を削除**。旧 `--mode standard` は概ね `--with-aws`、旧 `--mode full` は `--with-aws --with-gcp --with-claude --with-gemini --with-copilot` に相当。移行対応表は DCB README「mode オプションからの移行」を参照。
+- AI CLI（claude/gemini）の**トークンによる自動導入を廃止**。今後は `--with-<ai>` の明示指定が必要。
+- docker のリッチさが全生成物で標準になったため、旧 `minimal` 相当でも buildx 等が入る。
+
+### 予定（未実装）
+- `--with-codex`（OpenAI Codex）/ `--with-sakura`（さくらのクラウド）/ `--with-cloudflare`（Cloudflare）は拡張点の枠のみ。
+
+### Verification
+- [ ] preflight 全通過（DCB テストスイート、README / 規範のリンク検査、バージョン不変性）
+- [ ] 資産監査 OK（`RELEASE-MANIFEST.json` / `SHA256SUMS` / `PACKAGE_ARCHIVE.tar.gz` / `bootstrap.sh` / `doctor.sh`）
+
 ## v0.3.1
 
 ### Summary
