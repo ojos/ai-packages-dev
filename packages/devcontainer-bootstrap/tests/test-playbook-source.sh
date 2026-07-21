@@ -89,7 +89,7 @@ assert_file_absent "$out"
 
 it "規範が 0 件のソースは失敗する（沈黙した成功の防止）"
 # 規範を 1 件も配置しないまま成功扱いになることを防ぐ。空ディレクトリを指定すると
-# 検出は通るが、配置対象の規範が 0 件になり install 段で失敗する。
+# 検出は通るが、配置対象の規範が 0 件になり書き込み前に失敗する。
 empty="$(new_workdir)/empty"
 mkdir -p "$empty"
 out="$(new_workdir)/p"
@@ -99,6 +99,29 @@ if [[ $code -ne 0 ]]; then
   assert_contains "$output" "no rule files found" "エラー出力"
 else
   fail "規範 0 件でも成功してしまった"
+fi
+
+it "規範 0 件のソースは 1 つもファイルを書かない（アトミック配置）"
+assert_file_absent "$out"
+
+it "URL 取得が壊れたアーカイブでも書き込み前に失敗する（アトミック配置）"
+# curl は 200 だが tar 展開に失敗するケース。非 tarball をローカル配信して再現する
+# （ネットワークには出ない）。取得失敗で devcontainer を部分生成してから遅れて
+# 失敗する不具合（404 で全ファイルを書いてしまう）の回帰を防ぐ。
+bogus="$(mktemp "$TEST_TMP_ROOT/bogus.XXXXXX.tar.gz")"
+printf 'this is not a valid gzip tarball' > "$bogus"
+if url="$(serve_file "$bogus")"; then
+  out="$(new_workdir)/p"
+  output="$(run_bootstrap "$out" --playbook-from "$url" 2>&1)"
+  code=$?
+  stop_http_server
+  if [[ $code -ne 0 ]] && [[ ! -d "$out/.devcontainer" ]]; then
+    pass
+  else
+    fail "壊れたアーカイブで部分生成または成功した (code=$code, .devcontainer=$([ -d "$out/.devcontainer" ] && echo yes || echo no))"
+  fi
+else
+  fail "ローカル HTTP サーバを起動できず検証できなかった"
 fi
 
 # ── オプトイン ────────────────────────────────────────────────────────────────
