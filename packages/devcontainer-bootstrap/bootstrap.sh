@@ -1108,7 +1108,13 @@ file_mode_octal() {
 }
 
 should_install_playbook() {
-  [[ "$WITH_PLAYBOOK" == "true" ]]
+  # --with-playbook は明示 opt-in。加えて、--playbook-from / --playbook-version で
+  # ソースを指定した時点で配置意図は明確なため、--with-playbook 省略でも配置する
+  # （--playbook-version は PLAYBOOK_FROM へ展開済み）。ただし --without-playbook は
+  # 明示 opt-out として最優先で尊重する。
+  [[ "$WITH_PLAYBOOK" == "false" ]] && return 1
+  [[ "$WITH_PLAYBOOK" == "true" ]] && return 0
+  [[ -n "$PLAYBOOK_FROM" ]]
 }
 
 # 規範ルートを、規範パッケージの内部ファイル名に依存せず構造だけで決める。

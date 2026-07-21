@@ -118,8 +118,9 @@ assert_file_absent "$out/.ai-playbook"
 
 it "--playbook-version は既定ソースのタグ tarball URL へ展開する"
 out="$(new_workdir)/p"
-# --with-playbook を付けないので取得は走らない（展開ログだけを確認する）。
-output="$(run_bootstrap "$out" --playbook-version v1.2.3 2>&1)"
+# 展開ログは取得前に出る。--without-playbook で取得（ネットワーク）を抑止しつつ、
+# 展開された URL 文字列だけを確認する（run-tests.sh の非ネットワーク方針を守る）。
+output="$(run_bootstrap "$out" --playbook-version v1.2.3 --without-playbook 2>&1)"
 assert_contains "$output" \
   "https://github.com/ojos/ai-playbook/archive/refs/tags/v1.2.3.tar.gz" \
   "展開された playbook-from URL"
@@ -138,5 +139,18 @@ fi
 # 出るため run-tests.sh の非ネットワーク方針では検証しない。上のログ検証で URL 構築の
 # 正しさを、既存の「URL 指定で規範が配置される」テストで URL 取得経路の健全性を担保し、
 # 両者は PLAYBOOK_FROM 設定後の同一経路を通る（構造的に等価）。
+
+# ── ソース指定は --with-playbook を省略しても配置する（#93 の折り込み） ─────────
+# ローカルディレクトリ源を使い、ネットワークには出ない。
+
+it "--playbook-from 指定があれば --with-playbook を省略しても配置する"
+out="$(new_workdir)/p"
+run_bootstrap "$out" --playbook-from "$PLAYBOOK_SRC" >/dev/null 2>&1
+assert_eq "$(count_rules "$out/.ai-playbook")" "$EXPECTED_RULES" "配置された規範数（--with-playbook 省略）"
+
+it "--without-playbook はソース指定より優先される（明示 opt-out）"
+out="$(new_workdir)/p"
+run_bootstrap "$out" --playbook-from "$PLAYBOOK_SRC" --without-playbook >/dev/null 2>&1
+assert_file_absent "$out/.ai-playbook"
 
 exit_with_result
