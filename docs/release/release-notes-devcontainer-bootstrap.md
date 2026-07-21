@@ -2,6 +2,22 @@
 
 新世代（2026-07-17 リポジトリ再作成後）のリリースノートです。旧世代（〜v0.3.1）は [archive/release-notes-devcontainer-bootstrap.md](../archive/release-notes-devcontainer-bootstrap.md) を参照。
 
+## v0.4.1
+
+### Summary
+- ai-playbook ソース指定の使い勝手を改善（後方互換の追加）。
+
+### Highlights
+- `--playbook-version <tag>` を追加。既定ソース `ojos/ai-playbook` のタグ tarball（`.../archive/refs/tags/<tag>.tar.gz`）へ内部展開し、長い URL を打たずに版だけで指定できる。`--playbook-from` とは相互排他。
+- ソース（`--playbook-from` / `--playbook-version`）を指定した場合、`--with-playbook` を省略しても規範を配置する。判定順は「明示 opt-out（`--without-playbook`）> 明示 opt-in（`--with-playbook`）> ソース指定あり」。
+
+### Breaking Changes
+- なし。`--playbook-from` 単体は従来「無視」だったが「配置」になる（silent no-op の解消）。`--without-playbook` は最優先で従来どおり配置しない。
+
+### Verification
+- [ ] preflight 全通過（DCB テストスイート、README / 規範のリンク検査、バージョン不変性）
+- [ ] 資産監査 OK（`RELEASE-MANIFEST.json` / `SHA256SUMS` / `PACKAGE_ARCHIVE.tar.gz` / `bootstrap.sh` / `doctor.sh`）
+
 ## v0.4.0
 
 ### Summary
