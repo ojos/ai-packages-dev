@@ -41,6 +41,7 @@
 | ファイル | 種別 | 概要 |
 |---|---|---|
 | `docs/records/ASF_RETIREMENT_RECORD.md` | 履歴・記録 | ASF を廃止し dotfiles / DCB へ統合した退役の判断根拠と実施記録。 |
+| `docs/records/INTAKE_AUTO_SUGGEST_LOOP_RECORD.md` | 履歴・記録 | `@intake` の自動提案経路追加と、intake をループコーディング入口として機械判定ゲート化した判断根拠と実施記録。 |
 
 ### 計画（`docs/plans/`）
 
