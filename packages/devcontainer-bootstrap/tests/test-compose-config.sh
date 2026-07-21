@@ -12,55 +12,75 @@ set -uo pipefail
 
 echo "test-compose-config"
 
-for mode in minimal standard full; do
-  out="$(new_workdir)/p"
-  # run_bootstrap は --mode minimal を先に渡すが、後から渡した --mode が勝つ。
-  run_bootstrap "$out" --mode "$mode" >/dev/null 2>&1
-  dc="$out/.devcontainer/devcontainer.json"
-  compose="$out/.devcontainer/compose.yaml"
-
-  it "$mode: compose.yaml が生成される"
-  assert_file_exists "$compose"
-
-  it "$mode: devcontainer.json が compose.yaml を参照する"
-  assert_eq "$(jq -r '.dockerComposeFile' "$dc")" "compose.yaml" "dockerComposeFile"
-
-  it "$mode: サービス名は app"
-  assert_eq "$(jq -r '.service' "$dc")" "app" "service"
-
-  it "$mode: workspaceFolder がプロジェクト名で解決される"
-  assert_eq "$(jq -r '.workspaceFolder' "$dc")" "/workspaces/test" "workspaceFolder"
-
-  it "$mode: image ベース指定は残っていない"
-  assert_eq "$(jq -r '.image' "$dc")" "null" "image"
-
-  it "$mode: compose.yaml にプレースホルダが残っていない"
-  if grep -qE '__BASE_IMAGE__|__PROJECT_NAME__' "$compose"; then
-    fail "プレースホルダが未置換: $(grep -oE '__[A-Z_]+__' "$compose" | sort -u | tr '\n' ' ')"
-  else
-    pass
-  fi
-
-  it "$mode: compose.yaml に docker socket のマウントがある"
-  if grep -q '/var/run/docker.sock:/var/run/docker-host.sock' "$compose"; then
-    pass
-  else
-    fail "docker socket マウントが無い"
-  fi
-done
-
-# ── full 固有: AI CLI ボリュームは compose 側へ移した ─────────────────────────
-
+# mode は廃止。素の生成物（--with-* なし）で共通の compose 配線を検証する。
 out="$(new_workdir)/p"
-run_bootstrap "$out" --mode full >/dev/null 2>&1
+run_bootstrap "$out" >/dev/null 2>&1
 dc="$out/.devcontainer/devcontainer.json"
 compose="$out/.devcontainer/compose.yaml"
 
-it "full: devcontainer.json に mounts が残っていない"
+it "compose.yaml が生成される"
+assert_file_exists "$compose"
+
+it "devcontainer.json が compose.yaml を参照する"
+assert_eq "$(jq -r '.dockerComposeFile' "$dc")" "compose.yaml" "dockerComposeFile"
+
+it "サービス名は app"
+assert_eq "$(jq -r '.service' "$dc")" "app" "service"
+
+it "workspaceFolder がプロジェクト名で解決される"
+assert_eq "$(jq -r '.workspaceFolder' "$dc")" "/workspaces/test" "workspaceFolder"
+
+it "image ベース指定は残っていない"
+assert_eq "$(jq -r '.image' "$dc")" "null" "image"
+
+it "compose.yaml にプレースホルダが残っていない"
+if grep -qE '__BASE_IMAGE__|__PROJECT_NAME__|__AI_VOLUME' "$compose"; then
+  fail "プレースホルダが未置換: $(grep -oE '__[A-Z_]+__' "$compose" | sort -u | tr '\n' ' ')"
+else
+  pass
+fi
+
+it "compose.yaml に docker socket のマウントがある"
+if grep -q '/var/run/docker.sock:/var/run/docker-host.sock' "$compose"; then
+  pass
+else
+  fail "docker socket マウントが無い"
+fi
+
+it "docker feature は buildx/compose-switch を標準装備する（旧 standard/full 相当）"
+if jq -e '.features["ghcr.io/devcontainers/features/docker-outside-of-docker:1"].installDockerBuildx == true' "$dc" >/dev/null; then
+  pass
+else
+  fail "docker buildx が標準化されていない"
+fi
+
+# ── AI 永続ボリュームは --with-<ai> に随伴し、mode 非依存で付く ─────────────────
+
+it "素の生成物には AI 永続ボリュームが無い"
+if grep -q 'claude-storage\|gemini-storage\|copilot-storage' "$compose"; then
+  fail "AI ツール未選択なのに storage ボリュームがある"
+else
+  pass
+fi
+
+out="$(new_workdir)/p"
+run_bootstrap "$out" --with-claude >/dev/null 2>&1
+dc="$out/.devcontainer/devcontainer.json"
+compose="$out/.devcontainer/compose.yaml"
+
+it "--with-claude: devcontainer.json に mounts が残っていない（compose 側で持つ）"
 assert_eq "$(jq -r '.mounts' "$dc")" "null" "mounts"
 
-it "full: compose.yaml に claude-storage ボリュームがある"
+it "--with-claude: compose.yaml に claude-storage ボリュームがある"
 if grep -q 'claude-storage' "$compose"; then pass; else fail "claude-storage が無い"; fi
+
+it "--with-claude: compose config が妥当（末尾の volumes セクションが壊れない）"
+if command -v docker >/dev/null 2>&1; then
+  if docker compose -f "$compose" config >/dev/null 2>&1; then pass; else fail "docker compose config 失敗"; fi
+else
+  # docker 不在環境では最低限 volumes: セクションの存在で代替
+  if grep -q '^volumes:' "$compose"; then pass; else fail "volumes セクションが無い"; fi
+fi
 
 # ── doctor.sh の compose 配線検査 ─────────────────────────────────────────────
 

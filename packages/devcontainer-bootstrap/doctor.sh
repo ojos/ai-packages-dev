@@ -169,6 +169,31 @@ check_runtime_languages() {
 
 check_runtime_languages
 
+# devcontainer.json の features から配線済みの cloud ツールを検出し、対応 CLI を確認する。
+# feature キーと CLI 名は 1 対 1 でない（gcp は google-cloud-cli feature → gcloud）。
+check_with_features() {
+  local devcontainer_json="$TARGET_DIR/.devcontainer/devcontainer.json"
+  [[ -f "$devcontainer_json" ]] || return
+  # "feature-substring:cli-name" の対で検査する。bash 3.2 互換のため連想配列は使わない。
+  local pair feat cli
+  for pair in \
+    "features/aws-cli:aws" \
+    "dhoeric/features/google-cloud-cli:gcloud" \
+    "features/terraform:terraform"; do
+    feat="${pair%:*}"
+    cli="${pair##*:}"
+    if grep -q "\"ghcr.io/$feat:1\"" "$devcontainer_json" 2>/dev/null; then
+      if command -v "$cli" >/dev/null 2>&1; then
+        ok "$cli command available"
+      else
+        warn "$cli command missing"
+      fi
+    fi
+  done
+}
+
+check_with_features
+
 if grep -q 'docker-outside-of-docker' "$TARGET_DIR/.devcontainer/devcontainer.json" 2>/dev/null; then
   if command -v docker >/dev/null 2>&1; then
     ok "docker command available"
