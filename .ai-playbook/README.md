@@ -33,6 +33,8 @@
 | `role-contracts/` | ロール責務の契約 7 種（目的・入力・出力・禁止事項・エスカレーション条件・完了定義） |
 | `task-playbooks/` | タスク手順 4 種（issue triage / 計画分解 / PR レビュー / issue クローズ方針） |
 | `review-workflow.md` | クロスモデル二段ゲートによるレビュー運用 |
+| `loop-workflow.md` | ループコーディング運用の規範（受け入れ検証の機械ゲート化・verify ランナー契約・収束） |
+| `loop-coding-guide.md` | ループコーディングの解説ガイド（従来ワークフローとの違い・考え方。`loop-workflow.md` の解説版） |
 | `intake/` | intake テンプレート、相談テンプレート、判定 reason code |
 | `templates/` | 導入用の雛形（入口ファイル・プロジェクト共通ルール・第二意見レビュー） |
 
@@ -170,3 +172,8 @@ DCB は devcontainer と特定言語（node / go / python / php）を前提と�
 詳細な共通 AI ルールは次を参照してください。
 
 - [shared-ai-rules.md](shared-ai-rules.md)
+
+ループコーディングのワークフローについては次を参照してください。
+
+- [loop-coding-guide.md](loop-coding-guide.md) — 従来ワークフローとの違い・考え方の解説
+- [loop-workflow.md](loop-workflow.md) — 規範（受け入れ検証の機械ゲート化・verify ランナー契約・収束）

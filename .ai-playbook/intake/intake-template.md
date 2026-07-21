@@ -13,7 +13,7 @@ priority:
 
 - 必須項目: `goal`, `scope.in`, `acceptance`, `priority`
 - 任意項目: `scope.out`, `constraints`
-- 記述は具体的かつ検証可能に保つ。`acceptance` は `goal` を検証できる形にする
+- 記述は具体的かつ検証可能に保つ。`acceptance` は `goal` を検証できる形にする。可能な限り**非対話で実行でき機械判定できる**検証にする（[loop-workflow](../loop-workflow.md)）
 - 既定言語は日本語
 - ユーザー承認を得るまで起票しない
 
