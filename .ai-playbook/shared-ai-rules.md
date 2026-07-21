@@ -184,6 +184,7 @@ Markdown ファイルの命名は、文書の役割に応じて以下の規則�
 | ロール責務 | `role-contracts/` |
 | タスク手順 | `task-playbooks/` |
 | レビュー運用 | `review-workflow.md` |
+| ループ運用（受け入れ検証の機械ゲート化・収束） | `loop-workflow.md` |
 | intake 規律・判定根拠 | `intake/` |
 | 導入用の雛形 | `templates/` |
 

@@ -60,5 +60,6 @@ AI によるコードレビューを、無限修正ループに陥らせずに�
 
 ## 関連
 
+- ループ運用: [loop-workflow](loop-workflow.md)（受け入れ検証と本ゲートの直列化・収束）
 - ロール契約: [reviewer](role-contracts/reviewer.md) / [closer](role-contracts/closer.md)
 - タスクプレイブック: [pr-review](task-playbooks/pr-review.md)
