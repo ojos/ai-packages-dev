@@ -174,12 +174,14 @@ check_runtime_languages
 check_with_features() {
   local devcontainer_json="$TARGET_DIR/.devcontainer/devcontainer.json"
   [[ -f "$devcontainer_json" ]] || return
-  # "feature-substring:cli-name" の対で検査する。bash 3.2 互換のため連想配列は使わない。
+  # "feature-path:cli-name" の対で検査する。feature path は bootstrap.sh の
+  # with_feature_path と一致させる（aws/terraform は devcontainers 名前空間、gcp は
+  # 外部 dhoeric）。bash 3.2 互換のため連想配列は使わない。
   local pair feat cli
   for pair in \
-    "features/aws-cli:aws" \
+    "devcontainers/features/aws-cli:aws" \
     "dhoeric/features/google-cloud-cli:gcloud" \
-    "features/terraform:terraform"; do
+    "devcontainers/features/terraform:terraform"; do
     feat="${pair%:*}"
     cli="${pair##*:}"
     if grep -q "\"ghcr.io/$feat:1\"" "$devcontainer_json" 2>/dev/null; then

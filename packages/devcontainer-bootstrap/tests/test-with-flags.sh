@@ -190,4 +190,18 @@ else
   pass
 fi
 
+# ── doctor.sh の cloud CLI 検出（feature path の一致回帰を防ぐ） ────────────────
+
+it "doctor: --with-aws --with-gcp の生成物で aws/gcloud/terraform を検出して判定行を出す"
+out="$(new_workdir)/p"
+run_bootstrap "$out" --with-aws --with-gcp >/dev/null 2>&1
+output="$(bash "$PKG_DIR/doctor.sh" --target-dir "$out" 2>&1)"
+if printf '%s' "$output" | grep -q 'aws command' \
+   && printf '%s' "$output" | grep -q 'gcloud command' \
+   && printf '%s' "$output" | grep -q 'terraform command'; then
+  pass
+else
+  fail "cloud CLI 検出行が出ない（feature path 不一致の回帰）"
+fi
+
 exit_with_result

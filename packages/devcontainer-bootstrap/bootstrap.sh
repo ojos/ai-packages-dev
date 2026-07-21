@@ -3,7 +3,7 @@
 # 目的: 新規作業ディレクトリに1コマンドで devcontainer 雛形を生成する
 # 使用方法:
 #   curl -sSL https://github.com/ojos/devcontainer-bootstrap/releases/latest/download/bootstrap.sh \
-#     -o bootstrap.sh && bash bootstrap.sh --project-name myapp --languages node,go --mode standard
+#     -o bootstrap.sh && bash bootstrap.sh --project-name myapp --languages node,go --with-aws
 set -euo pipefail
 
 # 同階層の ai-playbook チェックアウトを探すために解決する。curl で単体取得された
