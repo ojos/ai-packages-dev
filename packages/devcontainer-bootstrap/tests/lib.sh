@@ -205,10 +205,11 @@ count_rules() {
 }
 
 # bootstrap.sh を最小構成で実行する。追加引数はそのまま渡す。
+# --mode は廃止。装備は --with-* で選択する（既定は素の環境）。
 run_bootstrap() {
   local out="$1"; shift
   bash "$BOOTSTRAP" \
-    --project-name test --languages node --mode minimal \
+    --project-name test --languages node \
     --output-dir "$out" "$@"
 }
 
