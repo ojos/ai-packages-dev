@@ -32,12 +32,12 @@
 - https://github.com/ojos/devcontainer-bootstrap
 
 最新安定リリース:
-- `v0.3.0`
+- `v0.3.1`
 
 `SHA256SUMS` は `bootstrap.sh` と `doctor.sh` を対象とするため、検証するにはその 2 つを取得します。
 
 ```bash
-TAG=v0.3.0
+TAG=v0.3.1
 BASE="https://github.com/ojos/devcontainer-bootstrap/releases/download/${TAG}"
 curl -sSL "${BASE}/bootstrap.sh" -o bootstrap.sh
 curl -sSL "${BASE}/doctor.sh" -o doctor.sh
@@ -50,7 +50,7 @@ AI 共通ルールも配置する場合は、ルールの取得元を指定し�
 
 ```bash
 bash bootstrap.sh --project-name myapp --languages node,go --mode standard \
-  --with-playbook --playbook-from https://github.com/ojos/ai-playbook/archive/refs/tags/v0.1.0.tar.gz
+  --with-playbook --playbook-from https://github.com/ojos/ai-playbook/archive/refs/tags/v0.1.1.tar.gz
 ```
 
 ## 入力仕様
