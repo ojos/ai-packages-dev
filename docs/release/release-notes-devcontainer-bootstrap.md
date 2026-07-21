@@ -2,6 +2,20 @@
 
 新世代（2026-07-17 リポジトリ再作成後）のリリースノートです。旧世代（〜v0.3.1）は [archive/release-notes-devcontainer-bootstrap.md](../archive/release-notes-devcontainer-bootstrap.md) を参照。
 
+## v0.4.2
+
+### Summary
+- playbook 取得失敗時に devcontainer を部分生成してから遅延失敗する不具合を修正（バグ修正）。
+
+### Fixes
+- 存在しないタグ（例: `--playbook-version` の `v` 抜け）や URL の 404、壊れたアーカイブでも、従来は devcontainer を全ファイル書き込んでから `no rule files found` で失敗していた。README が約束する「取得元が解決できなければ 1 つも書き込まず終了」に反していた。
+- 原因は `detect_playbook_dir` が `curl` / `tar` の失敗を明示検査せず `set -e` に依存していたが、`PLAYBOOK_DIR="$(...)"` の代入コマンド置換では `set -e` が発火しないこと。`curl` / `tar` の明示検査、代入コマンド置換の終了コード捕捉、規範 0 件の書き込み前検査で**アトミックに停止**するよう修正。
+- `--playbook-version` 使用時の取得失敗には `v` 接頭辞のヒント（例: `v0.1.1`）を表示。
+
+### Verification
+- [ ] preflight 全通過（DCB テストスイート、README / 規範のリンク検査、バージョン不変性）
+- [ ] 資産監査 OK（`RELEASE-MANIFEST.json` / `SHA256SUMS` / `PACKAGE_ARCHIVE.tar.gz` / `bootstrap.sh` / `doctor.sh`）
+
 ## v0.4.1
 
 ### Summary
