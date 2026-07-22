@@ -2,6 +2,23 @@
 
 新世代（2026-07-17 リポジトリ再作成後）のリリースノートです。旧世代（〜v0.3.1）は [archive/release-notes-devcontainer-bootstrap.md](../archive/release-notes-devcontainer-bootstrap.md) を参照。
 
+## v0.5.1
+
+### Summary
+- 取り込んだ ai-playbook の出所を、生成先の `.ai-playbook/VERSION` に記録するようにした（後方互換の機能追加）。
+
+### Highlights
+- `--playbook-version` などでバージョンを指定しても、生成後の環境に「どの版の playbook を取り込んだか」の on-disk 証跡が残らず、後から照合できなかった（devcontainer 自己診断 F-7）。
+- 規範を配置するとき `.ai-playbook/VERSION` を生成し、`version`（`--playbook-version` のタグ。未指定は `(unspecified)`）と `source`（解決済みソース。隣接チェックアウトは `<adjacent checkout>`）を `key=value` で記録する。`--dry-run` の plan 出力にも含める。
+- 書き込みは規範ファイルと同じ衝突ポリシー（`skip`/`overwrite`/`prompt`）に従う（`apply_file_with_policy` を再利用）。既存を `skip` した on-disk 規範を温存したまま `VERSION` だけ無条件上書きすると、記録が実際の規範とずれて出所が嘘になるため。
+
+### Breaking Changes
+- なし（後方互換の機能追加）。
+
+### Verification
+- [ ] preflight 全通過（DCB テストスイート、README / 規範のリンク検査、バージョン不変性）
+- [ ] 資産監査 OK（`RELEASE-MANIFEST.json` / `SHA256SUMS` / `PACKAGE_ARCHIVE.tar.gz` / `bootstrap.sh` / `doctor.sh`）
+
 ## v0.5.0
 
 ### Summary

@@ -9,13 +9,15 @@
 
 | パッケージ | リポジトリ | 現行バージョン | 配布形態 |
 |---|---|---|---|
-| devcontainer-bootstrap | `ojos/devcontainer-bootstrap` | v0.5.0 | GitHub Release + 3 資産 |
-| ai-playbook | `ojos/ai-playbook` | v0.1.1 | git タグのみ |
+| devcontainer-bootstrap | `ojos/devcontainer-bootstrap` | v0.5.1 | GitHub Release + 3 資産 |
+| ai-playbook | `ojos/ai-playbook` | v0.1.2 | git タグのみ |
 
 ### 新世代の版更新
 
 | パッケージ | 版 | 公開日 | 要点 |
 |---|---|---|---|
+| devcontainer-bootstrap | v0.5.1 | 2026-07-22 | 取り込んだ ai-playbook の出所を生成先 `.ai-playbook/VERSION` に記録（後方互換）。書き込みは規範と同じ衝突ポリシーに従う（自己診断 F-7） |
+| ai-playbook | v0.1.2 | 2026-07-22 | 入口雛形 `templates/entry.md` から「導入時の調整」節を削除（生成物へのメタ指示残置を解消。自己診断 F-6） |
 | devcontainer-bootstrap | v0.5.0 | 2026-07-22 | **破壊的変更**。Claude 認証を OAuth トークン注入から作業前 `/login` 既定へ変更（`--claude-token-env` / `CLAUDE_CODE_OAUTH_TOKEN` 自動注入を廃止）。あわせて AI ツール永続 volume の `root:root` 所有によるログイン不能を修正（`fix_owner` を postCreate に追加） |
 | devcontainer-bootstrap | v0.4.2 | 2026-07-21 | バグ修正: playbook 取得失敗時に部分生成せず書き込み前にアトミック停止。`--playbook-version` の `v` 抜けヒント |
 | devcontainer-bootstrap | v0.4.1 | 2026-07-21 | `--playbook-version <tag>` 追加（URL 冗長の解消）。ソース指定時は `--with-playbook` 省略可 |
@@ -23,7 +25,7 @@
 | devcontainer-bootstrap | v0.3.1 | 2026-07-21 | ループコーディング支援（`verify.sh` / `acceptance.sh` / `loop-gate.sh`）を生成に追加。`--with-playbook` 取得元を ai-playbook v0.1.1 へ更新 |
 | ai-playbook | v0.1.1 | 2026-07-21 | ループコーディング規範 `loop-workflow.md` / `loop-coding-guide.md` を追加、既存規範を追随更新 |
 
-> 注: 新世代 DCB は v0.1.0 で初回公開後、v0.2.0 / v0.3.0 / v0.3.1 / v0.4.0 / v0.4.1 / v0.4.2 を経て v0.5.0 に至る（README のバージョン固定が正本）。v0.4.0 は `--mode` 廃止、v0.5.0 は Claude 認証 login-first 化の破壊的変更。
+> 注: 新世代 DCB は v0.1.0 で初回公開後、v0.2.0 / v0.3.0 / v0.3.1 / v0.4.0 / v0.4.1 / v0.4.2 / v0.5.0 を経て v0.5.1 に至る（README のバージョン固定が正本）。v0.4.0 は `--mode` 廃止、v0.5.0 は Claude 認証 login-first 化の破壊的変更。v0.5.1 は非破壊の機能追加（playbook 出所記録）。
 
 - 再作成の理由: コミット作者情報に別アカウントが混入した痕跡を、GitHub 内部キャッシュも含め完全に除去するため。
 - 新世代 v0.1.0 の機能は、旧世代の最終版（DCB v0.3.1 / 旧 ai-playbook v0.1.0）の内容をすべて含みます。
