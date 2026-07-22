@@ -22,7 +22,6 @@ MANAGE_GITIGNORE="true"
 GITIGNORE_TARGETS=""
 
 GITHUB_PROFILES="primary,secondary"
-CLAUDE_TOKEN_ENV="CLAUDE_CODE_OAUTH_TOKEN"
 GEMINI_KEY_ENV="GEMINI_API_KEY"
 BASE_IMAGE_OVERRIDE=""
 BASE_IMAGE=""
@@ -53,7 +52,6 @@ options:
   --output-dir <path>         Output directory (default: $PWD/<project-name>)
   --github-profiles <csv>     GitHub profiles for multi-account env injection
                               (default: primary,secondary)
-  --claude-token-env <name>   Local env var name for Claude token (default: CLAUDE_CODE_OAUTH_TOKEN)
   --gemini-key-env <name>     Local env var name for Gemini key (default: GEMINI_API_KEY)
   --base-image <image>        Override auto-selected devcontainer base image
   --dry-run                   Show planned outputs without writing files
@@ -76,6 +74,11 @@ notes:
   auto-install); each --with AI tool also adds its VS Code extension and
   persists its config across rebuilds.
 
+  Claude Code authenticates at runtime via /login (not an injected OAuth token):
+  the OAuth token has a limited permission scope, and ~/.claude is persisted, so
+  a one-time /login carries across rebuilds. See README to opt back into token
+  injection if you need it (e.g. CI).
+
   Shared AI rules are maintained in a separate repository. This script places
   them into the generated project; it is a distribution mechanism, not the
   source of truth.
@@ -93,7 +96,6 @@ while [[ $# -gt 0 ]]; do
     --with-copilot)     WITH_SET+=("copilot"); shift ;;
     --output-dir)       OUTPUT_DIR="$2"; shift 2 ;;
     --github-profiles)  GITHUB_PROFILES="$2"; shift 2 ;;
-    --claude-token-env) CLAUDE_TOKEN_ENV="$2"; shift 2 ;;
     --gemini-key-env)   GEMINI_KEY_ENV="$2"; shift 2 ;;
     --base-image)       BASE_IMAGE_OVERRIDE="$2"; shift 2 ;;
     --dry-run)          DRY_RUN="true"; shift ;;
@@ -294,7 +296,6 @@ TMPL
   "remoteEnv": {
 __GITHUB_PROFILE_ENV_BLOCK__
     "GEMINI_API_KEY": "${localEnv:__GEMINI_KEY_ENV__}",
-    "CLAUDE_CODE_OAUTH_TOKEN": "${localEnv:__CLAUDE_TOKEN_ENV__}",
     "LOCAL_WORKSPACE_FOLDER": "${localWorkspaceFolder}"
   },
   "postCreateCommand": "bash scripts/install-ai-tools.sh",
@@ -1061,7 +1062,6 @@ render_content() {
   escaped_base_image="${escaped_base_image//&/\\&}"
 
   sed_args+=(-e "s|__PROJECT_NAME__|$PROJECT_NAME|g")
-  sed_args+=(-e "s|__CLAUDE_TOKEN_ENV__|$CLAUDE_TOKEN_ENV|g")
   sed_args+=(-e "s|__GEMINI_KEY_ENV__|$GEMINI_KEY_ENV|g")
   sed_args+=(-e "s|__BASE_IMAGE__|$escaped_base_image|g")
   for lang in node go python php rust; do
