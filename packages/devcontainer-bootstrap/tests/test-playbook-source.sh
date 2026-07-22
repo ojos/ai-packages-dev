@@ -176,4 +176,48 @@ out="$(new_workdir)/p"
 run_bootstrap "$out" --playbook-from "$PLAYBOOK_SRC" --without-playbook >/dev/null 2>&1
 assert_file_absent "$out/.ai-playbook"
 
+# ── 導入した規範のソースを VERSION に記録する（自己診断 F-7）──────────────────
+# 生成後の環境から「どのバージョンの playbook を取り込んだか」を証跡照合できる
+# ようにする。--playbook-version の実タグ取得はネットワークに出るため、ここでは
+# 非ネットワークで通る既定ソース／ローカルソース経路で source 記録を検証する。
+
+it "規範導入時に .ai-playbook/VERSION を作る"
+out="$(new_workdir)/p"
+run_bootstrap "$out" --with-playbook >/dev/null 2>&1
+assert_file_exists "$out/.ai-playbook/VERSION"
+
+it "VERSION に version と source を記録する（既定は隣接チェックアウト）"
+ver_content="$(cat "$out/.ai-playbook/VERSION" 2>/dev/null)"
+assert_contains "$ver_content" "version=(unspecified)" "VERSION の version 行"
+assert_contains "$ver_content" "source=<adjacent checkout>" "VERSION の source 行"
+
+it "--playbook-from 指定時は source にそのソースを記録する"
+out="$(new_workdir)/p"
+run_bootstrap "$out" --playbook-from "$PLAYBOOK_SRC" >/dev/null 2>&1
+assert_contains "$(cat "$out/.ai-playbook/VERSION" 2>/dev/null)" "source=$PLAYBOOK_SRC" "VERSION の source 行"
+
+it "規範を配置しないなら VERSION も作らない"
+out="$(new_workdir)/p"
+run_bootstrap "$out" >/dev/null 2>&1
+assert_file_absent "$out/.ai-playbook/VERSION"
+
+it "dry-run は VERSION の生成を計画に含める"
+out="$(new_workdir)/p"
+output="$(run_bootstrap "$out" --with-playbook --dry-run 2>&1)"
+assert_contains "$output" ".ai-playbook/VERSION" "dry-run 計画"
+
+it "再実行では既存 VERSION を skip ポリシーに従い上書きしない"
+# 規範 *.md を skip で温存したまま VERSION だけ書き換えると、記録が実際の
+# on-disk 規範とずれて嘘になる。VERSION も規範と同じ衝突ポリシーに従うこと。
+out="$(new_workdir)/p"
+altsrc="$(new_workdir)/alt"; mkdir -p "$altsrc"; cp -R "$PLAYBOOK_SRC/." "$altsrc/"
+run_bootstrap "$out" --playbook-from "$PLAYBOOK_SRC" >/dev/null 2>&1
+first="$(cat "$out/.ai-playbook/VERSION" 2>/dev/null)"
+run_bootstrap "$out" --playbook-from "$altsrc" >/dev/null 2>&1
+assert_eq "$(cat "$out/.ai-playbook/VERSION" 2>/dev/null)" "$first" "再実行後の VERSION（skip で不変）"
+
+it "再実行でも conflict-policy overwrite なら VERSION を更新する"
+run_bootstrap "$out" --playbook-from "$altsrc" --playbook-conflict-policy overwrite >/dev/null 2>&1
+assert_contains "$(cat "$out/.ai-playbook/VERSION" 2>/dev/null)" "source=$altsrc" "overwrite 後の source"
+
 exit_with_result
