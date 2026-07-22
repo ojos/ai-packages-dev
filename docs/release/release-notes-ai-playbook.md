@@ -2,6 +2,22 @@
 
 新世代（2026-07-17 リポジトリ再作成後）のリリースノートです。
 
+## v0.1.2
+
+### Summary
+- 入口ファイル雛形 `templates/entry.md` から「導入時の調整」節を削除。タグのみ配布（Release・資産なし）。
+
+### Highlights
+- 「導入時の調整」節は「調整が済んだら削除してよい」という自己削除指示付きの補足で、規範を `.ai-playbook` 以外へ再配置する場合の案内だった。この節が入口ファイル（`CLAUDE.md` / `.github/copilot-instructions.md`）へそのまま複製され、生成物にメタ指示が残置していた（devcontainer 自己診断 F-6）。
+- DCB は規範を常に `.ai-playbook` へ標準配置するため調整の余地がなく、当該節を削除した。
+
+### Breaking Changes
+- なし（後方互換の雛形整理）。
+
+### Verification
+- [ ] preflight 全通過（規範のリンク検査、タグ不変性）
+- [ ] archive tarball から規範一式が取得できることをリリース経路で確認
+
 ## v0.1.1
 
 ### Summary
