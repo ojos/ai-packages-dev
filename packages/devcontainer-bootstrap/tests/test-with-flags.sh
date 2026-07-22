@@ -204,4 +204,36 @@ else
   fail "cloud CLI 検出行が出ない（feature path 不一致の回帰）"
 fi
 
+# ── AI 設定ディレクトリの所有権修正（空 named volume の root:root 初回マウント回避） ──
+#
+# 空の永続 volume を初回マウントすると root:root で作られ、remoteUser が書けず AI CLI の
+# ログインが失敗する。install-ai-tools.sh 冒頭で選択ツールの config dir を chown する。
+
+it "--with-claude --with-gemini --with-copilot: 3 ツール分の fix_owner 行が入る"
+out="$(new_workdir)/p"
+run_bootstrap "$out" --with-claude --with-gemini --with-copilot >/dev/null 2>&1
+ait="$out/scripts/install-ai-tools.sh"
+if grep -qF 'fix_owner "/home/vscode/.claude"' "$ait" \
+   && grep -qF 'fix_owner "/home/vscode/.gemini"' "$ait" \
+   && grep -qF 'fix_owner "/home/vscode/.copilot"' "$ait"; then
+  pass
+else
+  fail "選択 3 ツールの fix_owner 行が揃わない"
+fi
+
+it "--with-claude --with-gemini --with-copilot: install-ai-tools.sh が sudo chown を含む"
+if grep -q 'sudo chown' "$ait"; then pass; else fail "sudo chown が無い"; fi
+
+it "AI ツール未選択の生成では fix_owner 呼び出し行が 0 件"
+out="$(new_workdir)/p"
+run_bootstrap "$out" >/dev/null 2>&1
+# 定義（fix_owner()）ではなく呼び出し行（fix_owner "..."）を数える。
+n="$(grep -cE '^fix_owner "' "$out/scripts/install-ai-tools.sh" || true)"
+if [[ "$n" == "0" ]]; then pass; else fail "未選択なのに fix_owner 呼び出しが $n 件"; fi
+
+it "生成された install-ai-tools.sh が bash -n を通る（全 AI 選択）"
+out="$(new_workdir)/p"
+run_bootstrap "$out" --with-claude --with-gemini --with-copilot >/dev/null 2>&1
+if bash -n "$out/scripts/install-ai-tools.sh" 2>/dev/null; then pass; else fail "構文エラー"; fi
+
 exit_with_result
