@@ -2,6 +2,25 @@
 
 新世代（2026-07-17 リポジトリ再作成後）のリリースノートです。旧世代（〜v0.3.1）は [archive/release-notes-devcontainer-bootstrap.md](../archive/release-notes-devcontainer-bootstrap.md) を参照。
 
+## v0.5.0
+
+### Summary
+- Claude 認証を OAuth トークン注入から作業前 `/login` 既定へ変更（**破壊的変更**）。
+- AI ツール永続 volume の所有権を修正し、`/login` 不能を解消（バグ修正）。
+
+### Breaking Changes
+- `--with-claude` の生成物で `remoteEnv` へ `CLAUDE_CODE_OAUTH_TOKEN` を**無条件注入する挙動を廃止**。OAuth トークンは権限スコープが限定されフルスペック操作が許可されないため、作業前に `/login` する方式を既定にした。`~/.claude` は named volume で永続するため、一度 `/login` すればリビルドをまたいで有効。
+- `--claude-token-env` フラグ / `CLAUDE_TOKEN_ENV` 変数 / `__CLAUDE_TOKEN_ENV__` の sed 置換を除去。
+- CI 等でトークン運用が必要な場合は、生成された `.devcontainer/devcontainer.json` の `remoteEnv` へ手動で 1 行追記する（手順は README に記載）。
+
+### Fixes
+- AI ツール用の永続 named volume（`claude-storage:/home/vscode/.claude` 等）を空の状態で初回マウントすると、マウントポイントを Docker デーモン（root）が `root:root` で作成するため、`remoteUser`（vscode）が書き込めず AI CLI のログイン/設定書き込みが失敗していた。
+- `postCreateCommand`（`install-ai-tools.sh`）に `fix_owner` を追加し、選択した AI ツールの設定ディレクトリの所有者が現ユーザーと異なる場合のみ `sudo chown -R` で復旧する（冪等）。`sudo` 不在・`chown` 失敗のいずれも `set -euo pipefail` 下で postCreate を止めず、WARN を出して CLI 導入まで到達させる。
+
+### Verification
+- [ ] preflight 全通過（DCB テストスイート、README / 規範のリンク検査、バージョン不変性）
+- [ ] 資産監査 OK（`RELEASE-MANIFEST.json` / `SHA256SUMS` / `PACKAGE_ARCHIVE.tar.gz` / `bootstrap.sh` / `doctor.sh`）
+
 ## v0.4.2
 
 ### Summary
