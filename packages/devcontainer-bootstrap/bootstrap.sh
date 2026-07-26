@@ -1854,10 +1854,18 @@ render_content() {
   sed_args+=(-e "s|__IDENTITY_PROFILE__|$identity_profile|g")
   sed_args+=(-e "s|__BASE_IMAGE__|$escaped_base_image|g")
   for lang in node go python php rust; do
-    local lang_upper
+    local lang_upper lang_options
     lang_upper=$(printf '%s' "$lang" | tr '[:lower:]' '[:upper:]')
     if has_language "$lang"; then
-      sed_args+=(-e "s|\"__IF_RUNTIME_${lang_upper}__\": \"ghcr.io/devcontainers/features/$lang:1\"|\"ghcr.io/devcontainers/features/$lang:1\": {}|g")
+      # 既定は素の feature（options 無し）。python だけは uv を同梱する。
+      # python feature には uv 専用オプションが無いため、pipx 導入の toolsToInstall
+      # に uv を追記する。toolsToInstall は上書き（既定リストを置換）なので、既定
+      # ツール群を明記した上で uv を足し、既定ツールの回帰を避ける。
+      lang_options='{}'
+      if [ "$lang" = "python" ]; then
+        lang_options='{ "installTools": true, "toolsToInstall": "flake8,autopep8,black,yapf,mypy,pydocstyle,pycodestyle,bandit,pipenv,virtualenv,pytest,pylint,uv" }'
+      fi
+      sed_args+=(-e "s|\"__IF_RUNTIME_${lang_upper}__\": \"ghcr.io/devcontainers/features/$lang:1\"|\"ghcr.io/devcontainers/features/$lang:1\": $lang_options|g")
     else
       sed_args+=(-e "/\"__IF_RUNTIME_${lang_upper}__\"/d")
     fi
