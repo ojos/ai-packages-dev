@@ -259,6 +259,15 @@ bash scripts/github-account-switch.sh use <profile>
 - `GITHUB_TOKEN_<PROFILE>` は `scripts/github-account-switch.sh` で profile ごとに切替利用する前提です。
 - `GITHUB_OWNER_<PROFILE>` は、トークン発行者と操作対象 owner（個人/組織）が異なるときに使います。
 
+### プロジェクト `.env` の優先読み込み
+
+`remoteEnv` はホスト OS の環境変数（`GEMINI_API_KEY` / `GITHUB_TOKEN_<PROFILE>` 等）をコンテナへ注入します。プロジェクトごとに別のキーを使いたい場合に備え、`scripts/load-project-env.sh` がプロジェクトルートの `.env` を**ホスト由来の値より後勝ちで上書き**します。
+
+- **`source` しません。** `KEY=VALUE` のみを安全にパースして `export` するため、`.env` の内容は任意コードとして実行されません（`FOO=$(...)` や単独の `echo` 行があっても実行されない）。壊れた `.env` がシェルの初期化ごと落とす事故を防ぎます。
+- **CWD 非依存。** スクリプト自身の位置（`scripts/` の 1 階層上）から `.env` を解決するため、サブディレクトリから呼んでも正しく読み込みます。`PROJECT_ENV_FILE` で対象ファイルを明示指定できます。
+- **bash / zsh 双方**で動作し、CRLF・`export KEY=VALUE`・`KEY = VALUE`・クォート囲みの各形式を吸収します。複数回読み込んでも安全（冪等）。`.env` が無ければ何もしません。
+- 対話シェルへは `scripts/on-attach.sh` が `~/.bashrc` / `~/.zshrc` へマーカー付きで**冪等に**注入するため、ターミナルから起動する CLI（`gemini` 等）にも `.env` の値が効きます。非対話実行（`scripts/gemini-review.sh` 等）は各スクリプトが冒頭で明示的に読み込みます。
+
 ## AI エンジン導入マトリックス
 
 このパッケージが生成する環境における、AI CLI の導入・認証要件のマトリックスです。
@@ -297,6 +306,7 @@ CI など非対話環境でトークン運用が必要な場合のみ、生成�
 - `.devcontainer/devcontainer.json`（言語別 feature を反映。docker-compose ベースで `compose.yaml` の `app` サービスを参照）
 - `.devcontainer/compose.yaml`（単一サービス `app` の compose 定義。compose 利用時は feature や devcontainer.json の mounts が適用されないため、docker socket を常に明示。AI CLI 用の永続 volume は `--with-<ai>` 選択時に随伴して compose 側へ配置）
 - `scripts/github-account-switch.sh`
+- `scripts/load-project-env.sh`（プロジェクト `.env` の優先読み込み。下記参照）
 - `scripts/on-attach.sh`
 - `scripts/post-rebuild-check.sh`
 - `scripts/verify.sh` / `scripts/acceptance.sh` / `scripts/loop-gate.sh`（ループコーディング支援。下記参照）

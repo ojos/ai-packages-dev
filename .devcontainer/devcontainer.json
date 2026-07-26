@@ -27,8 +27,8 @@
     "GEMINI_API_KEY": "${localEnv:GEMINI_API_KEY}",
     "LOCAL_WORKSPACE_FOLDER": "${localWorkspaceFolder}"
   },
-  "postCreateCommand": "bash -lc 'source scripts/load-env.sh && bash scripts/install-ai-tools.sh'",
-  "postAttachCommand": "bash -lc 'source scripts/load-env.sh && bash scripts/on-attach.sh'",
+  "postCreateCommand": "bash -lc 'source scripts/load-project-env.sh && bash scripts/install-ai-tools.sh'",
+  "postAttachCommand": "bash -lc 'source scripts/load-project-env.sh && bash scripts/on-attach.sh'",
   "customizations": {
     "vscode": {
       "extensions": [

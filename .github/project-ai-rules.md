@@ -20,7 +20,7 @@
 
 共通規範「機密の取り扱い」（`.ai-playbook/shared-ai-rules.md`）を、このリポジトリで具体化します。
 
-- 機密の読み取り元: `.env`（`scripts/load-env.sh` が読み込む）、および GitHub CLI の認証情報
+- 機密の読み取り元: `.env`（`scripts/load-project-env.sh` が読み込む）、および GitHub CLI の認証情報
 - 追跡除外: `.env` および `.env.*`（`.gitignore` 済み）
 - 共有する雛形: 値のない `.env.example` のみ
 - GitHub トークンは `GITHUB_TOKEN_<PROFILE>` 環境変数で扱い、ファイルへ保存しません（`scripts/github-account-switch.sh`）
@@ -88,7 +88,7 @@ bash scripts/gemini-review.sh              # ステージ済み差分
 bash scripts/gemini-review.sh --range main..HEAD
 ```
 
-- `GEMINI_API_KEY` が必要です（`.env` から `scripts/load-env.sh` が読み込みます）。
+- `GEMINI_API_KEY` が必要です（`.env` から `scripts/load-project-env.sh` が読み込みます）。
 - `gemini` CLI は `scripts/install-ai-tools.sh` が導入します。
 - 終了コード 0（`LGTM`）で通過、1 で重大な指摘ありです。
 - 両段とも対象は致命バグ・脆弱性・型エラー・エッジケースの見落としに限ります。修正は 1 イテレーションで完結させます。

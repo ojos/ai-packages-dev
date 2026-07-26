@@ -234,6 +234,7 @@ template_rel_paths() {
     'scripts/acceptance.sh' \
     'scripts/github-account-switch.sh' \
     'scripts/install-ai-tools.sh' \
+    'scripts/load-project-env.sh' \
     'scripts/loop-gate.sh' \
     'scripts/on-attach.sh' \
     'scripts/post-rebuild-check.sh' \
@@ -533,11 +534,119 @@ __AI_INSTALL_LINES__
 echo "[install-ai-tools] done"
 TMPL
       ;;
+    'scripts/load-project-env.sh')
+      # プロジェクト .env を「ホスト由来の環境変数（remoteEnv）より優先」で読み込む。
+      # 実行ではなく source して使う。source せず KEY=VALUE のみ安全にパースするため、
+      # 壊れた .env が対話シェルの初期化ごと落とす事故を防ぐ。CWD 非依存でスクリプト位置から
+      # ルートを解決し、bash / zsh の双方でソース中ファイルのパスを解決する。
+      cat <<'TMPL'
+#!/usr/bin/env bash
+# load-project-env.sh — プロジェクト固有の .env を「ホスト由来の環境変数より優先」で読み込む。
+#
+# 目的: devcontainer の remoteEnv がホスト OS の環境変数（GEMINI_API_KEY 等）を
+#       コンテナへ注入する構造は維持したまま、本プロジェクトのみ .env の値を上書き優先する。
+#
+# 使い方: 実行ではなく source して使う。
+#   . scripts/load-project-env.sh
+#
+# 設計:
+#   - 対象 .env はスクリプト自身の位置から解決する（CWD 非依存・パス非ハードコード）。
+#     scripts/ の 1 階層上をルートとみなす。別ディレクトリ名でクローンしても追随し、
+#     別リポジトリへ cd 済みのシェルから source しても誤検出しない（rc 側は絶対パスを注入）。
+#     PROJECT_ENV_FILE で明示的に差し替え可能。
+#   - .env は source せず安全にパースする（KEY=VALUE のみ export、任意コードは実行しない）。
+#     これにより、壊れた .env が対話シェルの初期化ごと落とす事故を防ぐ。
+#   - CRLF・=前後や値前後の空白など、実務的な .env の揺れを吸収する。
+#
+# 冪等: 複数回 source しても安全。.env が無ければ何もしない。
+
+__load_project_env() {
+  local project_root env_file line key val src
+  # ソース中ファイルのパスを bash / zsh 双方で解決する。zsh には BASH_SOURCE が無いため
+  # ${BASH_SOURCE[0]} は空になり CWD 依存へ化ける。実行シェルを判定して回避する。
+  if [ -n "${BASH_VERSION:-}" ]; then
+    src="${BASH_SOURCE[0]}"
+  elif [ -n "${ZSH_VERSION:-}" ]; then
+    # zsh: 現在ソース中ファイルの絶対/相対パス。
+    src="${(%):-%x}"
+  else
+    src="$0"
+  fi
+  # スクリプト位置から解決（scripts/ の 1 階層上がルート）。CWD にもパスにも依存しない。
+  project_root="$(cd "$(dirname "$src")/.." && pwd)"
+  env_file="${PROJECT_ENV_FILE:-$project_root/.env}"
+  [[ -f "$env_file" ]] || return 0
+
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    # CRLF 対策: Windows ホストでクローンされた .env の CR を除去。
+    line="${line//$'\r'/}"
+    # 行の前後の空白を除去し、空行・コメント行はスキップ。
+    line="${line#"${line%%[![:space:]]*}"}"
+    line="${line%"${line##*[![:space:]]}"}"
+    [[ -z "$line" || "$line" == \#* ]] && continue
+    # 先頭の `export` 記法を許容。区切りがスペース以外（タブ等）でも剥がせるよう、
+    # まず `export` 文字列だけを落としてから先頭空白をトリムする。
+    if [[ "$line" == export[[:space:]]* ]]; then
+      line="${line#export}"
+      line="${line#"${line%%[![:space:]]*}"}"
+    fi
+    # KEY=VALUE 形式でなければスキップ。
+    [[ "$line" == *=* ]] || continue
+    key="${line%%=*}"
+    val="${line#*=}"
+    # キー前後の空白を除去し、正当な識別子だけを対象にする（KEY = VALUE を許容）。
+    key="${key//[[:space:]]/}"
+    [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+    # 値の前後の空白を除去（KEY= VALUE / KEY =VALUE 等）。クォート内の空白は後段で保持。
+    val="${val#"${val%%[![:space:]]*}"}"
+    val="${val%"${val##*[![:space:]]}"}"
+    # 値を囲む対のクォートがあれば外す（dotenv 慣習）。
+    if [[ ${#val} -ge 2 && "$val" == \"*\" ]]; then
+      val="${val:1:${#val}-2}"
+    elif [[ ${#val} -ge 2 && "$val" == \'*\' ]]; then
+      val="${val:1:${#val}-2}"
+    fi
+    # 後勝ちで既存の環境変数（remoteEnv 由来のホスト値）を上書きする。
+    export "$key=$val"
+  done < "$env_file"
+}
+
+__load_project_env
+TMPL
+      ;;
     'scripts/on-attach.sh')
+      # 対話シェルへ .env autoload を配線する（rc 注入は冪等・マーカー判定・絶対パス参照）。
+      # HELPER はスクリプト自身の位置から解決し、起動時 CWD に依存しない。
       cat <<'TMPL'
 #!/usr/bin/env bash
 set -euo pipefail
 echo "[on-attach] bootstrap active"
+
+# スクリプト自身の位置から解決する（起動時 CWD に依存しない）。scripts/ 直下に
+# load-project-env.sh が並ぶ。
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+HELPER="$HERE/load-project-env.sh"
+
+# 対話シェルでプロジェクト .env を自動 override 読み込みするための rc 注入（冪等）。
+# これにより、ターミナルから起動する CLI（gemini 等）やスクリプトにも .env の値が効く。
+inject_env_autoload() {
+  local rc="$1"
+  local marker="# >>> project .env autoload >>>"
+  # rc が無いベースイメージでも autoload を効かせるため、存在しなければ作成する
+  # （touch は既存ファイルを切り詰めない）。zsh 未導入環境で作られても無害（誰も読まない）。
+  [[ -f "$rc" ]] || touch "$rc"
+  grep -qF "$marker" "$rc" && return 0
+  {
+    echo ""
+    echo "$marker"
+    echo "if [[ -f \"$HELPER\" ]]; then . \"$HELPER\"; fi"
+    echo "# <<< project .env autoload <<<"
+  } >> "$rc"
+  echo "[on-attach] injected project .env autoload into $rc"
+}
+inject_env_autoload "$HOME/.bashrc"
+inject_env_autoload "$HOME/.zshrc"
+
 if command -v gh >/dev/null 2>&1; then
   gh auth status >/dev/null 2>&1 && echo "[on-attach] gh auth OK" || echo "[on-attach] WARN: gh auth missing"
 fi
