@@ -86,9 +86,16 @@ jobs:
 
       # プロジェクト固有の値がパッケージ層と規範層へ混入していないことを検証する。
       # .github/PROJECT_DEFINITION.md が定めるクイック検証の自動化。
+      #
+      # tests/ は除外する。中立性が守るのは「配布される再利用可能な層」であり、
+      # DCB のリリースは bootstrap.sh / doctor.sh / README.md のみを公開して tests/ は
+      # 配布しない（scripts/release-packages.sh 参照）。かつテストは「生成物に固有名詞が
+      # 残らないこと」を検証する都合上、検査対象語として固有名詞をリテラルで持つ必要が
+      # あるため、ここで検査すると中立性の趣旨と自己矛盾する。
       - name: No project-specific names in packages or .ai-playbook
         run: |
-          if grep -rniE 'bascule|ojos' packages/ .ai-playbook/ --include='*.sh' --include='*.md' --include='*.json' \
+          if grep -rniE 'bascule|ojos' packages/ .ai-playbook/ \
+            --include='*.sh' --include='*.md' --include='*.json' --exclude-dir=tests \
             | grep -v 'ojos/devcontainer-bootstrap' \
             | grep -v 'ojos/ai-playbook'; then
             echo "project-specific names must not leak into packages/ or .ai-playbook/"
