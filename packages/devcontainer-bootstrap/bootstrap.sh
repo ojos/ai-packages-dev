@@ -231,6 +231,7 @@ template_rel_paths() {
   printf '%s\n' \
     '.devcontainer/compose.yaml' \
     '.devcontainer/devcontainer.json' \
+    '.github/workflows/identity-guard.yml' \
     'scripts/acceptance.sh' \
     'scripts/github-account-switch.sh' \
     'scripts/install-ai-tools.sh' \
@@ -238,6 +239,8 @@ template_rel_paths() {
     'scripts/loop-gate.sh' \
     'scripts/on-attach.sh' \
     'scripts/post-rebuild-check.sh' \
+    'scripts/setup-git-identity.sh' \
+    'scripts/verify-commit-identity.sh' \
     'scripts/verify.sh'
 }
 
@@ -311,6 +314,66 @@ __WITH_EXTENSIONS__
     }
   }
 }
+TMPL
+      ;;
+    '.github/workflows/identity-guard.yml')
+      # コミット identity の検証ゲート。判定は scripts/verify-commit-identity.sh に置き、
+      # ワークフローはそれを呼ぶだけ（CI と手元で同じコードを走らせる）。許可 author email は
+      # リポジトリ変数 vars.ALLOWED_AUTHOR_EMAILS を env 経由でスクリプトへ渡す（固有 email を
+      # 生成物に焼き込まない）。pull_request と push(main) の 2 系統を張る。
+      cat <<'TMPL'
+name: identity-guard
+
+# コミット identity の検証ゲート。
+#
+# git identity の適用漏れにより、別アカウントの identity のコミットが main に
+# 直接入り、GitHub の Contributors に意図しないアカウントが現れる事故を防ぐ。
+# 適用漏れそのものは scripts/setup-git-identity.sh が塞ぎ、ここはその検知層。
+#
+# 判定ロジックは scripts/verify-commit-identity.sh に置く。CI と手元で同じ
+# コードを走らせ、push 前にローカルで先に落とせるようにするため。
+#
+# 許可 author email は生成物に焼き込まず、リポジトリ変数から渡す:
+#   利用側リポジトリの Settings > Secrets and variables > Actions > Variables に
+#   ALLOWED_AUTHOR_EMAILS を作成し、許可する author email を設定する
+#   （複数はカンマまたは空白区切り。例: "you@example.com"）。
+#
+# 2 系統を張る:
+#   - pull_request: PR に含まれる全コミットを検査する（通常経路）
+#   - push(main):   main の全履歴を検査する（PR を経由しない直接 push を捕捉）
+#                   直接 push こそが混入の原因なので、こちらを省略しない。
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  verify-commit-identity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # 範囲指定で履歴を辿るため全履歴が要る。
+          fetch-depth: 0
+
+      - name: Verify commit identity
+        env:
+          # 固有 email を焼き込まず、リポジトリ変数から許可 author email を渡す。
+          ALLOWED_AUTHOR_EMAILS: ${{ vars.ALLOWED_AUTHOR_EMAILS }}
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            bash scripts/verify-commit-identity.sh "${BASE_SHA}..${HEAD_SHA}"
+          else
+            bash scripts/verify-commit-identity.sh --full
+          fi
 TMPL
       ;;
     'scripts/github-account-switch.sh')
@@ -623,9 +686,20 @@ set -euo pipefail
 echo "[on-attach] bootstrap active"
 
 # スクリプト自身の位置から解決する（起動時 CWD に依存しない）。scripts/ 直下に
-# load-project-env.sh が並ぶ。
+# load-project-env.sh / setup-git-identity.sh が並ぶ。
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HELPER="$HERE/load-project-env.sh"
+
+# git identity の無害化。VS Code の dev.containers.copyGitConfig がリビルドのたびに
+# ホストの ~/.gitconfig をコンテナへコピーし直すため、接続のたびに再適用する。
+# 失敗しても on-attach 全体は落とさない。identity が未適用でも、未指定のまま
+# コミットしようとすれば git 自身が exit 128 で止めるため、ここで打ち切る理由がない。
+# `if ! ...` で捕捉するため setup-git-identity.sh が非ゼロで終了しても on-attach は 0 のまま。
+if ! bash "$HERE/setup-git-identity.sh"; then
+  echo "[on-attach] WARN: git identity の適用に失敗しました。" >&2
+  # CWD に依存しないよう絶対パスで案内する（そのままコピペして実行できる形）。
+  echo "[on-attach] WARN: 手動確認: bash $HERE/setup-git-identity.sh --check" >&2
+fi
 
 # 対話シェルでプロジェクト .env を自動 override 読み込みするための rc 注入（冪等）。
 # これにより、ターミナルから起動する CLI（gemini 等）やスクリプトにも .env の値が効く。
@@ -651,6 +725,481 @@ if command -v gh >/dev/null 2>&1; then
   gh auth status >/dev/null 2>&1 && echo "[on-attach] gh auth OK" || echo "[on-attach] WARN: gh auth missing"
 fi
 echo "[on-attach] profile list: bash scripts/github-account-switch.sh list"
+TMPL
+      ;;
+    'scripts/setup-git-identity.sh')
+      # identity 未指定のコミットを「黙って通す」経路を塞ぐ適用スクリプト。
+      # 先頭 profile（__IDENTITY_PROFILE__）の GIT_AUTHOR_*_<PROFILE> を local へ適用し、
+      # global は user.useConfigOnly=true + name/email 削除で無害化する。render_content が
+      # __IDENTITY_PROFILE__ / __IDENTITY_PROFILE_UPPER__ を実際の profile 名へ置換する。
+      cat <<'TMPL'
+#!/usr/bin/env bash
+# setup-git-identity.sh — identity 未指定のコミットを「黙って通す」経路を塞ぐ
+#
+# 背景:
+#   local 設定を持たないリポジトリは、git が黙って global の user.name/email へ
+#   フォールバックしてコミットを通してしまう。リポジトリを新規作成した直後は
+#   local 設定が存在しないため、そこが穴になる。これにより、別アカウントの
+#   identity でコミットが main に入り、GitHub の Contributors に意図しない
+#   アカウントが現れる事故が起きる。
+#
+#   コンテナの ~/.gitconfig は VS Code の dev.containers.copyGitConfig が
+#   ホストの設定をコピーして生成する。リビルドのたびに再生成されるため、
+#   一度きりの適用では戻る。接続のたびに再適用する前提で書く（on-attach から呼ぶ）。
+#
+#   なお .git/config (local) は workspace がホストの bind mount であるため
+#   リビルドでは失われない。ここで local を扱うのは、消えた場合の復旧と、
+#   このリポジトリで useConfigOnly の失敗に遭わせないための保険。
+#
+# 適用する内容:
+#   1. global の user.name / user.email を削除する
+#   2. global に user.useConfigOnly=true を立てる
+#      → local 未設定のリポジトリでは commit が exit 128 で止まる。
+#         黙って別名義になるより、止まって気づくほうがよい。
+#   3. 当リポジトリの local へ先頭 profile の identity を適用する
+#      （GIT_AUTHOR_NAME_<PROFILE> / GIT_AUTHOR_EMAIL_<PROFILE> は devcontainer の
+#       remoteEnv 経由で注入される。未設定なら local 適用は行わず WARN に留める）
+#
+# github-account-switch.sh を呼ばないのは、あれが gh api user / gh auth login を
+# 伴うため。接続のたびにネットワークを叩くのは重く、オフラインやトークン未設定で
+# 失敗する。ここでは git identity だけを env から適用する。認証の切替えは
+# 引き続き github-account-switch.sh の役割。
+#
+# 使い方:
+#   bash scripts/setup-git-identity.sh            # 適用
+#   bash scripts/setup-git-identity.sh --check    # 検証
+#
+#   --check は「適用をもう一度実行して状態が変化しないこと」も併せて検証する
+#   （冪等性と、credential セクションを壊していないことの確認を兼ねる）。
+#
+# 終了コード:
+#   0 = IDENTITY_SETUP_OK / 1 = IDENTITY_SETUP_FAIL
+set -euo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$(dirname "$HERE")"
+
+# 先頭 profile を既定 identity とする。値は devcontainer の remoteEnv 経由で
+# GIT_AUTHOR_NAME_<PROFILE> / GIT_AUTHOR_EMAIL_<PROFILE> として注入される。
+# 固有 email はここに焼き込まない（環境変数契約から解決する）。
+IDENTITY_PROFILE="__IDENTITY_PROFILE__"
+IDENTITY_PROFILE_UPPER="__IDENTITY_PROFILE_UPPER__"
+NAME_VAR="GIT_AUTHOR_NAME_${IDENTITY_PROFILE_UPPER}"
+EMAIL_VAR="GIT_AUTHOR_EMAIL_${IDENTITY_PROFILE_UPPER}"
+EXPECTED_NAME="${!NAME_VAR:-}"
+EXPECTED_EMAIL="${!EMAIL_VAR:-}"
+
+log() { echo "[git-identity] $*"; }
+err() { echo "[git-identity] $*" >&2; }
+
+# 一時ファイルはスクリプトスコープで持ち、EXIT で片付ける。
+# RETURN トラップにすると main の復帰時にも発火し、local が解放済みの状態で
+# 参照して set -u に殺される。
+SNAPSHOT=""
+TMP_SNAPSHOT=""
+TMP_REPO=""
+cleanup() {
+  [[ -n "$SNAPSHOT" ]] && rm -f "$SNAPSHOT"
+  [[ -n "$TMP_SNAPSHOT" ]] && rm -f "$TMP_SNAPSHOT"
+  [[ -n "$TMP_REPO" ]] && rm -rf "$TMP_REPO"
+  return 0
+}
+trap cleanup EXIT
+
+# git が実際に書き込む global 設定ファイルの実体を git 自身に問い合わせる。
+# ~/.gitconfig と XDG 配下のどちらが使われるかは環境で変わるため、決め打ちしない。
+resolve_global_config() {
+  local origin
+  origin="$(git config --global --show-origin --get user.useConfigOnly 2>/dev/null | head -1 || true)"
+  if [[ "$origin" == file:* ]]; then
+    origin="${origin#file:}"
+    printf '%s' "${origin%%$'\t'*}"
+    return 0
+  fi
+  printf '%s' "${GIT_CONFIG_GLOBAL:-$HOME/.gitconfig}"
+}
+
+# 失敗は必ず return 1 で返す。
+# この関数は `if ! apply` の条件文脈から呼ばれることがあり、その中では set -e が
+# 無効化される。書き込み失敗を素通りさせると最後の log の終了コード 0 が返り、
+# 「適用できていないのに成功」と報告してしまう。
+apply() {
+  # --unset-all は該当キーが無いと exit 5 を返す。未設定は正常系なので握りつぶす。
+  git config --global --unset-all user.name || true
+  git config --global --unset-all user.email || true
+
+  if ! git config --global user.useConfigOnly true; then
+    err "ERROR: global 設定に user.useConfigOnly を書き込めません"
+    return 1
+  fi
+
+  if [[ -n "$EXPECTED_NAME" && -n "$EXPECTED_EMAIL" ]]; then
+    if ! git config --local user.name "$EXPECTED_NAME" ||
+      ! git config --local user.email "$EXPECTED_EMAIL"; then
+      err "ERROR: local 設定に identity を書き込めません"
+      return 1
+    fi
+    log "local identity: $EXPECTED_NAME <$EXPECTED_EMAIL>"
+  else
+    # ここで落とさない。global の無害化は済んでおり、identity 未設定のまま
+    # コミットしようとすれば git 自身が exit 128 で止める。
+    err "WARN: $NAME_VAR / $EMAIL_VAR が未設定のため local identity を適用しません。"
+    err "WARN: このリポジトリでコミットする前に次を実行してください:"
+    err "WARN:   bash $HERE/github-account-switch.sh use $IDENTITY_PROFILE --git-scope local"
+  fi
+
+  log "global identity を無効化し user.useConfigOnly=true を設定しました"
+}
+
+# 期待どおりに identity が解決できない状態を作って、git が止まることを確かめる。
+# GIT_AUTHOR_* / EMAIL が環境にあると git はそれを使うため、判定から除外する。
+git_ident_without_env() {
+  env -u GIT_AUTHOR_NAME -u GIT_AUTHOR_EMAIL \
+      -u GIT_COMMITTER_NAME -u GIT_COMMITTER_EMAIL \
+      -u EMAIL \
+      git "$@"
+}
+
+check() {
+  local failures=0
+  local global_config ident
+
+  global_config="$(resolve_global_config)"
+
+  # 状態の検査を先に行う。適用を先に走らせると「未適用」を検出できなくなるため、
+  # 冪等性の検査（apply を伴う）は最後に置く。
+  SNAPSHOT="$(mktemp)"
+  TMP_SNAPSHOT="$(mktemp)"
+  cp "$global_config" "$SNAPSHOT" 2>/dev/null || : >"$SNAPSHOT"
+
+  # 1) global に identity が残っていないこと。
+  if [[ -z "$(git config --global --get user.name || true)" ]]; then
+    log "OK  global user.name は未設定"
+  else
+    err "NG  global user.name が残っている: $(git config --global --get user.name)"
+    failures=$((failures + 1))
+  fi
+  if [[ -z "$(git config --global --get user.email || true)" ]]; then
+    log "OK  global user.email は未設定"
+  else
+    err "NG  global user.email が残っている: $(git config --global --get user.email)"
+    failures=$((failures + 1))
+  fi
+
+  # 2) 未指定コミットを失敗させる設定が効いていること。
+  if [[ "$(git config --global --get user.useConfigOnly || true)" == "true" ]]; then
+    log "OK  user.useConfigOnly=true"
+  else
+    err "NG  user.useConfigOnly が true でない"
+    failures=$((failures + 1))
+  fi
+
+  # 3) 当リポジトリの local identity。
+  if [[ -n "$EXPECTED_EMAIL" ]]; then
+    if [[ "$(git config --local --get user.email || true)" == "$EXPECTED_EMAIL" ]]; then
+      log "OK  local user.email = $EXPECTED_EMAIL"
+    else
+      err "NG  local user.email が $EXPECTED_EMAIL でない: $(git config --local --get user.email || echo '<unset>')"
+      failures=$((failures + 1))
+    fi
+  else
+    log "SKIP $EMAIL_VAR 未設定のため local identity の検査を省略"
+  fi
+
+  # 4) 当リポジトリでは identity が解決できること。
+  if ident="$(git_ident_without_env var GIT_AUTHOR_IDENT 2>/dev/null)"; then
+    log "OK  当リポジトリの author: ${ident% * *}"
+  else
+    if [[ -n "$EXPECTED_EMAIL" ]]; then
+      err "NG  当リポジトリで author identity を解決できない"
+      failures=$((failures + 1))
+    else
+      log "SKIP local identity 未適用のため author 解決の検査を省略"
+    fi
+  fi
+
+  # 5) local 設定を持たないリポジトリでは identity 解決が失敗すること。
+  #    これが本題。黙って global へ落ちないことを確かめる。
+  TMP_REPO="$(mktemp -d)"
+  git init -q "$TMP_REPO"
+  if (cd "$TMP_REPO" && git_ident_without_env var GIT_AUTHOR_IDENT >/dev/null 2>&1); then
+    err "NG  local 未設定のリポジトリで author identity が解決できてしまう"
+    err "NG  → 未設定のままコミットが通る。黙ったフォールバックが塞がっていない。"
+    failures=$((failures + 1))
+  else
+    log "OK  local 未設定のリポジトリでは author identity 解決が失敗する"
+  fi
+  rm -rf "$TMP_REPO"
+  TMP_REPO=""
+
+  # 6) 冪等性 + credential セクションの保全。
+  #    適用をもう一度走らせ、global 設定ファイルが 1 バイトも変わらないことを見る。
+  #    credential.helper は VS Code / github-account-switch.sh が注入するため、
+  #    消していないことを併せて確認する。
+  #
+  #    この検査は apply を伴う。未適用の状態で走らせると「失敗を報告しながら
+  #    裏で直してしまう」ことになり、次回の --check が通って問題が見えなくなる。
+  #    先行する検査が落ちている場合は、意味を持たないので実行しない。
+  if [[ "$failures" -gt 0 ]]; then
+    log "SKIP 冪等性検査（先行する検査が失敗しているため。まず適用してください）"
+  else
+    # apply の失敗を握りつぶすと、何も書き換わらないので cmp が一致し、
+    # 「再適用できないのに冪等 OK」という誤った判定になる。失敗は失敗として扱う。
+    if ! apply >/dev/null 2>&1; then
+      err "NG  再適用に失敗した（apply が非ゼロ終了）"
+      failures=$((failures + 1))
+    else
+      cp "$global_config" "$TMP_SNAPSHOT" 2>/dev/null || : >"$TMP_SNAPSHOT"
+      if cmp -s "$SNAPSHOT" "$TMP_SNAPSHOT"; then
+        log "OK  冪等: 再適用で $global_config は変化しない（credential セクションを含む）"
+      else
+        err "NG  冪等性なし: 再適用で $global_config が変化した"
+        diff -u "$SNAPSHOT" "$TMP_SNAPSHOT" >&2 || true
+        failures=$((failures + 1))
+      fi
+    fi
+  fi
+
+  if [[ "$failures" -gt 0 ]]; then
+    err "$failures 件の検査に失敗しました。"
+    echo "IDENTITY_SETUP_FAIL"
+    return 1
+  fi
+
+  echo "IDENTITY_SETUP_OK"
+  return 0
+}
+
+main() {
+  case "${1-}" in
+    --check) check ;;
+    "") apply ;;
+    -h | --help)
+      # 先頭コメントブロックをそのままヘルプとして出す（行番号を決め打ちしない）。
+      awk 'NR==1{next} /^#/{sub(/^# ?/,""); print; next} {exit}' "${BASH_SOURCE[0]}"
+      ;;
+    *)
+      err "error: unknown option: $1"
+      exit 1
+      ;;
+  esac
+}
+
+main "$@"
+TMPL
+      ;;
+    'scripts/verify-commit-identity.sh')
+      # コミット履歴の identity 検証ゲート。CI（identity-guard.yml）と手元で共用する。
+      # author は email のみで判定。許可 email は env ALLOWED_AUTHOR_EMAILS（CI は
+      # リポジトリ変数から渡す）→ 無ければ先頭 profile の GIT_AUTHOR_EMAIL_<PROFILE> の
+      # 順で解決する。render_content が __IDENTITY_PROFILE_UPPER__ を置換する。
+      cat <<'TMPL'
+#!/usr/bin/env bash
+# verify-commit-identity.sh — コミット identity の検証ゲート
+#
+# コミットの author / committer / Co-Authored-By に、許可外の identity が
+# 混入していないことを検証する。GitHub の Contributors は既定ブランチの
+# コミット author（email）で集計されるため、email で判定する。
+#
+# 背景:
+#   git identity の適用漏れにより、別アカウントの identity のコミットが
+#   main に直接入り、Contributors に意図しないアカウントが現れる事故が起きる。
+#   setup-git-identity.sh が適用漏れ（穴）を塞ぎ、このスクリプトが検知層になる。
+#
+# 名前ではなく email のみで判定する:
+#   同じアカウントでも表記が揺れる（ローカル profile と GitHub の squash merge で
+#   name が異なる）。名前で判定すると表記揺れで落ちるだけで、アカウントの
+#   取り違えは防げない。
+#
+# 許可 email の与え方:
+#   author の許可 email は次の順で解決する。固有 email はスクリプトに焼き込まない。
+#     1. 環境変数 ALLOWED_AUTHOR_EMAILS（カンマ/空白区切り）。
+#        CI はリポジトリ変数（vars.ALLOWED_AUTHOR_EMAILS）を env 経由で渡す。
+#     2. 未設定なら先頭 profile の GIT_AUTHOR_EMAIL_<PROFILE>（コンテナの remoteEnv）。
+#   どちらでも解決できなければ「検査対象が無いので通過」にせず、fail-closed で落とす。
+#   committer には常に noreply@github.com を、Co-Authored-By には加えて
+#   noreply@anthropic.com を許可する（GitHub 上の squash merge / web UI コミットの
+#   committer、および AI コーディング規約の trailer に対応）。
+#
+# 使い方:
+#   bash scripts/verify-commit-identity.sh                # origin/main..HEAD
+#   bash scripts/verify-commit-identity.sh <range>        # 任意の範囲
+#   bash scripts/verify-commit-identity.sh --full         # HEAD の全履歴
+#
+# --full は HEAD の全履歴であって git rev-list --all ではない。--all は
+# refs/original/（filter-branch のバックアップ）や全 remote-tracking ブランチ
+# まで拾い、検査対象がチェックアウト環境ごとにぶれる。
+#
+# 終了コード:
+#   0 = IDENTITY_PASS（許可外の identity なし）
+#   1 = IDENTITY_FAIL（許可外の identity を検出、または範囲/許可 email が解決できない）
+set -euo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$(dirname "$HERE")"
+
+# 先頭 profile。ALLOWED_AUTHOR_EMAILS 未設定時のフォールバック解決に使う。
+IDENTITY_PROFILE_UPPER="__IDENTITY_PROFILE_UPPER__"
+
+ALLOWED_AUTHOR_EMAILS_ARR=()
+ALLOWED_COMMITTER_EMAILS_ARR=()
+ALLOWED_COAUTHOR_EMAILS_ARR=()
+
+# author の許可 email を解決する。env ALLOWED_AUTHOR_EMAILS を最優先し、
+# 無ければ先頭 profile の GIT_AUTHOR_EMAIL_<PROFILE> を使う。
+resolve_allowed_author_emails() {
+  local raw="${ALLOWED_AUTHOR_EMAILS:-}"
+  if [[ -z "$raw" ]]; then
+    local fallback_var="GIT_AUTHOR_EMAIL_${IDENTITY_PROFILE_UPPER}"
+    raw="${!fallback_var:-}"
+  fi
+  # カンマ区切りも空白区切りも受ける。
+  printf '%s' "${raw//,/ }"
+}
+
+init_allowlists() {
+  local resolved
+  resolved="$(resolve_allowed_author_emails)"
+  # shellcheck disable=SC2206
+  ALLOWED_AUTHOR_EMAILS_ARR=($resolved)
+
+  if [[ "${#ALLOWED_AUTHOR_EMAILS_ARR[@]}" -eq 0 ]]; then
+    echo "[identity] 許可 author email が解決できません。" >&2
+    echo "[identity] CI はリポジトリ変数 ALLOWED_AUTHOR_EMAILS を、コンテナは GIT_AUTHOR_EMAIL_${IDENTITY_PROFILE_UPPER} を設定してください。" >&2
+    echo "IDENTITY_FAIL"
+    exit 1
+  fi
+
+  # committer は squash merge / web UI の noreply@github.com を許可。
+  ALLOWED_COMMITTER_EMAILS_ARR=("${ALLOWED_AUTHOR_EMAILS_ARR[@]}" "noreply@github.com")
+  # Co-Authored-By は加えて AI コーディング規約の trailer を許可。
+  ALLOWED_COAUTHOR_EMAILS_ARR=("${ALLOWED_AUTHOR_EMAILS_ARR[@]}" "noreply@github.com" "noreply@anthropic.com")
+}
+
+is_allowed() {
+  local needle="$1"
+  shift
+  local candidate
+  for candidate in "$@"; do
+    [[ "$needle" == "$candidate" ]] && return 0
+  done
+  return 1
+}
+
+resolve_range() {
+  local arg="${1-}"
+
+  if [[ "$arg" == "--full" ]]; then
+    printf '%s' "HEAD"
+    return 0
+  fi
+
+  if [[ -n "$arg" ]]; then
+    printf '%s' "$arg"
+    return 0
+  fi
+
+  # 既定は origin/main からの差分。取得できない場合のみ全履歴へ落とす。
+  # 「範囲が解決できないので何も検査しない」を通過扱いにしない。
+  if git rev-parse --verify --quiet origin/main >/dev/null; then
+    printf '%s' "origin/main..HEAD"
+    return 0
+  fi
+
+  printf '%s' "HEAD"
+}
+
+main() {
+  init_allowlists
+
+  local range
+  range="$(resolve_range "${1-}")"
+
+  # 全コミットを git log 1 回で取り出す。コミットごとにプロセスを起動すると、
+  # main への全履歴検査が履歴の長さに比例して遅くなり、いずれ CI が
+  # タイムアウトする。
+  #
+  # レコード区切りは制御文字を使う。コミットメッセージの subject や
+  # co-author 名に現れないため、区切り文字の衝突を考えなくてよい。
+  #   \x1d = レコード終端 / \x1f = フィールド区切り / \x1e = co-author 区切り
+  local fmt='%H%x1f%ae%x1f%ce%x1f%s%x1f%(trailers:key=Co-Authored-By,valueonly,separator=%x1e)%x1d'
+
+  local records
+  if ! records="$(git log --format="$fmt" "$range" 2>/dev/null)"; then
+    echo "[identity] 範囲を解決できません: $range" >&2
+    echo "IDENTITY_FAIL"
+    exit 1
+  fi
+
+  if [[ -z "$records" ]]; then
+    echo "[identity] 検査対象のコミットがありません（範囲: $range）"
+    echo "IDENTITY_PASS"
+    exit 0
+  fi
+
+  local checked=0
+  local violations=0
+  local record sha author_email committer_email subject coauthors
+  local coauthor coauthor_email
+
+  while IFS= read -r -d $'\x1d' record; do
+    # git log はコミットごとに改行を挟むため、レコード先頭の改行を落とす。
+    record="${record#$'\n'}"
+    [[ -n "$record" ]] || continue
+    checked=$((checked + 1))
+
+    IFS=$'\x1f' read -r sha author_email committer_email subject coauthors <<<"$record"
+
+    if ! is_allowed "$author_email" "${ALLOWED_AUTHOR_EMAILS_ARR[@]}"; then
+      echo "[identity] NG ${sha:0:8} author=<${author_email}> — ${subject}" >&2
+      violations=$((violations + 1))
+    fi
+
+    if ! is_allowed "$committer_email" "${ALLOWED_COMMITTER_EMAILS_ARR[@]}"; then
+      echo "[identity] NG ${sha:0:8} committer=<${committer_email}> — ${subject}" >&2
+      violations=$((violations + 1))
+    fi
+
+    # co-author が無いコミットが大半なので、空なら走査自体を飛ばす。
+    # ヒアストリングは末尾に改行を足すため、素通しすると空文字が
+    # 「不正形式の co-author 行」として誤検出される。
+    [[ -n "${coauthors//[[:space:]]/}" ]] || continue
+
+    while IFS= read -r -d $'\x1e' coauthor || [[ -n "$coauthor" ]]; do
+      # 前後の空白（ヒアストリング由来の改行を含む）を落とす。
+      coauthor="${coauthor#"${coauthor%%[![:space:]]*}"}"
+      coauthor="${coauthor%"${coauthor##*[![:space:]]}"}"
+      [[ -n "$coauthor" ]] || continue
+      # "Name <email>" から email を取り出す。<> が無い行は不正形式として弾く。
+      if [[ "$coauthor" != *"<"*">"* ]]; then
+        echo "[identity] NG ${sha:0:8} co-author 行が不正形式です: ${coauthor}" >&2
+        violations=$((violations + 1))
+        continue
+      fi
+      coauthor_email="${coauthor##*<}"
+      coauthor_email="${coauthor_email%>*}"
+      if ! is_allowed "$coauthor_email" "${ALLOWED_COAUTHOR_EMAILS_ARR[@]}"; then
+        echo "[identity] NG ${sha:0:8} co-author=<${coauthor_email}> — ${subject}" >&2
+        violations=$((violations + 1))
+      fi
+    done <<<"$coauthors"
+  done <<<"$records"
+
+  echo "[identity] 検査したコミット: ${checked}（範囲: ${range}）"
+
+  if [[ "$violations" -gt 0 ]]; then
+    echo "[identity] 許可外の identity を ${violations} 件検出しました。" >&2
+    echo "[identity] 対処: bash scripts/setup-git-identity.sh で local identity を適用し、" >&2
+    echo "[identity] 該当コミットを git rebase で author ごと作り直してください。" >&2
+    echo "IDENTITY_FAIL"
+    exit 1
+  fi
+
+  echo "IDENTITY_PASS"
+  exit 0
+}
+
+main "$@"
 TMPL
       ;;
     'scripts/post-rebuild-check.sh')
@@ -943,6 +1492,20 @@ build_remote_gitignore_block() {
   } | sed '/^$/N;/^\n$/D'
 }
 
+# CSV の先頭 profile 名を返す（空白除去済み）。identity ガードの既定 identity 解決に使う。
+# 未指定なら空文字を返す（呼び出し側は空でも安全に扱う）。
+first_github_profile() {
+  local csv="$GITHUB_PROFILES" item profile
+  IFS=',' read -ra items <<< "$csv"
+  for item in "${items[@]}"; do
+    profile="$(echo "$item" | xargs)"
+    [[ -n "$profile" ]] || continue
+    printf '%s' "$profile"
+    return 0
+  done
+  printf '%s' ""
+}
+
 build_github_profile_env_block() {
   local csv="$GITHUB_PROFILES"
   local item profile upper out=""
@@ -1170,8 +1733,16 @@ render_content() {
   escaped_base_image="$BASE_IMAGE"
   escaped_base_image="${escaped_base_image//&/\\&}"
 
+  # identity ガード（setup-git-identity.sh / verify-commit-identity.sh）は先頭 profile を
+  # 既定 identity とする。profile 名のみを差し込み、固有 email はスクリプトに焼き込まない。
+  local identity_profile identity_profile_upper
+  identity_profile="$(first_github_profile)"
+  identity_profile_upper="$(printf '%s' "$identity_profile" | tr '[:lower:]' '[:upper:]')"
+
   sed_args+=(-e "s|__PROJECT_NAME__|$PROJECT_NAME|g")
   sed_args+=(-e "s|__GEMINI_KEY_ENV__|$GEMINI_KEY_ENV|g")
+  sed_args+=(-e "s|__IDENTITY_PROFILE_UPPER__|$identity_profile_upper|g")
+  sed_args+=(-e "s|__IDENTITY_PROFILE__|$identity_profile|g")
   sed_args+=(-e "s|__BASE_IMAGE__|$escaped_base_image|g")
   for lang in node go python php rust; do
     local lang_upper

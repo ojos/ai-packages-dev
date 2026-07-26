@@ -268,6 +268,32 @@ bash scripts/github-account-switch.sh use <profile>
 - **bash / zsh 双方**で動作し、CRLF・`export KEY=VALUE`・`KEY = VALUE`・クォート囲みの各形式を吸収します。複数回読み込んでも安全（冪等）。`.env` が無ければ何もしません。
 - 対話シェルへは `scripts/on-attach.sh` が `~/.bashrc` / `~/.zshrc` へマーカー付きで**冪等に**注入するため、ターミナルから起動する CLI（`gemini` 等）にも `.env` の値が効きます。非対話実行（`scripts/gemini-review.sh` 等）は各スクリプトが冒頭で明示的に読み込みます。
 
+## Git identity ガード
+
+`github-account-switch.sh` で identity を切り替えても、**local 設定を持たないリポジトリは git が黙って global へフォールバックしてコミットを通す**ため、切替前や新規リポジトリで別アカウント名義のコミットが `main` に混入する事故が起き得ます。この穴を、適用・検証・CI の 3 層で塞ぎます。
+
+- `scripts/setup-git-identity.sh`（適用。`scripts/on-attach.sh` が毎接続で再適用）
+  - global の `user.name` / `user.email` を削除し、`user.useConfigOnly=true` を立てます。これにより **local 設定を持たないリポジトリでは `git commit` が exit 128 で停止**します（黙って別名義になるより止まって気づく）。
+  - 当リポジトリの local へ、先頭 profile（`--github-profiles` の 1 つ目。既定 `primary`）の `GIT_AUTHOR_NAME_<PROFILE>` / `GIT_AUTHOR_EMAIL_<PROFILE>` を適用します。未設定なら local 適用はスキップし WARN に留めます。
+  - 冪等です（2 回実行しても git config は不変）。`bash scripts/setup-git-identity.sh --check` で状態を検証できます。`github-account-switch.sh` が設定する `credential.helper` は壊しません。認証切替は引き続き `github-account-switch.sh` の役割で、このスクリプトは identity の git config 設定だけに閉じます（`gh` を呼ばずオフラインでも動く）。
+  - `on-attach.sh` からの呼び出しは、失敗しても **on-attach 全体を落としません**（WARN と `--check` の案内に留める）。
+- `scripts/verify-commit-identity.sh`（検証。CI と手元で共用）
+  - コミット履歴の author / committer / Co-Authored-By を **email のみ**で判定します（name は表記揺れで判定に使わない）。許可外の author email を含む範囲で exit 1。
+  - 許可する author email は、環境変数 `ALLOWED_AUTHOR_EMAILS`（カンマ/空白区切り）を最優先し、無ければ先頭 profile の `GIT_AUTHOR_EMAIL_<PROFILE>` にフォールバックします。どちらでも解決できなければ fail-closed（exit 1）で止まります。
+  - committer には `noreply@github.com`（GitHub の squash merge / web UI）、Co-Authored-By には加えて `noreply@anthropic.com`（AI コーディング規約の trailer）を許可します。
+  - 使い方: 既定は `origin/main..HEAD`、範囲指定可、`--full` で HEAD の全履歴（`git rev-list --all` にはしない）。
+- `.github/workflows/identity-guard.yml`（CI）
+  - `pull_request`（PR の全コミット）と `push`（`main` の全履歴）の 2 系統で `verify-commit-identity.sh` を呼びます。直接 push こそが混入の原因なので `push(main)` を省略しません。判定はスクリプト側にあり、ワークフローは呼ぶだけです。
+
+### 利用側の設定手順（許可 author email）
+
+CI に固有の email を焼き込まないため、**利用側リポジトリでリポジトリ変数を設定します**。
+
+1. GitHub リポジトリの **Settings → Secrets and variables → Actions → Variables** を開く。
+2. `ALLOWED_AUTHOR_EMAILS` という **Repository variable** を作成し、許可する author email を設定する（複数はカンマまたは空白区切り。例: `you@example.com`）。
+
+未設定のまま CI が走ると、`verify-commit-identity.sh` は許可 email を解決できず fail-closed で失敗します（検査を素通りさせないため）。コンテナ内・手元では `GIT_AUTHOR_EMAIL_<先頭 profile>`（`remoteEnv` 経由）が自動でフォールバックとして使われるため、通常は追加設定なしで `bash scripts/verify-commit-identity.sh` を実行できます。
+
 ## AI エンジン導入マトリックス
 
 このパッケージが生成する環境における、AI CLI の導入・認証要件のマトリックスです。
@@ -309,6 +335,8 @@ CI など非対話環境でトークン運用が必要な場合のみ、生成�
 - `scripts/load-project-env.sh`（プロジェクト `.env` の優先読み込み。下記参照）
 - `scripts/on-attach.sh`
 - `scripts/post-rebuild-check.sh`
+- `scripts/setup-git-identity.sh` / `scripts/verify-commit-identity.sh`（git identity ガード。下記参照）
+- `.github/workflows/identity-guard.yml`（コミット identity の検証 CI。下記参照）
 - `scripts/verify.sh` / `scripts/acceptance.sh` / `scripts/loop-gate.sh`（ループコーディング支援。下記参照）
 - `.gitignore` の managed セクション（言語構成に応じて自動更新）
 - README のセットアップ節更新
