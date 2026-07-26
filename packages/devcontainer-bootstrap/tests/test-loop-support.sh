@@ -69,6 +69,67 @@ out="$(new_workdir)/p"
 run_bootstrap "$out" --languages node,rust >/dev/null 2>&1
 if grep -q '__ACCEPTANCE_CHECK_LINES__' "$out/scripts/acceptance.sh"; then fail "未置換プレースホルダが残留"; else pass; fi
 
+# ── acceptance のマニフェスト検出ガード（存在する対象だけ検証・0 件なら失敗） ──
+
+it "マニフェストの無い言語の検証はスキップし、その旨を出力する"
+# 生成直後はルート直下に package.json が無いため node はスキップされる（失敗させない）。
+out="$(new_workdir)/p"
+run_bootstrap "$out" --languages node >/dev/null 2>&1
+out_txt="$(cd "$out" && bash scripts/acceptance.sh 2>&1)" || true
+assert_contains "$out_txt" "skip: package.json not found" "acceptance 出力"
+
+it "1 つも検証を実行できなければ非 0 で終了し、受け入れ条件が未定義である旨を出力する"
+# マニフェストを 1 つも置かない複数言語 → すべて skip → ran_any=0 → 非 0。
+out="$(new_workdir)/p"
+run_bootstrap "$out" --languages node,go,python >/dev/null 2>&1
+if out_txt="$(cd "$out" && bash scripts/acceptance.sh 2>&1)"; then
+  fail "検証対象が無いのに合格した: $out_txt"
+else
+  assert_contains "$out_txt" "受け入れ条件が未定義" "acceptance 出力"
+fi
+
+it "マニフェストはあるがツールが無い場合は導入手順を添えて非 0 で終了する"
+# ルートに package.json を置き、dirname だけを通す最小 PATH で npm を不在化する
+# （script が使う外部コマンドは dirname のみ。cd/pwd/command/echo は組み込み）。
+out="$(new_workdir)/p"
+run_bootstrap "$out" --languages node >/dev/null 2>&1
+printf '{}\n' > "$out/package.json"
+stub="$(new_workdir)/bin"; mkdir -p "$stub"
+ln -s "$(command -v dirname)" "$stub/dirname"
+bashbin="$(command -v bash)"
+if out_txt="$(cd "$out" && PATH="$stub" "$bashbin" scripts/acceptance.sh 2>&1)"; then
+  fail "ツール不在なのに合格した: $out_txt"
+else
+  if printf '%s' "$out_txt" | grep -q 'npm not found' && printf '%s' "$out_txt" | grep -qi 'install'; then
+    pass
+  else
+    fail "導入手順付きのツール不在エラーが出ていない: $out_txt"
+  fi
+fi
+
+it "acceptance は起動時 CWD に依存しない（サブディレクトリからルートのマニフェストを解決する）"
+# 回帰: マニフェスト検出は cwd 相対ではなくスクリプト位置基準でルートへ cd すること。
+out="$(new_workdir)/p"
+run_bootstrap "$out" --languages node >/dev/null 2>&1
+printf '{}\n' > "$out/package.json"   # ルート直下のマニフェスト
+sub="$out/nested/dir"; mkdir -p "$sub"
+out_txt="$(cd "$sub" && bash "$out/scripts/acceptance.sh" 2>&1)" || true
+if printf '%s' "$out_txt" | grep -q 'skip: package.json not found' \
+   || printf '%s' "$out_txt" | grep -q '受け入れ条件が未定義'; then
+  fail "サブディレクトリ起動でルートのマニフェストを解決できていない: $out_txt"
+else
+  pass
+fi
+
+it "--languages の各組み合わせで生成 acceptance.sh が bash -n を通る"
+bad=""
+for c in node go python php rust node,go node,go,python,php,rust python,rust; do
+  o="$(new_workdir)/p"
+  run_bootstrap "$o" --languages "$c" >/dev/null 2>&1
+  bash -n "$o/scripts/acceptance.sh" 2>/dev/null || bad="$bad $c"
+done
+if [[ -z "$bad" ]]; then pass; else fail "構文エラー:$bad"; fi
+
 # ── 単体動作の不変条件（規範パッケージ非依存・機構のみ） ──────────────────────
 
 it "verify / loop-gate / acceptance は規範パッケージの内部パス・文言を複製しない"
