@@ -5,18 +5,19 @@
 ## Unreleased
 
 ### Summary
-- プロジェクト固有 `.env` を「ホスト由来の環境変数（`remoteEnv`）より後勝ちで上書き」で読み込む層を生成物へ追加した（後方互換の機能追加）。
+- プロジェクト固有 `.env` を「ホスト由来の環境変数（`remoteEnv`）より後勝ちで上書き」で読み込む層を生成物へ追加した（後方互換の機能追加。issue #109）。
+- 生成物に git identity ガード（適用・検証・CI の 3 層）を追加し、local 未設定リポジトリが黙って global へフォールバックしてコミットを通す経路を塞いだ（後方互換の機能追加。生成ファイルが増える。issue #108）。
 
 ### Highlights
-- `remoteEnv` がホスト OS の環境変数（`GEMINI_API_KEY` / `GITHUB_TOKEN_<PROFILE>` 等）をコンテナへ注入する一方、プロジェクトごとに別キーを使いたい要求と構造的に衝突していた。生成物に `.env` を優先読み込みする層が無く、利用側が毎回自前で書く必要があった（issue #109）。
-- 中立名の `scripts/load-project-env.sh` を常時生成する。`.env` を **`source` せず** `KEY=VALUE` のみ安全にパースして `export` するため、任意コードを実行しない（壊れた `.env` が対話シェルの初期化ごと落とす事故を防ぐ）。CWD 非依存でスクリプト位置から `.env` を解決し、bash / zsh の双方で動作する。CRLF・`export KEY=VALUE`・`KEY = VALUE`・クォート囲みを吸収し、冪等。`PROJECT_ENV_FILE` で対象ファイルを差し替え可能。
-- 生成される `scripts/on-attach.sh` が `~/.bashrc` / `~/.zshrc` へマーカー付きで**冪等に**注入し、対話シェルから起動する CLI（`gemini` 等）にも `.env` の値を効かせる（rc 不在なら `touch` で作成、参照は絶対パス）。
+- **プロジェクト `.env` の優先読み込み（#109）**: 中立名の `scripts/load-project-env.sh` を常時生成する。`.env` を **`source` せず** `KEY=VALUE` のみ安全にパースして `export` するため、任意コードを実行しない（壊れた `.env` が対話シェルの初期化ごと落とす事故を防ぐ）。CWD 非依存でスクリプト位置から `.env` を解決し、bash / zsh の双方で動作する。CRLF・`export KEY=VALUE`・`KEY = VALUE`・クォート囲みを吸収し、冪等。`PROJECT_ENV_FILE` で対象ファイルを差し替え可能。生成される `scripts/on-attach.sh` が `~/.bashrc` / `~/.zshrc` へマーカー付きで**冪等に**注入し、対話シェルから起動する CLI（`gemini` 等）にも `.env` の値を効かせる（rc 不在なら `touch` で作成、参照は絶対パス）。
+- **git identity ガード（#108）**: `scripts/setup-git-identity.sh` を追加。global の `user.name` / `user.email` を削除して `user.useConfigOnly=true` を立て、local 未設定リポジトリでの `git commit` を exit 128 で停止させる。当リポジトリの local には先頭 profile（`--github-profiles` の 1 つ目）の `GIT_AUTHOR_*_<PROFILE>` を適用する。冪等で `--check` が状態を検証し、`credential.helper` は壊さない。`scripts/on-attach.sh` が毎接続で再適用する（VS Code の `copyGitConfig` がリビルドごとに `~/.gitconfig` を再生成するため）。**失敗しても on-attach 全体は落とさず**、WARN と手動確認コマンドの案内に留める。
+- **git identity 検証（#108）**: `scripts/verify-commit-identity.sh` を追加。コミット履歴の identity を **email のみ**で検証する（CI と手元で共用）。許可 author email は環境変数 `ALLOWED_AUTHOR_EMAILS` を最優先し、無ければ先頭 profile の `GIT_AUTHOR_EMAIL_<PROFILE>` へフォールバック。どちらも無ければ fail-closed。committer は `noreply@github.com`、Co-Authored-By は加えて `noreply@anthropic.com` を許可。`.github/workflows/identity-guard.yml` を追加し、`pull_request` と `push`(main) の 2 系統で検証を強制する。許可 author email は生成物に焼き込まず、利用側のリポジトリ変数 `ALLOWED_AUTHOR_EMAILS`（`vars.ALLOWED_AUTHOR_EMAILS`）から渡す。判定はシェル側にあり、ワークフローは呼ぶだけ。利用側は GitHub の **Settings → Secrets and variables → Actions → Variables** に `ALLOWED_AUTHOR_EMAILS` を設定する（README「Git identity ガード」参照）。
 
 ### Breaking Changes
-- なし（後方互換の機能追加）。
+- なし（後方互換の機能追加）。git identity ガードで生成ファイルが 3 つ増える。既存の生成物に対しては既存の衝突ポリシー（`skip`/`overwrite`/`prompt`）に従う。
 
 ### Verification
-- [ ] preflight 全通過（DCB テストスイート、README / 規範のリンク検査、バージョン不変性）
+- [ ] preflight 全通過（DCB テストスイート、`test-env-loader.sh` / `test-git-identity.sh` を含む全ファイル green、README / 規範のリンク検査、バージョン不変性）
 - [ ] 資産監査 OK（`RELEASE-MANIFEST.json` / `SHA256SUMS` / `PACKAGE_ARCHIVE.tar.gz` / `bootstrap.sh` / `doctor.sh`）
 
 ## v0.5.1
