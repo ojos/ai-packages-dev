@@ -8,6 +8,7 @@
 - `review-workflow.md`「リモート最終ゲート」の規定を緩和し、要求回数が 1 回に限定される機構であれば自動要求も許容する旨へ改めた。あわせて具体機構の雛形 `templates/copilot-review.yml` を新設（ベンダー中立の規範と、選択式の Copilot 雛形の分離）。規範の緩和方向で後方互換（issue #113）。
 - `intake/REASON_CODES.md` に「軽微修正の免除条件」節を追加（6 条件の AND・該当例・非該当例・AND の根拠）。判定基準の追記のみで後方互換（issue #110）。
 - 第二意見レビュー雛形 `templates/gemini-review.sh` の冒頭で、プロジェクト `.env` ローダー（`scripts/load-project-env.sh`）を明示 source するよう追随した（DCB 側の `.env` 優先読み込み機能への追随。issue #109）。タグのみ配布想定（Release・資産なし）。
+- Claude Code 向けの intake 起点スキル雛形 `templates/claude-skill-intake.md` を追加（規範を複製せず参照だけする薄いスキル）。あわせて `shared-ai-rules.md` 8 章に「実行環境の機構が固定ファイル名を要求する場合はその限りでない」旨の例外を 1 行追記（issue #111）。判定基準の追記・雛形追加のみで後方互換。
 
 ### Highlights
 - **リモート最終ゲートの緩和（#113）**: 従来「1 回だけ**手動で**要求する」としていた記述を「1 回だけ要求する」へ改め、守るべきは「手動であること」ではなく**要求回数を 1 回に限定すること**だと明示した。回数が 1 回に限定されるなら手動でも機構による自動要求でもよく、機構で自動化する場合は**再要求されないイベントに限定する**（例: `pull_request` の `opened` のみ、`synchronize` では再要求しない）ことを条件として明記した。「2 巡目以降の軽微な指摘は人間が却下する（AI 同士を往復させない）」とは矛盾しない（自動要求は PR 作成時 1 回のみで往復を生まない）。
@@ -15,9 +16,11 @@
 - `SMALL_FIX_EXEMPT_MEETS_CRITERIA` の適用可否を判定する基準が未定義だったギャップを埋めた（免除条件自体がどこにも書かれていなかった）。
 - 非該当例に「原因が特定できていない不具合の修正」を明記し、最も起きやすい誤判定を既存の `INVESTIGATE_EXEMPT` へ正しく振り分ける。利用側（`ojos/code-narrative`）で運用実績のある文面を規範側へ還元（issue #110）。
 - `gemini-review.sh` は非対話実行（スクリプト直接呼び出し・CI）される。rc 注入だけでは非対話実行に `.env` が効かないため、冒頭で隣接する `load-project-env.sh` を明示的に読み込むよう配線した。ローダーが無い構成（規範のみの単独導入など）でも壊れないよう、存在チェック付きで source する（issue #109）。
+- **Claude intake スキル雛形（#111）**: 規範（`intake/`）は「intake の要否をどう判定するか」を定めるが、Claude Code がそれをいつ読むかは skill が起点になる。`templates/claude-skill-intake.md` は判定基準・`reason_code` 一覧・intake 票の項目定義を**一切複製せず**、`intake/REASON_CODES.md` / `intake/intake-template.md` / `role-contracts/intake-manager.md` を参照するだけの薄いスキル。frontmatter に発火条件（実装依頼・バグ修正・機能追加等で使い、質問・説明・調査のみでは使わない）を持ち、「判定に迷えば intake 必須側へ倒す」方針とその根拠（安全側の既定）を明示する。DCB が `--with-claude` 指定時に `.claude/skills/intake/SKILL.md` へ配置する。
+- Claude Code の機構はスキル定義ファイル名を `SKILL.md` に固定するため、8 章の `lower-kebab-case.md` 規則と衝突する。これまで各利用側の入口ファイルで毎回宣言していた例外を、8 章へ 1 行足すことで規範側に一本化した（利用側での重複宣言が不要になる）。
 
 ### Breaking Changes
-- なし（判定基準の追記・後方互換の雛形追随。コードの改名・削除を伴わない）。
+- なし（判定基準の追記・後方互換の雛形追加。コードの改名・削除を伴わない）。
 
 ### Verification
 - [ ] preflight 全通過（規範のリンク検査、タグ不変性）
