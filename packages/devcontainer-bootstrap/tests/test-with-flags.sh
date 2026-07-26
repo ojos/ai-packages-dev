@@ -38,6 +38,18 @@ else
   fail "docker のリッチさが標準化されていない"
 fi
 
+it "素の生成物に開発補助ツール（ripgrep / tmux）が常時同梱される"
+# ripgrep と同様、tmux も装備フラグに依らず常時同梱する（--with-* の意味論を広げない）。
+if has_feature "$dc" "ghcr.io/devcontainers-extra/features/ripgrep:1" \
+   && has_feature "$dc" "ghcr.io/devcontainers-extra/features/tmux-apt-get:1"; then
+  pass
+else
+  fail "ripgrep / tmux が常時同梱されていない"
+fi
+
+it "生成された devcontainer.json は妥当な JSON である"
+if jq -e '.' "$dc" >/dev/null 2>&1; then pass; else fail "jq で解釈できない（不正な JSON）"; fi
+
 # ── 素の生成物には cloud/AI 装備が無い ────────────────────────────────────────
 
 it "素の生成物には cloud feature も AI 拡張も無い"
