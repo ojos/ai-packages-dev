@@ -36,7 +36,7 @@
 | `loop-workflow.md` | ループコーディング運用の規範（受け入れ検証の機械ゲート化・verify ランナー契約・収束） |
 | `loop-coding-guide.md` | ループコーディングの解説ガイド（従来ワークフローとの違い・考え方。`loop-workflow.md` の解説版） |
 | `intake/` | intake テンプレート、相談テンプレート、判定 reason code |
-| `templates/` | 導入用の雛形（入口ファイル・プロジェクト共通ルール・第二意見レビュー） |
+| `templates/` | 導入用の雛形（入口ファイル・プロジェクト共通ルール・第二意見レビュー・Claude Code の intake 起点スキル） |
 
 共通ルールの補足として、AI からの質問は一問ずつ行い、各質問には意図を添え、回答は選択肢優先で提示します。
 
@@ -154,6 +154,19 @@ chmod +x scripts/gemini-review.sh
 ```
 
 雛形は 1 つの実装例です。要件（別ベンダー・非対話・一意な通過出力）を満たせば別の手段でかまいません。
+
+### 5. intake 起点を配線する（Claude Code を使う場合・任意）
+
+入口ファイルは「読まれる」だけで「起動する」機構を持ちません。Claude Code では skill が起点になるため、実装依頼を受けた瞬間に intake 判定へ入る配線として、規範を参照するだけの薄いスキルを 1 つ置きます。
+
+```bash
+# Claude Code の機構はスキル定義ファイル名を SKILL.md に固定するため、
+# lower-kebab-case の雛形名から改名して配置する（shared-ai-rules.md 8 章の例外）。
+mkdir -p .claude/skills/intake
+cp .ai-playbook/templates/claude-skill-intake.md .claude/skills/intake/SKILL.md
+```
+
+このスキルは判定基準・`reason_code` 一覧・intake 票の項目定義を複製せず、`.ai-playbook/intake/` と `.ai-playbook/role-contracts/intake-manager.md` を参照するだけです。Copilot 等 skill 機構を持たない実行環境は、同じ規範を各環境の機構で参照する形になります。
 
 ### 新規プロジェクトの場合
 

@@ -2092,6 +2092,15 @@ install_playbook_rules() {
     apply_file_with_policy "$tpl" "$OUTPUT_DIR/.github/workflows/copilot-review.yml"
   fi
 
+  # Claude Code 向け intake 起点スキル。--with-claude を選んだときだけ配置する
+  # （選ばなければ .claude/ を作らない）。雛形は規範パッケージが持ち、DCB は置き先
+  # だけを決める。Claude Code の機構がスキル定義ファイル名を SKILL.md に固定するため、
+  # lower-kebab-case の雛形名から改名して配置する（shared-ai-rules.md 8 章の例外）。
+  if has_with claude; then
+    tpl="$(require_playbook_template claude-skill-intake.md)"
+    apply_file_with_policy "$tpl" "$OUTPUT_DIR/.claude/skills/intake/SKILL.md"
+  fi
+
   # 導入した規範のソースを on-disk に記録する。これがないと、生成後の環境から
   # 「どのバージョンの playbook を取り込んだか」を証跡で照合できない
   # （自己診断の F-7）。--playbook-version 指定時はそのタグを、ローカル/URL を
@@ -2187,6 +2196,7 @@ EOF
     if has_with copilot; then
       echo "plan: $OUTPUT_DIR/.github/workflows/copilot-review.yml"
     fi
+    has_with claude && echo "plan: $OUTPUT_DIR/.claude/skills/intake/SKILL.md"
     echo "plan: $OUTPUT_DIR/$PLAYBOOK_REL_ROOT/VERSION"
   fi
   exit 0
