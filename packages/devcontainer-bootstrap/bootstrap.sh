@@ -1292,15 +1292,35 @@ TMPL
 # acceptance.sh — このプロジェクトの受け入れ条件（プロジェクトが所有・編集する）
 #
 # verify.sh がこのスクリプトを実行し、終了コードで合否を判定する。
-# 生成時に、選択言語の慣習的なテストコマンドを既定として配置している。
+# 生成時は、選択言語のマニフェスト（package.json / go.mod など）がルート直下に
+# 存在する対象だけを、その言語の慣習的なテストで検証する。マニフェストが無い言語は
+# スキップし（失敗させない）、マニフェストはあるがツールが無い場合は導入手順を添えて
+# 失敗させる。1 つも検証できなければ「受け入れ条件が未定義」として非0で終了する。
 # プロジェクトの実態（テスト・ビルド・lint・E2E など）に合わせて自由に編集すること。
 # 受け入れ条件が検証可能であるほど、ループコーディングの反復が収束しやすくなる。
 #
-# 終了コード: 0 = 合格 / 非0 = 不合格
+# 終了コード: 0 = 合格 / 非0 = 不合格・未定義
 set -euo pipefail
 
+# 検証はプロジェクトルート基準で行う。scripts/ の 1 階層上がルート。
+# 任意の作業ディレクトリから起動しても結果が不変になるよう、起動時 CWD に依存しない。
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$(dirname "$HERE")"
+
 echo "[acceptance] project acceptance checks"
+# 実際に検証を 1 つでも実行したか。1 つも実行できなければ「合格」ではなく失敗にする。
+# 検証していないことを合格として報告するのが最悪であるため。
+ran_any=0
+
 __ACCEPTANCE_CHECK_LINES__
+
+if [[ "$ran_any" -eq 0 ]]; then
+  echo "[acceptance] 受け入れ条件が未定義です。検証対象のマニフェストが 1 つも見つかりません。" >&2
+  echo "[acceptance] このプロジェクトの受け入れ条件（テスト等）を scripts/acceptance.sh に定義してください。" >&2
+  exit 1
+fi
+
+echo "[acceptance] OK"
 TMPL
       ;;
     'scripts/loop-gate.sh')
@@ -1584,6 +1604,58 @@ acceptance_check_cmd() {
   esac
 }
 
+# 言語の受け入れ検証を実行する前提となるマニフェストの [[ ]] 条件式を返す。
+# ルート直下にマニフェストが存在する対象だけを検証する（存在しなければスキップ）。
+# bash 3.2 互換のため連想配列を使わず case で分岐する。
+acceptance_manifest_cond() {
+  case "$1" in
+    node)   printf '[[ -f package.json ]]' ;;
+    go)     printf '[[ -f go.mod ]]' ;;
+    python) printf '[[ -f pyproject.toml || -f requirements.txt ]]' ;;
+    php)    printf '[[ -f composer.json ]]' ;;
+    rust)   printf '[[ -f Cargo.toml ]]' ;;
+    *)      printf 'false' ;;
+  esac
+}
+
+# スキップ時に表示するマニフェスト名（人間向け）。
+acceptance_manifest_name() {
+  case "$1" in
+    node)   printf 'package.json' ;;
+    go)     printf 'go.mod' ;;
+    python) printf 'pyproject.toml / requirements.txt' ;;
+    php)    printf 'composer.json' ;;
+    rust)   printf 'Cargo.toml' ;;
+    *)      printf '%s' "$1" ;;
+  esac
+}
+
+# 受け入れ検証の実行に必要なツール名（command -v で存在確認する対象）を返す。
+# runtime_check_cmd と同型だが、実行するコマンドに合わせる（node は npm、php は composer）。
+acceptance_tool_cmd() {
+  case "$1" in
+    node)   printf 'npm' ;;
+    go)     printf 'go' ;;
+    python) printf 'python' ;;
+    php)    printf 'composer' ;;
+    rust)   printf 'cargo' ;;
+    *)      printf '%s' "$1" ;;
+  esac
+}
+
+# マニフェストはあるがツールが無い場合に添える導入手順。
+# 「スキップ」と「実行できなかった（失敗）」を混同させないためのメッセージ。
+acceptance_install_hint() {
+  case "$1" in
+    node)   printf 'install Node.js (npm) to run this acceptance check.' ;;
+    go)     printf 'install the Go toolchain to run this acceptance check.' ;;
+    python) printf 'install Python to run this acceptance check.' ;;
+    php)    printf 'install PHP and Composer to run this acceptance check.' ;;
+    rust)   printf 'install the Rust toolchain (https://rustup.rs) to run this acceptance check.' ;;
+    *)      printf 'install the required toolchain to run this acceptance check.' ;;
+  esac
+}
+
 # 言語に対応する VS Code の language server 拡張 ID を返す。
 # 拡張を持たない言語（node は JS/TS が組み込み、php は有料ティアのある
 # サードパーティを避ける）は空文字を返す。
@@ -1608,14 +1680,28 @@ build_runtime_check_block() {
 }
 
 # 選択言語ごとの acceptance.sh 既定検証行を生成する。
-# 検査コマンドは acceptance_check_cmd に一元化する。プロジェクトが編集する起点であり、
-# 生成時点で緑になることは保証しない（受け入れ条件はプロジェクト固有のため）。
+# 各言語について「マニフェストの実在を確認 → ツール検査 → 実行」の構造を出す。
+#   - マニフェスト不在: 理由を出してスキップ（失敗させない）。
+#   - マニフェストあり・ツール無し: 導入手順を添えて非0で終了（スキップと混同しない）。
+#   - 実行できたら ran_any=1 を立てる。1 つも立たなければ呼び出し側の枠組みが失敗させる。
+# 検査コマンド・条件・ツール・手順は上の acceptance_* ヘルパへ一元化する。プロジェクトが
+# 編集する起点であり、生成時点で緑になることは保証しない（受け入れ条件はプロジェクト固有）。
 build_acceptance_check_block() {
-  local lang cmd out=""
+  local lang cmd cond mname tool hint out=""
   for lang in "${LANGUAGES[@]}"; do
     cmd="$(acceptance_check_cmd "$lang")"
-    out+="echo \"[acceptance] ($lang) $cmd\""$'\n'
-    out+="$cmd"$'\n'
+    cond="$(acceptance_manifest_cond "$lang")"
+    mname="$(acceptance_manifest_name "$lang")"
+    tool="$(acceptance_tool_cmd "$lang")"
+    hint="$(acceptance_install_hint "$lang")"
+    out+="if $cond; then"$'\n'
+    out+="  command -v $tool >/dev/null 2>&1 || { echo \"[acceptance] ($lang) $tool not found. $hint\" >&2; exit 1; }"$'\n'
+    out+="  echo \"[acceptance] ($lang) $cmd\""$'\n'
+    out+="  $cmd"$'\n'
+    out+="  ran_any=1"$'\n'
+    out+="else"$'\n'
+    out+="  echo \"[acceptance] ($lang) skip: $mname not found\""$'\n'
+    out+="fi"$'\n'
   done
   printf '%s' "$out"
 }
