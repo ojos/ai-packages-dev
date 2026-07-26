@@ -52,6 +52,15 @@
 
 1. 主レビュー: （実装したモデル自身によるレビュー手段を記載）
 2. 第二意見: （別ベンダーのモデルによるレビュー手段を記載）
+3. 単一入口: `bash scripts/loop-gate.sh` が「受け入れ検証（`scripts/verify.sh`）→ 第二意見」を直列化します。push / PR 作成の前にこれを通します。第二意見コマンドは環境変数 `LOOP_GATE_REVIEW_CMD` で差し替え（任意コマンド）・無効化（空文字）できます。
 
 - 両段とも対象は致命バグ・脆弱性・型エラー・エッジケースの見落としに限ります。
 - 修正は 1 イテレーションで完結させます。
+
+### リモート最終ゲート
+
+push / PR 作成後の最終ゲートを、このプロジェクトで具体化します（`.ai-playbook/review-workflow.md`「リモート最終ゲート」）。
+
+- 手段: （記載。例: GitHub Copilot code review を PR 作成時に 1 回要求する。DCB の `--with-copilot` で `.github/workflows/copilot-review.yml` を配置できます）
+- 要求は 1 回に限定します。機構で自動要求する場合は、再要求されないイベント（例: `pull_request` の `opened` のみ）に限定します（`.ai-playbook/review-workflow.md`）。
+- 前提条件・失敗時の扱い: （記載。例: リポジトリ所有者の Copilot code review が有効でないと 422 で失敗する）
