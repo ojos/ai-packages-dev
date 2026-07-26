@@ -823,10 +823,32 @@ resolve_global_config() {
 # この関数は `if ! apply` の条件文脈から呼ばれることがあり、その中では set -e が
 # 無効化される。書き込み失敗を素通りさせると最後の log の終了コード 0 が返り、
 # 「適用できていないのに成功」と報告してしまう。
+
+# global の identity キーを削除する。--unset-all は該当キーが無いと exit 5 を返す
+# （未設定は正常系）。それ以外の非ゼロは書き込み失敗として扱い、さらに削除後に
+# 実際に空になったことを確認する。ここを `|| true` で握りつぶすと、権限・書き込み
+# 失敗で削除できていないのに成功扱いになり得る。useConfigOnly=true 下でも明示設定
+# された global identity は使われるため、残存すると local 未設定リポジトリで黙って
+# 別名義コミットが通る（このガードが防ぎたい事故そのもの）。
+unset_global_identity_key() {
+  local key="$1" rc=0
+  git config --global --unset-all "$key" || rc=$?
+  if [[ "$rc" -ne 0 && "$rc" -ne 5 ]]; then
+    err "ERROR: global の $key を削除できません (exit $rc)"
+    return 1
+  fi
+  if [[ -n "$(git config --global --get "$key" 2>/dev/null || true)" ]]; then
+    err "ERROR: global の $key が削除後も残っています"
+    return 1
+  fi
+  return 0
+}
+
 apply() {
-  # --unset-all は該当キーが無いと exit 5 を返す。未設定は正常系なので握りつぶす。
-  git config --global --unset-all user.name || true
-  git config --global --unset-all user.email || true
+  # global の user.name / user.email を確実に削除する（削除失敗・残存を見逃さない）。
+  if ! unset_global_identity_key user.name || ! unset_global_identity_key user.email; then
+    return 1
+  fi
 
   if ! git config --global user.useConfigOnly true; then
     err "ERROR: global 設定に user.useConfigOnly を書き込めません"

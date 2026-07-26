@@ -95,6 +95,11 @@ assert_eq "$?" "0" "on-attach の終了コード"
 r="$(new_workdir)/r"
 mk_repo "$r" setup-git-identity.sh github-account-switch.sh
 
+# 事前に別アカウントの global identity を仕込む。apply がこれを確実に削除し、
+# 残存を握りつぶさないことを後続の「削除される」検証で担保する。
+git config --global user.name "Stale Global"
+git config --global user.email "stale@wrong.example"
+
 it "適用が成功する"
 if run_setup "$r" >/dev/null 2>&1; then pass; else fail "apply が非ゼロ終了"; fi
 
