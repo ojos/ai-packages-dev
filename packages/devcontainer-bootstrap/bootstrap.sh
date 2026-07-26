@@ -2084,6 +2084,14 @@ install_playbook_rules() {
     chmod +x "$OUTPUT_DIR/scripts/gemini-review.sh"
   fi
 
+  # リモート最終ゲートの雛形は、その機構を明示選択した場合のみ配置する。
+  # 規範（review-workflow.md）はベンダー中立で「1 回に限定される機構なら自動でよい」
+  # とだけ述べ、具体機構は選択時に雛形として置く分離を守る。
+  if has_with copilot; then
+    tpl="$(require_playbook_template copilot-review.yml)"
+    apply_file_with_policy "$tpl" "$OUTPUT_DIR/.github/workflows/copilot-review.yml"
+  fi
+
   # 導入した規範のソースを on-disk に記録する。これがないと、生成後の環境から
   # 「どのバージョンの playbook を取り込んだか」を証跡で照合できない
   # （自己診断の F-7）。--playbook-version 指定時はそのタグを、ローカル/URL を
@@ -2176,6 +2184,9 @@ EOF
     echo "plan: $OUTPUT_DIR/CLAUDE.md"
     echo "plan: $OUTPUT_DIR/.github/copilot-instructions.md"
     echo "plan: $OUTPUT_DIR/scripts/gemini-review.sh"
+    if has_with copilot; then
+      echo "plan: $OUTPUT_DIR/.github/workflows/copilot-review.yml"
+    fi
     echo "plan: $OUTPUT_DIR/$PLAYBOOK_REL_ROOT/VERSION"
   fi
   exit 0
