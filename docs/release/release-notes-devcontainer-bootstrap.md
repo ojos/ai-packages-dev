@@ -2,7 +2,7 @@
 
 新世代（2026-07-17 リポジトリ再作成後）のリリースノートです。旧世代（〜v0.3.1）は [archive/release-notes-devcontainer-bootstrap.md](../archive/release-notes-devcontainer-bootstrap.md) を参照。
 
-## Unreleased
+## v0.6.0
 
 ### Summary
 - 開発補助として `tmux`（`ghcr.io/devcontainers-extra/features/tmux-apt-get:1`）を、`ripgrep` と同様に**常時同梱**するようにした（後方互換の機能追加。装備フラグ `--with-*` には追加しない。issue #115）。
