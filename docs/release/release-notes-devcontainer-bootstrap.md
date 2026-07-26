@@ -5,10 +5,12 @@
 ## Unreleased
 
 ### Summary
+- `--with-copilot` 選択時のみ、リモート最終ゲートの雛形を `.github/workflows/copilot-review.yml` として配置するようにした（後方互換の機能追加。雛形は規範パッケージが持ち、DCB は配置先だけを決める。issue #113）。
 - プロジェクト固有 `.env` を「ホスト由来の環境変数（`remoteEnv`）より後勝ちで上書き」で読み込む層を生成物へ追加した（後方互換の機能追加。issue #109）。
 - 生成物に git identity ガード（適用・検証・CI の 3 層）を追加し、local 未設定リポジトリが黙って global へフォールバックしてコミットを通す経路を塞いだ（後方互換の機能追加。生成ファイルが増える。issue #108）。
 
 ### Highlights
+- **リモート最終ゲート雛形の配置（#113）**: `--with-copilot` を選び、かつ規範（playbook）を配置する構成のときだけ、規範パッケージの `templates/copilot-review.yml` を `.github/workflows/copilot-review.yml` へコピーする。`--with-copilot` 未指定、または規範を配置しない構成では置かない。DCB は内容を持たず配置先だけを決める（正本は規範パッケージ）。ワークフローは PR 作成時（`pull_request: types: [opened]`）に一度だけ Copilot へレビューを要求し、`synchronize` では再要求しないため「1 回だけ」を機構で保証する。フォークからの PR はスキップし、トークンは `COPILOT_REVIEW_TOKEN || GITHUB_TOKEN` へフォールバックする。既存ファイルには既存の衝突ポリシー（`skip`/`overwrite`/`prompt`）に従う。`--dry-run` の plan 出力にも copilot 選択時のみ含める。
 - **プロジェクト `.env` の優先読み込み（#109）**: 中立名の `scripts/load-project-env.sh` を常時生成する。`.env` を **`source` せず** `KEY=VALUE` のみ安全にパースして `export` するため、任意コードを実行しない（壊れた `.env` が対話シェルの初期化ごと落とす事故を防ぐ）。CWD 非依存でスクリプト位置から `.env` を解決し、bash / zsh の双方で動作する。CRLF・`export KEY=VALUE`・`KEY = VALUE`・クォート囲みを吸収し、冪等。`PROJECT_ENV_FILE` で対象ファイルを差し替え可能。生成される `scripts/on-attach.sh` が `~/.bashrc` / `~/.zshrc` へマーカー付きで**冪等に**注入し、対話シェルから起動する CLI（`gemini` 等）にも `.env` の値を効かせる（rc 不在なら `touch` で作成、参照は絶対パス）。
 - **git identity ガード（#108）**: `scripts/setup-git-identity.sh` を追加。global の `user.name` / `user.email` を削除して `user.useConfigOnly=true` を立て、local 未設定リポジトリでの `git commit` を exit 128 で停止させる。当リポジトリの local には先頭 profile（`--github-profiles` の 1 つ目）の `GIT_AUTHOR_*_<PROFILE>` を適用する。冪等で `--check` が状態を検証し、`credential.helper` は壊さない。`scripts/on-attach.sh` が毎接続で再適用する（VS Code の `copyGitConfig` がリビルドごとに `~/.gitconfig` を再生成するため）。**失敗しても on-attach 全体は落とさず**、WARN と手動確認コマンドの案内に留める。
 - **git identity 検証（#108）**: `scripts/verify-commit-identity.sh` を追加。コミット履歴の identity を **email のみ**で検証する（CI と手元で共用）。許可 author email は環境変数 `ALLOWED_AUTHOR_EMAILS` を最優先し、無ければ先頭 profile の `GIT_AUTHOR_EMAIL_<PROFILE>` へフォールバック。どちらも無ければ fail-closed。committer は `noreply@github.com`、Co-Authored-By は加えて `noreply@anthropic.com` を許可。`.github/workflows/identity-guard.yml` を追加し、`pull_request` と `push`(main) の 2 系統で検証を強制する。許可 author email は生成物に焼き込まず、利用側のリポジトリ変数 `ALLOWED_AUTHOR_EMAILS`（`vars.ALLOWED_AUTHOR_EMAILS`）から渡す。判定はシェル側にあり、ワークフローは呼ぶだけ。利用側は GitHub の **Settings → Secrets and variables → Actions → Variables** に `ALLOWED_AUTHOR_EMAILS` を設定する（README「Git identity ガード」参照）。
