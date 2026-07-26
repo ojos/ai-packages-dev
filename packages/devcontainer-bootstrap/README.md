@@ -224,7 +224,7 @@ bash scripts/github-account-switch.sh use <profile>
 ## Feature フラグ
 
 常に導入する feature（既定）:
-- `common-utils` / `docker-outside-of-docker`（buildx + compose-switch を標準装備）/ `ripgrep` / `github-cli`
+- `common-utils` / `docker-outside-of-docker`（buildx + compose-switch を標準装備）/ `ripgrep` / `tmux` / `github-cli`
 
 条件付き feature:
 - `node` / `go` / `python` / `php` / `rust`（`--languages` に含む場合）

@@ -5,6 +5,7 @@
 ## Unreleased
 
 ### Summary
+- 開発補助として `tmux`（`ghcr.io/devcontainers-extra/features/tmux-apt-get:1`）を、`ripgrep` と同様に**常時同梱**するようにした（後方互換の機能追加。装備フラグ `--with-*` には追加しない。issue #115）。
 - `--with-copilot` 選択時のみ、リモート最終ゲートの雛形を `.github/workflows/copilot-review.yml` として配置するようにした（後方互換の機能追加。雛形は規範パッケージが持ち、DCB は配置先だけを決める。issue #113）。
 - 生成する `scripts/acceptance.sh` の既定を「**ルート直下にマニフェストが存在する対象だけ検証し、1 つも実行できなければ失敗する**」形へ変更した（軽微な破壊的変更。生成される既定内容が変わる。issue #112）。
 - プロジェクト固有 `.env` を「ホスト由来の環境変数（`remoteEnv`）より後勝ちで上書き」で読み込む層を生成物へ追加した（後方互換の機能追加。issue #109）。
@@ -12,6 +13,7 @@
 - `--with-claude` 指定かつ規範導入時に、Claude Code 向け intake 起点スキルを `.claude/skills/intake/SKILL.md` へ配置するようにした（後方互換の機能追加。`--with-claude` 指定時に生成ファイルが 1 つ増える。issue #111）。
 
 ### Highlights
+- **tmux の常時同梱（#115）**: `devcontainer.json` の features に `tmux` を追加した。既に開発補助として `ripgrep` を常時同梱している前例に整合させ、装備フラグ `--with-*`（cloud/AI ツール）へは入れない（`--mode` 廃止時に整理した `--with-*` の意味論を広げないため）。`devcontainers-extra` 名前空間は `ripgrep` で既に使用しており、新たな依存先は増えない。生成される `devcontainer.json` は妥当な JSON を保つ。
 - **リモート最終ゲート雛形の配置（#113）**: `--with-copilot` を選び、かつ規範（playbook）を配置する構成のときだけ、規範パッケージの `templates/copilot-review.yml` を `.github/workflows/copilot-review.yml` へコピーする。`--with-copilot` 未指定、または規範を配置しない構成では置かない。DCB は内容を持たず配置先だけを決める（正本は規範パッケージ）。ワークフローは PR 作成時（`pull_request: types: [opened]`）に一度だけ Copilot へレビューを要求し、`synchronize` では再要求しないため「1 回だけ」を機構で保証する。フォークからの PR はスキップし、トークンは `COPILOT_REVIEW_TOKEN || GITHUB_TOKEN` へフォールバックする。既存ファイルには既存の衝突ポリシー（`skip`/`overwrite`/`prompt`）に従う。`--dry-run` の plan 出力にも copilot 選択時のみ含める。
 - **acceptance.sh のマニフェスト検出ガード（#112）**: 生成する `scripts/acceptance.sh` を、選択言語ごとに**ルート直下のマニフェスト**（`node`→`package.json`、`go`→`go.mod`、`python`→`pyproject.toml`/`requirements.txt`、`php`→`composer.json`、`rust`→`Cargo.toml`）の実在を確認してから慣習的テストを実行する形へ変更した。マニフェストが無い言語は理由を出して**スキップ**し失敗させない。マニフェストはあるがツールが無い場合は**導入手順を添えて非 0 で終了**する（「スキップ」と「実行できなかった」を混同しない）。`ran_any` ガードで、1 つも検証を実行できなければ「受け入れ条件が未定義」と出力して**非 0 で終了**する（全スキップで誤って緑になり、検証していないことを合格と報告する事故を防ぐ）。スクリプト位置からルートを解決し、起動時 CWD に依存しない。従来はどこにマニフェストが無くても選択言語のテストコマンドを無条件に直列実行していたため、monorepo・未実装段階で生成直後が必ず「テストが無くて赤い」状態になっていた。新しい既定でも生成直後は赤いままだが、「受け入れ条件が未定義だと明示して落ちる」に変わり、失敗メッセージで受け入れ条件の定義を促せる。`verify.sh` は本 issue のスコープ外で変更しない。
 - **プロジェクト `.env` の優先読み込み（#109）**: 中立名の `scripts/load-project-env.sh` を常時生成する。`.env` を **`source` せず** `KEY=VALUE` のみ安全にパースして `export` するため、任意コードを実行しない（壊れた `.env` が対話シェルの初期化ごと落とす事故を防ぐ）。CWD 非依存でスクリプト位置から `.env` を解決し、bash / zsh の双方で動作する。CRLF・`export KEY=VALUE`・`KEY = VALUE`・クォート囲みを吸収し、冪等。`PROJECT_ENV_FILE` で対象ファイルを差し替え可能。生成される `scripts/on-attach.sh` が `~/.bashrc` / `~/.zshrc` へマーカー付きで**冪等に**注入し、対話シェルから起動する CLI（`gemini` 等）にも `.env` の値を効かせる（rc 不在なら `touch` で作成、参照は絶対パス）。
