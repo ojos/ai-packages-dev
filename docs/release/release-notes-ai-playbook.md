@@ -2,6 +2,22 @@
 
 新世代（2026-07-17 リポジトリ再作成後）のリリースノートです。
 
+## Unreleased
+
+### Summary
+- `intake/REASON_CODES.md` に「軽微修正の免除条件」節を追加（6 条件の AND・該当例・非該当例・AND の根拠）。判定基準の追記のみで後方互換。
+
+### Highlights
+- `SMALL_FIX_EXEMPT_MEETS_CRITERIA` の適用可否を判定する基準が未定義だったギャップを埋めた（免除条件自体がどこにも書かれていなかった）。
+- 非該当例に「原因が特定できていない不具合の修正」を明記し、最も起きやすい誤判定を既存の `INVESTIGATE_EXEMPT` へ正しく振り分ける。
+- 利用側（`ojos/code-narrative`）で運用実績のある文面を規範側へ還元（issue #110）。
+
+### Breaking Changes
+- なし（判定基準の追記のみ。コードの追加・改名・削除を伴わない）。
+
+### Verification
+- [ ] preflight 全通過（規範のリンク検査、タグ不変性）
+
 ## v0.1.2
 
 ### Summary
