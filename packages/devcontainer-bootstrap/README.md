@@ -151,11 +151,13 @@ bash scripts/loop-gate.sh
 対応ランタイム（任意の組み合わせ）:
 - `node`（Node.js / JavaScript / TypeScript）
 - `go`（Go）
-- `python`（Python 3）
+- `python`（Python 3。パッケージ/仮想環境マネージャの [uv](https://github.com/astral-sh/uv) を同梱）
 - `php`（PHP）
 - `rust`（Rust）
 
 選択した言語は devcontainer feature（`ghcr.io/devcontainers/features/<lang>:1`）として導入され、`scripts/post-rebuild-check.sh` の検査対象にもなります。`rust` は feature 名（`rust`）と実行コマンド（`cargo`）が異なるため、検査・診断は `cargo` の有無で判定します。
+
+`python` を選ぶと、uv も併せて導入されます。uv には公式の devcontainer feature が無いため、python feature の `toolsToInstall`（pipx 導入のツール列）へ `uv` を追記する形で同梱します。既定の Lint/テストツール群は維持したまま `uv` を足すため、既存の導入内容は変わりません。`python` を選ばない場合、uv は導入されません。
 
 ### VS Code language server 拡張
 
@@ -227,7 +229,7 @@ bash scripts/github-account-switch.sh use <profile>
 - `common-utils` / `docker-outside-of-docker`（buildx + compose-switch を標準装備）/ `ripgrep` / `tmux` / `github-cli`
 
 条件付き feature:
-- `node` / `go` / `python` / `php` / `rust`（`--languages` に含む場合）
+- `node` / `go` / `python` / `php` / `rust`（`--languages` に含む場合。`python` は uv を `toolsToInstall` に同梱）
 - `aws-cli`（`--with-aws` の場合）
 - `google-cloud-cli`（`--with-gcp` の場合、外部 `dhoeric` feature を利用）
 - `terraform`（`--with-aws` または `--with-gcp` の場合、1 回）
