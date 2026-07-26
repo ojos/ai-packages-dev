@@ -14,7 +14,7 @@
 | `scripts/gemini-review.sh` | 別ベンダーのモデルによる第二意見（クロスモデル二段ゲートの2段目）。 |
 | `scripts/github-account-switch.sh` | GitHub アカウント/プロファイル切替。 |
 | `scripts/install-ai-tools.sh` | AI CLI ツール導入。 |
-| `scripts/load-env.sh` | 環境変数ロード。 |
+| `scripts/load-project-env.sh` | プロジェクト .env を source せず安全にパースして export（ホスト env を後勝ちで上書き）。 |
 | `scripts/on-attach.sh` | attach 時の初期化処理。 |
 | `scripts/post-rebuild-check.sh` | リビルド後チェック。 |
 | `scripts/release-packages.sh` | ai-playbook / DCB のリリース実行と監査。 |
