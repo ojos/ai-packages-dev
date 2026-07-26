@@ -72,7 +72,9 @@ if grep -q '__ACCEPTANCE_CHECK_LINES__' "$out/scripts/acceptance.sh"; then fail 
 # ── acceptance のマニフェスト検出ガード（存在する対象だけ検証・0 件なら失敗） ──
 
 it "マニフェストの無い言語の検証はスキップし、その旨を出力する"
-# 生成直後はルート直下に package.json が無いため node はスキップされる（失敗させない）。
+# node のみ選択・ルート直下に package.json 不在 → node は skip される（skip 自体は失敗ではない）。
+# ただし対象が node だけで ran_any=0 のため、acceptance 全体は末尾で非 0 終了する。ここでは
+# skip メッセージの出力のみを検証する目的なので、終了コードは `|| true` で意図的に無視する。
 out="$(new_workdir)/p"
 run_bootstrap "$out" --languages node >/dev/null 2>&1
 out_txt="$(cd "$out" && bash scripts/acceptance.sh 2>&1)" || true
