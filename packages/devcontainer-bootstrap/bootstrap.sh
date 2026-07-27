@@ -21,8 +21,10 @@ DRY_RUN="false"
 MANAGE_GITIGNORE="true"
 GITIGNORE_TARGETS=""
 
-GITHUB_PROFILES="primary,secondary"
-GEMINI_KEY_ENV="GEMINI_API_KEY"
+# identity ガード（setup-git-identity.sh / verify-commit-identity.sh）が既定 identity を
+# 解決する際に使う profile 名。CLI からは選べない内部定数とする（--github-profiles 廃止）。
+# 資格情報のホスト注入を撤去したため、profile ごとに env を生成する意味が無くなった。
+IDENTITY_PROFILE="primary"
 BASE_IMAGE_OVERRIDE=""
 BASE_IMAGE=""
 GITIGNORE_BEGIN="# >>> devcontainer-bootstrap managed section >>>"
@@ -50,9 +52,6 @@ options:
   --with-gemini               Install Gemini CLI + extension (persisted)
   --with-copilot              Install GitHub Copilot CLI + extensions (persisted)
   --output-dir <path>         Output directory (default: $PWD/<project-name>)
-  --github-profiles <csv>     GitHub profiles for multi-account env injection
-                              (default: primary,secondary)
-  --gemini-key-env <name>     Local env var name for Gemini key (default: GEMINI_API_KEY)
   --base-image <image>        Override auto-selected devcontainer base image
   --dry-run                   Show planned outputs without writing files
   --force                     Overwrite existing files
@@ -74,10 +73,13 @@ notes:
   auto-install); each --with AI tool also adds its VS Code extension and
   persists its config across rebuilds.
 
-  Claude Code authenticates at runtime via /login (not an injected OAuth token):
-  the OAuth token has a limited permission scope, and ~/.claude is persisted, so
-  a one-time /login carries across rebuilds. See README to opt back into token
-  injection if you need it (e.g. CI).
+  Credentials are never injected from the host. remoteEnv carries only
+  LOCAL_WORKSPACE_FOLDER; authenticate inside the container (gh auth login,
+  claude /login, ...). Config dirs of the AI CLIs selected with --with-* are
+  persisted in named volumes; gh/cloud logins are not persisted yet, so they
+  must be repeated after a rebuild. Project-scoped values such as
+  GEMINI_API_KEY belong in the project .env, which
+  scripts/load-project-env.sh reads.
 
   Shared AI rules are maintained in a separate repository. This script places
   them into the generated project; it is a distribution mechanism, not the
@@ -95,8 +97,15 @@ while [[ $# -gt 0 ]]; do
     --with-gemini)      WITH_SET+=("gemini"); shift ;;
     --with-copilot)     WITH_SET+=("copilot"); shift ;;
     --output-dir)       OUTPUT_DIR="$2"; shift 2 ;;
-    --github-profiles)  GITHUB_PROFILES="$2"; shift 2 ;;
-    --gemini-key-env)   GEMINI_KEY_ENV="$2"; shift 2 ;;
+    # 廃止フラグは黙殺せず、移行先を示して停止する。黙って無視すると
+    # 「指定したのに注入されない」状態を作り、資格情報の所在をふたたび曖昧にする。
+    --github-profiles|--gemini-key-env)
+      echo "error: $1 は廃止されました（資格情報のホスト注入を撤去したため）。" >&2
+      echo "       GitHub の認証はコンテナ内で 'gh auth login' を実行してください。" >&2
+      echo "       GEMINI_API_KEY などのプロジェクト固有値は生成先の .env に置いてください" >&2
+      echo "       （scripts/load-project-env.sh が読み込みます）。" >&2
+      exit 1
+      ;;
     --base-image)       BASE_IMAGE_OVERRIDE="$2"; shift 2 ;;
     --dry-run)          DRY_RUN="true"; shift ;;
     --force)            FORCE="true"; shift ;;
@@ -233,7 +242,6 @@ template_rel_paths() {
     '.devcontainer/devcontainer.json' \
     '.github/workflows/identity-guard.yml' \
     'scripts/acceptance.sh' \
-    'scripts/github-account-switch.sh' \
     'scripts/install-ai-tools.sh' \
     'scripts/load-project-env.sh' \
     'scripts/loop-gate.sh' \
@@ -299,8 +307,6 @@ TMPL
     "__IF_WITH_TERRAFORM__": "ghcr.io/devcontainers/features/terraform:1"
   },
   "remoteEnv": {
-__GITHUB_PROFILE_ENV_BLOCK__
-    "GEMINI_API_KEY": "${localEnv:__GEMINI_KEY_ENV__}",
     "LOCAL_WORKSPACE_FOLDER": "${localWorkspaceFolder}"
   },
   "postCreateCommand": "bash scripts/install-ai-tools.sh",
@@ -375,172 +381,6 @@ jobs:
           else
             bash scripts/verify-commit-identity.sh --full
           fi
-TMPL
-      ;;
-    'scripts/github-account-switch.sh')
-      cat <<'TMPL'
-#!/usr/bin/env bash
-set -euo pipefail
-
-usage() {
-  cat <<'EOF'
-usage:
-  bash scripts/github-account-switch.sh list
-  bash scripts/github-account-switch.sh status
-  bash scripts/github-account-switch.sh use <profile> [--git-scope local|global]
-
-profiles:
-  GITHUB_TOKEN_<PROFILE_UPPER> を設定した profile を自動検出
-  任意で以下も profile ごとに設定可:
-    GITHUB_OWNER_<PROFILE_UPPER>
-    GIT_AUTHOR_NAME_<PROFILE_UPPER>
-    GIT_AUTHOR_EMAIL_<PROFILE_UPPER>
-EOF
-}
-
-profile_to_upper() {
-  printf '%s' "$1" | tr '[:lower:]' '[:upper:]'
-}
-
-cmd_list() {
-  local found=0
-  while IFS='=' read -r key _; do
-    if [[ "$key" =~ ^GITHUB_TOKEN_(.+)$ ]]; then
-      local suffix="${BASH_REMATCH[1]}"
-      local profile
-      profile="$(printf '%s' "$suffix" | tr '[:upper:]' '[:lower:]')"
-      echo "  $profile  (env: GITHUB_TOKEN_${suffix})"
-      found=1
-    fi
-  done < <(env | sort)
-  if [[ "$found" -eq 0 ]]; then
-    echo "  (none — set GITHUB_TOKEN_<PROFILE> to register a profile)"
-  fi
-}
-
-cmd_status() {
-  echo "[github-account] gh auth status"
-  gh auth status -h github.com || true
-  echo
-  echo "[github-account] git identity"
-  echo "  scope=local  name=$(git config --local user.name 2>/dev/null || echo '<unset>')"
-  echo "  scope=local  email=$(git config --local user.email 2>/dev/null || echo '<unset>')"
-  echo "  scope=global name=$(git config --global user.name 2>/dev/null || echo '<unset>')"
-  echo "  scope=global email=$(git config --global user.email 2>/dev/null || echo '<unset>')"
-  echo "  github.owner(local)=$(git config --local github.owner 2>/dev/null || echo '<unset>')"
-  echo "  github.owner(global)=$(git config --global github.owner 2>/dev/null || echo '<unset>')"
-  echo
-  echo "[github-account] registered profiles"
-  cmd_list
-}
-
-# git push の認証を、いま選択した gh のアカウントへ向ける。
-#
-# gh auth login --with-token は非対話のため git を設定しない。これを補わないと、
-# gh と git identity だけが切り替わり、push の認証は既存の credential.helper
-# （エディタが仕込むものなど）が返す別アカウントのまま残る。切替えたつもりで
-# 別人として push しようとして 403 になる。
-#
-# git はヘルパーを定義順に試し、最初に応答したものを採用する。上位スコープに
-# ヘルパーがあると必ずそちらが勝つため、空文字を先に入れて一覧をリセットする。
-setup_git_credentials() {
-  local git_scope="$1"
-  command -v gh >/dev/null 2>&1 || return 0
-  git config --"$git_scope" --unset-all credential.helper 2>/dev/null || true
-  git config --"$git_scope" --add credential.helper ''
-  git config --"$git_scope" --add credential.helper '!gh auth git-credential'
-}
-
-cmd_use() {
-  local profile="$1"
-  shift
-
-  [[ "$profile" =~ ^[a-zA-Z0-9_]+$ ]] || {
-    echo "error: invalid profile" >&2
-    exit 1
-  }
-
-  local git_scope="local"
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --git-scope)
-        git_scope="$2"
-        shift 2
-        ;;
-      *)
-        echo "error: unknown option: $1" >&2
-        exit 1
-        ;;
-    esac
-  done
-
-  local upper token_env name_env email_env owner_env
-  upper="$(profile_to_upper "$profile")"
-  token_env="GITHUB_TOKEN_${upper}"
-  name_env="GIT_AUTHOR_NAME_${upper}"
-  email_env="GIT_AUTHOR_EMAIL_${upper}"
-  owner_env="GITHUB_OWNER_${upper}"
-
-  local token="${!token_env:-}"
-  [[ -n "$token" ]] || {
-    echo "error: $token_env is not set" >&2
-    exit 1
-  }
-
-  local login
-  login="$(GH_TOKEN="$token" gh api user --jq .login)"
-  printf '%s' "$token" | gh auth login --hostname github.com --with-token >/dev/null
-  if gh auth switch --help >/dev/null 2>&1; then
-    gh auth switch --hostname github.com --user "$login" >/dev/null
-  fi
-
-  local owner="${!owner_env:-$login}"
-  local git_name="${!name_env:-}"
-  local git_email="${!email_env:-}"
-
-  if [[ -n "$git_name" ]]; then git config --"$git_scope" user.name "$git_name"; fi
-  if [[ -n "$git_email" ]]; then git config --"$git_scope" user.email "$git_email"; fi
-  git config --"$git_scope" github.owner "$owner"
-  git config --"$git_scope" github.account "$login"
-
-  setup_git_credentials "$git_scope"
-
-  echo "[github-account] active profile: $profile"
-  echo "[github-account] active login:   $login"
-  echo "[github-account] owner:          $owner"
-  echo "[github-account] git scope:      $git_scope"
-  echo "[github-account] git user.name:  $(git config --"$git_scope" user.name 2>/dev/null || echo '<unchanged>')"
-  echo "[github-account] git user.email: $(git config --"$git_scope" user.email 2>/dev/null || echo '<unchanged>')"
-  echo "[github-account] git push auth:  gh ($login)"
-}
-
-main() {
-  [[ $# -ge 1 ]] || {
-    usage
-    exit 1
-  }
-
-  case "$1" in
-    list) cmd_list ;;
-    status) cmd_status ;;
-    use)
-      shift
-      [[ $# -ge 1 ]] || {
-        echo "error: missing profile" >&2
-        exit 1
-      }
-      cmd_use "$@"
-      ;;
-    -h|--help|help) usage ;;
-    *)
-      echo "error: unknown subcommand: $1" >&2
-      usage
-      exit 1
-      ;;
-  esac
-}
-
-main "$@"
 TMPL
       ;;
     'scripts/install-ai-tools.sh')
@@ -723,9 +563,10 @@ inject_env_autoload "$HOME/.bashrc"
 inject_env_autoload "$HOME/.zshrc"
 
 if command -v gh >/dev/null 2>&1; then
-  gh auth status >/dev/null 2>&1 && echo "[on-attach] gh auth OK" || echo "[on-attach] WARN: gh auth missing"
+  # 未認証なら、コンテナ内でのログインを案内する。ホストのトークンは注入されない。
+  gh auth status >/dev/null 2>&1 && echo "[on-attach] gh auth OK" || \
+    echo "[on-attach] WARN: gh は未認証です。コンテナ内で 'gh auth login' を実行してください。" >&2
 fi
-echo "[on-attach] profile list: bash scripts/github-account-switch.sh list"
 TMPL
       ;;
     'scripts/setup-git-identity.sh')
@@ -757,14 +598,13 @@ TMPL
 #   2. global に user.useConfigOnly=true を立てる
 #      → local 未設定のリポジトリでは commit が exit 128 で止まる。
 #         黙って別名義になるより、止まって気づくほうがよい。
-#   3. 当リポジトリの local へ先頭 profile の identity を適用する
-#      （GIT_AUTHOR_NAME_<PROFILE> / GIT_AUTHOR_EMAIL_<PROFILE> は devcontainer の
-#       remoteEnv 経由で注入される。未設定なら local 適用は行わず WARN に留める）
+#   3. 当リポジトリの local へ identity を適用する
+#      （GIT_AUTHOR_NAME_<PROFILE> / GIT_AUTHOR_EMAIL_<PROFILE> を環境から読む。
+#       未設定なら local 適用は行わず WARN に留める）
 #
-# github-account-switch.sh を呼ばないのは、あれが gh api user / gh auth login を
-# 伴うため。接続のたびにネットワークを叩くのは重く、オフラインやトークン未設定で
-# 失敗する。ここでは git identity だけを env から適用する。認証の切替えは
-# 引き続き github-account-switch.sh の役割。
+# このスクリプトは git config だけを触り、gh を呼ばない。接続のたびにネットワークを
+# 叩くのは重く、オフラインでは失敗するため。認証（gh へのログイン）はコンテナ内で
+# 利用者が明示的に行う。
 #
 # 使い方:
 #   bash scripts/setup-git-identity.sh            # 適用
@@ -780,9 +620,10 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$(dirname "$HERE")"
 
-# 先頭 profile を既定 identity とする。値は devcontainer の remoteEnv 経由で
-# GIT_AUTHOR_NAME_<PROFILE> / GIT_AUTHOR_EMAIL_<PROFILE> として注入される。
+# 既定 identity の解決に使う profile 名。値は環境変数
+# GIT_AUTHOR_NAME_<PROFILE> / GIT_AUTHOR_EMAIL_<PROFILE> から読む。
 # 固有 email はここに焼き込まない（環境変数契約から解決する）。
+# remoteEnv によるホストからの注入は廃止済みのため、環境に無ければ WARN 経路へ入る。
 IDENTITY_PROFILE="__IDENTITY_PROFILE__"
 IDENTITY_PROFILE_UPPER="__IDENTITY_PROFILE_UPPER__"
 NAME_VAR="GIT_AUTHOR_NAME_${IDENTITY_PROFILE_UPPER}"
@@ -867,8 +708,9 @@ apply() {
     # ここで落とさない。global の無害化は済んでおり、identity 未設定のまま
     # コミットしようとすれば git 自身が exit 128 で止める。
     err "WARN: $NAME_VAR / $EMAIL_VAR が未設定のため local identity を適用しません。"
-    err "WARN: このリポジトリでコミットする前に次を実行してください:"
-    err "WARN:   bash $HERE/github-account-switch.sh use $IDENTITY_PROFILE --git-scope local"
+    err "WARN: このリポジトリでコミットする前に、identity を設定してください:"
+    err "WARN:   git config --local user.name  '<name>'"
+    err "WARN:   git config --local user.email '<email>'"
   fi
 
   log "global identity を無効化し user.useConfigOnly=true を設定しました"
@@ -957,8 +799,8 @@ check() {
 
   # 6) 冪等性 + credential セクションの保全。
   #    適用をもう一度走らせ、global 設定ファイルが 1 バイトも変わらないことを見る。
-  #    credential.helper は VS Code / github-account-switch.sh が注入するため、
-  #    消していないことを併せて確認する。
+  #    credential.helper は VS Code や feature が注入するため、消していないことを
+  #    併せて確認する。
   #
   #    この検査は apply を伴う。未適用の状態で走らせると「失敗を報告しながら
   #    裏で直してしまう」ことになり、次回の --check が通って問題が見えなくなる。
@@ -1535,51 +1377,6 @@ build_remote_gitignore_block() {
   } | sed '/^$/N;/^\n$/D'
 }
 
-# CSV の先頭 profile 名を返す（空白除去済み）。identity ガードの既定 identity 解決に使う。
-# 未指定なら空文字を返す（呼び出し側は空でも安全に扱う）。
-first_github_profile() {
-  local csv="$GITHUB_PROFILES" item profile
-  IFS=',' read -ra items <<< "$csv"
-  for item in "${items[@]}"; do
-    profile="$(echo "$item" | xargs)"
-    [[ -n "$profile" ]] || continue
-    printf '%s' "$profile"
-    return 0
-  done
-  printf '%s' ""
-}
-
-build_github_profile_env_block() {
-  local csv="$GITHUB_PROFILES"
-  local item profile upper out=""
-  local line
-
-  IFS=',' read -ra items <<< "$csv"
-  for item in "${items[@]}"; do
-    profile="$(echo "$item" | xargs)"
-    [[ -n "$profile" ]] || continue
-    if [[ ! "$profile" =~ ^[a-zA-Z0-9_]+$ ]]; then
-      echo "error: invalid github profile name: $profile" >&2
-      exit 1
-    fi
-    upper="$(printf '%s' "$profile" | tr '[:lower:]' '[:upper:]')"
-    # shellcheck disable=SC2016
-    printf -v line '    "GITHUB_TOKEN_%s": "${localEnv:GITHUB_TOKEN_%s}",\n' "$upper" "$upper"
-    out+="$line"
-    # shellcheck disable=SC2016
-    printf -v line '    "GITHUB_OWNER_%s": "${localEnv:GITHUB_OWNER_%s}",\n' "$upper" "$upper"
-    out+="$line"
-    # shellcheck disable=SC2016
-    printf -v line '    "GIT_AUTHOR_NAME_%s": "${localEnv:GIT_AUTHOR_NAME_%s}",\n' "$upper" "$upper"
-    out+="$line"
-    # shellcheck disable=SC2016
-    printf -v line '    "GIT_AUTHOR_EMAIL_%s": "${localEnv:GIT_AUTHOR_EMAIL_%s}",\n' "$upper" "$upper"
-    out+="$line"
-  done
-
-  printf '%b' "$out"
-}
-
 # 言語ランタイムの存在検査に使うコマンド名を返す。
 # 既定は言語名と同一だが、rust は実行ファイルが cargo/rustc に分かれ
 # 「rust」という実行ファイルが無いため、代表コマンド cargo へ写像する。
@@ -1808,10 +1605,6 @@ render_content() {
   local content="$1"
   local sed_args=()
   local escaped_base_image
-  local github_env_block
-
-  github_env_block="$(build_github_profile_env_block)"
-  content="${content//__GITHUB_PROFILE_ENV_BLOCK__/$github_env_block}"
 
   # 行単位プレースホルダを awk で差し替える。sed や bash のパターン置換は使わない:
   # 挿入内容が `&`（検査行の `2>&1` / `&&`）を含み、sed の置換記号や Bash 5.1+ の
@@ -1842,16 +1635,15 @@ render_content() {
   escaped_base_image="$BASE_IMAGE"
   escaped_base_image="${escaped_base_image//&/\\&}"
 
-  # identity ガード（setup-git-identity.sh / verify-commit-identity.sh）は先頭 profile を
-  # 既定 identity とする。profile 名のみを差し込み、固有 email はスクリプトに焼き込まない。
-  local identity_profile identity_profile_upper
-  identity_profile="$(first_github_profile)"
-  identity_profile_upper="$(printf '%s' "$identity_profile" | tr '[:lower:]' '[:upper:]')"
+  # identity ガード（setup-git-identity.sh / verify-commit-identity.sh）は内部定数の
+  # profile を既定 identity とする。profile 名のみを差し込み、固有 email はスクリプトへ
+  # 焼き込まない。
+  local identity_profile_upper
+  identity_profile_upper="$(printf '%s' "$IDENTITY_PROFILE" | tr '[:lower:]' '[:upper:]')"
 
   sed_args+=(-e "s|__PROJECT_NAME__|$PROJECT_NAME|g")
-  sed_args+=(-e "s|__GEMINI_KEY_ENV__|$GEMINI_KEY_ENV|g")
   sed_args+=(-e "s|__IDENTITY_PROFILE_UPPER__|$identity_profile_upper|g")
-  sed_args+=(-e "s|__IDENTITY_PROFILE__|$identity_profile|g")
+  sed_args+=(-e "s|__IDENTITY_PROFILE__|$IDENTITY_PROFILE|g")
   sed_args+=(-e "s|__BASE_IMAGE__|$escaped_base_image|g")
   for lang in node go python php rust; do
     local lang_upper lang_options

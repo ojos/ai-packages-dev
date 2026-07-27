@@ -3,11 +3,10 @@
 # .github/workflows/identity-guard.yml）を検証する。
 #
 # 背景:
-#   DCB は github-account-switch.sh で多プロファイル切替を提供するが、local 設定を
-#   持たないリポジトリが黙って global へフォールバックしてコミットを通す経路を
-#   塞いでいなかった。この穴により別アカウントの identity のコミットが main に入る
-#   事故が起きた。ここではその 3 層（適用・検証・CI）が生成され、期待どおり
-#   振る舞うことを一時 git リポジトリで確認する。
+#   local 設定を持たないリポジトリが黙って global へフォールバックしてコミットを
+#   通す経路が塞がれていなかった。この穴により別アカウントの identity のコミットが
+#   main に入る事故が起きた。ここではその 3 層（適用・検証・CI）が生成され、期待
+#   どおり振る舞うことを一時 git リポジトリで確認する。
 #
 #   git config を汚さないよう、HOME / GIT_CONFIG_GLOBAL / GIT_CONFIG_SYSTEM を
 #   サンドボックスへ向けてからテストする。ネットワークにも実トークンにも依存しない。
@@ -43,7 +42,7 @@ mk_repo() {
   ( cd "$dir" && git init -q )
 }
 
-# 先頭 profile（primary）の identity を env で渡して setup を実行する。
+# 既定 profile（primary）の identity を env で渡して setup を実行する。
 run_setup() {
   local dir="$1"; shift
   ( cd "$dir" &&
@@ -84,7 +83,7 @@ if grep -q 'if ! bash "$HERE/setup-git-identity.sh"' "$out/scripts/on-attach.sh"
 
 it "on-attach.sh は setup 失敗時も exit 0 を保つ"
 oa="$(new_workdir)/oa"
-mk_repo "$oa" on-attach.sh setup-git-identity.sh github-account-switch.sh
+mk_repo "$oa" on-attach.sh setup-git-identity.sh
 # global 設定の書き込みを ENOTDIR で失敗させ、setup を確実に非ゼロ終了させる。
 blocker="$oa/blocker"; : > "$blocker"
 ( cd "$oa" && env GIT_CONFIG_GLOBAL="$blocker/gitconfig" GIT_CONFIG_SYSTEM=/dev/null \
@@ -93,7 +92,7 @@ assert_eq "$?" "0" "on-attach の終了コード"
 
 # ── 適用（global 無害化 + local 適用） ────────────────────────────────────────
 r="$(new_workdir)/r"
-mk_repo "$r" setup-git-identity.sh github-account-switch.sh
+mk_repo "$r" setup-git-identity.sh
 
 # 事前に別アカウントの global identity を仕込む。apply がこれを確実に削除し、
 # 残存を握りつぶさないことを後続の「削除される」検証で担保する。
