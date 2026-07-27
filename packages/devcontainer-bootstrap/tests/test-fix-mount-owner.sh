@@ -71,25 +71,49 @@ else
   fail "sudo -n を使っていない: $(grep -n 'sudo' "$FMO" | tr '\n' ' ')"
 fi
 
-it "sudo 不在でも異常終了しない"
-probe="$(new_workdir)/nosudo"
-mkdir -p "$probe"
-target="$probe/target"; mkdir -p "$target"
-# PATH から sudo を外して実行する（coreutils は残す）。
-PATH_NO_SUDO="$(dirname "$(command -v bash)"):/usr/bin:/bin"
-output="$(env PATH="$PATH_NO_SUDO" HOME="$probe" bash -c "
-  $(sed -n '/^log()/,/^exit 0$/p' "$FMO" | sed '$d')
-  fix_mount '$target'
-" 2>&1)"
-rc=$?
-if [[ "$rc" -eq 0 ]]; then pass; else fail "sudo 不在で非ゼロ終了 (rc=$rc): $output"; fi
-
-# ── 失敗しても後続へ進めること ────────────────────────────────────────────────
-
 # 生成物は対象を絶対パス（/home/vscode/...）で持つため、HOME を差し替えても対象は
 # 変わらない。関数定義だけを取り出し、テスト用のパスに対して適用する。
 # 関数定義は先頭の log() から、最初の呼び出し行（fix_mount "...") の直前まで。
 fmo_funcs="$(awk '/^log\(\)/ { inside = 1 } /^fix_mount "/ { inside = 0 } inside' "$FMO")"
+
+it "sudo 不在でも異常終了しない"
+probe="$(new_workdir)/nosudo"
+mkdir -p "$probe"
+target="$probe/target"; mkdir -p "$target"
+# sudo を含まない最小 PATH を組み立てる。/usr/bin をそのまま残すと、そこに sudo が
+# ある一般的な環境（/usr/bin/sudo）で分岐を通らず、検証にならない。
+nosudo_bin="$probe/bin"
+mkdir -p "$nosudo_bin"
+for c in bash id dirname chown; do
+  src="$(command -v "$c" 2>/dev/null || true)"
+  [[ -n "$src" ]] && ln -sf "$src" "$nosudo_bin/$c"
+done
+# 所有者判定を「自分ではない」に倒す。テスト実行ユーザー所有のままだと冪等の
+# 早期 return に入り、sudo 不在の分岐へ到達しない。
+cat > "$nosudo_bin/stat" <<'STUB'
+#!/usr/bin/env bash
+echo "someone-else"
+STUB
+chmod +x "$nosudo_bin/stat"
+it_sudo_visible="$(env PATH="$nosudo_bin" bash -c 'command -v sudo || true')"
+if [[ -n "$it_sudo_visible" ]]; then
+  fail "テストの前提が崩れている（PATH に sudo が残る: $it_sudo_visible）"
+else
+  output="$(env PATH="$nosudo_bin" HOME="$probe" bash -c "
+set -uo pipefail
+$fmo_funcs
+fix_mount '$target'
+exit 0
+" 2>&1)"
+  rc=$?
+  if [[ "$rc" -eq 0 ]] && printf '%s' "$output" | grep -q 'sudo not available'; then
+    pass
+  else
+    fail "sudo 不在の分岐を通っていない (rc=$rc): $output"
+  fi
+fi
+
+# ── 失敗しても後続へ進めること ────────────────────────────────────────────────
 
 # sudo をスタブに差し替えて必ず失敗させ、stat も「別ユーザー所有」に倒す。
 stub="$(new_workdir)/stub"
