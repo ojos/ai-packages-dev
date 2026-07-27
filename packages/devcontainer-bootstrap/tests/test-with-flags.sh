@@ -236,12 +236,20 @@ fi
 it "--with-claude --with-gemini --with-copilot: install-ai-tools.sh が sudo chown を含む"
 if grep -q 'sudo chown' "$ait"; then pass; else fail "sudo chown が無い"; fi
 
-it "AI ツール未選択の生成では fix_owner 呼び出し行が 0 件"
+it "chown の対象が永続 volume のマウント先と一致する"
+# 所有権修復が漏れたマウント先は root:root のままになり、そのツールのログインが
+# Permission denied で落ちる。compose のマウント行と突き合わせて漏れを検出する。
+chowned="$(grep -oE '^fix_owner "[^"]+"' "$ait" | sed -E 's/^fix_owner "//; s/"$//' | sort | tr '\n' ' ')"
+mounted="$(grep -oE '^ +- [a-z0-9-]+-storage:[^ ]+' "$out/.devcontainer/compose.yaml" \
+  | sed -E 's/^ +- [a-z0-9-]+-storage://' | sort | tr '\n' ' ')"
+assert_eq "$chowned" "$mounted" "chown 対象とマウント先"
+
+it "AI ツール未選択でも gh の chown 行だけは入る"
 out="$(new_workdir)/p"
 run_bootstrap "$out" >/dev/null 2>&1
 # 定義（fix_owner()）ではなく呼び出し行（fix_owner "..."）を数える。
-n="$(grep -cE '^fix_owner "' "$out/scripts/install-ai-tools.sh" || true)"
-if [[ "$n" == "0" ]]; then pass; else fail "未選択なのに fix_owner 呼び出しが $n 件"; fi
+calls="$(grep -oE '^fix_owner "[^"]+"' "$out/scripts/install-ai-tools.sh" | sed -E 's/^fix_owner "//; s/"$//' | tr '\n' ' ')"
+assert_eq "$calls" "/home/vscode/.config/gh " "素の生成物の fix_owner 対象"
 
 it "生成された install-ai-tools.sh が bash -n を通る（全 AI 選択）"
 out="$(new_workdir)/p"
