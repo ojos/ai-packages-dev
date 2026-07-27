@@ -1618,8 +1618,9 @@ build_volume_mounts_block() {
 # compose のトップレベル volumes: セクション（__VOLUME_SECTION__）。
 # gh-storage が常に入るため、このセクションが空になることはない。
 build_volume_section_block() {
-  local name dir defs=""
-  while read -r name dir; do
+  local name defs=""
+  # volume 名しか使わないので、2 列目（マウント先）は読み捨てる。
+  while read -r name _; do
     [[ -n "$name" ]] || continue
     defs+="  ${name}-storage:"$'\n'
   done < <(persisted_storages)
