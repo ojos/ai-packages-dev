@@ -19,6 +19,7 @@
 | `scripts/post-rebuild-check.sh` | リビルド後チェック。 |
 | `scripts/release-packages.sh` | ai-playbook / DCB のリリース実行と監査。 |
 | `scripts/setup-git-identity.sh` | global identity の無害化と local identity 適用、credential.helper の gh 固定。 |
+| `scripts/verify-commit-identity.sh` | コミット履歴の identity 検証（email のみで判定）。CI（identity-guard）と手元で共用。 |
 | `scripts/setup-ai-directory-policy.sh` | AI 用ディレクトリ方針ウィザード。 |
 | `scripts/setup-devcontainer-bootstrap-release-repo.sh` | DCB リリースリポジトリ準備。 |
 | `scripts/update-release-status.sh` | README のリリース状況更新。 |
