@@ -2,6 +2,20 @@
 
 新世代（2026-07-17 リポジトリ再作成後）のリリースノートです。旧世代（〜v0.3.1）は [archive/release-notes-devcontainer-bootstrap.md](../archive/release-notes-devcontainer-bootstrap.md) を参照。
 
+## v0.7.1
+
+### Summary
+- 生成される `scripts/verify-commit-identity.sh` で、許可 author email の解決からパス名展開（glob）を除去した（issue #149）。後方互換の不具合修正。
+
+### Highlights
+- **許可リストの glob 展開を除去（#149）**: 許可 email の配列代入がクォートなし（`ALLOWED_AUTHOR_EMAILS_ARR=($resolved)`）で、単語分割と同時にパス名展開も行っていた。`ALLOWED_AUTHOR_EMAILS` / `GIT_IDENTITY_EMAIL` に `*` や `?` が含まれると、許可リストが「検査対象リポジトリにどのファイルが存在するか」で変わる。実際に、ルートに author と同名のファイルを置くかどうかだけで `IDENTITY_PASS` と `IDENTITY_FAIL` が反転することを確認した。検知層の判定が検査対象の中身に左右されるのは、fail-closed 設計の意味を失わせる。`read -r -a` へ改め、単語分割だけを行わせる。here-string は末尾に改行を付けるため `set -e` 下でも `read` は 0 を返し、空文字なら空配列になって既存の fail-closed 検査に落ちる。回帰テストは「ファイルの有無で判定が変わらないこと」を検証する（片側だけでは、完全一致で落ちているのか展開が抑止されているのかを区別できないため）。
+
+### 影響
+- 生成される `verify-commit-identity.sh` の内容が変わる。既存の生成物は衝突ポリシー（`skip`/`overwrite`/`prompt`）により上書きされないため、再生成しない限り影響しない。
+- 通常の email には glob メタ文字が含まれないため、既存の運用で挙動が変わることはない。
+
+---
+
 ## v0.7.0
 
 ### Summary
