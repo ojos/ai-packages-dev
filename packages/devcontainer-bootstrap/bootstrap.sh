@@ -242,6 +242,7 @@ template_rel_paths() {
     '.devcontainer/devcontainer.json' \
     '.github/workflows/identity-guard.yml' \
     'scripts/acceptance.sh' \
+    'scripts/fix-mount-owner.sh' \
     'scripts/install-ai-tools.sh' \
     'scripts/load-project-env.sh' \
     'scripts/loop-gate.sh' \
@@ -310,7 +311,7 @@ TMPL
   "remoteEnv": {
     "LOCAL_WORKSPACE_FOLDER": "${localWorkspaceFolder}"
   },
-  "postCreateCommand": "bash scripts/install-ai-tools.sh",
+  "postCreateCommand": "bash scripts/fix-mount-owner.sh && bash scripts/install-ai-tools.sh",
   "postAttachCommand": "bash scripts/on-attach.sh",
   "customizations": {
     "vscode": {
@@ -388,7 +389,7 @@ TMPL
       # 選択された AI CLI のみを無条件に導入する（--with-* による明示 opt-in）。
       # トークン有無での自動インストールは行わない。__AI_INSTALL_LINES__ は
       # render_content が選択 AI ツール分の install 行に置換する（未選択なら空）。
-      # __CHOWN_LINES__ は永続 volume のマウント先の所有権修正行に置換する。
+      # 永続 volume の所有権修復は fix-mount-owner.sh が postCreate の先頭で行う。
       cat <<'TMPL'
 #!/usr/bin/env bash
 # 選択された AI CLI ツールを導入する（--with-claude / --with-gemini / --with-copilot）。
@@ -406,37 +407,93 @@ install_if_missing() {
   echo "[install-ai-tools] $cmd installed: $(command -v "$cmd")"
 }
 
-# AI ツールの永続 named volume を空の状態で初回マウントすると、マウントポイントが
-# Docker デーモン（root）により root:root 所有で作られ、remoteUser が書き込めず
-# CLI のログインが失敗する。設定ディレクトリの所有権を現ユーザーへ戻して復旧する。
-fix_owner() {
-  local dir="$1"
-  local want owner
-  # マウントされていない設定ディレクトリは触らない。
-  [[ -d "$dir" ]] || return 0
-  want="$(id -un)"
-  # 既に現ユーザー所有なら再帰 chown を避ける（冪等・不要な再帰 I/O 回避）。
-  owner="$(stat -c %U "$dir" 2>/dev/null || stat -f %Su "$dir" 2>/dev/null || echo '')"
-  if [[ "$owner" == "$want" ]]; then
-    echo "[install-ai-tools] $dir already owned by $want, skipping chown"
-    return 0
-  fi
-  # sudo が無い環境（ベースイメージ非依存）でも set -euo pipefail 下で異常終了させない。
+__AI_INSTALL_LINES__
+echo "[install-ai-tools] done"
+TMPL
+      ;;
+    'scripts/fix-mount-owner.sh')
+      # 永続 volume のマウント先の所有権を remoteUser へ戻す。postCreate の先頭で
+      # 走らせ、CLI 導入やログインより前に書き込み可能にする。
+      # __MOUNT_OWNER_LINES__ は render_content が対象ディレクトリ分の行へ置換する。
+      cat <<'TMPL'
+#!/usr/bin/env bash
+# fix-mount-owner.sh — 永続 named volume のマウント先を remoteUser 所有へ戻す。
+#
+# 空の named volume を初回マウントすると、マウントポイントは Docker デーモン
+# （root）により root:root 所有で作られる。remoteUser が書き込めず、
+# `gh auth login` や AI CLI のログインが Permission denied で落ちる。
+#
+# 対象は AI ツールに限らない。gh / aws / gcloud の認証ディレクトリも永続化する。
+# ネストしたマウント先（~/.config/gh、~/.config/gcloud）は親 ~/.config が
+# 先に root:root で作られる経路があるため、親も対象に含める。
+#
+# 終了コードは常に 0。ここで落ちると postCreate が止まり、CLI 導入まで到達しない。
+# 「認証はできないが環境は立ち上がる」ほうが、原因の切り分けができるぶん実害が小さい。
+# 失敗は WARN として標準エラーへ出す（握りつぶさない）。
+set -uo pipefail
+
+log()  { echo "[fix-mount-owner] $*"; }
+warn() { echo "[fix-mount-owner] WARN: $*" >&2; }
+
+# sudo は -n（非対話）で使う。パスワードを要求する環境で -n を落とすと、
+# postCreate が入力待ちのまま固まり、原因が見えない形で rebuild が終わらなくなる。
+sudo_chown() {
+  local recursive="$1" target="$2"
   if ! command -v sudo >/dev/null 2>&1; then
-    echo "[install-ai-tools] WARN: sudo not available; cannot fix owner of $dir" >&2
-    return 0
+    warn "sudo not available; cannot fix owner of $target"
+    return 1
   fi
-  echo "[install-ai-tools] fixing owner of $dir -> $(id -un):$(id -gn)"
-  # chown 失敗（busy 等）でも set -euo pipefail 下で postCreate 全体を止めない。
-  # sudo 不在ブランチと挙動を揃え、CLI 導入まで到達させたうえで WARN で可視化する。
-  if ! sudo chown -R "$(id -un):$(id -gn)" "$dir"; then
-    echo "[install-ai-tools] WARN: failed to fix owner of $dir" >&2
+  if [[ "$recursive" == "recursive" ]]; then
+    sudo -n chown -R "$(id -un):$(id -gn)" "$target" 2>/dev/null
+  else
+    sudo -n chown "$(id -un):$(id -gn)" "$target" 2>/dev/null
   fi
 }
 
-__CHOWN_LINES__
-__AI_INSTALL_LINES__
-echo "[install-ai-tools] done"
+owned_by_me() {
+  local owner
+  owner="$(stat -c %U "$1" 2>/dev/null || stat -f %Su "$1" 2>/dev/null || echo '')"
+  [[ "$owner" == "$(id -un)" ]]
+}
+
+# 親ディレクトリは非再帰で直す。~/.config 配下には他ツールの設定も入るため、
+# 再帰 chown で無関係なファイルの所有権まで書き換えない。
+fix_parent() {
+  local parent="$1"
+  [[ -d "$parent" ]] || return 0
+  # $HOME 自身と / は対象外。ここを再帰的に遡ると影響範囲が読めなくなる。
+  [[ "$parent" != "$HOME" && "$parent" != "/" ]] || return 0
+  owned_by_me "$parent" && return 0
+  if sudo_chown shallow "$parent"; then
+    log "fixed owner of $parent (non-recursive)"
+  else
+    warn "failed to fix owner of $parent"
+  fi
+}
+
+fix_mount() {
+  local dir="$1"
+  # マウントされていないディレクトリは触らない。
+  if [[ ! -d "$dir" ]]; then
+    log "$dir does not exist, skipping"
+    return 0
+  fi
+  fix_parent "$(dirname "$dir")"
+  # 既に現ユーザー所有なら再帰 chown を避ける（冪等・不要な再帰 I/O 回避）。
+  if owned_by_me "$dir"; then
+    log "$dir already owned by $(id -un), skipping"
+    return 0
+  fi
+  if sudo_chown recursive "$dir"; then
+    log "fixed owner of $dir -> $(id -un):$(id -gn)"
+  else
+    warn "failed to fix owner of $dir"
+  fi
+}
+
+__MOUNT_OWNER_LINES__
+log "done"
+exit 0
 TMPL
       ;;
     'scripts/load-project-env.sh')
@@ -1590,16 +1647,16 @@ build_ai_install_block() {
   printf '%s' "$out"
 }
 
-# 永続 volume のマウント先の所有権修正行を生成する
-# （install-ai-tools.sh の __CHOWN_LINES__）。install 行より前に置き、
-# 空の named volume を root:root で初回マウントした際の書き込み不能を復旧する。
-# 対象は AI ツールに限らない。gh / cloud も永続化するため、ここが漏れると
-# 'gh auth login' が Permission denied で落ち、永続化の意味が無くなる。
-build_chown_block() {
+# 永続 volume のマウント先の所有権修復行を生成する
+# （fix-mount-owner.sh の __MOUNT_OWNER_LINES__）。空の named volume を root:root で
+# 初回マウントした際の書き込み不能を復旧する。対象は AI ツールに限らない。
+# gh / cloud も永続化するため、ここが漏れると 'gh auth login' が Permission denied で
+# 落ち、永続化の意味が無くなる。
+build_mount_owner_block() {
   local name dir out=""
   while read -r name dir; do
     [[ -n "$name" ]] || continue
-    out+="fix_owner \"$dir\""$'\n'
+    out+="fix_mount \"$dir\""$'\n'
   done < <(persisted_storages)
   printf '%s' "$out"
 }
@@ -1683,7 +1740,7 @@ render_content() {
   subst_block __ACCEPTANCE_CHECK_LINES__ "$(build_acceptance_check_block)"
   subst_block __LANGUAGE_EXTENSIONS__ "$(build_language_extensions_block)"
   subst_block __WITH_EXTENSIONS__ "$(build_with_extensions_block)"
-  subst_block __CHOWN_LINES__ "$(build_chown_block)"
+  subst_block __MOUNT_OWNER_LINES__ "$(build_mount_owner_block)"
   subst_block __AI_INSTALL_LINES__ "$(build_ai_install_block)"
   subst_block __VOLUME_MOUNTS__ "$(build_volume_mounts_block)"
   subst_block __VOLUME_SECTION__ "$(build_volume_section_block)"

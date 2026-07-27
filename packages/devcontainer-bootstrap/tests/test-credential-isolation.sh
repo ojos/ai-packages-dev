@@ -83,6 +83,34 @@ assert_deprecated_flag --github-profiles primary,secondary
 it "--gemini-key-env は廃止フラグとして停止する"
 assert_deprecated_flag --gemini-key-env MY_GEMINI_KEY
 
+# ── doctor が注入経路の復活を検出する ────────────────────────────────────────
+#
+# 「remoteEnv に localEnv 参照が無いこと」は生成時に満たしていても、利用者や別の
+# ツールが後から書き戻せば崩れる。doctor がその復活を FAIL として捕まえられるかを、
+# 実際に注入した devcontainer.json に対して確認する。
+
+it "doctor: 資格情報の注入が無い生成物は --strict で exit 0"
+output="$(bash "$PKG_DIR/doctor.sh" --target-dir "$out" --strict 2>&1)"
+rc=$?
+if [[ "$rc" -eq 0 ]] && printf '%s' "$output" | grep -q 'no localEnv reference'; then
+  pass
+else
+  fail "clean な生成物が通らない (rc=$rc)"
+fi
+
+it "doctor: remoteEnv へ localEnv 参照が戻ると FAIL する"
+tainted="$(new_workdir)/tainted"
+cp -R "$out" "$tainted"
+tdc="$tainted/.devcontainer/devcontainer.json"
+jq '.remoteEnv.GITHUB_TOKEN_PRIMARY = "${localEnv:GITHUB_TOKEN_PRIMARY}"' "$tdc" > "$tdc.tmp" && mv "$tdc.tmp" "$tdc"
+output="$(bash "$PKG_DIR/doctor.sh" --target-dir "$tainted" 2>&1)"
+rc=$?
+if [[ "$rc" -ne 0 ]] && printf '%s' "$output" | grep -q 'localEnv reference found'; then
+  pass
+else
+  fail "注入経路の復活を検出できない (rc=$rc): $(printf '%s' "$output" | grep -i localenv)"
+fi
+
 it "usage に廃止フラグが載っていない"
 usage_out="$(bash "$BOOTSTRAP" --help 2>&1)"
 case "$usage_out" in
