@@ -46,11 +46,13 @@ RELEASE_AUTHOR_EMAIL=""
 resolve_release_identity() {
   local here
   here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  if [[ -z "${GIT_IDENTITY_NAME:-}" || -z "${GIT_IDENTITY_EMAIL:-}" ]]; then
-    if [[ -f "$here/load-project-env.sh" ]]; then
-      # shellcheck source=/dev/null
-      . "$here/load-project-env.sh"
-    fi
+  # 環境に値があっても必ずローダーを通す。load-project-env.sh は .env を後勝ちで
+  # 上書きする契約であり、「.env が唯一の供給元」を保つには常に通す必要がある。
+  # 未設定のときだけ読むと、シェルへ手で export した古い値が .env に勝ってしまい、
+  # 一時クローンの commit が意図しない名義になる。
+  if [[ -f "$here/load-project-env.sh" ]]; then
+    # shellcheck source=/dev/null
+    . "$here/load-project-env.sh"
   fi
   RELEASE_AUTHOR_NAME="${GIT_IDENTITY_NAME:-}"
   RELEASE_AUTHOR_EMAIL="${GIT_IDENTITY_EMAIL:-}"
