@@ -34,7 +34,7 @@ it "image ベース指定は残っていない"
 assert_eq "$(jq -r '.image' "$dc")" "null" "image"
 
 it "compose.yaml にプレースホルダが残っていない"
-if grep -qE '__BASE_IMAGE__|__PROJECT_NAME__|__AI_VOLUME' "$compose"; then
+if grep -qE '__BASE_IMAGE__|__PROJECT_NAME__|__VOLUME' "$compose"; then
   fail "プレースホルダが未置換: $(grep -oE '__[A-Z_]+__' "$compose" | sort -u | tr '\n' ' ')"
 else
   pass
@@ -54,13 +54,39 @@ else
   fail "docker buildx が標準化されていない"
 fi
 
-# ── AI 永続ボリュームは --with-<ai> に随伴し、mode 非依存で付く ─────────────────
+# ── 永続ボリュームの条件配線 ─────────────────────────────────────────────────
+#
+# gh は github-cli feature が構成に依らず常時入るため、常に永続化する。資格情報を
+# ホストから注入しない以上、コンテナ内のログインが唯一の認証手段であり、それが
+# rebuild のたびに消えると実用に耐えない。cloud（aws / gcloud）は --with-* 随伴。
 
-it "素の生成物には AI 永続ボリュームが無い"
-if grep -q 'claude-storage\|gemini-storage\|copilot-storage' "$compose"; then
-  fail "AI ツール未選択なのに storage ボリュームがある"
+# マウント行から volume 名を抽出する（"      - <name>-storage:<dir>"）。
+mounted_storages() {
+  grep -oE '^ +- [a-z0-9-]+-storage:' "$1" | sed -E 's/^ +- //; s/:$//' | sort | tr '\n' ' '
+}
+
+it "素の生成物でも gh-storage が永続化される"
+assert_eq "$(mounted_storages "$compose")" "gh-storage " "素の生成物の storage 一覧"
+
+it "素の生成物には AI / cloud 永続ボリュームが無い"
+if grep -qE 'claude-storage|gemini-storage|copilot-storage|aws-storage|gcloud-storage' "$compose"; then
+  fail "未選択なのに storage ボリュームがある"
 else
   pass
+fi
+
+it "素の生成物でも volumes セクションが成立する（gh-storage が常時あるため）"
+if grep -q '^volumes:' "$compose" && grep -q '^  gh-storage:' "$compose"; then
+  pass
+else
+  fail "トップレベル volumes セクションに gh-storage の定義が無い"
+fi
+
+it "素の生成物の compose config が妥当（AI 未選択でも volumes が壊れない）"
+if command -v docker >/dev/null 2>&1; then
+  if docker compose -f "$compose" config >/dev/null 2>&1; then pass; else fail "docker compose config 失敗"; fi
+else
+  if grep -q '^volumes:' "$compose"; then pass; else fail "volumes セクションが無い"; fi
 fi
 
 out="$(new_workdir)/p"
@@ -71,8 +97,8 @@ compose="$out/.devcontainer/compose.yaml"
 it "--with-claude: devcontainer.json に mounts が残っていない（compose 側で持つ）"
 assert_eq "$(jq -r '.mounts' "$dc")" "null" "mounts"
 
-it "--with-claude: compose.yaml に claude-storage ボリュームがある"
-if grep -q 'claude-storage' "$compose"; then pass; else fail "claude-storage が無い"; fi
+it "--with-claude: claude-storage が gh-storage と併存する"
+assert_eq "$(mounted_storages "$compose")" "claude-storage gh-storage " "--with-claude の storage 一覧"
 
 it "--with-claude: compose config が妥当（末尾の volumes セクションが壊れない）"
 if command -v docker >/dev/null 2>&1; then
@@ -81,6 +107,80 @@ else
   # docker 不在環境では最低限 volumes: セクションの存在で代替
   if grep -q '^volumes:' "$compose"; then pass; else fail "volumes セクションが無い"; fi
 fi
+
+# ── cloud 認証の永続化は --with-aws / --with-gcp に随伴する ───────────────────
+
+out="$(new_workdir)/p"
+run_bootstrap "$out" --with-aws >/dev/null 2>&1
+compose="$out/.devcontainer/compose.yaml"
+
+it "--with-aws: aws-storage が ~/.aws へマウントされる"
+if grep -q -- '- aws-storage:/home/vscode/.aws$' "$compose"; then pass; else fail "aws-storage のマウントが無い"; fi
+
+it "--with-aws: gcloud-storage は定義されない"
+if grep -q 'gcloud-storage' "$compose"; then fail "gcp 未選択なのに gcloud-storage がある"; else pass; fi
+
+out="$(new_workdir)/p"
+run_bootstrap "$out" --with-gcp >/dev/null 2>&1
+compose="$out/.devcontainer/compose.yaml"
+
+it "--with-gcp: gcloud-storage が ~/.config/gcloud へマウントされる"
+if grep -q -- '- gcloud-storage:/home/vscode/.config/gcloud$' "$compose"; then pass; else fail "gcloud-storage のマウントが無い"; fi
+
+it "--with-gcp: aws-storage は定義されない"
+if grep -q 'aws-storage' "$compose"; then fail "aws 未選択なのに aws-storage がある"; else pass; fi
+
+out="$(new_workdir)/p"
+run_bootstrap "$out" --with-aws --with-gcp --with-claude --with-gemini --with-copilot >/dev/null 2>&1
+compose="$out/.devcontainer/compose.yaml"
+
+it "全装備: マウント行と volumes 定義の集合が一致する"
+mounts="$(mounted_storages "$compose")"
+defs="$(grep -oE '^  [a-z0-9-]+-storage:' "$compose" | sed -E 's/^  //; s/:$//' | sort | tr '\n' ' ')"
+assert_eq "$defs" "$mounts" "volumes 定義とマウントの集合"
+
+it "全装備: compose config が妥当"
+if command -v docker >/dev/null 2>&1; then
+  if docker compose -f "$compose" config >/dev/null 2>&1; then pass; else fail "docker compose config 失敗"; fi
+else
+  if grep -q '^volumes:' "$compose"; then pass; else fail "volumes セクションが無い"; fi
+fi
+
+# ── post-rebuild-check.sh が実マウントを検査する ─────────────────────────────
+#
+# 定義しただけでマウントされない状態は、CLI が動くぶん気づきにくく、rebuild のたびに
+# 静かにログインが消える形で表面化する。検査行が生成されることを担保する。
+
+PRC="$out/scripts/post-rebuild-check.sh"
+
+it "post-rebuild-check.sh に永続 volume の検査がある"
+if grep -q 'check_mounted' "$PRC"; then pass; else fail "check_mounted が無い"; fi
+
+it "post-rebuild-check.sh の検査対象が compose のマウントと一致する"
+checked="$(grep -oE '^check_mounted "[^"]+" "[a-z0-9-]+-storage"' "$PRC" \
+  | sed -E 's/.*"([a-z0-9-]+-storage)"$/\1/' | sort | tr '\n' ' ')"
+assert_eq "$checked" "$(mounted_storages "$compose")" "検査対象の storage 一覧"
+
+it "post-rebuild-check.sh がマウント不在を検出する"
+# /proc/mounts に無いディレクトリを検査させ、WARN が出ることを見る。
+probe="$(new_workdir)/probe.sh"
+{
+  sed -n '/^check_mounted() {/,/^}/p' "$PRC"
+  echo 'check_mounted "/nonexistent/mount/point" "probe-storage"'
+} > "$probe"
+probe_out="$(bash "$probe" 2>&1)"
+assert_contains "$probe_out" "WARN: probe-storage not mounted" "マウント不在時の出力"
+
+it "post-rebuild-check.sh がマウント済みを検出する"
+{
+  sed -n '/^check_mounted() {/,/^}/p' "$PRC"
+  echo 'check_mounted "/proc" "proc-storage"'
+} > "$probe"
+probe_out="$(bash "$probe" 2>&1)"
+assert_contains "$probe_out" "proc-storage mounted at /proc" "マウント済み時の出力"
+
+it "生成された post-rebuild-check.sh が bash -n を通る"
+if bash -n "$PRC" 2>/dev/null; then pass; else fail "syntax error"; fi
 
 # ── doctor.sh の compose 配線検査 ─────────────────────────────────────────────
 

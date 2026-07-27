@@ -256,8 +256,9 @@ get_template_content() {
   local rel="$1"
   case "$rel" in
     '.devcontainer/compose.yaml')
-      # AI ツールの永続 volume は選択に応じて条件配線する（__AI_VOLUME_MOUNTS__ /
-      # __AI_VOLUME_SECTION__ を render_content が置換）。docker socket は常に明示。
+      # 永続 volume は構成に応じて条件配線する（__VOLUME_MOUNTS__ /
+      # __VOLUME_SECTION__ を render_content が置換）。gh は常時、cloud と AI ツールは
+      # 選択時のみ。docker socket は常に明示。
       cat <<'TMPL'
 services:
   app:
@@ -266,9 +267,9 @@ services:
       - ..:/workspaces/__PROJECT_NAME__:cached
       # docker-outside-of-docker feature 用（compose 利用時は feature 側の mounts が適用されないため明示）
       - /var/run/docker.sock:/var/run/docker-host.sock
-__AI_VOLUME_MOUNTS__
+__VOLUME_MOUNTS__
     command: sleep infinity
-__AI_VOLUME_SECTION__
+__VOLUME_SECTION__
 TMPL
       ;;
     '.devcontainer/devcontainer.json')
@@ -387,7 +388,7 @@ TMPL
       # 選択された AI CLI のみを無条件に導入する（--with-* による明示 opt-in）。
       # トークン有無での自動インストールは行わない。__AI_INSTALL_LINES__ は
       # render_content が選択 AI ツール分の install 行に置換する（未選択なら空）。
-      # __AI_CHOWN_LINES__ は選択 AI ツールの設定ディレクトリの所有権修正行に置換する。
+      # __CHOWN_LINES__ は永続 volume のマウント先の所有権修正行に置換する。
       cat <<'TMPL'
 #!/usr/bin/env bash
 # 選択された AI CLI ツールを導入する（--with-claude / --with-gemini / --with-copilot）。
@@ -433,7 +434,7 @@ fix_owner() {
   fi
 }
 
-__AI_CHOWN_LINES__
+__CHOWN_LINES__
 __AI_INSTALL_LINES__
 echo "[install-ai-tools] done"
 TMPL
@@ -1069,7 +1070,8 @@ TMPL
       ;;
     'scripts/post-rebuild-check.sh')
       # 基本コマンド + 選択言語（__RUNTIME_CHECK_LINES__）+ 選択装備
-      # （__WITH_CHECK_LINES__: 選択した cloud/AI ツールの CLI）の存在を検査する。
+      # （__WITH_CHECK_LINES__: 選択した cloud/AI ツールの CLI）+ 永続 volume の
+      # 実マウント（__VOLUME_CHECK_LINES__）を検査する。
       cat <<'TMPL'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -1077,6 +1079,27 @@ echo "[check] bootstrap checks"
 for cmd in bash jq gh docker rg; do
   command -v "$cmd" >/dev/null 2>&1 && echo "[check] $cmd OK" || echo "[check] $cmd missing"
 done
+
+# 認証状態を保持するディレクトリが named volume として実際にマウントされているかを見る。
+# 定義したのにマウントされていない状態（compose の編集ミス、devcontainer.json が別
+# サービスを指している等）は、CLI が入っていて動くぶん気づきにくく、rebuild のたびに
+# 静かにログインが消える形で表面化する。
+#
+# /proc/mounts を引くのは、mountpoint コマンドが無いベースイメージがあるため。
+# 判定できない環境（/proc/mounts を読めない等）は「不明」として素通りさせる。
+check_mounted() {
+  local dir="$1" vol="$2"
+  if [[ ! -r /proc/mounts ]]; then
+    echo "[check] $vol unknown (cannot read /proc/mounts)"
+    return 0
+  fi
+  if awk -v d="$dir" '$2 == d { found = 1 } END { exit found ? 0 : 1 }' /proc/mounts; then
+    echo "[check] $vol mounted at $dir"
+  else
+    echo "[check] WARN: $vol not mounted at $dir (認証状態は rebuild で失われます)" >&2
+  fi
+}
+__VOLUME_CHECK_LINES__
 __RUNTIME_CHECK_LINES__
 __WITH_CHECK_LINES__
 TMPL
@@ -1295,6 +1318,27 @@ selected_ai_tools() {
   for t in claude gemini copilot; do
     has_with "$t" && printf '%s\n' "$t"
   done
+}
+
+# rebuild を跨いで保持する認証・設定ディレクトリを "<name> <dir>" で列挙する。
+# name は named volume の接頭辞（${name}-storage）になる。
+#
+# gh は github-cli feature が構成に依らず常時入るため、常に永続化する。
+# 資格情報をホストから注入しなくなった以上、コンテナ内のログインが唯一の認証手段で
+# あり、それが rebuild のたびに消えると実用に耐えない。
+# cloud（aws / gcloud）は該当の --with-* を選んだときだけ定義する。未選択の構成に
+# 使われない volume を作らないため。
+persisted_storages() {
+  local t dir
+  printf '%s %s\n' gh /home/vscode/.config/gh
+  with_feature_active aws && printf '%s %s\n' aws /home/vscode/.aws
+  with_feature_active gcp && printf '%s %s\n' gcloud /home/vscode/.config/gcloud
+  while IFS= read -r t; do
+    [[ -n "$t" ]] || continue
+    dir="$(ai_config_dir "$t")"
+    [[ -n "$dir" ]] || continue
+    printf '%s %s\n' "$t" "$dir"
+  done < <(selected_ai_tools)
 }
 
 build_default_gitignore_targets() {
@@ -1546,42 +1590,55 @@ build_ai_install_block() {
   printf '%s' "$out"
 }
 
-# 選択した AI ツールの設定ディレクトリ所有権修正行を生成する
-# （install-ai-tools.sh の __AI_CHOWN_LINES__）。install 行より前に置き、
+# 永続 volume のマウント先の所有権修正行を生成する
+# （install-ai-tools.sh の __CHOWN_LINES__）。install 行より前に置き、
 # 空の named volume を root:root で初回マウントした際の書き込み不能を復旧する。
-# 未選択なら空。
-build_ai_chown_block() {
-  local tool dir out=""
-  while IFS= read -r tool; do
-    [[ -n "$tool" ]] || continue
-    dir="$(ai_config_dir "$tool")"
+# 対象は AI ツールに限らない。gh / cloud も永続化するため、ここが漏れると
+# 'gh auth login' が Permission denied で落ち、永続化の意味が無くなる。
+build_chown_block() {
+  local name dir out=""
+  while read -r name dir; do
+    [[ -n "$name" ]] || continue
     out+="fix_owner \"$dir\""$'\n'
-  done < <(selected_ai_tools)
+  done < <(persisted_storages)
   printf '%s' "$out"
 }
 
-# compose の app.volumes に足す AI 永続 volume のマウント行（__AI_VOLUME_MOUNTS__）。
-# 未選択なら空（行ごと消える）。
-build_ai_volume_mounts_block() {
-  local tool dir out=""
-  while IFS= read -r tool; do
-    [[ -n "$tool" ]] || continue
-    dir="$(ai_config_dir "$tool")"
-    out+="      - ${tool}-storage:${dir}"$'\n'
-  done < <(selected_ai_tools)
+# compose の app.volumes に足す永続 volume のマウント行（__VOLUME_MOUNTS__）。
+# gh は常時、cloud と AI ツールは選択に応じて並ぶ。
+build_volume_mounts_block() {
+  local name dir out=""
+  while read -r name dir; do
+    [[ -n "$name" ]] || continue
+    out+="      - ${name}-storage:${dir}"$'\n'
+  done < <(persisted_storages)
   printf '%s' "$out"
 }
 
-# compose のトップレベル volumes: セクション（__AI_VOLUME_SECTION__）。
-# AI ツールを 1 つでも選べば named volume を定義、なければ空（セクションごと消える）。
-build_ai_volume_section_block() {
-  local tool defs=""
-  while IFS= read -r tool; do
-    [[ -n "$tool" ]] || continue
-    defs+="  ${tool}-storage:"$'\n'
-  done < <(selected_ai_tools)
+# compose のトップレベル volumes: セクション（__VOLUME_SECTION__）。
+# gh-storage が常に入るため、このセクションが空になることはない。
+build_volume_section_block() {
+  local name defs=""
+  # volume 名しか使わないので、2 列目（マウント先）は読み捨てる。
+  while read -r name _; do
+    [[ -n "$name" ]] || continue
+    defs+="  ${name}-storage:"$'\n'
+  done < <(persisted_storages)
   [[ -n "$defs" ]] || { printf ''; return; }
   printf 'volumes:\n%s' "$defs"
+}
+
+# post-rebuild-check.sh の __VOLUME_CHECK_LINES__。永続 volume が実際にマウント
+# されているかを検査する。定義しただけでマウントされない（compose の編集ミス、
+# devcontainer.json が別サービスを指している等）と、ログイン状態は毎回消えるのに
+# CLI は入っているため、原因が分かりにくい形で表面化する。
+build_volume_check_block() {
+  local name dir out=""
+  while read -r name dir; do
+    [[ -n "$name" ]] || continue
+    out+="check_mounted \"$dir\" \"${name}-storage\""$'\n'
+  done < <(persisted_storages)
+  printf '%s' "$out"
 }
 
 # post-rebuild-check.sh の __WITH_CHECK_LINES__。選択した cloud/AI の CLI を検査する。
@@ -1626,10 +1683,11 @@ render_content() {
   subst_block __ACCEPTANCE_CHECK_LINES__ "$(build_acceptance_check_block)"
   subst_block __LANGUAGE_EXTENSIONS__ "$(build_language_extensions_block)"
   subst_block __WITH_EXTENSIONS__ "$(build_with_extensions_block)"
-  subst_block __AI_CHOWN_LINES__ "$(build_ai_chown_block)"
+  subst_block __CHOWN_LINES__ "$(build_chown_block)"
   subst_block __AI_INSTALL_LINES__ "$(build_ai_install_block)"
-  subst_block __AI_VOLUME_MOUNTS__ "$(build_ai_volume_mounts_block)"
-  subst_block __AI_VOLUME_SECTION__ "$(build_ai_volume_section_block)"
+  subst_block __VOLUME_MOUNTS__ "$(build_volume_mounts_block)"
+  subst_block __VOLUME_SECTION__ "$(build_volume_section_block)"
+  subst_block __VOLUME_CHECK_LINES__ "$(build_volume_check_block)"
   subst_block __WITH_CHECK_LINES__ "$(build_with_check_block)"
 
   escaped_base_image="$BASE_IMAGE"
