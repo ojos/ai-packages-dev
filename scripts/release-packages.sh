@@ -37,6 +37,32 @@ require_cmd() {
   }
 }
 
+# リポジトリ外の一時クローンでコミットする際に使う identity。
+# 供給元はプロジェクト .env（GIT_IDENTITY_NAME / GIT_IDENTITY_EMAIL）に一本化する。
+# global へのフォールバックには依存しない。setup-git-identity.sh が global identity を
+# 削除して user.useConfigOnly=true を立てるため、フォールバックは存在しない。
+RELEASE_AUTHOR_NAME=""
+RELEASE_AUTHOR_EMAIL=""
+resolve_release_identity() {
+  local here
+  here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  if [[ -z "${GIT_IDENTITY_NAME:-}" || -z "${GIT_IDENTITY_EMAIL:-}" ]]; then
+    if [[ -f "$here/load-project-env.sh" ]]; then
+      # shellcheck source=/dev/null
+      . "$here/load-project-env.sh"
+    fi
+  fi
+  RELEASE_AUTHOR_NAME="${GIT_IDENTITY_NAME:-}"
+  RELEASE_AUTHOR_EMAIL="${GIT_IDENTITY_EMAIL:-}"
+  # 解決できないまま進むと、一時クローンでの commit が exit 128 で止まる。
+  # 途中まで公開状態を変えてから落ちるより、着手前に止めるほうが安全。
+  if [[ -z "$RELEASE_AUTHOR_NAME" || -z "$RELEASE_AUTHOR_EMAIL" ]]; then
+    echo "error: GIT_IDENTITY_NAME / GIT_IDENTITY_EMAIL が解決できません。" >&2
+    echo "       プロジェクトルートの .env に設定してください（雛形: .env.example）。" >&2
+    exit 1
+  fi
+}
+
 require_clean_worktree() {
   if [[ -n "$(git status --porcelain)" ]]; then
     echo "error: working tree is not clean. commit/stash changes first." >&2
@@ -317,7 +343,13 @@ init_and_push_release_repo() {
   pushd "$dir" >/dev/null
   git add .
   if ! git diff --cached --quiet; then
-    git commit -m "chore: release snapshot"
+    # identity を明示する。ここはリポジトリ外の一時クローンであり、local 設定を
+    # 持たない。setup-git-identity.sh が global identity を削除し
+    # user.useConfigOnly=true を立てているため、明示しないと git が exit 128 で止まる
+    # （黙って別名義でコミットされるより安全側に倒した設計。
+    #  .github/project-ai-rules.md「Git identity」）。
+    git -c user.name="$RELEASE_AUTHOR_NAME" -c user.email="$RELEASE_AUTHOR_EMAIL" \
+      commit -m "chore: release snapshot"
   fi
 
   if gh repo view "$repo" >/dev/null 2>&1; then
@@ -448,6 +480,9 @@ require_cmd bash
 require_cmd tar
 require_cmd sha256sum
 require_clean_worktree
+# identity は preflight で解決する。公開状態を変え始めてから止まると、
+# 「途中まで公開された」状態の後始末が必要になる。
+resolve_release_identity
 
 # 検査は安い順に並べる。版の重複は問い合わせ 1 回で分かるため、テスト実行のような
 # 重い検査より先に判定する。手戻りが早いだけでなく、テストから release-packages.sh を

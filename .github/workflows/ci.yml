@@ -29,6 +29,40 @@ jobs:
       - name: Shellcheck
         run: shellcheck -x packages/devcontainer-bootstrap/bootstrap.sh packages/devcontainer-bootstrap/doctor.sh
 
+  self-devcontainer:
+    name: Self devcontainer credential isolation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # このリポジトリ自身の devcontainer も、生成物と同じ「資格情報をホストから
+      # 注入しない」構造を保つ。remoteEnv は作業ディレクトリの受け渡しだけを担い、
+      # ${localEnv:...} を 1 つでも足すと、その値がホスト OS から静かに流れ込む。
+      - name: remoteEnv carries only LOCAL_WORKSPACE_FOLDER
+        run: |
+          keys="$(jq -r '.remoteEnv | keys | join(",")' .devcontainer/devcontainer.json)"
+          if [ "$keys" != "LOCAL_WORKSPACE_FOLDER" ]; then
+            echo "remoteEnv must contain only LOCAL_WORKSPACE_FOLDER, got: $keys"
+            exit 1
+          fi
+
+      - name: No localEnv reference in devcontainer.json
+        run: |
+          if grep -q '${localEnv:' .devcontainer/devcontainer.json; then
+            echo "host credential injection path found:"
+            grep -n '${localEnv:' .devcontainer/devcontainer.json
+            exit 1
+          fi
+
+      # 一時クローンでの commit は identity を明示する。global identity は
+      # setup-git-identity.sh が削除するため、明示しないと exit 128 で止まる。
+      - name: Release script commits with an explicit identity
+        run: |
+          if ! grep -q "git -c user.name=.*-c user.email=.* \\\\" scripts/release-packages.sh; then
+            echo "scripts/release-packages.sh must commit with an explicit identity"
+            exit 1
+          fi
+
   dcb-tests:
     name: devcontainer-bootstrap tests
     runs-on: ubuntu-latest

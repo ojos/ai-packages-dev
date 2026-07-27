@@ -11,9 +11,9 @@ set -euo pipefail
 #     --create-remote
 #
 # 前提:
-# - gh auth login 済み
-# - 必要なら事前に profile 切替:
-#   bash scripts/github-account-switch.sh use <profile>
+# - コンテナ内で gh auth login 済み（認証状態は gh-storage volume に残る）
+# - 対象オーナーへ書き込める権限を持つアカウントでログインしていること
+#   bash -c 'gh auth status'
 
 usage() {
   cat <<'EOF'
