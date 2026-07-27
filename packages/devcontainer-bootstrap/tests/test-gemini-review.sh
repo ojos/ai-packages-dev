@@ -16,6 +16,8 @@ echo "test-gemini-review"
 
 REVIEW="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)/.ai-playbook/templates/gemini-review.sh"
 
+LOADER="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)/scripts/load-project-env.sh"
+
 # レビュー対象の差分を持つ一時リポジトリを作る。scripts/ の 1 階層上がルート。
 mk_review_repo() {
   local dir="$1"
@@ -162,6 +164,29 @@ if [[ "$rc" -eq 0 && "$n" -eq 10 ]]; then
 else
   fail "runs=010 が 10 回として扱われていない (exit $rc / 呼び出し $n 回): $out"
 fi
+
+it "プロジェクト .env の GEMINI_REVIEW_RUNS が効く"
+# .env の読み込みが既定値の解決より後にあると、設定したつもりで効かない。
+# 検証もすり抜けるため、不正な値がそのまま走ることになる。
+d="$(new_workdir)/r"; b="$(new_workdir)/bin"
+mk_review_repo "$d"; mk_gemini_stub "$b" "LLL"
+cp "$LOADER" "$d/scripts/load-project-env.sh"
+printf 'GEMINI_API_KEY=from-env\nGEMINI_REVIEW_RUNS=3\n' > "$d/.env"
+out="$( cd "$d" && PATH="$b:$PATH" bash scripts/gemini-review.sh 2>&1 )"; rc=$?
+n="$(cat "$b/.count" 2>/dev/null || echo 0)"
+if [[ "$rc" -eq 0 && "$n" -eq 3 ]]; then
+  assert_contains "$out" "runs=3" ".env からの解決"
+else
+  fail ".env の GEMINI_REVIEW_RUNS が効いていない (exit $rc / 呼び出し $n 回): $out"
+fi
+
+it "CLI 引数は .env より優先される"
+d="$(new_workdir)/r"; b="$(new_workdir)/bin"
+mk_review_repo "$d"; mk_gemini_stub "$b" "LLL"
+cp "$LOADER" "$d/scripts/load-project-env.sh"
+printf 'GEMINI_API_KEY=from-env\nGEMINI_REVIEW_RUNS=3\n' > "$d/.env"
+( cd "$d" && PATH="$b:$PATH" bash scripts/gemini-review.sh --runs 1 ) >/dev/null 2>&1
+assert_eq "$(cat "$b/.count" 2>/dev/null || echo 0)" "1" "CLI 引数の優先"
 
 it "値を伴わないオプションは unbound variable ではなく使い方を出して停止する"
 # set -u 下で $2 を直接読むと、何が足りないかを言わずに落ちる。

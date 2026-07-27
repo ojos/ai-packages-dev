@@ -27,6 +27,20 @@
 #   1 = 重大な指摘あり、または実行不能
 set -euo pipefail
 
+# プロジェクト固有 .env を優先読み込み（ホスト env を上書き）。非対話実行でも効かせる。
+# 隣接する load-project-env.sh を source する。無い構成（規範のみの単独導入等）でも壊さない。
+#
+# 既定値を読む前に通す。あとから読むと、.env に書いた GEMINI_REVIEW_RUNS /
+# GEMINI_REVIEW_MODEL が既に確定した変数に負けて、設定したつもりで効かない。
+# 検証もすり抜けるため、不正な値がそのまま走ることになる。
+__SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -f "$__SCRIPT_DIR/load-project-env.sh" ]]; then
+  # shellcheck source=scripts/load-project-env.sh
+  . "$__SCRIPT_DIR/load-project-env.sh"
+fi
+
+# 優先順位は CLI 引数 > .env > 既定。ここでは .env（読み込み済み）と既定を解決し、
+# CLI 引数は後段の引数解析で上書きする。
 RANGE=""
 MODEL="${GEMINI_REVIEW_MODEL:-}"
 RUNS="${GEMINI_REVIEW_RUNS:-1}"
@@ -80,14 +94,6 @@ RUNS=$((10#$RUNS))
 if [[ "$RUNS" -lt 1 ]]; then
   echo "error: runs は 1 以上の整数で指定してください: $RUNS" >&2
   exit 1
-fi
-
-# プロジェクト固有 .env を優先読み込み（ホスト env を上書き）。非対話実行でも効かせる。
-# 隣接する load-project-env.sh を source する。無い構成（規範のみの単独導入等）でも壊さない。
-__SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [[ -f "$__SCRIPT_DIR/load-project-env.sh" ]]; then
-  # shellcheck source=scripts/load-project-env.sh
-  . "$__SCRIPT_DIR/load-project-env.sh"
 fi
 
 command -v gemini >/dev/null 2>&1 || {
