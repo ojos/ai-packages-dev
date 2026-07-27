@@ -21,7 +21,8 @@ ai-packages-dev/
 │       ├── doctor.sh                # 自己診断スクリプト
 │       └── tests/                   # 機能テスト
 └── scripts/
-    ├── github-account-switch.sh     # GitHub マルチアカウント切替
+    ├── fix-mount-owner.sh           # 永続 volume のマウント先所有権修復
+    ├── setup-git-identity.sh        # git identity ガード / credential.helper 固定
     ├── release-packages.sh          # 2 パッケージのリリース実行
     └── setup-devcontainer-bootstrap-release-repo.sh  # DCB 公開リポジトリ初期化
 ```

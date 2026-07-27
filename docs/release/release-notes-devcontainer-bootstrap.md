@@ -2,6 +2,39 @@
 
 新世代（2026-07-17 リポジトリ再作成後）のリリースノートです。旧世代（〜v0.3.1）は [archive/release-notes-devcontainer-bootstrap.md](../archive/release-notes-devcontainer-bootstrap.md) を参照。
 
+## v0.7.0
+
+### Summary
+- **破壊的変更**。生成物からホスト OS の資格情報を注入する経路（`remoteEnv` の `${localEnv:...}`）を全廃した。`remoteEnv` が運ぶのは `LOCAL_WORKSPACE_FOLDER` のみになり、認証はコンテナ内で行い、その状態を named volume に残す構造へ移行した（issue #129 / #130 / #131 / #132 / #133 / #141）。
+- `--github-profiles` / `--gemini-key-env` を廃止し、`GITHUB_TOKEN_*` / `GITHUB_OWNER_*` / `GIT_AUTHOR_*_<PROFILE>` の環境変数契約を撤去した。`scripts/github-account-switch.sh` は生成しない。
+- git identity の供給元をプロジェクト `.env` の `GIT_IDENTITY_NAME` / `GIT_IDENTITY_EMAIL` へ一本化し、雛形として `.env.example` を生成するようにした。
+- 永続 volume を `gh` / `aws` / `gcloud` へ拡張し、所有権修復を `scripts/fix-mount-owner.sh` として独立させた。
+
+### Highlights
+- **remoteEnv からの資格情報撤去（#130）**: ホスト側と `.env` に別の値が入っていると、`.env` を読まない文脈でだけ黙ってホスト側が使われる。実際に、別アカウントの PAT が `git credential fill` から警告なく返り、別アカウントの API キーでクォータと課金が消費される事故が起きた。`remoteEnv` を `LOCAL_WORKSPACE_FOLDER` のみへ縮小し、廃止フラグは**黙殺せず**移行先を示して非ゼロ終了する（黙って無視すると「指定したのに注入されない」状態を作り、資格情報の所在をふたたび曖昧にするため）。
+- **認証状態の永続化（#131）**: 注入を止めた以上、コンテナ内でのログインが唯一の認証手段になる。`gh` は github-cli feature が常時入るため `gh-storage` を常時定義し、`aws-storage` / `gcloud-storage` は `--with-aws` / `--with-gcp` に随伴する。生成する `post-rebuild-check.sh` は、定義した volume が**実際にマウントされているか**を `/proc/mounts` で検査する（定義しただけでマウントされない状態は、CLI が動くぶん気づきにくく、rebuild のたびに静かにログインが消える形で表面化するため）。
+- **所有権修復の独立（#132）**: 空の named volume を初回マウントするとマウントポイントは `root:root` で作られ、`gh auth login` が Permission denied で落ちる。修復を `scripts/fix-mount-owner.sh` へ切り出し、`postCreateCommand` を `fix-mount-owner.sh && install-ai-tools.sh` の直列にした。`sudo -n` で非対話を保証し（`-n` が無いとパスワードを要求する環境で postCreate が入力待ちのまま固まる）、失敗しても WARN のうえ `exit 0` で CLI 導入まで到達する。ネストしたマウント先（`~/.config/gh` 等）の親は**非再帰**で直す（`~/.config` 配下の無関係な設定を巻き込まないため）。
+- **供給元のコンテナ内集約（#133）**: `on-attach.sh` が接続ごとに `~/.docker/config.json` の `credsStore` / `credHelpers` を除去する（VS Code が接続のたびに書き込み、コンテナ内の docker がホスト OS のキーチェーンへ問い合わせるため）。git の `credential.helper` は「空 → `!gh auth git-credential`」の順で global に固定する。空文字がヘルパー一覧をリセットするため、`/etc/gitconfig` 側やエディタが注入したヘルパーが応答しなくなる。`setup-git-identity.sh --check` に、この固定順序と「local 設定を持たない一時リポジトリでの実効供給元が gh のみであること」の 2 検査を追加した。
+- **`.env` への一本化（#133 / #141）**: identity は `.env` の `GIT_IDENTITY_NAME` / `GIT_IDENTITY_EMAIL` から解決する。`GIT_AUTHOR_NAME` / `GIT_AUTHOR_EMAIL` を使わないのは、それが git 自身の読む環境変数であり、環境に置くと local 未設定リポジトリでも identity が解決できて `user.useConfigOnly` の保護が無効になるため。理由は `.env.example` のコメントに残している。許可 author email の解決も、環境に値があっても必ず `.env` ローダーを通す（`.env` を唯一の供給元に保つため）。
+- **doctor の secrets policy 反転（#132）**: 「`${localEnv:` 参照が**見つからない**と WARN」から「参照の**存在**を FAIL」へ改めた。撤去後の世界では、この参照はホスト資格情報の注入経路が復活したことを意味する。
+
+### Breaking Changes
+- **重大**: `--github-profiles` / `--gemini-key-env` を廃止した。指定すると非ゼロ終了で停止する。
+- **重大**: `GITHUB_TOKEN_<PROFILE>` / `GITHUB_OWNER_<PROFILE>` / `GIT_AUTHOR_NAME_<PROFILE>` / `GIT_AUTHOR_EMAIL_<PROFILE>` の環境変数契約を撤去した。`scripts/github-account-switch.sh` は生成しない。
+- **重大**: git identity の供給元が `.env` の `GIT_IDENTITY_NAME` / `GIT_IDENTITY_EMAIL` へ変わった。未設定のリポジトリでは `git commit` が exit 128 で止まる（設計どおり。黙って別名義で通るより止める）。
+- トークン注入へ opt-in で戻す経路は用意しない。opt-in で穴を残せる構造そのものが、上記の事故を生んだ形であるため。
+
+### 移行手順（既存の生成済みプロジェクト）
+1. `.env` に `GEMINI_API_KEY` / `GIT_IDENTITY_NAME` / `GIT_IDENTITY_EMAIL` を設定する（雛形は再生成後の `.env.example`）。
+2. `bootstrap.sh` を再実行して生成物を更新する（衝突ポリシーに従う。`--github-profiles` / `--gemini-key-env` は付けない）。
+3. rebuild 後、コンテナ内で `gh auth login` を 1 度実行する（以後は `gh-storage` に残る）。`--with-aws` / `--with-gcp` を使う場合は `aws sso login` / `gcloud auth login` も同様。
+4. ホスト側 VS Code に `dev.containers.dockerCredentialHelper: false` を設定する（README「ホスト側 VS Code に必要な設定」参照）。
+5. ホスト OS の `GITHUB_TOKEN_*` / `GITHUB_OWNER_*` / `GIT_AUTHOR_*_<PROFILE>` は不要になる。
+
+### Verification
+- [ ] preflight 全通過（DCB テストスイート全ファイル green、README / 規範のリンク検査、バージョン不変性）
+- [ ] 資産監査 OK（`RELEASE-MANIFEST.json` / `SHA256SUMS` / `PACKAGE_ARCHIVE.tar.gz` / `bootstrap.sh` / `doctor.sh`）
+
 ## v0.6.0
 
 ### Summary
