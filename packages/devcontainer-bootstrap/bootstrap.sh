@@ -75,9 +75,11 @@ notes:
 
   Credentials are never injected from the host. remoteEnv carries only
   LOCAL_WORKSPACE_FOLDER; authenticate inside the container (gh auth login,
-  claude /login, ...) and the state is kept in named volumes across rebuilds.
-  Project-scoped values such as GEMINI_API_KEY belong in the project .env,
-  which scripts/load-project-env.sh reads.
+  claude /login, ...). Config dirs of the AI CLIs selected with --with-* are
+  persisted in named volumes; gh/cloud logins are not persisted yet, so they
+  must be repeated after a rebuild. Project-scoped values such as
+  GEMINI_API_KEY belong in the project .env, which
+  scripts/load-project-env.sh reads.
 
   Shared AI rules are maintained in a separate repository. This script places
   them into the generated project; it is a distribution mechanism, not the
@@ -602,7 +604,7 @@ TMPL
 #
 # このスクリプトは git config だけを触り、gh を呼ばない。接続のたびにネットワークを
 # 叩くのは重く、オフラインでは失敗するため。認証（gh へのログイン）はコンテナ内で
-# 利用者が明示的に行い、その状態は named volume に残る。
+# 利用者が明示的に行う。
 #
 # 使い方:
 #   bash scripts/setup-git-identity.sh            # 適用
