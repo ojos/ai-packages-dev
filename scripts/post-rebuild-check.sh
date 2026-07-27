@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 echo "[check] bootstrap checks"
-for cmd in bash jq gh docker rg; do
+# shellcheck は受け入れ検証（scripts/acceptance.sh）が要求する。無いとゲートが
+# 通らないため、CLI 群と同じ位置で存在を確認する。手元での apt install に頼ると
+# rebuild のたびに消えるので、devcontainer.json の feature で入れている。
+for cmd in bash jq gh docker rg shellcheck; do
   command -v "$cmd" >/dev/null 2>&1 && echo "[check] $cmd OK" || echo "[check] $cmd missing"
 done
 
