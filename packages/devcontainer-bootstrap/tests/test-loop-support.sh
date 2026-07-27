@@ -250,6 +250,73 @@ else
   fail "スキップ指定で exit 非 0: $out_txt"
 fi
 
+it "ステージが空の git リポジトリでは commit 済み範囲を第二意見へ渡す"
+# gemini-review.sh の既定対象はステージ済み差分で、空なら 0 を返す。commit 後に
+# ゲートを回すと第二意見が実質スキップされたまま GATE_PASS が出る（偽の緑）。
+#
+# 範囲が渡ることだけでは足りない。reviewer は範囲を git diff に渡すため、
+# 渡した範囲が空の差分にしかならなければ（例: --range HEAD は作業ツリー vs HEAD で、
+# commit 直後は空）素通りは塞がれていない。stub 側で実際の差分量を測る。
+out="$(new_workdir)/p"
+run_bootstrap "$out" >/dev/null 2>&1
+acc="$(new_workdir)/acc-pass.sh"; printf '#!/usr/bin/env bash\nexit 0\n' > "$acc"
+cat > "$out/scripts/gemini-review.sh" <<'STUB'
+#!/usr/bin/env bash
+echo "REVIEW_ARGV:$*"
+if [[ "${1-}" == "--range" ]]; then
+  echo "REVIEW_DIFF_LINES:$(git diff "$2" | wc -l | tr -d ' ')"
+fi
+exit 0
+STUB
+chmod +x "$out/scripts/gemini-review.sh"
+(
+  cd "$out" && git init -q && git add -A \
+    && git -c user.name=T -c user.email=t@example.com commit -q -m c1
+) >/dev/null 2>&1
+if out_txt="$(cd "$out" && VERIFY_ACCEPTANCE="$acc" bash scripts/loop-gate.sh 2>&1)"; then
+  lines="$(printf '%s' "$out_txt" | sed -n 's/^REVIEW_DIFF_LINES://p')"
+  if printf '%s' "$out_txt" | grep -q 'REVIEW_ARGV:--range ' \
+     && [[ -n "$lines" && "$lines" -gt 0 ]] \
+     && printf '%s' "$out_txt" | grep -q 'GATE_PASS'; then
+    pass
+  else
+    fail "ステージ空で範囲が渡っていない、または差分が空 (lines=${lines:-none}): $out_txt"
+  fi
+else
+  fail "全段合格なのに exit 非 0: $out_txt"
+fi
+
+it "ステージ済み差分があるときは範囲を渡さない（reviewer の既定に委ねる）"
+# 既定の対象を上書きしてしまうと、レビュー範囲が意図せず広がる。
+printf 'change\n' > "$out/STAGED.txt"
+( cd "$out" && git add STAGED.txt ) >/dev/null 2>&1
+if out_txt="$(cd "$out" && VERIFY_ACCEPTANCE="$acc" bash scripts/loop-gate.sh 2>&1)"; then
+  if printf '%s' "$out_txt" | grep -q 'REVIEW_ARGV:$' && printf '%s' "$out_txt" | grep -q 'GATE_PASS'; then
+    pass
+  else
+    fail "ステージ済みがあるのに範囲を渡している: $out_txt"
+  fi
+else
+  fail "全段合格なのに exit 非 0: $out_txt"
+fi
+
+it "git リポジトリでなければ従来どおり引数なしで呼ぶ"
+# 生成直後で git 管理下にないプロジェクトでもゲートが使えること。
+out="$(new_workdir)/p"
+run_bootstrap "$out" >/dev/null 2>&1
+acc="$(new_workdir)/acc-pass.sh"; printf '#!/usr/bin/env bash\nexit 0\n' > "$acc"
+printf '#!/usr/bin/env bash\necho "REVIEW_ARGV:$*"\nexit 0\n' > "$out/scripts/gemini-review.sh"
+chmod +x "$out/scripts/gemini-review.sh"
+if out_txt="$(cd "$out" && VERIFY_ACCEPTANCE="$acc" bash scripts/loop-gate.sh 2>&1)"; then
+  if printf '%s' "$out_txt" | grep -q 'REVIEW_ARGV:$' && printf '%s' "$out_txt" | grep -q 'GATE_PASS'; then
+    pass
+  else
+    fail "git 外で範囲を渡している、または通過しない: $out_txt"
+  fi
+else
+  fail "git 外で exit 非 0: $out_txt"
+fi
+
 # ── doctor 連携 ───────────────────────────────────────────────────────────────
 
 it "doctor はループスクリプトを含めて FAIL=0 で診断する"

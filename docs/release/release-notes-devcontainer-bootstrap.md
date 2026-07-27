@@ -2,6 +2,21 @@
 
 新世代（2026-07-17 リポジトリ再作成後）のリリースノートです。旧世代（〜v0.3.1）は [archive/release-notes-devcontainer-bootstrap.md](../archive/release-notes-devcontainer-bootstrap.md) を参照。
 
+## v0.7.2
+
+### Summary
+- 生成される `scripts/loop-gate.sh` で、ステージ済み差分が空のときに第二意見が実質スキップされる経路を塞いだ（issue #152）。後方互換の不具合修正。
+
+### Highlights
+- **ステージ空での第二意見の素通りを塞ぐ（#152）**: `loop-gate.sh` の第 2 段は `gemini-review.sh` を引数なしで呼び、その既定対象はステージ済み差分だった。`gemini-review.sh` は差分が空だと「レビュー対象なし」として 0 を返すため、commit 後（ステージが空）にゲートを回すと**第二意見が実質スキップされたまま `GATE_PASS` が出ていた**。push 前ゲートとしては偽の緑になる。ステージが空のときだけ commit 済み範囲（`@{upstream}..HEAD` →無ければ `origin/HEAD` / `origin/main` / `origin/master` の順 →いずれも無ければ**空ツリー**からの全体）へ切り替える。最後の受け皿を `HEAD` にしてはならない。reviewer は範囲を `git diff` へ渡すため、`git diff HEAD` は「作業ツリー vs HEAD」となり、commit 直後はクリーンで差分が空になって素通りが復活する（`git log HEAD` が全履歴を指すのとは意味が違う）。空ツリーのハッシュはオブジェクト形式で異なるため定数を焼き込まず `git hash-object -t tree /dev/null` に計算させる。既定ブランチ名は決め打ちしない。ステージ済み差分があるときは従来どおり引数を渡さず reviewer の既定に委ねる（対象を上書きするとレビュー範囲が意図せず広がるため）。**git リポジトリでない場合・コミットが 0 件の場合も従来どおり引数なしで呼ぶ**（ここで落とすと、git 管理下にない生成直後のプロジェクトでゲートが使えなくなる）。
+- 検出経路: #146 の実装中に判明し、第二意見（gemini-review）と Copilot も独立に同じ箇所を指摘した。
+
+### 影響
+- 生成される `loop-gate.sh` の内容が変わる。既存の生成物は衝突ポリシー（`skip`/`overwrite`/`prompt`）により上書きされないため、再生成しない限り影響しない。
+- `LOOP_GATE_REVIEW_CMD` による差し替え・無効化の契約は変えていない。
+
+---
+
 ## v0.7.1
 
 ### Summary
