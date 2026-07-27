@@ -1442,9 +1442,21 @@ resolve_review_range() {
     fi
   done
 
-  # remote が無いプロジェクト。起点が無いので HEAD の全体を対象にする。
-  # 「範囲を解決できないので何も見ない」を通過扱いにしないため、素通りはさせない。
-  REVIEW_RANGE="HEAD"
+  # remote が無いプロジェクト。起点が無いので空ツリーからの全体を対象にする。
+  #
+  # ここを "HEAD" にしてはならない。reviewer は範囲を git diff に渡すため、
+  # git diff HEAD は「作業ツリー vs HEAD」になる。commit 直後は作業ツリーが
+  # クリーンで差分が空になり、塞いだはずの素通りがそのまま復活する。
+  # （git log HEAD が全履歴を指すのとは意味が違う。verify-commit-identity.sh の
+  #   resolve_range が HEAD へ落とすのは git log に渡すためで、こことは別。）
+  #
+  # 空ツリーのハッシュはオブジェクト形式（sha1 / sha256）で異なるため、
+  # 定数を焼き込まず git に計算させる。
+  local empty_tree
+  empty_tree="$(git hash-object -t tree /dev/null 2>/dev/null || true)"
+  if [[ -n "$empty_tree" ]]; then
+    REVIEW_RANGE="$empty_tree..HEAD"
+  fi
 }
 
 echo "[loop-gate] step 1: verify (acceptance)"

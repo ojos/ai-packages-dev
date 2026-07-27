@@ -16,7 +16,7 @@
 
 | パッケージ | 版 | 公開日 | 要点 |
 |---|---|---|---|
-| devcontainer-bootstrap | v0.7.2 | 2026-07-27 | 生成される `loop-gate.sh` で、ステージ済み差分が空のときに第二意見が実質スキップされる経路を塞いだ（#152）。空のときだけ commit 済み範囲へ切り替える。既定ブランチ名は決め打ちせず、git リポジトリでない場合は従来どおり引数なしで呼ぶ。後方互換 |
+| devcontainer-bootstrap | v0.7.2 | 2026-07-27 | 生成される `loop-gate.sh` で、ステージ済み差分が空のときに第二意見が実質スキップされる経路を塞いだ（#152）。空のときだけ commit 済み範囲へ切り替える。既定ブランチ名は決め打ちせず、起点が無ければ空ツリーを使う（`HEAD` だと `git diff` が作業ツリー比較になり素通りが復活する）。git リポジトリでない場合は従来どおり引数なしで呼ぶ。後方互換 |
 | devcontainer-bootstrap | v0.7.1 | 2026-07-27 | 生成される `verify-commit-identity.sh` で、許可 author email の解決からパス名展開（glob）を除去（#149）。クォートなしの配列代入により、許可 email に `*` / `?` が含まれると許可リストが検査対象リポジトリのファイル名で変わっていた。`read -r -a` へ改め、回帰テストで「ファイルの有無で判定が変わらないこと」を検証する。後方互換 |
 | devcontainer-bootstrap | v0.7.0 | 2026-07-27 | **破壊的変更**。生成物からホスト資格情報の注入経路（`remoteEnv` の `${localEnv:...}`）を全廃し、認証をコンテナ内で行い named volume で永続化する構造へ移行（#129）。`--github-profiles` / `--gemini-key-env` と `GITHUB_TOKEN_*` 等の環境変数契約を撤去（#130）、永続 volume を gh/aws/gcloud へ拡張し実マウントを検査（#131）、所有権修復を `fix-mount-owner.sh` へ独立（#132）、credsStore 打ち消し・identity の `.env` 化・`credential.helper` の gh 固定・`.env.example` 追加（#133 / #141） |
 | devcontainer-bootstrap | v0.6.0 | 2026-07-26 | 生成物に git identity ガード（適用・検証・CI の 3 層。#108）、プロジェクト `.env` 優先読み込み（#109）、`--with-claude` での Claude intake 起点スキル配置（#111）、`--with-copilot` でのリモート最終ゲート雛形配置（#113）、tmux 常時同梱（#115）を追加。あわせて `acceptance.sh` の生成既定を「存在する対象だけ検証し 0 件なら失敗」へ変更（**軽微な破壊的変更**。#112） |
