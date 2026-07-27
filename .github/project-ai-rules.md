@@ -24,7 +24,7 @@
 - 追跡除外: `.env` および `.env.*`（`.gitignore` 済み）
 - 共有する雛形: 値のない `.env.example` のみ
 - ホスト OS の資格情報をコンテナへ注入しません。`devcontainer.json` の `remoteEnv` が運ぶのは `LOCAL_WORKSPACE_FOLDER` のみで、CI の `Self devcontainer credential isolation` ジョブがこれを検査します
-- GitHub の認証はコンテナ内で `gh auth login` を実行し、状態は `gh-storage` volume に残します。トークンをファイルや環境変数へ保存しません
+- GitHub の認証はコンテナ内で `gh auth login` を実行し、状態は `gh-storage` volume に残します。トークンを**私たちが**ファイルや環境変数へ保存しません（gh 自身は `~/.config/gh/hosts.yml` に保持します。それを volume の外へ写さない、という意味です）
 - リリース実行時、シークレットの値をリリース資産へ含めません
 
 ## Git identity（コミット作者情報）

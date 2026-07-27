@@ -20,12 +20,10 @@ ai-packages-dev/
 │       ├── bootstrap.sh             # メインスクリプト
 │       ├── doctor.sh                # 自己診断スクリプト
 │       └── tests/                   # 機能テスト
-└── scripts/
-    ├── fix-mount-owner.sh           # 永続 volume のマウント先所有権修復
-    ├── setup-git-identity.sh        # git identity ガード / credential.helper 固定
-    ├── release-packages.sh          # 2 パッケージのリリース実行
-    └── setup-devcontainer-bootstrap-release-repo.sh  # DCB 公開リポジトリ初期化
+└── scripts/                         # 運用スクリプト（一覧と用途は scripts/CATALOG.md が正本）
 ```
+
+`scripts/` の個々のファイルはここでは列挙しません。索引は [scripts/CATALOG.md](scripts/CATALOG.md) を正本とし、追加・削除・改名は同一コミットでの更新を CI が検査します（2 箇所へ列挙すると、片方だけ古くなる形で必ずずれるため）。
 
 ## パッケージの役割と関係
 
