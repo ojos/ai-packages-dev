@@ -480,9 +480,6 @@ require_cmd bash
 require_cmd tar
 require_cmd sha256sum
 require_clean_worktree
-# identity は preflight で解決する。公開状態を変え始めてから止まると、
-# 「途中まで公開された」状態の後始末が必要になる。
-resolve_release_identity
 
 # 検査は安い順に並べる。版の重複は問い合わせ 1 回で分かるため、テスト実行のような
 # 重い検査より先に判定する。手戻りが早いだけでなく、テストから release-packages.sh を
@@ -509,6 +506,12 @@ if [[ "$EXECUTE" != "true" ]]; then
   echo "[info] dry-run mode. add --execute to publish releases"
   exit 0
 fi
+
+# identity は「実行が確定した直後・最初の副作用より前」に解決する。
+# preflight より前に置くと、.env を持たない環境（CI・テスト）で版の重複検査へ
+# 到達できなくなる。identity が要るのは一時クローンでの commit だけなので、
+# dry-run と検査だけの実行に .env を要求しない。
+resolve_release_identity
 
 ROOT_DIR="$(pwd)"
 DCB_DIR="/tmp/dcb-release"
