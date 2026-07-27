@@ -21,10 +21,6 @@ DRY_RUN="false"
 MANAGE_GITIGNORE="true"
 GITIGNORE_TARGETS=""
 
-# identity ガード（setup-git-identity.sh / verify-commit-identity.sh）が既定 identity を
-# 解決する際に使う profile 名。CLI からは選べない内部定数とする（--github-profiles 廃止）。
-# 資格情報のホスト注入を撤去したため、profile ごとに env を生成する意味が無くなった。
-IDENTITY_PROFILE="primary"
 BASE_IMAGE_OVERRIDE=""
 BASE_IMAGE=""
 GITIGNORE_BEGIN="# >>> devcontainer-bootstrap managed section >>>"
@@ -238,6 +234,7 @@ select_base_image
 # 生成する相対パス一覧。mode を廃したため単一の集合。
 template_rel_paths() {
   printf '%s\n' \
+    '.env.example' \
     '.devcontainer/compose.yaml' \
     '.devcontainer/devcontainer.json' \
     '.github/workflows/identity-guard.yml' \
@@ -256,6 +253,31 @@ template_rel_paths() {
 get_template_content() {
   local rel="$1"
   case "$rel" in
+    '.env.example')
+      # プロジェクト固有値の唯一の供給元。ホストからの注入は行わないため、
+      # 利用者はこの雛形を .env へ複製して埋める。
+      cat <<'TMPL'
+# プロジェクト固有の値。.env へ複製して使う（.env は追跡しない）。
+#
+# ホスト OS の環境変数はコンテナへ注入されない。devcontainer.json の remoteEnv は
+# 作業ディレクトリの受け渡し（LOCAL_WORKSPACE_FOLDER）だけを担う。ここに書いた値が
+# 唯一の供給元になり、「どの資格情報を使っているか」がファイルとして目に見える。
+#
+# 認証そのもの（gh / cloud / AI CLI）はコンテナ内で行う。ログイン状態は named volume に
+# 残るため、rebuild しても消えない。トークンをこのファイルへ書き写す必要はない。
+
+# Gemini API キー（第二意見レビュー scripts/gemini-review.sh が読む）
+GEMINI_API_KEY=
+
+# git のコミット identity。scripts/setup-git-identity.sh が local へ適用する。
+#
+# GIT_AUTHOR_NAME / GIT_AUTHOR_EMAIL という名前を使わないのは、それが git 自身の読む
+# 環境変数だから。環境に置くと local 設定を持たないリポジトリでも identity が解決でき、
+# user.useConfigOnly による保護（未設定なら commit を止める）が無効になる。
+GIT_IDENTITY_NAME=
+GIT_IDENTITY_EMAIL=
+TMPL
+      ;;
     '.devcontainer/compose.yaml')
       # 永続 volume は構成に応じて条件配線する（__VOLUME_MOUNTS__ /
       # __VOLUME_SECTION__ を render_content が置換）。gh は常時、cloud と AI ツールは
@@ -620,6 +642,38 @@ inject_env_autoload() {
 inject_env_autoload "$HOME/.bashrc"
 inject_env_autoload "$HOME/.zshrc"
 
+# ホストの Docker 資格情報ヘルパーを打ち消す。
+#
+# VS Code の dev.containers.dockerCredentialHelper は、接続のたびにコンテナの
+# ~/.docker/config.json へ credsStore を書き込む。これが残っていると、コンテナ内の
+# docker login/pull がホスト OS のキーチェーンへ問い合わせ、ホスト側の資格情報を
+# 黙って使う。remoteEnv を絞ってもこの経路は塞がらないため、接続ごとに打ち消す。
+#
+# 接続順序の都合で VS Code の書き込みに負ける場合があるため、これは多層防御の 1 枚に
+# すぎない。確実に塞ぐにはホスト側で dev.containers.dockerCredentialHelper: false を
+# 設定する（README 参照）。
+strip_docker_creds_store() {
+  local cfg="$HOME/.docker/config.json"
+  [[ -f "$cfg" ]] || return 0
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "[on-attach] WARN: jq が無いため $cfg の credsStore を除去できません。" >&2
+    return 0
+  fi
+  # credsStore / credHelpers のどちらも対象にする。前者はレジストリ横断、後者は
+  # レジストリ個別にホストのヘルパーを指す。
+  if ! jq -e 'has("credsStore") or has("credHelpers")' "$cfg" >/dev/null 2>&1; then
+    return 0
+  fi
+  local tmp="$cfg.on-attach.tmp"
+  if jq 'del(.credsStore, .credHelpers)' "$cfg" > "$tmp" 2>/dev/null && mv "$tmp" "$cfg"; then
+    echo "[on-attach] removed credsStore/credHelpers from $cfg"
+  else
+    rm -f "$tmp"
+    echo "[on-attach] WARN: $cfg の credsStore を除去できませんでした。" >&2
+  fi
+}
+strip_docker_creds_store
+
 if command -v gh >/dev/null 2>&1; then
   # 未認証なら、コンテナ内でのログインを案内する。ホストのトークンは注入されない。
   gh auth status >/dev/null 2>&1 && echo "[on-attach] gh auth OK" || \
@@ -629,9 +683,9 @@ TMPL
       ;;
     'scripts/setup-git-identity.sh')
       # identity 未指定のコミットを「黙って通す」経路を塞ぐ適用スクリプト。
-      # 先頭 profile（__IDENTITY_PROFILE__）の GIT_AUTHOR_*_<PROFILE> を local へ適用し、
-      # global は user.useConfigOnly=true + name/email 削除で無害化する。render_content が
-      # __IDENTITY_PROFILE__ / __IDENTITY_PROFILE_UPPER__ を実際の profile 名へ置換する。
+      # .env の GIT_IDENTITY_NAME / GIT_IDENTITY_EMAIL を local へ適用し、global は
+      # user.useConfigOnly=true + name/email 削除で無害化する。あわせて credential.helper
+      # を gh へ固定し、上位スコープからの資格情報の供給を打ち切る。
       cat <<'TMPL'
 #!/usr/bin/env bash
 # setup-git-identity.sh — identity 未指定のコミットを「黙って通す」経路を塞ぐ
@@ -657,8 +711,16 @@ TMPL
 #      → local 未設定のリポジトリでは commit が exit 128 で止まる。
 #         黙って別名義になるより、止まって気づくほうがよい。
 #   3. 当リポジトリの local へ identity を適用する
-#      （GIT_AUTHOR_NAME_<PROFILE> / GIT_AUTHOR_EMAIL_<PROFILE> を環境から読む。
+#      （.env の GIT_IDENTITY_NAME / GIT_IDENTITY_EMAIL を読む。
 #       未設定なら local 適用は行わず WARN に留める）
+#   4. global の credential.helper を「空 → !gh auth git-credential」に固定する
+#      → 空文字を先に置くとヘルパー一覧がリセットされ、/etc/gitconfig 側や
+#         エディタが注入したヘルパーが応答しなくなる。資格情報の供給元を
+#         コンテナ内の gh だけに絞る。
+#
+# GIT_AUTHOR_NAME / GIT_AUTHOR_EMAIL という名前を .env に使わないのは、それが git 自身の
+# 読む環境変数だから。環境に置くと local 未設定のリポジトリでも identity が解決でき、
+# user.useConfigOnly による保護が無効になる（このガードが塞ぎたい穴そのもの）。
 #
 # このスクリプトは git config だけを触り、gh を呼ばない。接続のたびにネットワークを
 # 叩くのは重く、オフラインでは失敗するため。認証（gh へのログイン）はコンテナ内で
@@ -678,16 +740,16 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$(dirname "$HERE")"
 
-# 既定 identity の解決に使う profile 名。値は環境変数
-# GIT_AUTHOR_NAME_<PROFILE> / GIT_AUTHOR_EMAIL_<PROFILE> から読む。
-# 固有 email はここに焼き込まない（環境変数契約から解決する）。
-# remoteEnv によるホストからの注入は廃止済みのため、環境に無ければ WARN 経路へ入る。
-IDENTITY_PROFILE="__IDENTITY_PROFILE__"
-IDENTITY_PROFILE_UPPER="__IDENTITY_PROFILE_UPPER__"
-NAME_VAR="GIT_AUTHOR_NAME_${IDENTITY_PROFILE_UPPER}"
-EMAIL_VAR="GIT_AUTHOR_EMAIL_${IDENTITY_PROFILE_UPPER}"
-EXPECTED_NAME="${!NAME_VAR:-}"
-EXPECTED_EMAIL="${!EMAIL_VAR:-}"
+# identity の供給元はプロジェクト .env に一本化する。on-attach から呼ばれる文脈では
+# 対話シェルの rc は効かないため、ここで明示的にローダーを通す（存在しなければ素通り）。
+NAME_VAR="GIT_IDENTITY_NAME"
+EMAIL_VAR="GIT_IDENTITY_EMAIL"
+if [[ -f "$HERE/load-project-env.sh" ]]; then
+  # shellcheck source=/dev/null
+  . "$HERE/load-project-env.sh"
+fi
+EXPECTED_NAME="${GIT_IDENTITY_NAME:-}"
+EXPECTED_EMAIL="${GIT_IDENTITY_EMAIL:-}"
 
 log() { echo "[git-identity] $*"; }
 err() { echo "[git-identity] $*" >&2; }
@@ -744,6 +806,35 @@ unset_global_identity_key() {
   return 0
 }
 
+# 資格情報の供給元を gh に絞る。
+#
+# git はヘルパーを定義順に試し、最初に応答したものを採用する。空文字を置くと
+# それまでの一覧が破棄されるため、「空 → gh」の順で global に固定すると、
+# /etc/gitconfig（system）側やエディタが注入したヘルパーが応答しなくなる。
+# ここが緩いと、ホスト由来の資格情報が git credential fill から警告なく返る。
+CRED_HELPER_GH='!gh auth git-credential'
+pin_credential_helper() {
+  local current
+  current="$(git config --global --get-all credential.helper 2>/dev/null | tr '\n' '|' || true)"
+  if [[ "$current" == "|${CRED_HELPER_GH}|" ]]; then
+    return 0
+  fi
+  # --unset-all は該当キーが無いと exit 5 を返す（未設定は正常系）。
+  local rc=0
+  git config --global --unset-all credential.helper || rc=$?
+  if [[ "$rc" -ne 0 && "$rc" -ne 5 ]]; then
+    err "ERROR: global の credential.helper を削除できません (exit $rc)"
+    return 1
+  fi
+  if ! git config --global --add credential.helper '' ||
+    ! git config --global --add credential.helper "$CRED_HELPER_GH"; then
+    err "ERROR: global の credential.helper を固定できません"
+    return 1
+  fi
+  log "credential.helper を「空 → gh」に固定しました"
+  return 0
+}
+
 apply() {
   # global の user.name / user.email を確実に削除する（削除失敗・残存を見逃さない）。
   if ! unset_global_identity_key user.name || ! unset_global_identity_key user.email; then
@@ -752,6 +843,10 @@ apply() {
 
   if ! git config --global user.useConfigOnly true; then
     err "ERROR: global 設定に user.useConfigOnly を書き込めません"
+    return 1
+  fi
+
+  if ! pin_credential_helper; then
     return 1
   fi
 
@@ -766,9 +861,10 @@ apply() {
     # ここで落とさない。global の無害化は済んでおり、identity 未設定のまま
     # コミットしようとすれば git 自身が exit 128 で止める。
     err "WARN: $NAME_VAR / $EMAIL_VAR が未設定のため local identity を適用しません。"
-    err "WARN: このリポジトリでコミットする前に、identity を設定してください:"
-    err "WARN:   git config --local user.name  '<name>'"
-    err "WARN:   git config --local user.email '<email>'"
+    err "WARN: このリポジトリでコミットする前に、プロジェクトルートの .env へ設定してください:"
+    err "WARN:   $NAME_VAR=<name>"
+    err "WARN:   $EMAIL_VAR=<email>"
+    err "WARN: 雛形は .env.example にあります。"
   fi
 
   log "global identity を無効化し user.useConfigOnly=true を設定しました"
@@ -855,10 +951,40 @@ check() {
   rm -rf "$TMP_REPO"
   TMP_REPO=""
 
-  # 6) 冪等性 + credential セクションの保全。
+  # 6) global の credential.helper が「空 → gh」に固定されていること。
+  #    空文字が先頭に無いと、system（/etc/gitconfig）側のヘルパーが先に応答し、
+  #    ホスト由来の資格情報が返り得る。
+  local helpers
+  helpers="$(git config --global --get-all credential.helper 2>/dev/null | tr '\n' '|' || true)"
+  if [[ "$helpers" == "|${CRED_HELPER_GH}|" ]]; then
+    log "OK  global credential.helper は「空 → gh」"
+  else
+    err "NG  global credential.helper が「空 → gh」でない: ${helpers:-<unset>}"
+    failures=$((failures + 1))
+  fi
+
+  # 7) local 設定を持たないリポジトリで、資格情報の供給元が gh だけであること。
+  #    ここが本題。設定を持たない新規リポジトリでも、上位スコープのヘルパーが
+  #    生き残っていないことを、実際に一時リポジトリを作って確かめる。
+  #    git は空文字で一覧をリセットするため、最後の空要素より後ろだけが実効値になる。
+  TMP_REPO="$(mktemp -d)"
+  git init -q "$TMP_REPO"
+  local effective
+  effective="$(cd "$TMP_REPO" && git config --get-all credential.helper 2>/dev/null \
+    | awk '$0 == "" { n = 0; next } { v[++n] = $0 } END { for (i = 1; i <= n; i++) print v[i] }' \
+    | tr '\n' '|' || true)"
+  if [[ "$effective" == "${CRED_HELPER_GH}|" ]]; then
+    log "OK  local 未設定のリポジトリでも資格情報の供給元は gh のみ"
+  else
+    err "NG  local 未設定のリポジトリで gh 以外の供給元が残っている: ${effective:-<none>}"
+    err "NG  → ホスト由来の資格情報が git credential fill から返り得る。"
+    failures=$((failures + 1))
+  fi
+  rm -rf "$TMP_REPO"
+  TMP_REPO=""
+
+  # 8) 冪等性。
   #    適用をもう一度走らせ、global 設定ファイルが 1 バイトも変わらないことを見る。
-  #    credential.helper は VS Code や feature が注入するため、消していないことを
-  #    併せて確認する。
   #
   #    この検査は apply を伴う。未適用の状態で走らせると「失敗を報告しながら
   #    裏で直してしまう」ことになり、次回の --check が通って問題が見えなくなる。
@@ -914,8 +1040,7 @@ TMPL
     'scripts/verify-commit-identity.sh')
       # コミット履歴の identity 検証ゲート。CI（identity-guard.yml）と手元で共用する。
       # author は email のみで判定。許可 email は env ALLOWED_AUTHOR_EMAILS（CI は
-      # リポジトリ変数から渡す）→ 無ければ先頭 profile の GIT_AUTHOR_EMAIL_<PROFILE> の
-      # 順で解決する。render_content が __IDENTITY_PROFILE_UPPER__ を置換する。
+      # リポジトリ変数から渡す）→ 無ければ .env の GIT_IDENTITY_EMAIL の順で解決する。
       cat <<'TMPL'
 #!/usr/bin/env bash
 # verify-commit-identity.sh — コミット identity の検証ゲート
@@ -938,7 +1063,7 @@ TMPL
 #   author の許可 email は次の順で解決する。固有 email はスクリプトに焼き込まない。
 #     1. 環境変数 ALLOWED_AUTHOR_EMAILS（カンマ/空白区切り）。
 #        CI はリポジトリ変数（vars.ALLOWED_AUTHOR_EMAILS）を env 経由で渡す。
-#     2. 未設定なら先頭 profile の GIT_AUTHOR_EMAIL_<PROFILE>（コンテナの remoteEnv）。
+#     2. 未設定なら .env の GIT_IDENTITY_EMAIL（コンテナ内の唯一の供給元）。
 #   どちらでも解決できなければ「検査対象が無いので通過」にせず、fail-closed で落とす。
 #   committer には常に noreply@github.com を、Co-Authored-By には加えて
 #   noreply@anthropic.com を許可する（GitHub 上の squash merge / web UI コミットの
@@ -961,20 +1086,20 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$(dirname "$HERE")"
 
-# 先頭 profile。ALLOWED_AUTHOR_EMAILS 未設定時のフォールバック解決に使う。
-IDENTITY_PROFILE_UPPER="__IDENTITY_PROFILE_UPPER__"
-
 ALLOWED_AUTHOR_EMAILS_ARR=()
 ALLOWED_COMMITTER_EMAILS_ARR=()
 ALLOWED_COAUTHOR_EMAILS_ARR=()
 
 # author の許可 email を解決する。env ALLOWED_AUTHOR_EMAILS を最優先し、
-# 無ければ先頭 profile の GIT_AUTHOR_EMAIL_<PROFILE> を使う。
+# 無ければ .env の GIT_IDENTITY_EMAIL を使う（CI では .env が無いため前者だけが効く）。
 resolve_allowed_author_emails() {
   local raw="${ALLOWED_AUTHOR_EMAILS:-}"
   if [[ -z "$raw" ]]; then
-    local fallback_var="GIT_AUTHOR_EMAIL_${IDENTITY_PROFILE_UPPER}"
-    raw="${!fallback_var:-}"
+    if [[ -z "${GIT_IDENTITY_EMAIL:-}" && -f "$HERE/load-project-env.sh" ]]; then
+      # shellcheck source=/dev/null
+      . "$HERE/load-project-env.sh"
+    fi
+    raw="${GIT_IDENTITY_EMAIL:-}"
   fi
   # カンマ区切りも空白区切りも受ける。
   printf '%s' "${raw//,/ }"
@@ -988,7 +1113,7 @@ init_allowlists() {
 
   if [[ "${#ALLOWED_AUTHOR_EMAILS_ARR[@]}" -eq 0 ]]; then
     echo "[identity] 許可 author email が解決できません。" >&2
-    echo "[identity] CI はリポジトリ変数 ALLOWED_AUTHOR_EMAILS を、コンテナは GIT_AUTHOR_EMAIL_${IDENTITY_PROFILE_UPPER} を設定してください。" >&2
+    echo "[identity] CI はリポジトリ変数 ALLOWED_AUTHOR_EMAILS を、コンテナは .env の GIT_IDENTITY_EMAIL を設定してください。" >&2
     echo "IDENTITY_FAIL"
     exit 1
   fi
@@ -1750,15 +1875,7 @@ render_content() {
   escaped_base_image="$BASE_IMAGE"
   escaped_base_image="${escaped_base_image//&/\\&}"
 
-  # identity ガード（setup-git-identity.sh / verify-commit-identity.sh）は内部定数の
-  # profile を既定 identity とする。profile 名のみを差し込み、固有 email はスクリプトへ
-  # 焼き込まない。
-  local identity_profile_upper
-  identity_profile_upper="$(printf '%s' "$IDENTITY_PROFILE" | tr '[:lower:]' '[:upper:]')"
-
   sed_args+=(-e "s|__PROJECT_NAME__|$PROJECT_NAME|g")
-  sed_args+=(-e "s|__IDENTITY_PROFILE_UPPER__|$identity_profile_upper|g")
-  sed_args+=(-e "s|__IDENTITY_PROFILE__|$IDENTITY_PROFILE|g")
   sed_args+=(-e "s|__BASE_IMAGE__|$escaped_base_image|g")
   for lang in node go python php rust; do
     local lang_upper lang_options
