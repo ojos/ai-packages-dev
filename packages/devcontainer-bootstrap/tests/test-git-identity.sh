@@ -42,12 +42,17 @@ mk_repo() {
   ( cd "$dir" && git init -q )
 }
 
-# 既定 profile（primary）の identity を env で渡して setup を実行する。
+# identity の供給元はプロジェクト .env。ローダー（load-project-env.sh）を同梱し、
+# .env を置いた状態を作る。env で直接渡す経路はもう無い。
+mk_repo_with_env() {
+  local dir="$1" name="$2" email="$3"; shift 3
+  mk_repo "$dir" load-project-env.sh "$@"
+  printf 'GIT_IDENTITY_NAME=%s\nGIT_IDENTITY_EMAIL=%s\n' "$name" "$email" > "$dir/.env"
+}
+
 run_setup() {
   local dir="$1"; shift
-  ( cd "$dir" &&
-    env GIT_AUTHOR_NAME_PRIMARY="Test User" GIT_AUTHOR_EMAIL_PRIMARY="allowed@example.com" \
-        bash scripts/setup-git-identity.sh "$@" )
+  ( cd "$dir" && bash scripts/setup-git-identity.sh "$@" )
 }
 
 # author/committer email を明示してコミットする（useConfigOnly 下でも env が identity を満たす）。
@@ -83,7 +88,7 @@ if grep -q 'if ! bash "$HERE/setup-git-identity.sh"' "$out/scripts/on-attach.sh"
 
 it "on-attach.sh は setup 失敗時も exit 0 を保つ"
 oa="$(new_workdir)/oa"
-mk_repo "$oa" on-attach.sh setup-git-identity.sh
+mk_repo_with_env "$oa" "Test User" "allowed@example.com" on-attach.sh setup-git-identity.sh
 # global 設定の書き込みを ENOTDIR で失敗させ、setup を確実に非ゼロ終了させる。
 blocker="$oa/blocker"; : > "$blocker"
 ( cd "$oa" && env GIT_CONFIG_GLOBAL="$blocker/gitconfig" GIT_CONFIG_SYSTEM=/dev/null \
@@ -92,7 +97,7 @@ assert_eq "$?" "0" "on-attach の終了コード"
 
 # ── 適用（global 無害化 + local 適用） ────────────────────────────────────────
 r="$(new_workdir)/r"
-mk_repo "$r" setup-git-identity.sh
+mk_repo_with_env "$r" "Test User" "allowed@example.com" setup-git-identity.sh
 
 # 事前に別アカウントの global identity を仕込む。apply がこれを確実に削除し、
 # 残存を握りつぶさないことを後続の「削除される」検証で担保する。
@@ -110,11 +115,14 @@ gn="$(git config --global --get user.name 2>/dev/null || echo '')"
 ge="$(git config --global --get user.email 2>/dev/null || echo '')"
 if [[ -z "$gn" && -z "$ge" ]]; then pass; else fail "global に identity が残る: name=$gn email=$ge"; fi
 
-it "当リポジトリの local に先頭 profile の identity が入る"
+it "当リポジトリの local に .env の identity が入る"
 assert_eq "$(cd "$r" && git config --local --get user.email 2>/dev/null || echo '')" "allowed@example.com" "local user.email"
 
-it "credential.helper を壊さない"
-assert_eq "$(git config --global --get credential.helper 2>/dev/null || echo '')" "store" "global credential.helper"
+it "credential.helper を「空 → gh」に固定する"
+# 上位スコープ（system / エディタ注入）のヘルパーが応答しないよう、空文字で一覧を
+# リセットしてから gh を置く。順序が逆だと上位スコープが先に応答して勝つ。
+helpers="$(git config --global --get-all credential.helper 2>/dev/null | tr '\n' '|')"
+assert_eq "$helpers" "|!gh auth git-credential|" "global credential.helper"
 
 # ── 冪等性 / --check ──────────────────────────────────────────────────────────
 it "冪等: 再適用で global 設定ファイルが変化しない"
@@ -160,16 +168,17 @@ vo="$(cd "$vr" && env ALLOWED_AUTHOR_EMAILS="allowed@example.com" bash scripts/v
 if [[ "$vrc" -eq 1 ]]; then assert_contains "$vo" "IDENTITY_FAIL" "verify 出力"; else fail "許可外を通した (exit $vrc)"; fi
 
 it "許可 email を解決できない場合は fail-closed（exit 1）"
-vr2="$(new_workdir)/vr2"; mk_repo "$vr2" verify-commit-identity.sh
+vr2="$(new_workdir)/vr2"; mk_repo "$vr2" load-project-env.sh verify-commit-identity.sh
 commit_as "$vr2" "allowed@example.com" "allowed@example.com" c1
-( cd "$vr2" && env -u ALLOWED_AUTHOR_EMAILS -u GIT_AUTHOR_EMAIL_PRIMARY \
+( cd "$vr2" && env -u ALLOWED_AUTHOR_EMAILS -u GIT_IDENTITY_EMAIL \
     bash scripts/verify-commit-identity.sh --full >/dev/null 2>&1 )
 assert_eq "$?" "1" "空 allowlist の終了コード"
 
-it "ALLOWED_AUTHOR_EMAILS 未設定でも先頭 profile の email をフォールバックに使う"
-vo="$(cd "$vr2" && env -u ALLOWED_AUTHOR_EMAILS GIT_AUTHOR_EMAIL_PRIMARY="allowed@example.com" \
+it "ALLOWED_AUTHOR_EMAILS 未設定なら .env の GIT_IDENTITY_EMAIL をフォールバックに使う"
+printf 'GIT_IDENTITY_NAME=Test User\nGIT_IDENTITY_EMAIL=allowed@example.com\n' > "$vr2/.env"
+vo="$(cd "$vr2" && env -u ALLOWED_AUTHOR_EMAILS -u GIT_IDENTITY_EMAIL \
     bash scripts/verify-commit-identity.sh --full 2>&1)"; vrc=$?
-if [[ "$vrc" -eq 0 ]]; then assert_contains "$vo" "IDENTITY_PASS" "フォールバック解決"; else fail "フォールバックが効かない (exit $vrc)"; fi
+if [[ "$vrc" -eq 0 ]]; then assert_contains "$vo" "IDENTITY_PASS" "フォールバック解決"; else fail "フォールバックが効かない (exit $vrc): $(printf '%s' "$vo" | tail -1)"; fi
 
 # ── CI ワークフロー ───────────────────────────────────────────────────────────
 it "identity-guard.yml が pull_request と push(main) の 2 系統を張る"

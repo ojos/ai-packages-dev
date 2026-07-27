@@ -58,6 +58,7 @@ require_exec() {
 
 section "Static structure"
 require_file ".devcontainer/devcontainer.json"
+require_file ".env.example"
 require_file "scripts/on-attach.sh"
 require_file "scripts/fix-mount-owner.sh"
 require_file "scripts/post-rebuild-check.sh"
