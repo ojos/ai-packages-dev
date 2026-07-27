@@ -1095,7 +1095,10 @@ ALLOWED_COAUTHOR_EMAILS_ARR=()
 resolve_allowed_author_emails() {
   local raw="${ALLOWED_AUTHOR_EMAILS:-}"
   if [[ -z "$raw" ]]; then
-    if [[ -z "${GIT_IDENTITY_EMAIL:-}" && -f "$HERE/load-project-env.sh" ]]; then
+    # 環境に値があっても必ずローダーを通す。load-project-env.sh は .env を後勝ちで
+    # 上書きする契約であり、「.env が唯一の供給元」を保つには常に通す必要がある。
+    # 未設定のときだけ読むと、シェルへ手で export した古い値が .env に勝つ。
+    if [[ -f "$HERE/load-project-env.sh" ]]; then
       # shellcheck source=/dev/null
       . "$HERE/load-project-env.sh"
     fi

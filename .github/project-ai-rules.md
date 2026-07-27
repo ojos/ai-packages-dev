@@ -23,38 +23,36 @@
 - 機密の読み取り元: `.env`（`scripts/load-project-env.sh` が読み込む）、および GitHub CLI の認証情報
 - 追跡除外: `.env` および `.env.*`（`.gitignore` 済み）
 - 共有する雛形: 値のない `.env.example` のみ
-- GitHub トークンは `GITHUB_TOKEN_<PROFILE>` 環境変数で扱い、ファイルへ保存しません（`scripts/github-account-switch.sh`）
+- ホスト OS の資格情報をコンテナへ注入しません。`devcontainer.json` の `remoteEnv` が運ぶのは `LOCAL_WORKSPACE_FOLDER` のみで、CI の `Self devcontainer credential isolation` ジョブがこれを検査します
+- GitHub の認証はコンテナ内で `gh auth login` を実行し、状態は `gh-storage` volume に残します。トークンを**私たちが**ファイルや環境変数へ保存しません（gh 自身は `~/.config/gh/hosts.yml` に保持します。それを volume の外へ写さない、という意味です）
 - リリース実行時、シークレットの値をリリース資産へ含めません
 
 ## Git identity（コミット作者情報）
 
 `ojos/*` リポジトリへのすべての git 操作（commit / tag / リリーススクリプト内の一時クローン含む）は、次の identity で行います。
 
-- `user.name` = `$GIT_AUTHOR_NAME_OJOS`（= `Ido`）
-- `user.email` = `$GIT_AUTHOR_EMAIL_OJOS`（= `ido@ojos.jp`）
+- `user.name` = `.env` の `GIT_IDENTITY_NAME`（= `Ido`）
+- `user.email` = `.env` の `GIT_IDENTITY_EMAIL`（= `ido@ojos.jp`）
 
 順守事項:
 
-- グローバル gitconfig へのフォールバックに依存しません。Dev Container はホストの `~/.gitconfig`（別アカウントの identity の場合がある）をコピーするためです。
-- コンテナ接続時に `scripts/on-attach.sh` がグローバル identity を `$GIT_AUTHOR_NAME_OJOS` / `$GIT_AUTHOR_EMAIL_OJOS` で強制上書きします。
-- リポジトリ外の一時クローンでコミットするスクリプトは、`git -c user.name=... -c user.email=...` などで identity を明示します。
+- global の identity には依存しません。`scripts/setup-git-identity.sh` が global の `user.name` / `user.email` を削除し、`user.useConfigOnly=true` を立てます。Dev Container はホストの `~/.gitconfig`（別アカウントの identity の場合がある）をコピーするため、そこへ落ちる経路を残しません。
+- コンテナ接続時に `scripts/on-attach.sh` が `setup-git-identity.sh` を再適用します（リビルドのたびに ~/.gitconfig が再生成されるため）。`bash scripts/setup-git-identity.sh --check` で状態を検証できます。
+- local 設定を持たないリポジトリでは `git commit` が exit 128 で止まります。これは設計どおりです。黙って別名義のコミットが通るより、止まって気づくほうを選びます。
+- リポジトリ外の一時クローンでコミットするスクリプトは、`git -c user.name=... -c user.email=...` で identity を明示します（`scripts/release-packages.sh`）。CI の `Self devcontainer credential isolation` ジョブが明示を検査します。
 - push / リリース実行の前に `git log -1 --format='%an <%ae>'` で作者情報を確認します。`aizu@bascule.co.jp` 等の別 identity を検出した場合は中断し、修正してからやり直します。
 
-## GitHub 認証（gh CLI / トークン）
+## GitHub 認証（gh CLI）
 
-gh CLI の認証はトークンで行い、登録は `scripts/github-account-switch.sh` を唯一の経路とします。
-
-前提となる仕組み:
-
-- gh が環境変数として自動認識するのは `GH_TOKEN` / `GITHUB_TOKEN` のみです。`GITHUB_TOKEN_<PROFILE>`（例: `GITHUB_TOKEN_OJOS`）は本プロジェクトの独自命名のため、gh は自動では使いません。
-- switch スクリプトが `gh auth login --with-token` でトークンを gh へ登録します。gh はその**コピー**を `~/.config/gh/hosts.yml` に保存するため、トークンをローテーションすると保存側だけが失効した状態になり得ます。
+gh CLI の認証はコンテナ内で行い、その状態を named volume に残します。ホスト OS からトークンを持ち込みません。
 
 順守事項:
 
-- トークン再発行時は、ホスト側環境変数 `GITHUB_TOKEN_<PROFILE>` を更新し、コンテナへ再接続します（`scripts/on-attach.sh` が `auto` を実行して gh へ再登録します）。再接続せずに反映する場合は `bash scripts/github-account-switch.sh auto --git-scope local` を実行します。
-- `gh auth status` が失敗（トークン失効）した場合、手動の `gh auth login` ではなく、まず上記 switch スクリプトの再実行で復旧します。
-- `GH_TOKEN` / `GITHUB_TOKEN` を恒久的に設定しません。gh に登録済みのアカウントより優先され、プロファイル切替を無効化するためです。
-- gh が使えない場合でも、`GITHUB_TOKEN_<PROFILE>` を用いた API / git 直接操作（curl、トークン付き URL の push）は可能です。ただし恒久的なリリース操作はスクリプト経由とする「外部サービスの状態管理」の規約に従います。
+- 認証は `gh auth login` をコンテナ内で 1 度実行します。状態は `gh-storage` volume（`/home/vscode/.config/gh`）に残り、リビルドを跨いで有効です。
+- `GH_TOKEN` / `GITHUB_TOKEN` を恒久的に設定しません。gh に登録済みのアカウントより優先され、コンテナ内のログイン状態が無視されるためです。
+- git の push 認証は `scripts/setup-git-identity.sh` が global の `credential.helper` を「空 → `!gh auth git-credential`」に固定して gh へ向けます。空文字がヘルパー一覧をリセットするため、`/etc/gitconfig` 側やエディタが注入したヘルパーは応答しません。
+- `gh auth status` が失敗した場合は、コンテナ内で `gh auth login` をやり直します。ホスト側の環境変数を触る必要はありません。
+- Docker レジストリの資格情報も同様です。ホスト側 VS Code で `dev.containers.dockerCredentialHelper: false` を設定してください。`scripts/on-attach.sh` が接続ごとに `~/.docker/config.json` の `credsStore` を除去しますが、書き込み順序によっては間に合わないため、ホスト側の設定が本体です。
 
 ## 作業状況の記録先
 

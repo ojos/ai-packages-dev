@@ -9,13 +9,14 @@
 
 | パッケージ | リポジトリ | 現行バージョン | 配布形態 |
 |---|---|---|---|
-| devcontainer-bootstrap | `ojos/devcontainer-bootstrap` | v0.6.0 | GitHub Release + 3 資産 |
+| devcontainer-bootstrap | `ojos/devcontainer-bootstrap` | v0.7.0 | GitHub Release + 3 資産 |
 | ai-playbook | `ojos/ai-playbook` | v0.1.3 | git タグのみ |
 
 ### 新世代の版更新
 
 | パッケージ | 版 | 公開日 | 要点 |
 |---|---|---|---|
+| devcontainer-bootstrap | v0.7.0 | 2026-07-27 | **破壊的変更**。生成物からホスト資格情報の注入経路（`remoteEnv` の `${localEnv:...}`）を全廃し、認証をコンテナ内で行い named volume で永続化する構造へ移行（#129）。`--github-profiles` / `--gemini-key-env` と `GITHUB_TOKEN_*` 等の環境変数契約を撤去（#130）、永続 volume を gh/aws/gcloud へ拡張し実マウントを検査（#131）、所有権修復を `fix-mount-owner.sh` へ独立（#132）、credsStore 打ち消し・identity の `.env` 化・`credential.helper` の gh 固定・`.env.example` 追加（#133 / #141） |
 | devcontainer-bootstrap | v0.6.0 | 2026-07-26 | 生成物に git identity ガード（適用・検証・CI の 3 層。#108）、プロジェクト `.env` 優先読み込み（#109）、`--with-claude` での Claude intake 起点スキル配置（#111）、`--with-copilot` でのリモート最終ゲート雛形配置（#113）、tmux 常時同梱（#115）を追加。あわせて `acceptance.sh` の生成既定を「存在する対象だけ検証し 0 件なら失敗」へ変更（**軽微な破壊的変更**。#112） |
 | ai-playbook | v0.1.3 | 2026-07-26 | `REASON_CODES.md` に軽微修正の免除条件を追加（#110）、`review-workflow.md` のリモート最終ゲートを「1 回に限定される機構なら自動要求可」へ緩和し `templates/copilot-review.yml` を新設（#113）、Claude Code 向け intake 起点スキル雛形 `templates/claude-skill-intake.md` を追加し 8 章へ固定ファイル名の例外を追記（#111）、`templates/project-ai-rules.md` のレビュー節に loop-gate 単一入口とリモート最終ゲート欄を追加（#114）、`templates/gemini-review.sh` を `.env` ローダーへ追随（#109） |
 | devcontainer-bootstrap | v0.5.1 | 2026-07-22 | 取り込んだ ai-playbook の出所を生成先 `.ai-playbook/VERSION` に記録（後方互換）。書き込みは規範と同じ衝突ポリシーに従う（自己診断 F-7） |

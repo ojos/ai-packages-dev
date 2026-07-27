@@ -174,6 +174,28 @@ commit_as "$vr2" "allowed@example.com" "allowed@example.com" c1
     bash scripts/verify-commit-identity.sh --full >/dev/null 2>&1 )
 assert_eq "$?" "1" "空 allowlist の終了コード"
 
+it "環境の GIT_IDENTITY_EMAIL より .env の値が優先される"
+# .env が唯一の供給元。シェルへ手で export した古い値が勝つと、許可 email が
+# 実際の運用と食い違い、通すべきコミットを落とす／落とすべきものを通す。
+printf 'GIT_IDENTITY_NAME=Test User\nGIT_IDENTITY_EMAIL=allowed@example.com\n' > "$vr2/.env"
+vo="$(cd "$vr2" && env -u ALLOWED_AUTHOR_EMAILS GIT_IDENTITY_EMAIL="stale@wrong.example" \
+    bash scripts/verify-commit-identity.sh --full 2>&1)"; vrc=$?
+if [[ "$vrc" -eq 0 ]]; then
+  assert_contains "$vo" "IDENTITY_PASS" ".env 優先の解決"
+else
+  fail "環境の古い値が .env に勝っている (exit $vrc): $(printf '%s' "$vo" | tail -1)"
+fi
+
+it "ALLOWED_AUTHOR_EMAILS があれば .env より優先される"
+# CI はリポジトリ変数から渡す。ここが逆転すると CI の許可リストが効かなくなる。
+vo="$(cd "$vr2" && env ALLOWED_AUTHOR_EMAILS="only-ci@example.com" \
+    bash scripts/verify-commit-identity.sh --full 2>&1)"; vrc=$?
+if [[ "$vrc" -eq 1 ]]; then
+  assert_contains "$vo" "IDENTITY_FAIL" "env 最優先の解決"
+else
+  fail ".env が ALLOWED_AUTHOR_EMAILS に勝っている (exit $vrc)"
+fi
+
 it "ALLOWED_AUTHOR_EMAILS 未設定なら .env の GIT_IDENTITY_EMAIL をフォールバックに使う"
 printf 'GIT_IDENTITY_NAME=Test User\nGIT_IDENTITY_EMAIL=allowed@example.com\n' > "$vr2/.env"
 vo="$(cd "$vr2" && env -u ALLOWED_AUTHOR_EMAILS -u GIT_IDENTITY_EMAIL \
