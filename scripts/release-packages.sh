@@ -37,6 +37,34 @@ require_cmd() {
   }
 }
 
+# リポジトリ外の一時クローンでコミットする際に使う identity。
+# 供給元はプロジェクト .env（GIT_IDENTITY_NAME / GIT_IDENTITY_EMAIL）に一本化する。
+# global へのフォールバックには依存しない。setup-git-identity.sh が global identity を
+# 削除して user.useConfigOnly=true を立てるため、フォールバックは存在しない。
+RELEASE_AUTHOR_NAME=""
+RELEASE_AUTHOR_EMAIL=""
+resolve_release_identity() {
+  local here
+  here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  # 環境に値があっても必ずローダーを通す。load-project-env.sh は .env を後勝ちで
+  # 上書きする契約であり、「.env が唯一の供給元」を保つには常に通す必要がある。
+  # 未設定のときだけ読むと、シェルへ手で export した古い値が .env に勝ってしまい、
+  # 一時クローンの commit が意図しない名義になる。
+  if [[ -f "$here/load-project-env.sh" ]]; then
+    # shellcheck source=/dev/null
+    . "$here/load-project-env.sh"
+  fi
+  RELEASE_AUTHOR_NAME="${GIT_IDENTITY_NAME:-}"
+  RELEASE_AUTHOR_EMAIL="${GIT_IDENTITY_EMAIL:-}"
+  # 解決できないまま進むと、一時クローンでの commit が exit 128 で止まる。
+  # 途中まで公開状態を変えてから落ちるより、着手前に止めるほうが安全。
+  if [[ -z "$RELEASE_AUTHOR_NAME" || -z "$RELEASE_AUTHOR_EMAIL" ]]; then
+    echo "error: GIT_IDENTITY_NAME / GIT_IDENTITY_EMAIL が解決できません。" >&2
+    echo "       プロジェクトルートの .env に設定してください（雛形: .env.example）。" >&2
+    exit 1
+  fi
+}
+
 require_clean_worktree() {
   if [[ -n "$(git status --porcelain)" ]]; then
     echo "error: working tree is not clean. commit/stash changes first." >&2
@@ -317,7 +345,13 @@ init_and_push_release_repo() {
   pushd "$dir" >/dev/null
   git add .
   if ! git diff --cached --quiet; then
-    git commit -m "chore: release snapshot"
+    # identity を明示する。ここはリポジトリ外の一時クローンであり、local 設定を
+    # 持たない。setup-git-identity.sh が global identity を削除し
+    # user.useConfigOnly=true を立てているため、明示しないと git が exit 128 で止まる
+    # （黙って別名義でコミットされるより安全側に倒した設計。
+    #  .github/project-ai-rules.md「Git identity」）。
+    git -c user.name="$RELEASE_AUTHOR_NAME" -c user.email="$RELEASE_AUTHOR_EMAIL" \
+      commit -m "chore: release snapshot"
   fi
 
   if gh repo view "$repo" >/dev/null 2>&1; then
@@ -474,6 +508,12 @@ if [[ "$EXECUTE" != "true" ]]; then
   echo "[info] dry-run mode. add --execute to publish releases"
   exit 0
 fi
+
+# identity は「実行が確定した直後・最初の副作用より前」に解決する。
+# preflight より前に置くと、.env を持たない環境（CI・テスト）で版の重複検査へ
+# 到達できなくなる。identity が要るのは一時クローンでの commit だけなので、
+# dry-run と検査だけの実行に .env を要求しない。
+resolve_release_identity
 
 ROOT_DIR="$(pwd)"
 DCB_DIR="/tmp/dcb-release"
