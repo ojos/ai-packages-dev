@@ -202,6 +202,26 @@ vo="$(cd "$vr2" && env -u ALLOWED_AUTHOR_EMAILS -u GIT_IDENTITY_EMAIL \
     bash scripts/verify-commit-identity.sh --full 2>&1)"; vrc=$?
 if [[ "$vrc" -eq 0 ]]; then assert_contains "$vo" "IDENTITY_PASS" "フォールバック解決"; else fail "フォールバックが効かない (exit $vrc): $(printf '%s' "$vo" | tail -1)"; fi
 
+it "許可 email に glob メタ文字があってもファイル名で展開されない"
+# クォートなしの配列代入は単語分割と同時にパス名展開も行う。許可リストが
+# リポジトリ内のファイル名で変わると、検知層の判定が検査対象の中身に左右される。
+# 判定は完全一致なので、'*@example.com' はどんな author にも一致してはならない。
+vr3="$(new_workdir)/vr3"; mk_repo "$vr3" verify-commit-identity.sh
+commit_as "$vr3" "allowed@example.com" "allowed@example.com" c1
+# author と同名のファイルをルートに置く。展開が起きるなら許可リストが
+# 'allowed@example.com' になり、誤って通してしまう。
+: > "$vr3/allowed@example.com"
+vo="$(cd "$vr3" && env ALLOWED_AUTHOR_EMAILS='*@example.com' \
+    bash scripts/verify-commit-identity.sh --full 2>&1)"; vrc=$?
+rm -f "$vr3/allowed@example.com"
+vo2="$(cd "$vr3" && env ALLOWED_AUTHOR_EMAILS='*@example.com' \
+    bash scripts/verify-commit-identity.sh --full 2>&1)"; vrc2=$?
+if [[ "$vrc" -eq 1 && "$vrc2" -eq 1 ]]; then
+  assert_contains "$vo" "IDENTITY_FAIL" "glob 展開の抑止"
+else
+  fail "ファイルの有無で判定が変わった (あり: exit $vrc / なし: exit $vrc2)"
+fi
+
 # ── CI ワークフロー ───────────────────────────────────────────────────────────
 it "identity-guard.yml が pull_request と push(main) の 2 系統を張る"
 if grep -q 'pull_request:' "$WF" && grep -q 'push:' "$WF" && grep -q 'branches: \[main\]' "$WF"; then

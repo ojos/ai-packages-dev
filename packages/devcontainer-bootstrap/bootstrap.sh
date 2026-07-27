@@ -1111,8 +1111,13 @@ resolve_allowed_author_emails() {
 init_allowlists() {
   local resolved
   resolved="$(resolve_allowed_author_emails)"
-  # shellcheck disable=SC2206
-  ALLOWED_AUTHOR_EMAILS_ARR=($resolved)
+  # 単語分割だけを行い、パス名展開は行わせない。クォートなしの配列代入
+  # （ARR=($resolved)）は分割と同時に glob 展開もするため、許可 email に
+  # '*' や '?' が含まれると、許可リストが「検査対象リポジトリにどのファイルが
+  # 存在するか」で変わる。検知層の判定が検査対象の中身に左右されるのは、
+  # fail-closed 設計の意味を失わせる。here-string は末尾に改行を付けるので
+  # set -e 下でも read は 0 を返し、空文字なら空配列になって下の検査に落ちる。
+  read -r -a ALLOWED_AUTHOR_EMAILS_ARR <<<"$resolved"
 
   if [[ "${#ALLOWED_AUTHOR_EMAILS_ARR[@]}" -eq 0 ]]; then
     echo "[identity] 許可 author email が解決できません。" >&2
