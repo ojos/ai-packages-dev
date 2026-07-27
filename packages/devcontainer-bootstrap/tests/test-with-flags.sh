@@ -216,40 +216,43 @@ else
   fail "cloud CLI 検出行が出ない（feature path 不一致の回帰）"
 fi
 
-# ── AI 設定ディレクトリの所有権修正（空 named volume の root:root 初回マウント回避） ──
+# ── 永続 volume の所有権修復は fix-mount-owner.sh が担う ──────────────────────
 #
-# 空の永続 volume を初回マウントすると root:root で作られ、remoteUser が書けず AI CLI の
-# ログインが失敗する。install-ai-tools.sh 冒頭で選択ツールの config dir を chown する。
+# 修復対象と挙動は test-fix-mount-owner.sh で検証する。ここでは装備フラグとの
+# 条件配線（選択したツールのマウント先が漏れなく対象になること）だけを見る。
 
-it "--with-claude --with-gemini --with-copilot: 3 ツール分の fix_owner 行が入る"
+it "--with-claude --with-gemini --with-copilot: 3 ツール分の修復対象が入る"
 out="$(new_workdir)/p"
 run_bootstrap "$out" --with-claude --with-gemini --with-copilot >/dev/null 2>&1
-ait="$out/scripts/install-ai-tools.sh"
-if grep -qF 'fix_owner "/home/vscode/.claude"' "$ait" \
-   && grep -qF 'fix_owner "/home/vscode/.gemini"' "$ait" \
-   && grep -qF 'fix_owner "/home/vscode/.copilot"' "$ait"; then
+fmo="$out/scripts/fix-mount-owner.sh"
+if grep -qF 'fix_mount "/home/vscode/.claude"' "$fmo" \
+   && grep -qF 'fix_mount "/home/vscode/.gemini"' "$fmo" \
+   && grep -qF 'fix_mount "/home/vscode/.copilot"' "$fmo"; then
   pass
 else
-  fail "選択 3 ツールの fix_owner 行が揃わない"
+  fail "選択 3 ツールの fix_mount 行が揃わない"
 fi
 
-it "--with-claude --with-gemini --with-copilot: install-ai-tools.sh が sudo chown を含む"
-if grep -q 'sudo chown' "$ait"; then pass; else fail "sudo chown が無い"; fi
+it "install-ai-tools.sh は所有権修復を持たない（責務が分離されている）"
+if grep -qE 'fix_owner|fix_mount|sudo chown' "$out/scripts/install-ai-tools.sh"; then
+  fail "install-ai-tools.sh に所有権修復が残っている"
+else
+  pass
+fi
 
-it "chown の対象が永続 volume のマウント先と一致する"
-# 所有権修復が漏れたマウント先は root:root のままになり、そのツールのログインが
+it "修復対象が永続 volume のマウント先と一致する"
+# 修復が漏れたマウント先は root:root のままになり、そのツールのログインが
 # Permission denied で落ちる。compose のマウント行と突き合わせて漏れを検出する。
-chowned="$(grep -oE '^fix_owner "[^"]+"' "$ait" | sed -E 's/^fix_owner "//; s/"$//' | sort | tr '\n' ' ')"
+fixed="$(grep -oE '^fix_mount "[^"]+"' "$fmo" | sed -E 's/^fix_mount "//; s/"$//' | sort | tr '\n' ' ')"
 mounted="$(grep -oE '^ +- [a-z0-9-]+-storage:[^ ]+' "$out/.devcontainer/compose.yaml" \
   | sed -E 's/^ +- [a-z0-9-]+-storage://' | sort | tr '\n' ' ')"
-assert_eq "$chowned" "$mounted" "chown 対象とマウント先"
+assert_eq "$fixed" "$mounted" "修復対象とマウント先"
 
-it "AI ツール未選択でも gh の chown 行だけは入る"
+it "AI ツール未選択でも gh の修復対象だけは入る"
 out="$(new_workdir)/p"
 run_bootstrap "$out" >/dev/null 2>&1
-# 定義（fix_owner()）ではなく呼び出し行（fix_owner "..."）を数える。
-calls="$(grep -oE '^fix_owner "[^"]+"' "$out/scripts/install-ai-tools.sh" | sed -E 's/^fix_owner "//; s/"$//' | tr '\n' ' ')"
-assert_eq "$calls" "/home/vscode/.config/gh " "素の生成物の fix_owner 対象"
+calls="$(grep -oE '^fix_mount "[^"]+"' "$out/scripts/fix-mount-owner.sh" | sed -E 's/^fix_mount "//; s/"$//' | tr '\n' ' ')"
+assert_eq "$calls" "/home/vscode/.config/gh " "素の生成物の修復対象"
 
 it "生成された install-ai-tools.sh が bash -n を通る（全 AI 選択）"
 out="$(new_workdir)/p"
