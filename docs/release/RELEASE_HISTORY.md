@@ -10,7 +10,7 @@
 | パッケージ | リポジトリ | 現行バージョン | 配布形態 |
 |---|---|---|---|
 | devcontainer-bootstrap | `ojos/devcontainer-bootstrap` | v0.7.2 | GitHub Release + 3 資産 |
-| ai-playbook | `ojos/ai-playbook` | v0.1.3 | git タグのみ |
+| ai-playbook | `ojos/ai-playbook` | v0.1.4 | git タグのみ |
 
 ### 新世代の版更新
 
@@ -20,6 +20,7 @@
 | devcontainer-bootstrap | v0.7.1（未公開） | — | **タグ未公開。v0.7.2 へ統合。** 生成される `verify-commit-identity.sh` で、許可 author email の解決からパス名展開（glob）を除去（#149）。クォートなしの配列代入により、許可 email に `*` / `?` が含まれると許可リストが検査対象リポジトリのファイル名で変わっていた。`read -r -a` へ改め、回帰テストで「ファイルの有無で判定が変わらないこと」を検証する。後方互換 |
 | devcontainer-bootstrap | v0.7.0 | 2026-07-27 | **破壊的変更**。生成物からホスト資格情報の注入経路（`remoteEnv` の `${localEnv:...}`）を全廃し、認証をコンテナ内で行い named volume で永続化する構造へ移行（#129）。`--github-profiles` / `--gemini-key-env` と `GITHUB_TOKEN_*` 等の環境変数契約を撤去（#130）、永続 volume を gh/aws/gcloud へ拡張し実マウントを検査（#131）、所有権修復を `fix-mount-owner.sh` へ独立（#132）、credsStore 打ち消し・identity の `.env` 化・`credential.helper` の gh 固定・`.env.example` 追加（#133 / #141） |
 | devcontainer-bootstrap | v0.6.0 | 2026-07-26 | 生成物に git identity ガード（適用・検証・CI の 3 層。#108）、プロジェクト `.env` 優先読み込み（#109）、`--with-claude` での Claude intake 起点スキル配置（#111）、`--with-copilot` でのリモート最終ゲート雛形配置（#113）、tmux 常時同梱（#115）を追加。あわせて `acceptance.sh` の生成既定を「存在する対象だけ検証し 0 件なら失敗」へ変更（**軽微な破壊的変更**。#112） |
+| ai-playbook | v0.1.4 | 2026-07-27 | `templates/gemini-review.sh` に複数回実行と多数決を追加（#157）。第二意見は非決定的で、同一コミットへの 4 回の実行が LGTM 2 回・指摘あり 2 回に分かれた。`GEMINI_REVIEW_RUNS` で回数を増やし、指摘を報告した実行が過半数に達したときだけ落とす。既定 1 で従来と同一挙動。`review-workflow.md` へ「第二意見の非決定性」節を追加 |
 | ai-playbook | v0.1.3 | 2026-07-26 | `REASON_CODES.md` に軽微修正の免除条件を追加（#110）、`review-workflow.md` のリモート最終ゲートを「1 回に限定される機構なら自動要求可」へ緩和し `templates/copilot-review.yml` を新設（#113）、Claude Code 向け intake 起点スキル雛形 `templates/claude-skill-intake.md` を追加し 8 章へ固定ファイル名の例外を追記（#111）、`templates/project-ai-rules.md` のレビュー節に loop-gate 単一入口とリモート最終ゲート欄を追加（#114）、`templates/gemini-review.sh` を `.env` ローダーへ追随（#109） |
 | devcontainer-bootstrap | v0.5.1 | 2026-07-22 | 取り込んだ ai-playbook の出所を生成先 `.ai-playbook/VERSION` に記録（後方互換）。書き込みは規範と同じ衝突ポリシーに従う（自己診断 F-7） |
 | ai-playbook | v0.1.2 | 2026-07-22 | 入口雛形 `templates/entry.md` から「導入時の調整」節を削除（生成物へのメタ指示残置を解消。自己診断 F-6） |
