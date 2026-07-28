@@ -4,6 +4,34 @@
 
 > このファイルは公開リポジトリへ `CHANGELOG.md` として配布されます。配布先には `docs/` 階層が存在しないため、リポジトリ内の相対リンクを書かないでください（配布先で解決できないリンクになります）。
 
+## v0.7.3
+
+### Summary
+- README と実装の乖離を解消した（issue #170 / #171）。実装済みの CLI フラグ 3 件が未記載、実行前提コマンドが未記載、生成しないものを生成物として記載、doctor の検査項目と終了コードが未記載、といった記述誤りをまとめて直している。**生成物の挙動は変えていない。**
+- `bootstrap.sh` / `doctor.sh` の usage が、開発リポジトリと公開配布物のどちらか一方でしか解決しないパスを示していた問題を修正した（#174 / #182）。
+- `LICENSE`（MIT）と `CHANGELOG.md` を配布物へ追加した（#177）。あわせて README へ「配布専用リポジトリであり外部からの貢献は受け付けない」旨を明記した。
+- 後方互換。
+
+### Highlights
+
+- **未記載だった CLI フラグを追加（#170）**: `--dry-run` / `--force` / `-h`・`--help` が README のどこにも無かった。とくに `--force` の欠落は影響が大きい。既定では既存ファイルを `skip (exists)` で温存するため、**再実行しても上書きされないことが README から読み取れなかった**。`--no-gitignore` / `--gitignore-targets` も使用例にしか現れていなかったのでオプション節へ昇格した。実行前提コマンド（`jq` / `perl` / `awk` / `sed` / `curl`、URL ソース時の `tar`）も一切書かれていなかったため追加した。不在時は即エラー終了する。
+- **rust 対応の記述漏れ（#170）**: 対応言語の列挙 3 箇所から `rust` が抜けており、同一 README 内で矛盾していた（`--languages` の説明では rust を挙げている）。
+- **生成物一覧を実装と一致させた（#171）**: 生成しない「README のセットアップ節更新」を削除し、常に生成される `scripts/install-ai-tools.sh` / `scripts/gemini-review.sh` と、規範配置時に作られる `.ai-playbook/VERSION` を追加した。`postCreateCommand` の記載値も実値と違っていた。
+- **doctor 節の取りこぼし（#171）**: 「言語ランタイムと cloud CLI の可用性」しか説明していなかったが、実際は静的構造の存在検査・`devcontainer.json` の JSON 妥当性・**`${localEnv:` 混入の検出**・compose 参照先の実在・生成スクリプトの構文検査も行う。終了コードも未記載だった（FAIL>0 で 1、`--strict` かつ WARN>0 で **2**）。
+- **リリース資産の説明（#171）**: 配布している `PACKAGE_ARCHIVE.tar.gz` と `RELEASE-MANIFEST.json` が README で一切説明されていなかった。あわせて `RELEASE-MANIFEST.json` の `assets` に、README が入手を案内する `bootstrap.sh` / `doctor.sh` が載っていなかった問題も直した。
+- **usage のパス（#174 / #182）**: `doctor.sh` は固定パスで開発リポジトリの位置を出しており、公開配布物（リポジトリ直下）では解決しなかった。呼び出しに使われたパスをそのまま出す形へ変更した。`bootstrap.sh` も同様だが、usage ヒアドキュメント内に**リテラルの `$PWD`** が含まれるため、`doctor.sh` と同じく引用符を外すとヘルプの記述が壊れる。1 行目だけ分離して対処した。
+- **`bootstrap.sh` の永続化に関する記述（#174）**: usage が「gh / cloud のログインは永続化されないのでリビルドのたびにやり直す必要がある」と述べていたが、実装は `gh` を常に永続化し、cloud も `--with-*` 選択時に永続化する。README のほうが正しく、usage が旧仕様のまま残っていた。
+- **`CHANGELOG.md` を生成物へ持ち込まない（#177）**: 規範の配布ルートに `CHANGELOG.md` を置いたことで、`--with-playbook` の `*.md` 一括コピーが生成プロジェクトの `.ai-playbook/` へこれを取り込む状態になった。既存の `README.md` 除外と並べて除外した。
+
+### 影響
+
+- **生成物の内容が 1 点変わる**: `--with-playbook` で配置される `.ai-playbook/` に `CHANGELOG.md` が含まれなくなる（本来含むべきでないファイルの除外）。既存の生成物は衝突ポリシーにより上書きされないため、再生成しない限り影響しない。
+- 配布物に `LICENSE` と `CHANGELOG.md` が加わる。`SHA256SUMS` の対象（`bootstrap.sh` / `doctor.sh`）は変わらない。
+- `RELEASE-MANIFEST.json` の `assets` に `bootstrap.sh` / `doctor.sh` が加わる。
+- CLI の引数契約・生成される devcontainer の構成は変えていない。
+
+---
+
 ## v0.7.2
 
 ### Summary

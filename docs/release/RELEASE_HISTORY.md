@@ -9,13 +9,15 @@
 
 | パッケージ | リポジトリ | 現行バージョン | 配布形態 |
 |---|---|---|---|
-| devcontainer-bootstrap | `ojos/devcontainer-bootstrap` | v0.7.2 | GitHub Release + 3 資産 |
-| ai-playbook | `ojos/ai-playbook` | v0.1.4 | git タグのみ |
+| devcontainer-bootstrap | `ojos/devcontainer-bootstrap` | v0.7.3 | GitHub Release + 資産 5 点（配布スクリプト 2: `bootstrap.sh` / `doctor.sh`、生成物 3: `SHA256SUMS` / `RELEASE-MANIFEST.json` / `PACKAGE_ARCHIVE.tar.gz`） |
+| ai-playbook | `ojos/ai-playbook` | v0.1.5 | git タグのみ |
 
 ### 新世代の版更新
 
 | パッケージ | 版 | 公開日 | 要点 |
 |---|---|---|---|
+| devcontainer-bootstrap | v0.7.3 | 2026-07-28 | README と実装の乖離を解消（#170 / #171）。未記載だった `--dry-run` / `--force` / `-h`、実行前提コマンド、rust 対応を追加し、生成物一覧・doctor 節・リリース資産の説明を実装と一致させた。`bootstrap.sh` / `doctor.sh` の usage が開発リポジトリと公開配布物のどちらか一方でしか解決しないパスを示していた問題を修正（#174 / #182）。`LICENSE`（MIT）と `CHANGELOG.md` を配布物へ追加（#177）。**生成物への影響は `.ai-playbook/CHANGELOG.md` を取り込まなくなる 1 点のみ。** 後方互換 |
+| ai-playbook | v0.1.5 | 2026-07-28 | **導入手順が新規プロジェクトで必ず失敗する不具合を修正**（#167。手順 2・4 の `cp` に `mkdir -p` が無かった）。配布先で解決しない参照を除去（#167）、構成表・命名規則・管理対象の自己不整合を解消（#168）、契約・雛形の内部不整合とベンダー中立違反を解消（#169）、`LICENSE`（MIT）と `CHANGELOG.md` を配布物へ追加（#177）。命名規則は分類定義のみ改め、**ファイル改名は行っていない**ため既存の取り込みは壊れない。後方互換 |
 | devcontainer-bootstrap | v0.7.2 | 2026-07-27 | 生成される `loop-gate.sh` で、ステージ済み差分が空のときに第二意見が実質スキップされる経路を塞いだ（#152）。空のときだけ commit 済み範囲へ切り替える。既定ブランチ名は決め打ちせず、起点が無ければ空ツリーを使う（`HEAD` だと `git diff` が作業ツリー比較になり素通りが復活する）。git リポジトリでない場合は従来どおり引数なしで呼ぶ。**v0.7.1（#149）の内容を含む。** 後方互換 |
 | devcontainer-bootstrap | v0.7.1（未公開） | — | **タグ未公開。v0.7.2 へ統合。** 生成される `verify-commit-identity.sh` で、許可 author email の解決からパス名展開（glob）を除去（#149）。クォートなしの配列代入により、許可 email に `*` / `?` が含まれると許可リストが検査対象リポジトリのファイル名で変わっていた。`read -r -a` へ改め、回帰テストで「ファイルの有無で判定が変わらないこと」を検証する。後方互換 |
 | devcontainer-bootstrap | v0.7.0 | 2026-07-27 | **破壊的変更**。生成物からホスト資格情報の注入経路（`remoteEnv` の `${localEnv:...}`）を全廃し、認証をコンテナ内で行い named volume で永続化する構造へ移行（#129）。`--github-profiles` / `--gemini-key-env` と `GITHUB_TOKEN_*` 等の環境変数契約を撤去（#130）、永続 volume を gh/aws/gcloud へ拡張し実マウントを検査（#131）、所有権修復を `fix-mount-owner.sh` へ独立（#132）、credsStore 打ち消し・identity の `.env` 化・`credential.helper` の gh 固定・`.env.example` 追加（#133 / #141） |
