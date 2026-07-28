@@ -85,7 +85,7 @@ cat >"$BLOCK_FILE" <<EOF
 | devcontainer-bootstrap | $OWNER/devcontainer-bootstrap で $DCB_TAG まで公開済み |
 | ai-playbook | $OWNER/ai-playbook で $PLAYBOOK_TAG まで公開済み |
 
-リリース実行手順は各パッケージの \`docs/\` または \`.github/workflows/\` を参照する。
+リリース実行手順は [docs/release/RELEASE_EXECUTION_RUNBOOK.md](docs/release/RELEASE_EXECUTION_RUNBOOK.md) を参照する。
 
 ### リリース状況
 
