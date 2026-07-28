@@ -108,6 +108,43 @@ else
   fail "RELEASE-MANIFEST.json が生成されていない"
 fi
 
+it "マニフェストの assets が README の入手対象をすべて含む"
+# assets はリリースに何が添付されているかの機械可読な正本。README が公式手順として
+# curl させるファイルが載っていないと、マニフェストだけを見た利用者は何を取得すれば
+# よいか分からない。公開 v0.7.2 は実際にこの状態だった（assets が標準 3 資産のみ）。
+if [[ -f "$rel/RELEASE-MANIFEST.json" ]]; then
+  assets="$(jq -r '.assets[]' "$rel/RELEASE-MANIFEST.json" 2>/dev/null | tr '\n' ' ')"
+  missing_assets=""
+  while IFS= read -r f; do
+    [[ -n "$f" ]] || continue
+    case " $assets " in *" $f "*) ;; *) missing_assets="$missing_assets $f" ;; esac
+  done < <(grep -oE 'curl [^|]*/[A-Za-z0-9._-]+" -o [A-Za-z0-9._-]+' "$DCB_README" \
+             | sed 's/.* -o //' | sort -u)
+  if [[ -z "$missing_assets" ]]; then
+    pass
+  else
+    fail "README が取得させるのに assets に無い資産:$missing_assets (assets: $assets)"
+  fi
+else
+  fail "RELEASE-MANIFEST.json が生成されていない"
+fi
+
+it "マニフェストの assets が実際に添付する資産と一致する"
+# tag_and_release へ渡すファイル一覧と assets がずれると、「載っているのに無い」
+# 資産が生まれる。両者を同じ集合に保つ。
+if [[ -f "$rel/RELEASE-MANIFEST.json" ]]; then
+  uploaded="$(sed -n '/tag_and_release "\$DCB_DIR"/,/^fi$/p' "$RELEASE_SH" \
+    | grep -oE '\$DCB_DIR/[A-Za-z0-9._-]+' | sed 's|^\$DCB_DIR/||' | sort -u | tr '\n' ' ')"
+  assets_sorted="$(jq -r '.assets[]' "$rel/RELEASE-MANIFEST.json" | sort -u | tr '\n' ' ')"
+  if [[ "$uploaded" == "$assets_sorted" ]]; then
+    pass
+  else
+    fail "添付一覧と assets が不一致。添付: $uploaded / assets: $assets_sorted"
+  fi
+else
+  fail "RELEASE-MANIFEST.json が生成されていない"
+fi
+
 # ── 二重所有の再発防止 ────────────────────────────────────────────────────────
 
 it "公開リポジトリへ release workflow を配布しない"
