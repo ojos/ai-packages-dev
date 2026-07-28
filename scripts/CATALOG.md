@@ -24,7 +24,6 @@
 | `scripts/verify.sh` | `acceptance.sh` を非対話実行し、一意な通過信号（`VERIFY_PASS`）を返す接地信号。 |
 | `scripts/loop-gate.sh` | push / PR 前のローカル事前ゲート。`verify.sh` と第二意見を直列化する単一入口（`GATE_PASS`）。 |
 | `scripts/verify-commit-identity.sh` | コミット履歴の identity 検証（email のみで判定）。CI（identity-guard）と手元で共用。 |
-| `scripts/setup-ai-directory-policy.sh` | AI 用ディレクトリ方針ウィザード。 |
 | `scripts/setup-devcontainer-bootstrap-release-repo.sh` | DCB リリースリポジトリ準備。 |
 | `scripts/update-release-status.sh` | README のリリース状況更新。 |
 | `scripts/CATALOG.md` | `scripts/` 配下の索引（本ファイル）。 |
