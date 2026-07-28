@@ -190,7 +190,15 @@ Markdown ファイルの命名は、文書の役割に応じて以下の規則�
 | intake 規律・判定根拠 | `intake/` |
 | 導入用の雛形 | `templates/` |
 
-0 章の 3 層構造は、`templates/` の雛形をコピーすることで配線できます。手順は本パッケージの README を参照してください。
+0 章の 3 層構造は、`templates/` の雛形を次のとおり配置することで配線できます。
+
+| 雛形 | 配置先 |
+|---|---|
+| `templates/project-ai-rules.md` | `.github/project-ai-rules.md`（2 層目: プロジェクト共通ルール） |
+| `templates/entry.md` | 実行環境ごとの入口ファイル（例: `CLAUDE.md`, `.github/copilot-instructions.md`）（3 層目） |
+
+配布経路によっては、本パッケージの `README.md` が取り込まれません（規範ではなくパッケージ自身の説明であるため）。
+その場合もこの表だけで 3 層構造を配線できます。
 
 ## 14. 非目標
 

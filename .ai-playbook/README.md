@@ -120,7 +120,10 @@
 
 ## 導入手順
 
-このパッケージ単独で完結します。特定の言語・コンテナ・実行環境を前提としません。
+このパッケージは特定の言語・コンテナ・実行環境を前提としません。導入に必要な雛形はすべて `templates/` に含まれます。
+
+ただし雛形には、**利用側が用意する実行体を指す記入欄**があります（受け入れ検証・第二意見レビュー・その単一入口など）。
+このパッケージは規範と雛形のみを配り、実行ランタイムは持ちません（「責務の範囲」）。記入欄を何で埋めるかは利用側が選びます（手順 3・4）。
 
 ### 1. 規範を配置する
 
@@ -133,6 +136,7 @@ submodule / subtree / 手動同期のいずれかで、このパッケージを 
 
 ```bash
 # 2 層目: プロジェクト共通ルール
+mkdir -p .github
 cp .ai-playbook/templates/project-ai-rules.md .github/project-ai-rules.md
 
 # 3 層目: 実行環境の入口ファイル（使う実行環境の数だけ）
@@ -149,6 +153,7 @@ cp .ai-playbook/templates/entry.md .github/copilot-instructions.md
 `review-workflow.md` のクロスモデル二段ゲートを使う場合、別ベンダーのモデルで実行する手段を配置します。
 
 ```bash
+mkdir -p scripts
 cp .ai-playbook/templates/gemini-review.sh scripts/
 chmod +x scripts/gemini-review.sh
 ```
@@ -173,7 +178,7 @@ cp .ai-playbook/templates/claude-skill-intake.md .claude/skills/intake/SKILL.md
 新規に環境ごと立ち上げる場合は、DevContainer Bootstrap（DCB）の `--with-playbook` が上記 1〜4 をまとめて実施します。
 DCB は雛形の内容を持たず、このパッケージの `templates/` をコピーするだけです。正本はこのパッケージ側にあります。
 
-DCB は devcontainer と特定言語（node / go / python / php）を前提とするため、それ以外の環境では上記の手順を使ってください。
+DCB は devcontainer と特定言語（node / go / python / php / rust）を前提とするため、それ以外の環境では上記の手順を使ってください。
 
 ## ファイル同期ルール
 

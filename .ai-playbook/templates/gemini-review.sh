@@ -97,7 +97,7 @@ if [[ "$RUNS" -lt 1 ]]; then
 fi
 
 command -v gemini >/dev/null 2>&1 || {
-  echo "error: gemini CLI not found. run scripts/install-ai-tools.sh" >&2
+  echo "error: gemini CLI not found. gemini CLI を導入してから再実行してください（導入手段はプロジェクト層で定義します）" >&2
   exit 1
 }
 [[ -n "${GEMINI_API_KEY:-}" ]] || {
