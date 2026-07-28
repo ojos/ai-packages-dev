@@ -10,6 +10,11 @@
       "resolved": "ghcr.io/devcontainers-extra/features/shellcheck@sha256:8e6d050e4ead6a0350dbe4c70611e351f32cb61a8cc5cb2b39da0cf29ff3bed5",
       "integrity": "sha256:8e6d050e4ead6a0350dbe4c70611e351f32cb61a8cc5cb2b39da0cf29ff3bed5"
     },
+    "ghcr.io/devcontainers-extra/features/tmux-apt-get:1": {
+      "version": "1.0.17",
+      "resolved": "ghcr.io/devcontainers-extra/features/tmux-apt-get@sha256:7d15e519840976e86642bba9180e11cba88dd07a00209c7f589d6112d9876c89",
+      "integrity": "sha256:7d15e519840976e86642bba9180e11cba88dd07a00209c7f589d6112d9876c89"
+    },
     "ghcr.io/devcontainers/features/common-utils:1": {
       "version": "1.2.0",
       "resolved": "ghcr.io/devcontainers/features/common-utils@sha256:0b0b3e64a9ed55be10902c8845778727978ab234d3b3a19b42aac54101a9cec7",
