@@ -26,6 +26,23 @@
 そのため、AI ルールだけが必要な場合は、このパッケージを介さず ai-playbook を直接導入できます。
 このパッケージは devcontainer と対応言語（node / go / python / php / rust）を前提とするため、それ以外の環境では ai-playbook 側の導入手順を使ってください。
 
+## 実行前提コマンド
+
+`bootstrap.sh` は起動直後に次のコマンドの実在を検査し、**1 つでも欠けていればファイルを 1 つも書かずにエラー終了**します（`error: required command not found: <cmd>`）。
+
+| コマンド | 必要になる場面 | 用途 |
+|---|---|---|
+| `jq` | 常時 | 生成する `devcontainer.json` の整形 |
+| `perl` | 常時 | JSON テンプレートの末尾カンマ除去 |
+| `awk` | 常時 | `.gitignore` の managed セクション差し替え、テンプレート名の重複除去 |
+| `sed` | 常時 | テンプレートのプレースホルダ置換 |
+| `curl` | 常時 | github/gitignore テンプレートの取得、規範アーカイブのダウンロード |
+| `tar` | 規範の取得元に **URL** を指定した場合のみ（`--playbook-version` / URL 形式の `--playbook-from`） | アーカイブの展開 |
+
+`doctor.sh` は `jq` を使います（`devcontainer.json` の JSON 妥当性検査と `dockerComposeFile` の読み取り）。
+
+`docker` は**任意**です。あればベースイメージの `os/arch` 適合を実際のマニフェストで判定し、無ければ既定の `mcr.microsoft.com/devcontainers/base:ubuntu` へフォールバックします（警告のみで停止しません）。
+
 ## 公開リリースからの利用
 
 公開リポジトリ:
@@ -81,12 +98,37 @@ bash bootstrap.sh --project-name myapp --languages node,go --with-claude \
 - **資格情報はホストから注入しません**: `remoteEnv` が運ぶのは作業ディレクトリのパス（`LOCAL_WORKSPACE_FOLDER`）だけです。認証はコンテナ内で行い、その状態を named volume に残します（下記「資格情報の扱い」）。
 
 ### オプション入力
-- `--output-dir <path>`（省略時: カレントディレクトリ直下に `<project-name>/` を作成して展開）
-- `--base-image <image>`（自動判定結果を上書きして明示指定）
+- `--output-dir <path>`（既定: カレントディレクトリ直下に `<project-name>/` を作成して展開）
+- `--base-image <image>`（既定: Docker サーバーの `os/arch` から自動判定。この値で上書きして明示指定）
+- `--dry-run`（既定: 無効。生成予定のパスを `plan:` 行として並べるだけで、**ファイルを 1 つも書きません**）
+- `--force`（既定: 無効。既存ファイルの上書きを許可します。下記「再実行したときの挙動」参照）
+- `--no-gitignore`（既定: 無効＝`.gitignore` の managed セクションを更新する。指定すると `.gitignore` に一切触れません）
+- `--gitignore-targets <csv>`（既定: 空。暗黙ターゲットに**追加で合成**する github/gitignore テンプレート名。下記「`.gitignore` と github/gitignore の連携」参照）
 - `--with-playbook` / `--without-playbook`（AI 共通ルールの配置。既定: 配置しない）
-- `--playbook-version <tag>`（既定ソース `ojos/ai-playbook` のタグ tarball への糖衣。`--playbook-from` とは排他。`<tag>` は GitHub の実タグ名をそのまま指定します。例: `v0.1.3`（先頭の `v` を含む）。存在しないタグを指定すると、**ファイルを 1 つも書かずに**明示エラーで終了します）
-- `--playbook-from <path|url>`（ルールの取得元。ディレクトリまたはアーカイブ URL。別 owner・任意 URL・ローカル用）
-- `--playbook-conflict-policy <skip|overwrite|prompt>`（既存ファイルがある場合の扱い。既定: `skip`）
+- `--playbook-version <tag>`（既定: 空。既定ソース `ojos/ai-playbook` のタグ tarball への糖衣。`--playbook-from` とは排他。`<tag>` は GitHub の実タグ名をそのまま指定します。例: `v0.1.3`（先頭の `v` を含む）。存在しないタグを指定すると、**ファイルを 1 つも書かずに**明示エラーで終了します）
+- `--playbook-from <path|url>`（既定: 空。ルールの取得元。ディレクトリまたはアーカイブ URL。別 owner・任意 URL・ローカル用）
+- `--playbook-conflict-policy <skip|overwrite|prompt>`（既定: `skip`。**規範ファイル**に既存がある場合の扱い）
+- `-h` / `--help`（使い方を表示して終了。何も生成しません）
+
+### 廃止フラグ
+
+次のフラグは廃止済みです。いずれも**黙って無視されるのではなくエラー終了**します（指定したのに効いていない、という曖昧な状態を作らないため）。
+
+| 廃止フラグ | 移行先 |
+|---|---|
+| `--mode <minimal\|standard\|full>` | `--with-*` フラグで装備を明示選択（[mode オプションからの移行](#mode-オプションからの移行)）。未知のオプションとして拒否されます |
+| `--github-profiles` | コンテナ内で `gh auth login`（ホストからの資格情報注入は廃止） |
+| `--gemini-key-env` | 生成先の `.env` に `GEMINI_API_KEY` を置く（`scripts/load-project-env.sh` が読む） |
+
+### 再実行したときの挙動
+
+同じ出力先へ再実行しても、**既定では既存ファイルを上書きしません**。
+
+- `--force` 未指定（既定）: 既に存在するファイルは `skip (exists): <path>` と表示して**そのまま温存**します。テンプレートを更新した DCB で再実行しても、生成済みファイルは古いままになります。
+- `--force` 指定: 既存ファイルを新しいテンプレートで**上書き**します。
+- `--playbook-conflict-policy` が効くのは**規範ファイル**（`.ai-playbook/**` / 入口ファイル / `scripts/gemini-review.sh` など）だけで、`.devcontainer/` や `scripts/` のテンプレート生成物には効きません。テンプレート生成物の上書きは `--force` が唯一の手段です。
+- `.gitignore` の managed セクションだけは `--force` に依らず毎回差し替えます（セクション外の行は保持）。
+- 何が書かれるかを先に確かめたい場合は `--dry-run` を使います。
 
 ### AI 共通ルールの配置
 
@@ -330,7 +372,7 @@ CI に固有の email を焼き込まないため、**利用側リポジトリ�
 OAuth トークン（`CLAUDE_CODE_OAUTH_TOKEN`）を `remoteEnv` へ注入する経路は**用意しません**。権限スコープが限定されてフルスペックの操作が許可されないうえ、opt-in で穴を残せる構造そのものが「黙って別アカウントの資格情報が使われる」事故を生んだ形だからです。
 
 ## 検証ルール
-1. `languages` には少なくとも 1 つの対応言語（node|go|python|php）を含めること
+1. `languages` には少なくとも 1 つの対応言語（node|go|python|php|rust）を含めること
 2. 指定した各言語に対応する feature を devcontainer.json に追加すること
 3. `remoteEnv` は `LOCAL_WORKSPACE_FOLDER` のみを持つこと（ホスト資格情報の注入経路を作らない）
 4. ベースイメージは Docker サーバーの `os/arch` から自動判定（既定: `mcr.microsoft.com/devcontainers/base:ubuntu`、必要に応じて `--base-image` で上書き可能）
@@ -364,12 +406,12 @@ OAuth トークン（`CLAUDE_CODE_OAUTH_TOKEN`）を `remoteEnv` へ注入する
 
 ### `.gitignore` と github/gitignore の連携
 - managed セクション末尾には常に `github/gitignore` テンプレートを追加します。
-- 暗黙ターゲットは `macOS` + `--languages` で指定した言語対応テンプレート（`node`→`Node` / `go`→`Go` / `python`→`Python` / `php`→`PHP`）です。
+- 暗黙ターゲットは `macOS` + `--languages` で指定した言語対応テンプレート（`node`→`Node` / `go`→`Go` / `python`→`Python` / `php`→`PHP` / `rust`→`Rust`）です。
 - `--gitignore-targets <csv>` を指定すると、暗黙ターゲットに追加で合成します（重複は除去）。
 - テンプレート取得は `https://github.com/github/gitignore` から行います（`<name>.gitignore` と `Global/<name>.gitignore` を順に探索）。
 - 取得できないテンプレート名は警告を出してスキップします（処理は継続）。
 
-> **注意**: `--languages` の値は小文字（`node`, `go`, `python`, `php`）で指定します。一方 `--gitignore-targets` の値は [github/gitignore](https://github.com/github/gitignore) リポジトリのファイル名に合わせた大文字始まり（`Node`, `Go`, `PHP`, `macOS` など）で指定してください。これらは別々の用途を持つため、意図的に表記が異なります。
+> **注意**: `--languages` の値は小文字（`node`, `go`, `python`, `php`, `rust`）で指定します。一方 `--gitignore-targets` の値は [github/gitignore](https://github.com/github/gitignore) リポジトリのファイル名に合わせた大文字始まり（`Node`, `Go`, `PHP`, `Rust`, `macOS` など）で指定してください。これらは別々の用途を持つため、意図的に表記が異なります。
 
 ## Doctor 自己診断
 生成後に次を実行して検証します:
