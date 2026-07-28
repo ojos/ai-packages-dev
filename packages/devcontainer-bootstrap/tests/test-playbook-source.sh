@@ -44,14 +44,20 @@ else
 fi
 
 it "URL 指定で一時ディレクトリが残らない"
-before="$(ls -d /tmp/tmp.* 2>/dev/null | wc -l | tr -d ' ')"
+# グローバルな /tmp/tmp.* を数えると、同一ホストの無関係なプロセスの mktemp が
+# 計数に混入し、テスト対象と無関係な理由で落ちる（並列実行時にのみ再現する偽陽性）。
+# bootstrap.sh の一時領域は mktemp 由来なので TMPDIR で作成先を制御できる。
+# この実行専用の空ディレクトリへ向け、そこだけを数えることで計数範囲を閉じる。
+tmpwatch="$(mktemp -d "$TEST_TMP_ROOT/tmpwatch.XXXXXX")"
 out2="$(new_workdir)/p"
 archive2="$(make_playbook_tarball)"
 if url2="$(serve_file "$archive2")"; then
-  run_bootstrap "$out2" --with-playbook --playbook-from "$url2" >/dev/null 2>&1
+  # TMPDIR は子プロセスへ渡すだけで、テストプロセス自身の一時領域は動かさない。
+  (export TMPDIR="$tmpwatch"; run_bootstrap "$out2" --with-playbook --playbook-from "$url2") >/dev/null 2>&1
   stop_http_server
-  after="$(ls -d /tmp/tmp.* 2>/dev/null | wc -l | tr -d ' ')"
-  assert_eq "$after" "$before" "実行前後の /tmp/tmp.* の数"
+  # 空ディレクトリへ向けたので、残骸があれば必ずここに現れる。
+  leftover="$(ls -A "$tmpwatch" 2>/dev/null | wc -l | tr -d ' ')"
+  assert_eq "$leftover" "0" "実行後に残った一時ディレクトリ・ファイルの数"
 else
   fail "ローカル HTTP サーバを起動できなかった"
 fi
