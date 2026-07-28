@@ -14,11 +14,10 @@
 ポリシー影響のある変更をコミット前に、リポジトリルートで次を実行する。
 
 ```bash
-! grep -rniE 'bascule|ojos' packages/ .ai-playbook/ \
-  --include='*.sh' --include='*.md' --include='*.json' --exclude-dir=tests \
-  | grep -v 'ojos/devcontainer-bootstrap' \
-  | grep -v 'ojos/ai-playbook'
+bash scripts/check-neutrality.sh
 ```
+
+検査対象と除外条件は `scripts/check-neutrality.sh` が持つ。CI（`.github/workflows/ci.yml` の neutrality ジョブ）とローカルゲート（`scripts/acceptance.sh`）も同じスクリプトを呼ぶため、ここに条件を書き写さない。
 
 期待結果:
 - 終了コード 0。ユーザー明示承認の例外がない限り、1 件も出力されないこと。

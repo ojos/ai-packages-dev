@@ -127,40 +127,12 @@ while IFS= read -r f; do
 done < <(git ls-files '*.md')
 [[ "$link_fail" -eq 0 ]] || exit 1
 
-# 配布雛形が要求する節が、このリポジトリのプロジェクト共通ルールに存在することを検証する。
-# 雛形は「何を具体化すべきか」の必須項目そのもので、節が欠けたまま配布側だけが増えると、
-# 自分たちが配れと言っている項目を自分では書いていない状態になる。
-# 見出しレベルは問わず、見出しテキストの完全一致で照合する（節の階層は文書の都合で変わるため）。
-echo "[acceptance] (docs) project-ai-rules covers every template section"
-tpl_doc=".ai-playbook/templates/project-ai-rules.md"
-proj_doc=".github/project-ai-rules.md"
-section_fail=0
-proj_headings="$(grep -oE '^#{2,6} .+' "$proj_doc" | sed -E 's/^#+ //')"
-while IFS= read -r h; do
-  [[ -n "$h" ]] || continue
-  printf '%s\n' "$proj_headings" | grep -qxF "$h" || {
-    echo "[acceptance] template section not covered in $proj_doc: $h" >&2
-    section_fail=1
-  }
-done < <(grep -oE '^#{2,6} .+' "$tpl_doc" | sed -E 's/^#+ //')
-[[ "$section_fail" -eq 0 ]] || exit 1
-
 # ── CI: Package neutrality ───────────────────────────────────────────────────
-# プロジェクト固有の値がパッケージ層と規範層へ混入していないことを検証する。
-# tests/ は除外する（配布されない層であり、生成物に固有名詞が残らないことを
-# 検証する都合上、検査対象語をリテラルで持つ必要があるため）。
-# 対象拡張子は .github/workflows/ci.yml の同名ジョブと一致させる（本スクリプトは
-# CI の完全ミラーであり、片方だけが検知する状態を作らない）。*.yml / *.yaml は
-# 規範層が配布する workflow テンプレート（.ai-playbook/templates/*.yml）を含む。
+# 検査対象・除外条件の正本は scripts/check-neutrality.sh。CI の同名ジョブも同じ
+# スクリプトを呼ぶため、本スクリプトが CI の完全ミラーであることが構造的に保たれる
+# （条件を書き写さないので、片方だけが古くなる余地がない）。
 echo "[acceptance] (neutrality) no project-specific names in packages or .ai-playbook"
-if grep -rniE 'bascule|ojos' packages/ .ai-playbook/ \
-  --include='*.sh' --include='*.md' --include='*.json' \
-  --include='*.yml' --include='*.yaml' --exclude-dir=tests \
-  | grep -v 'ojos/devcontainer-bootstrap' \
-  | grep -v 'ojos/ai-playbook'; then
-  echo "[acceptance] project-specific names must not leak into packages/ or .ai-playbook/" >&2
-  exit 1
-fi
+bash scripts/check-neutrality.sh
 
 # ── CI: devcontainer-bootstrap tests ─────────────────────────────────────────
 # 所要時間が最も長い（約 4 分）ため最後に置く。手前の速い検査で落ちる差分は、

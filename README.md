@@ -26,7 +26,6 @@ ai-packages-dev/
 │   ├── CATALOG.md                   # docs 配下の索引（正本）
 │   ├── release/                     # リリース実行手順・履歴・リリースノート
 │   ├── records/                     # 判断根拠と実施記録
-│   ├── plans/                       # 計画
 │   └── archive/                     # 旧世代（参照のみ・更新しない）
 └── scripts/                         # 運用スクリプト（一覧と用途は scripts/CATALOG.md が正本）
 ```

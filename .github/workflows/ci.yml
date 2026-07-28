@@ -112,24 +112,6 @@ jobs:
           done
           exit $fail
 
-      # 配布雛形が要求する節が、このリポジトリのプロジェクト共通ルールに存在することを
-      # 検証する。雛形は「何を具体化すべきか」の必須項目そのもので、節が欠けたまま
-      # 配布側だけが増えると、自分たちが配れと言っている項目を自分では書いていない
-      # 状態になる。見出しレベルは問わず、見出しテキストの完全一致で照合する。
-      - name: project-ai-rules covers every template section
-        run: |
-          tpl=.ai-playbook/templates/project-ai-rules.md
-          doc=.github/project-ai-rules.md
-          fail=0
-          doc_headings="$(grep -oE '^#{2,6} .+' "$doc" | sed -E 's/^#+ //')"
-          while IFS= read -r h; do
-            [ -n "$h" ] || continue
-            printf '%s\n' "$doc_headings" | grep -qxF "$h" || {
-              echo "template section not covered in $doc: $h"; fail=1;
-            }
-          done < <(grep -oE '^#{2,6} .+' "$tpl" | sed -E 's/^#+ //')
-          exit $fail
-
   neutrality:
     name: Package neutrality
     runs-on: ubuntu-latest
@@ -137,23 +119,8 @@ jobs:
       - uses: actions/checkout@v4
 
       # プロジェクト固有の値がパッケージ層と規範層へ混入していないことを検証する。
-      # .github/PROJECT_DEFINITION.md が定めるクイック検証の自動化。
-      #
-      # tests/ は除外する。中立性が守るのは「配布される再利用可能な層」であり、
-      # DCB のリリースは bootstrap.sh / doctor.sh / README.md のみを公開して tests/ は
-      # 配布しない（scripts/release-packages.sh 参照）。かつテストは「生成物に固有名詞が
-      # 残らないこと」を検証する都合上、検査対象語として固有名詞をリテラルで持つ必要が
-      # あるため、ここで検査すると中立性の趣旨と自己矛盾する。
-      #
-      # 対象拡張子は scripts/acceptance.sh の同名チェックと一致させる。*.yml / *.yaml
-      # は規範層が配布する workflow テンプレート（.ai-playbook/templates/*.yml）を含む。
+      # 検査対象・除外条件の正本は scripts/check-neutrality.sh。CI・ローカルゲート
+      # （scripts/acceptance.sh）・.github/PROJECT_DEFINITION.md のクイック検証が
+      # 同じスクリプトを呼ぶため、条件が 3 箇所でずれることがない。
       - name: No project-specific names in packages or .ai-playbook
-        run: |
-          if grep -rniE 'bascule|ojos' packages/ .ai-playbook/ \
-            --include='*.sh' --include='*.md' --include='*.json' \
-            --include='*.yml' --include='*.yaml' --exclude-dir=tests \
-            | grep -v 'ojos/devcontainer-bootstrap' \
-            | grep -v 'ojos/ai-playbook'; then
-            echo "project-specific names must not leak into packages/ or .ai-playbook/"
-            exit 1
-          fi
+        run: bash scripts/check-neutrality.sh

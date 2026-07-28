@@ -20,6 +20,7 @@
 | `scripts/release-packages.sh` | ai-playbook / DCB のリリース実行と監査。 |
 | `scripts/setup-git-identity.sh` | global identity の無害化と local identity 適用、credential.helper の gh 固定。 |
 | `scripts/acceptance.sh` | このプロジェクトの受け入れ条件（CI 5 ジョブの完全ミラー）。プロジェクトが所有・編集する。 |
+| `scripts/check-neutrality.sh` | `packages/` と `.ai-playbook/` への固有名詞混入検査。検査対象・除外条件の正本で、CI・`acceptance.sh`・`PROJECT_DEFINITION.md` が共用する。 |
 | `scripts/verify.sh` | `acceptance.sh` を非対話実行し、一意な通過信号（`VERIFY_PASS`）を返す接地信号。 |
 | `scripts/loop-gate.sh` | push / PR 前のローカル事前ゲート。`verify.sh` と第二意見を直列化する単一入口（`GATE_PASS`）。 |
 | `scripts/verify-commit-identity.sh` | コミット履歴の identity 検証（email のみで判定）。CI（identity-guard）と手元で共用。 |
