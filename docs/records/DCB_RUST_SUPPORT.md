@@ -3,11 +3,25 @@
 devcontainer-bootstrap（DCB）の `--languages` に `rust` を追加するための仕様と作業計画。
 
 - 起案日: 2026-07-17
-- 状態: **判断ポイント確定・実装未着手**
+- 状態: **実装完了（devcontainer-bootstrap v0.3.0 で出荷）**
 - 対象パッケージ: `packages/devcontainer-bootstrap`
-- 種別: 計画（実装完了後は記録として `docs/records/` へ移動、または内容を issue クローズコメントへ集約のうえ archive 化）
+- 種別: 記録（実装完了に伴い `docs/plans/` から `docs/records/` へ移動。§1 以降は起案当時の仕様・計画のまま残す）
 
-> この文書は仕様の正本。作業進捗の正本は GitHub issue / PR とする（プロジェクト規約「作業状況の記録先」）。
+> この文書は起案当時の仕様の正本であり、現行仕様の正本ではない。現行仕様の正本は `packages/devcontainer-bootstrap/README.md` と実装（`bootstrap.sh` / `doctor.sh`）とする。
+
+## 実装完了の証跡
+
+本計画は実装・出荷済み。以下は完了判断の根拠。行番号は v0.7.2 時点のもの。
+
+| 項目 | 内容 |
+|---|---|
+| 実装コミット | `2286a25` `feat(dcb): --languages に rust を追加し言語拡張の条件配線・検査行を汎用化`（PR #82 / issue #81、2026-07-17） |
+| 出荷リリース | devcontainer-bootstrap **v0.3.0**（2026-07-21 公開。README ピン留め更新は `63ee1ff`） |
+| 実装箇所 | `bootstrap.sh`: 受理値 allowlist（`:146-147`）／usage（`:44`）／rust feature プレースホルダ（`:328`）／`Rust` gitignore（`:1611`）／`runtime_check_cmd`（`:1680-1683`、rust→cargo）／language server 拡張の条件配線（`:1758-1760`）／検査行の汎用化（`:1766-1772`、php 個別プレースホルダは撤去）。`doctor.sh`: `check_runtime_languages`（`:164-172`） |
+| 回帰テスト | `packages/devcontainer-bootstrap/tests/test-rust-support.sh`（`__IF_RUNTIME_PHP_CHECK__` の残留検出を含む） |
+| 未実装の残件 | **なし**。§6 の受け入れ条件は全項目が実装・テストで満たされている。§2.2 Out（`Cargo.toml` 等の雛形生成、ツールチェーン細粒度指定オプション）は当初から対象外 |
+
+なお §2.1・§4.5・§5 が前提としていた 3 モード（minimal / standard / full）は、後続の [DCB_MODE_REMOVAL_WITH_FLAGS](DCB_MODE_REMOVAL_WITH_FLAGS.md)（v0.4.0）で廃止され、単一のパラメータ化テンプレートへ集約された。rust の配線自体はその集約後も維持されている。
 
 ## 1. 背景・目的
 
