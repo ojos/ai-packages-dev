@@ -103,6 +103,27 @@
 - 利用側プロジェクトは submodule、subtree、手動同期のいずれかで取り込む
 - 取り込み方法に関わらず、採用したタグとコミット SHA を記録する
 
+### 取り込んだ版の記録（`.ai-playbook/VERSION`）
+
+取り込みを機構化する場合、取り込み側が版の記録ファイルを生成することがあります。
+DevContainer Bootstrap（DCB）の `--with-playbook` は、取り込み先の `.ai-playbook/VERSION` に次の内容を書き出します。
+
+```
+# devcontainer-bootstrap が記録した ai-playbook のソース情報。
+# version は --playbook-version 指定時のタグ。未指定なら (unspecified)。
+version=v0.1.4
+source=https://.../v0.1.4.tar.gz
+```
+
+| キー | 意味 |
+|---|---|
+| `version` | 取り込んだタグ。バージョンを明示せずに取り込んだ場合は `(unspecified)` |
+| `source` | 解決したソース（タグの tarball URL、任意 URL、ローカルパスのいずれか） |
+
+- 形式は機械可読な `key=value`（`#` で始まる行はコメント）です。
+- このファイルはこのパッケージの構成要素ではなく、取り込み側が生成する記録です（`shared-ai-rules.md` 13 章）。
+- 生成された環境では、このファイルが「どの版を取り込んだか」の証跡になります。`version` が `(unspecified)` の場合はタグが記録されていないため、`source` とコミット SHA を別途記録してください。
+
 ## インストールスクリプト方針
 
 結論: このパッケージにインストール用シェルスクリプトは提供しません。
@@ -187,8 +208,20 @@ cp .ai-playbook/templates/copilot-review.yml .github/workflows/copilot-review.ym
 
 ### 新規プロジェクトの場合
 
-新規に環境ごと立ち上げる場合は、DevContainer Bootstrap（DCB）の `--with-playbook` が上記 1〜4 をまとめて実施します。
+新規に環境ごと立ち上げる場合は、DevContainer Bootstrap（DCB）の `--with-playbook` が上記の手順の大半を実施します。
+対応は次のとおりです。
+
+| 上記の手順 | DCB の扱い |
+|---|---|
+| 1. 規範を配置する | 実施する（`*.md` のみ。`README.md` は規範ではないため配布対象外） |
+| 2. 3 層構造を配線する | 実施する（`.github/project-ai-rules.md` と入口ファイル 2 種） |
+| 3. プロジェクト固有の値を埋める | **実施しない。** 内容の判断が必要で自動化できないため、生成後に手で埋める |
+| 4. 第二意見レビューを用意する | 実施する（`scripts/gemini-review.sh` を実行可能属性付きで配置） |
+| 5. intake 起点を配線する | Claude Code の装備を選んだ場合のみ実施する |
+| 6. リモート最終ゲートを配線する | 該当のレビュー機構を選んだ場合のみ実施する |
+
 DCB は雛形の内容を持たず、このパッケージの `templates/` をコピーするだけです。正本はこのパッケージ側にあります。
+DCB はあわせて `.ai-playbook/VERSION` を生成し、取り込んだ版の出所を記録します（「取り込んだ版の記録」）。
 
 DCB は devcontainer と特定言語（node / go / python / php / rust）を前提とするため、それ以外の環境では上記の手順を使ってください。
 
