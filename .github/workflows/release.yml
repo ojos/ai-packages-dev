@@ -55,8 +55,11 @@ jobs:
       # 落とすことで、誤った入力がどの副作用にも到達しない。
       - name: Validate inputs
         env:
-          DCB_VERSION: ${{ inputs.dcb-version }}
-          PLAYBOOK_VERSION: ${{ inputs.playbook-version }}
+          # ハイフンを含む入力名はブラケット記法で参照する。ドット記法（inputs.dcb-version）
+          # が減算として解釈され得るという指摘があり、公式ドキュメントの記述とは食い違うが、
+          # ブラケット記法なら解釈の余地が無く、失うものも無い。
+          DCB_VERSION: ${{ inputs['dcb-version'] }}
+          PLAYBOOK_VERSION: ${{ inputs['playbook-version'] }}
           EXECUTE: ${{ inputs.execute }}
           # ブランチ名ではなく ref で判定する。ref_name は tag からの起動でもタグ名を
           # 返すため、main という名前のタグを作られると素通りする。
@@ -142,8 +145,8 @@ jobs:
           GIT_IDENTITY_NAME: ${{ vars.RELEASE_BOT_NAME }}
           GIT_IDENTITY_EMAIL: ${{ vars.RELEASE_BOT_EMAIL }}
           OWNER: ${{ github.repository_owner }}
-          DCB_VERSION: ${{ inputs.dcb-version }}
-          PLAYBOOK_VERSION: ${{ inputs.playbook-version }}
+          DCB_VERSION: ${{ inputs['dcb-version'] }}
+          PLAYBOOK_VERSION: ${{ inputs['playbook-version'] }}
           EXECUTE: ${{ inputs.execute }}
         run: |
           # 入力は env 経由で受け取り、式展開でシェルへ直接埋め込まない。
