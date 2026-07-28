@@ -3,12 +3,26 @@
 devcontainer-bootstrap（DCB）の `--mode <minimal|standard|full>` を廃止し、mode が束ねていた直交した装備を「常時標準化」と「`--with-*` フラグ」に分解するための仕様と作業計画。
 
 - 起案日: 2026-07-21
-- 状態: **仕様確定・実装未着手**
+- 状態: **実装完了（devcontainer-bootstrap v0.4.0 で出荷）**
 - 対象パッケージ: `packages/devcontainer-bootstrap`
-- 種別: 計画（実装完了後は記録として `docs/records/` へ移動、または issue クローズコメントへ集約のうえ archive 化）
+- 種別: 記録（実装完了に伴い `docs/plans/` から `docs/records/` へ移動。§1 以降は起案当時の仕様・計画のまま残す）
 - 破壊的変更: **あり**（`--mode` 削除）。後方互換は取らず版を上げる（案B）。
 
-> この文書は仕様の正本。作業進捗の正本は GitHub issue / PR とする（プロジェクト規約「作業状況の記録先」）。
+> この文書は起案当時の仕様の正本であり、現行仕様の正本ではない。現行仕様の正本は `packages/devcontainer-bootstrap/README.md` と実装（`bootstrap.sh` / `doctor.sh`）とする。
+
+## 実装完了の証跡
+
+本計画は実装・出荷済み。以下は完了判断の根拠。行番号は v0.7.2 時点のもの。
+
+| 項目 | 内容 |
+|---|---|
+| 実装コミット | `3531b4e` `feat(dcb)!: --mode を廃止し装備を --with-* フラグへ分解`（PR #90、2026-07-21）。同 PR 内の `f0eee16` で doctor の cloud CLI 検出不具合を修正 |
+| 出荷リリース | devcontainer-bootstrap **v0.4.0**（2026-07-21 公開。**破壊的変更**。`docs/release/RELEASE_HISTORY.md` の v0.4.0 行、`docs/release/release-notes-devcontainer-bootstrap.md` の v0.4.0 節） |
+| 実装箇所 | `bootstrap.sh`: usage の `Cloud/AI tooling is opt-in via --with-* flags (no --mode).`（`:66-67`）／`--with-*` の受理と with-set 正規化（`:90-94`）／docker 標準化（`:318-319`）／`__IF_WITH_*__` 条件プレースホルダ（`:329-331`）／`has_with`（`:1519`）／Terraform の合成条件 `has_with aws \|\| has_with gcp`（`:1541`）／AI 拡張の条件配線（`:1824-1827`）／永続 volume（`persisted_storages`、`:1583` 以降）／条件行の展開・削除（`:1976-1978`）。`doctor.sh` は mode 前提の検査を撤去済み |
+| 回帰テスト | `packages/devcontainer-bootstrap/tests/test-with-flags.sh`（`--mode` が未知オプションとしてエラーになることの検証を含む） |
+| 未実装の残件 | **なし**。§7 の受け入れ条件は全項目が実装・テストで満たされている。§5.4 の「※実装時確定」だった識別子は `anthropic.claude-code` / `Google.gemini-cli-vscode-ide-companion` / `github.copilot`・`github.copilot-chat` で確定済み。§2.2・§5.6 の予定フラグ（`--with-codex` / `--with-sakura` / `--with-cloudflare`）は当初から対象外 |
+
+なお §5.4・§5.5 の AI 認証まわりの設計は、後続の v0.5.0（Claude 認証を OAuth トークン注入から `/login` 既定へ変更）および v0.7.0（生成物からホスト資格情報の注入経路を全廃）で更新されている。本書は v0.4.0 時点の記録であり、現行の認証仕様は DCB README を参照すること。
 
 ## 1. 背景・目的
 

@@ -41,16 +41,15 @@
 | ファイル | 種別 | 概要 |
 |---|---|---|
 | `docs/records/ASF_RETIREMENT_RECORD.md` | 履歴・記録 | ASF を廃止し dotfiles / DCB へ統合した退役の判断根拠と実施記録。 |
+| `docs/records/DCB_MODE_REMOVAL_WITH_FLAGS.md` | 履歴・記録 | DCB の `--mode` を廃止し装備を `--with-*` フラグ（cloud/AI ツール）へ分解した仕様と実装完了の証跡（DCB v0.4.0 で出荷）。 |
+| `docs/records/DCB_RUST_SUPPORT.md` | 履歴・記録 | DCB の `--languages` へ rust を追加した仕様と実装完了の証跡（DCB v0.3.0 で出荷）。 |
 | `docs/records/INTAKE_AUTO_SUGGEST_LOOP_RECORD.md` | 履歴・記録 | `@intake` の自動提案経路追加と、intake をループコーディング入口として機械判定ゲート化した判断根拠と実施記録。 |
 
-### 計画（`docs/plans/`）
+### 計画（`plans/`）
 
-これから着手する作業の仕様・計画。進捗の正本は issue / PR。実装完了後は `docs/records/` へ移動または archive 化する。
+これから着手する作業の仕様・計画は docs/plans/ に置く。進捗の正本は issue / PR。実装完了後は `docs/records/` へ移動または archive 化する。
 
-| ファイル | 種別 | 概要 |
-|---|---|---|
-| `docs/plans/DCB_RUST_SUPPORT.md` | 計画 | DCB の `--languages` へ rust を追加する仕様・作業計画。 |
-| `docs/plans/DCB_MODE_REMOVAL_WITH_FLAGS.md` | 計画 | DCB の `--mode` を廃止し装備を `--with-*` フラグ（cloud/AI ツール）へ分解する仕様・作業計画。 |
+現在、未着手の計画文書はない（docs/plans/ に追跡対象ファイルなし）。
 
 ## アーカイブ（`docs/archive/`）
 
