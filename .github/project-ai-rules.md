@@ -2,6 +2,18 @@
 
 このリポジトリは、パッケージ中立性を厳密に維持します。
 
+## 参照先
+
+- 全体共通ルール: `.ai-playbook/shared-ai-rules.md`
+- プロジェクト固有の最上位定義: `.github/PROJECT_DEFINITION.md`
+- ロール責務: `.ai-playbook/role-contracts/`
+- タスク手順: `.ai-playbook/task-playbooks/`
+- レビュー運用: `.ai-playbook/review-workflow.md`
+- ループ運用（受け入れ検証の機械ゲート化・収束）: `.ai-playbook/loop-workflow.md`
+- intake 規律・判定根拠: `.ai-playbook/intake/`
+
+実行環境の入口ファイル（`CLAUDE.md` / `.github/copilot-instructions.md`）はこのファイルを参照し、最小差分のみを記述します。
+
 ## 常時適用
 
 - `.github/PROJECT_DEFINITION.md` をプロジェクト固有の最上位定義として読み、必ず従います。
@@ -16,6 +28,14 @@
 - Dev Container の環境差は、パッケージ既定値の変更ではなく、プロジェクト層（`.env` / `.devcontainer/`）の設定で吸収します。ホスト OS の資格情報を運ぶ生成時オプションは廃止済みで、指定すると `bootstrap.sh` が停止します（`--github-profiles` / `--gemini-key-env`）。
 - 主要ドキュメント更新時は、日本語での一貫性を維持します。
 
+## このプロジェクト固有の値
+
+固有値の正本は `.github/PROJECT_DEFINITION.md` です。値をこのファイルへ複製しません。
+
+- パッケージ中立性のクイック検証コマンドと期待結果: `.github/PROJECT_DEFINITION.md`「クイック検証（パッケージ中立性）」。同じ判定は `.github/workflows/ci.yml` の `neutrality` ジョブと `scripts/acceptance.sh` の `(neutrality)` 検査が持ちます。
+- git identity の値（`GIT_IDENTITY_NAME` / `GIT_IDENTITY_EMAIL`）: `.env`（下記「Git identity」）。
+- Git フックによるワークフロー強制は行いません。push 前のゲートは `scripts/loop-gate.sh`、リモート側は CI と `.github/workflows/` の各ワークフローが担います。
+
 ## 機密の具体化
 
 共通規範「機密の取り扱い」（`.ai-playbook/shared-ai-rules.md`）を、このリポジトリで具体化します。
@@ -26,6 +46,25 @@
 - ホスト OS の資格情報をコンテナへ注入しません。`devcontainer.json` の `remoteEnv` が運ぶのは `LOCAL_WORKSPACE_FOLDER` のみで、CI の `Self devcontainer credential isolation` ジョブがこれを検査します
 - GitHub の認証はコンテナ内で `gh auth login` を実行し、状態は `gh-storage` volume に残します。トークンを**私たちが**ファイルや環境変数へ保存しません（gh 自身は `~/.config/gh/hosts.yml` に保持します。それを volume の外へ写さない、という意味です）
 - リリース実行時、シークレットの値をリリース資産へ含めません
+
+## 生成物の具体化
+
+共通規範「生成物の取り扱い」（`.ai-playbook/shared-ai-rules.md`）を、このリポジトリで具体化します。
+
+コミットしない生成物:
+
+- 依存・ビルド成果物・キャッシュ（`node_modules/`、`dist/`、`coverage/` など）。列挙の正本は `.gitignore` の DCB 管理セクション（`# >>> devcontainer-bootstrap managed section >>>` 〜 `# <<< devcontainer-bootstrap managed section <<<`）です。
+- 機密ファイル `.env` / `.env.*`（`.env.example` のみ追跡。上記「機密の具体化」）
+- ローカル引き継ぎメモ `GETTING_STARTED.md`（ワークスペースには残すがコミットしない）
+- Claude Code のローカル設定 `.claude/*`（`.claude/skills/` のみ再包含して追跡します。スキルはローカル設定ではなく規範の配布物のため）
+
+再生成手順:
+
+- `.gitignore` の管理セクション: `packages/devcontainer-bootstrap/bootstrap.sh` が管理セクションのみを冪等に書き換えます（抑止は `--no-gitignore`、テンプレート追加は `--gitignore-targets`）。管理セクション外の記述は手で管理します。
+- `.env`: `.env.example` を複製し、値を各自が設定します
+- AI CLI（`gemini` 等）: `bash scripts/install-ai-tools.sh`
+
+再生成できる大容量の生成物・メディアはリポジトリへ置きません。共有が必要な場合はリポジトリ外の手段を使います。
 
 ## Git identity（コミット作者情報）
 
@@ -40,7 +79,24 @@
 - コンテナ接続時に `scripts/on-attach.sh` が `setup-git-identity.sh` を再適用します（リビルドのたびに ~/.gitconfig が再生成されるため）。`bash scripts/setup-git-identity.sh --check` で状態を検証できます。
 - local 設定を持たないリポジトリでは `git commit` が exit 128 で止まります。これは設計どおりです。黙って別名義のコミットが通るより、止まって気づくほうを選びます。
 - リポジトリ外の一時クローンでコミットするスクリプトは、`git -c user.name=... -c user.email=...` で identity を明示します（`scripts/release-packages.sh`）。CI の `Self devcontainer credential isolation` ジョブが明示を検査します。
-- push / リリース実行の前に `git log -1 --format='%an <%ae>'` で作者情報を確認します。`aizu@bascule.co.jp` 等の別 identity を検出した場合は中断し、修正してからやり直します。
+- push / リリース実行の前に `bash scripts/verify-commit-identity.sh` で作者情報を検証します。別 identity を検出した場合は中断し、`bash scripts/setup-git-identity.sh` を適用したうえで該当コミットを `git rebase` で author ごと作り直します。単発の目視確認には `git log -1 --format='%an <%ae>'` を使います。
+
+### commit identity の検証層
+
+判定ロジックは `scripts/verify-commit-identity.sh` に置き、CI と手元で同じコードを走らせます。手元で先に落とせるようにするためです。
+
+```bash
+bash scripts/verify-commit-identity.sh              # 既定: origin/main..HEAD（取得できなければ HEAD の全履歴）
+bash scripts/verify-commit-identity.sh <range>      # 任意の範囲
+bash scripts/verify-commit-identity.sh --full       # HEAD の全履歴
+```
+
+- 終了コード 0 = `IDENTITY_PASS` / 1 = `IDENTITY_FAIL`（許可外の identity を検出、または範囲・許可 email を解決できない）。
+- 判定は名前ではなく **email** で行います（GitHub の Contributors は既定ブランチのコミット author の email で集計されるため）。対象は author / committer / `Co-Authored-By` の 3 つです。
+- committer には `noreply@github.com` を、`Co-Authored-By` にはさらに `noreply@anthropic.com` を追加で許可します（squash merge / web UI コミット、および AI コーディング規約の trailer に対応）。
+- 許可 author email の解決順は、`ALLOWED_AUTHOR_EMAILS`（カンマまたは空白区切り）→ `.env` の `GIT_IDENTITY_EMAIL`。どちらでも解決できない場合は「検査対象が無いので通過」にせず、fail-closed で落とします。
+- CI の検知層は `.github/workflows/identity-guard.yml` です。`pull_request`（`opened` / `synchronize` / `reopened`）では PR に含まれる全コミットを、`push`（`main`）では main の全履歴を検査します。PR を経由しない直接 push こそが混入の原因なので、後者を省略しません。
+- 許可 email は生成物へ焼き込まず、**リポジトリ変数** `ALLOWED_AUTHOR_EMAILS`（Settings > Secrets and variables > Actions > Variables）で渡します。CI には `.env` が無いため、これを設定しないと identity-guard は fail-closed で必ず失敗します。
 
 ## GitHub 認証（gh CLI）
 
@@ -52,7 +108,7 @@ gh CLI の認証はコンテナ内で行い、その状態を named volume に�
 - `GH_TOKEN` / `GITHUB_TOKEN` を恒久的に設定しません。gh に登録済みのアカウントより優先され、コンテナ内のログイン状態が無視されるためです。
 - git の push 認証は `scripts/setup-git-identity.sh` が global の `credential.helper` を「空 → `!gh auth git-credential`」に固定して gh へ向けます。空文字がヘルパー一覧をリセットするため、`/etc/gitconfig` 側やエディタが注入したヘルパーは応答しません。
 - `gh auth status` が失敗した場合は、コンテナ内で `gh auth login` をやり直します。ホスト側の環境変数を触る必要はありません。
-- Docker レジストリの資格情報も同様です。ホスト側 VS Code で `dev.containers.dockerCredentialHelper: false` を設定してください。`scripts/on-attach.sh` が接続ごとに `~/.docker/config.json` の `credsStore` を除去しますが、書き込み順序によっては間に合わないため、ホスト側の設定が本体です。
+- Docker レジストリの資格情報も同様です。ホスト側 VS Code で `dev.containers.dockerCredentialHelper: false` を設定してください。`scripts/on-attach.sh` が接続ごとに `~/.docker/config.json` の `credsStore` と `credHelpers` の両方を除去します（前者はレジストリ横断、後者はレジストリ個別にホストのヘルパーを指すため、片方だけでは塞がりません）。ただし書き込み順序によっては間に合わないため、ホスト側の設定が本体で、この除去は多層防御の 1 枚です。
 
 ## 作業状況の記録先
 
@@ -74,22 +130,67 @@ gh CLI の認証はコンテナ内で行い、その状態を named volume に�
 
 ## レビューの起動方法
 
-共通規範「レビューワークフロー」（`.ai-playbook/review-workflow.md`）のクロスモデル二段ゲートを、このリポジトリで具体化します。
+共通規範「レビューワークフロー」（`.ai-playbook/review-workflow.md`）のクロスモデル二段ゲートと、「ループ運用」（`.ai-playbook/loop-workflow.md`）のローカル事前ゲートを、このリポジトリで具体化します。
 
-push / PR 作成の前に、次の 2 段を通します。
+push / PR 作成の前に、次の 3 段を通します。
 
 1. **主レビュー**: Claude Code の `/code-review`（セキュリティに関わる差分は `/security-review` も）でステージ済み差分をレビューし、その場で修正します。
-2. **第二意見**: 別ベンダーのモデルによるクロスチェックを実行します。
+2. **受け入れ検証**: `scripts/verify.sh` が受け入れ条件を機械判定します。
+3. **第二意見**: 別ベンダーのモデル（`scripts/gemini-review.sh`）でクロスチェックします。
+
+2 と 3 は**単一入口** `scripts/loop-gate.sh` が直列化します。push / PR 作成の前にこれを通します。
 
 ```bash
-bash scripts/gemini-review.sh              # ステージ済み差分
-bash scripts/gemini-review.sh --range main..HEAD
+bash scripts/loop-gate.sh
 ```
 
-- `GEMINI_API_KEY` が必要です（`.env` から `scripts/load-project-env.sh` が読み込みます）。
-- `gemini` CLI は `scripts/install-ai-tools.sh` が導入します。
-- 終了コード 0（`LGTM`）で通過、1 で重大な指摘ありです。
-- 両段とも対象は致命バグ・脆弱性・型エラー・エッジケースの見落としに限ります。修正は 1 イテレーションで完結させます。
+- 終了コード 0 = `GATE_PASS`（push 可） / 1 = `GATE_FAIL`（いずれかの段が未通過、または実行不能）。
+- 第二意見コマンドは環境変数 `LOOP_GATE_REVIEW_CMD` で差し替え（任意のコマンド）・無効化（空文字）できます。未設定のときは `scripts/gemini-review.sh` があれば実行し、無ければスキップします。
+- ステージ済み差分が空のときは、`loop-gate.sh` が第二意見の対象を commit 済み範囲へ自動で切り替えます（上流ブランチ → `origin/HEAD` / `origin/main` / `origin/master` → 空ツリー の順に解決）。commit 後にゲートを回すと第二意見が実質スキップされ、偽の緑が出るためです。
+- 両段（主レビュー・第二意見）とも対象は致命バグ・脆弱性・型エラー・エッジケースの見落としに限ります。修正は 1 イテレーションで完結させます。
+
+### 受け入れ検証（verify / acceptance）
+
+```bash
+bash scripts/verify.sh
+```
+
+- 終了コード 0 = `VERIFY_PASS` / 1 = `VERIFY_FAIL`（未達、または受け入れ条件が未定義）。
+- 受け入れ条件の実体は `scripts/acceptance.sh`（プロジェクトが所有・編集します）。環境変数 `VERIFY_ACCEPTANCE` で差し替えられます（例: `VERIFY_ACCEPTANCE=scripts/acceptance-fast.sh bash scripts/verify.sh`）。
+- `scripts/acceptance.sh` は `.github/workflows/ci.yml` の 5 ジョブを完全ミラーします。「ローカルが緑なら CI も緑」を保つための構成で、部分ミラーは採りません。
+- **`ci.yml` を変更したら `scripts/acceptance.sh` も同じ内容へ追随させます。** 追随漏れを機械で検知する仕組みは無く、食い違うとローカルゲートは CI の予行演習でなくなります。
+
+### 第二意見（クロスモデル）
+
+```bash
+bash scripts/gemini-review.sh                      # ステージ済み差分
+bash scripts/gemini-review.sh --range main..HEAD   # 範囲指定
+bash scripts/gemini-review.sh --runs 3             # 実行回数
+```
+
+| オプション | 環境変数 | 既定 | 意味 |
+|---|---|---|---|
+| `--range <git-range>` | — | ステージ済み差分 | レビュー対象の差分範囲 |
+| `--model <name>` | `GEMINI_REVIEW_MODEL` | `gemini` CLI の既定 | 使用モデル |
+| `--runs <n>` | `GEMINI_REVIEW_RUNS` | `1` | 実行回数（1 以上の整数。不正値は実行前に停止） |
+
+- 優先順位は CLI 引数 > `.env` > 既定です。
+- 判定は多数決です。指摘を報告した run が**過半数**（`floor(N/2)+1`）に達したときだけ落とします。既定の `1` では閾値も 1 で、従来と同じ挙動になります。
+- 過半数に届かなかった指摘も出力に残ります。誤検出とは限らないため、内容を確認して採否を判断します。
+- 終了コード 0 = `LGTM`（指摘を報告した run が閾値未満） / 1 = 重大な指摘あり、または実行不能。
+- `GEMINI_API_KEY` が必要です（`scripts/load-project-env.sh` が `.env` から読み込みます）。`gemini` CLI は `scripts/install-ai-tools.sh` が導入します。
+- このレビューは非決定的です。1 回の `LGTM` は重大な指摘が無いことの証明ではなく、主レビューを省略してよい根拠にもなりません。
+
+### リモート最終ゲート
+
+push / PR 作成後の最終ゲートを、このリポジトリで具体化します（`.ai-playbook/review-workflow.md`「リモート最終ゲート」）。
+
+- 手段: `.github/workflows/copilot-review.yml` が、PR 作成時に `copilot-pull-request-reviewer[bot]` をレビュアーとして自動で要求します（`gh api --method POST repos/<repo>/pulls/<number>/requested_reviewers`）。
+- **要求は 1 回だけ**: 契機を `pull_request` の `types: [opened]` に限定し、PR 更新（`synchronize`）では再要求しません。これが「1 回だけ」を運用者の記憶に頼らず機構で保証している実体です。
+- **fork からの PR はスキップ**: `github.event.pull_request.head.repo.full_name == github.repository` のときだけジョブを実行します。fork の PR は書き込みトークンを持たないためです。
+- **トークンのフォールバック**: `secrets.COPILOT_REVIEW_TOKEN || secrets.GITHUB_TOKEN`。既定の `GITHUB_TOKEN` で要求できない場合、リポジトリ Secrets に `COPILOT_REVIEW_TOKEN`（pull-requests 書き込み権限を持つ PAT）を設定すれば自動で切り替わります。
+- **前提**: リポジトリ所有者の Copilot サブスクリプションで「Copilot code review」が有効であること。無効だと reviewers 要求が 422 で失敗します。
+- 指摘の打ち切りは `.ai-playbook/review-workflow.md` の収束規則に従います。2 巡目以降の軽微な指摘は人間が却下し、AI 同士を往復させません。
 
 ### ドキュメント分離運用
 

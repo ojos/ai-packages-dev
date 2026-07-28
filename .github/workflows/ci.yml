@@ -112,6 +112,24 @@ jobs:
           done
           exit $fail
 
+      # 配布雛形が要求する節が、このリポジトリのプロジェクト共通ルールに存在することを
+      # 検証する。雛形は「何を具体化すべきか」の必須項目そのもので、節が欠けたまま
+      # 配布側だけが増えると、自分たちが配れと言っている項目を自分では書いていない
+      # 状態になる。見出しレベルは問わず、見出しテキストの完全一致で照合する。
+      - name: project-ai-rules covers every template section
+        run: |
+          tpl=.ai-playbook/templates/project-ai-rules.md
+          doc=.github/project-ai-rules.md
+          fail=0
+          doc_headings="$(grep -oE '^#{2,6} .+' "$doc" | sed -E 's/^#+ //')"
+          while IFS= read -r h; do
+            [ -n "$h" ] || continue
+            printf '%s\n' "$doc_headings" | grep -qxF "$h" || {
+              echo "template section not covered in $doc: $h"; fail=1;
+            }
+          done < <(grep -oE '^#{2,6} .+' "$tpl" | sed -E 's/^#+ //')
+          exit $fail
+
   neutrality:
     name: Package neutrality
     runs-on: ubuntu-latest

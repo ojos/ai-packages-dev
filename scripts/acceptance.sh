@@ -127,6 +127,24 @@ while IFS= read -r f; do
 done < <(git ls-files '*.md')
 [[ "$link_fail" -eq 0 ]] || exit 1
 
+# 配布雛形が要求する節が、このリポジトリのプロジェクト共通ルールに存在することを検証する。
+# 雛形は「何を具体化すべきか」の必須項目そのもので、節が欠けたまま配布側だけが増えると、
+# 自分たちが配れと言っている項目を自分では書いていない状態になる。
+# 見出しレベルは問わず、見出しテキストの完全一致で照合する（節の階層は文書の都合で変わるため）。
+echo "[acceptance] (docs) project-ai-rules covers every template section"
+tpl_doc=".ai-playbook/templates/project-ai-rules.md"
+proj_doc=".github/project-ai-rules.md"
+section_fail=0
+proj_headings="$(grep -oE '^#{2,6} .+' "$proj_doc" | sed -E 's/^#+ //')"
+while IFS= read -r h; do
+  [[ -n "$h" ]] || continue
+  printf '%s\n' "$proj_headings" | grep -qxF "$h" || {
+    echo "[acceptance] template section not covered in $proj_doc: $h" >&2
+    section_fail=1
+  }
+done < <(grep -oE '^#{2,6} .+' "$tpl_doc" | sed -E 's/^#+ //')
+[[ "$section_fail" -eq 0 ]] || exit 1
+
 # ── CI: Package neutrality ───────────────────────────────────────────────────
 # プロジェクト固有の値がパッケージ層と規範層へ混入していないことを検証する。
 # tests/ は除外する（配布されない層であり、生成物に固有名詞が残らないことを
