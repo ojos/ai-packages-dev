@@ -17,6 +17,32 @@ PLAYBOOK_SRC="$REPO_ROOT/.ai-playbook"
 # 各テストが使う一時領域。run-tests.sh が最後に掃除する。
 : "${TEST_TMP_ROOT:?TEST_TMP_ROOT must be set by the runner}"
 
+# ── 実行環境からの隔離 ────────────────────────────────────────────────────────
+#
+# 生成物のスクリプトは、ここに挙げた環境変数を実行時に読む。テストは生成物を
+# 起動して挙動を検査するため、実行者の環境にこれらが設定されていると、テストが
+# 設定したつもりの無い値を生成物が拾い、判定が変わる。
+#
+# 実測では GEMINI_REVIEW_RUNS=3 を設定した状態でスイートを回すと 4 ファイル 21
+# ケースが落ちた。CI はこれらの変数を持たないため常に緑で、失敗はローカル実行
+# だけに現れる。ローカルゲートの赤が「変更のせい」なのか「環境のせい」なのかを
+# 実行者が区別できず、CI の予行演習という位置づけが成立しなくなる。
+#
+# 個々のテストで env -u するのではなくここで一括して落とすのは、新しいテストを
+# 足すたびに隔離を書き忘れる余地を無くすため。値を設定したいテストは、従来どおり
+# 自身のサブシェルや env で明示的に渡す（ここでの unset はテストプロセスの環境を
+# 空にするだけで、テストが子プロセスへ渡す値には干渉しない）。
+#
+# GIT_CONFIG_GLOBAL はここに含めない。git 自身が読む変数で、テストが一時的な
+# global 設定へ向けるために意図的に設定する経路がある。
+TEST_ISOLATED_ENV_VARS="GEMINI_API_KEY GEMINI_REVIEW_RUNS GEMINI_REVIEW_MODEL ALLOWED_AUTHOR_EMAILS GIT_IDENTITY_NAME GIT_IDENTITY_EMAIL LOOP_GATE_REVIEW_CMD VERIFY_ACCEPTANCE PROJECT_ENV_FILE"
+
+# 語分割で 1 つずつ落とす。bash 3.2 互換のため配列を使わない。
+for __isolated_var in $TEST_ISOLATED_ENV_VARS; do
+  unset "$__isolated_var"
+done
+unset __isolated_var
+
 # ── 出力 ──────────────────────────────────────────────────────────────────────
 
 it() {
