@@ -24,10 +24,26 @@
 | 操作 | コマンド | 用途 |
 |---|---|---|
 | dry-run | `bash scripts/release-packages.sh --owner ojos --playbook-version vX.Y.Z` | preflight を手早く回して手戻りを短くする補助。本番の予行演習は Actions 側で行う（実行環境が違うため、手元で通っても本番の保証にはならない） |
-| 資産監査 | `bash scripts/release-packages.sh --owner ojos --audit` | 公開済み Release の必須資産を確認する |
+| 資産監査 | `bash scripts/release-packages.sh --owner ojos --audit` | 公開済み Release の資産を取得し、SHA256 を再計算して整合性を検証する（直近 10 件。件数は `AUDIT_RELEASE_LIMIT` で変える） |
 
 git identity は workflow が GitHub App の bot として渡す。実行者が `.env` に identity を用意する必要はない
 （`.github/project-ai-rules.md`「Git identity」）。
+
+## 前提条件（リポジトリ設定）
+
+workflow は認証と identity をリポジトリ設定から解決する。値をコードへ焼き込まない方針のため、未設定のまま起動すると実行時に落ちる。
+
+| 種別 | 名前 | 値 |
+|---|---|---|
+| Secret | `RELEASE_APP_ID` | リリース用 GitHub App（`ojos-release-bot`）の App ID |
+| Secret | `RELEASE_APP_PRIVATE_KEY` | 同 App の秘密鍵（`.pem` の中身全文） |
+| Variable | `RELEASE_BOT_NAME` | `ojos-release-bot[bot]` |
+| Variable | `RELEASE_BOT_EMAIL` | `<bot ユーザー ID>+ojos-release-bot[bot]@users.noreply.github.com` |
+
+いずれも Settings > Secrets and variables > Actions に置く（Secrets と Variables はタブが分かれている）。
+
+- App は `ojos/devcontainer-bootstrap` と `ojos/ai-playbook` の 2 リポジトリへ install し、権限は `contents: write` のみを与える。Actions の `GITHUB_TOKEN` は自リポジトリにしかスコープが効かず、クロスリポジトリ push ができないため。
+- bot ユーザー ID は install 後に `gh api '/users/ojos-release-bot[bot]' --jq '.id'` で取得する。**App ID とは別番号**で、コミットを bot アカウントへ紐付けるのはこちら。
 
 ## 配布方式（パッケージごとに異なる）
 
@@ -206,6 +222,14 @@ preflight がもう一度すべて走る。dry-run 通過後に `main` や公開
   ```bash
   bash scripts/release-packages.sh --owner ojos --audit
   ```
+
+## 定期監査
+
+公開後に資産が差し替えられた場合、リリース時の 1 回の検査では気づけない。`.github/workflows/release-audit.yml` が週次（月曜 03:17 UTC）で公開済みリリースを再検査する。`workflow_dispatch` で手動起動もできる。
+
+- 検査対象は直近 10 件。手動起動時は `limit` 入力で変えられる。**検査した件数と、範囲外として見ていない件数は必ず出力に出る**（黙って打ち切ると「全部見た」と読めるため）。
+- 読み取り専用で、公開状態は一切変更しない。
+- 失敗が **2 回連続したときだけ** issue を起票する。1 回目では起票しない（一過性のネットワークエラーで issue が溜まるのを避けるため）。同じ失敗で open issue が既にあればコメント追記に留める。判定と起票は `scripts/audit-failure-notify.sh` が持つ。
 
 ## 失敗時の対応
 

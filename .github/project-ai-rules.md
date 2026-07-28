@@ -33,7 +33,7 @@
 固有値の正本は `.github/PROJECT_DEFINITION.md` です。値をこのファイルへ複製しません。
 
 - パッケージ中立性のクイック検証コマンドと期待結果: `.github/PROJECT_DEFINITION.md`「クイック検証（パッケージ中立性）」。同じ判定は `.github/workflows/ci.yml` の `neutrality` ジョブと `scripts/acceptance.sh` の `(neutrality)` 検査が持ちます。
-- git identity の値（`GIT_IDENTITY_NAME` / `GIT_IDENTITY_EMAIL`）: `.env`（下記「Git identity」）。
+- git identity の値（`GIT_IDENTITY_NAME` / `GIT_IDENTITY_EMAIL`）: 人の操作は `.env`、release workflow は Actions のリポジトリ変数 `RELEASE_BOT_NAME` / `RELEASE_BOT_EMAIL`（下記「Git identity」）。値の一覧と設定先は `docs/release/RELEASE_EXECUTION_RUNBOOK.md`「前提条件（リポジトリ設定）」。
 - Git フックによるワークフロー強制は行いません。push 前のゲートは `scripts/loop-gate.sh`、リモート側は CI と `.github/workflows/` の各ワークフローが担います。
 
 ## 機密の具体化
