@@ -17,7 +17,7 @@ options:
   --dcb-version <vX.Y.Z>        DCB release tag
   --playbook-version <vX.Y.Z>   ai-playbook tag (source-only, no release)
   --execute                     Actually execute release operations
-  --audit                       Audit release assets across all repos and exit
+  --audit                       Verify published release asset integrity and exit
   -h, --help                    Show help
 
 notes:
@@ -26,7 +26,10 @@ notes:
   - Published versions are immutable. Re-releasing an existing version fails
     during preflight, before any side effect.
   - Without --execute, this script only validates inputs and exits.
-  - Use --audit to check asset completeness across all repos without releasing.
+  - Use --audit to re-download published assets and verify them by recomputing
+    SHA256 (SHA256SUMS vs actual files, and RELEASE-MANIFEST.json vs SHA256SUMS).
+    Scope is the latest AUDIT_RELEASE_LIMIT releases (default 10); the number of
+    releases left outside that scope is always reported. Read-only.
 EOF
 }
 
@@ -460,38 +463,230 @@ tag_and_release() {
   fi
 }
 
-# 指定 owner の全リポジトリを対象に、必須リリース資産を監査する。
-# レポートを出力し、必須資産に欠けがあれば非ゼロで終了する。
+# 監査で検査する直近リリースの既定件数。
+#
+# 全件走査にしない理由: 監査は資産を実際にダウンロードして再計算するため、
+# 実行時間がリリース数に比例して伸びる。ただし打ち切った事実を黙って隠すと
+# 「全部見た」と読めてしまうため、検査した件数と範囲外の件数を必ず出力する。
+# 件数は環境変数 AUDIT_RELEASE_LIMIT で変更できる（定期実行の workflow が渡す）。
+AUDIT_RELEASE_LIMIT_DEFAULT=10
+
+# ダウンロード済みのリリース資産 1 件分を検証する。
+# 使い方: verify_release_assets_dir <dir> <label>
+#
+# ネットワークへ出ず <dir> の中身だけで完結させる。取得（gh）と検証を分けることで、
+# 意図的に壊した入力で落ちることをテストから直接固定できる。
+#
+# 検証内容:
+#   1. SHA256SUMS の各行と、実ファイルを再計算したハッシュが一致すること
+#   2. RELEASE-MANIFEST.json の記載と SHA256SUMS が矛盾しないこと
+#
+# 戻り値: 0 = 整合 / 1 = 不整合（どのファイルのどの値が食い違ったかを出力する）
+verify_release_assets_dir() {
+  local dir="$1"
+  local label="$2"
+  local failed=0
+  local asset name expected actual declared
+
+  # 必須資産の存在。ここが欠けるとハッシュ照合そのものが成立しない。
+  for asset in "${REQUIRED_RELEASE_ASSETS[@]}"; do
+    if [[ ! -f "$dir/$asset" ]]; then
+      echo "[audit] FAIL  $label  $asset — 必須資産が無い"
+      failed=1
+    fi
+  done
+  if [[ ! -f "$dir/SHA256SUMS" || ! -f "$dir/RELEASE-MANIFEST.json" ]]; then
+    # 照合の起点そのものが無い。欠落は上で報告済みなので、ここで打ち切る。
+    return 1
+  fi
+
+  # ── 1. SHA256SUMS の各行 vs 実ファイルの再計算値 ────────────────────────────
+  #
+  # 利用者が documented な手順（sha256sum -c SHA256SUMS）で実行するのと同じ照合を、
+  # 公開されている実体に対して行う。存在確認では、資産が差し替わっても素通りする。
+  local sums_lines=0
+  while read -r expected name || [[ -n "$expected" ]]; do
+    [[ -n "$expected" && -n "$name" ]] || continue
+    # sha256sum のバイナリモード印を落とす（"<hash>  *<name>" 形式）。
+    name="${name#\*}"
+    sums_lines=$((sums_lines + 1))
+    if [[ ! -f "$dir/$name" ]]; then
+      echo "[audit] FAIL  $label  $name — SHA256SUMS が列挙するファイルが資産に無い"
+      failed=1
+      continue
+    fi
+    actual="$(sha256sum "$dir/$name" | awk '{print $1}')"
+    if [[ "$actual" == "$expected" ]]; then
+      echo "[audit] OK    $label  $name  (SHA256SUMS)"
+    else
+      echo "[audit] FAIL  $label  $name — SHA256SUMS の記載と実ファイルが不一致"
+      echo "[audit]         SHA256SUMS 記載: $expected"
+      echo "[audit]         実ファイル再計算: $actual"
+      failed=1
+    fi
+  done < "$dir/SHA256SUMS"
+
+  if [[ $sums_lines -eq 0 ]]; then
+    # 空の SHA256SUMS は sha256sum -c を無条件に通す。検証手順が素通りする状態は
+    # 「検証していないのに緑」なので、不整合として扱う。
+    echo "[audit] FAIL  $label  SHA256SUMS が 1 行も列挙していない"
+    failed=1
+  fi
+
+  # ── 2. RELEASE-MANIFEST.json の記載 vs SHA256SUMS ───────────────────────────
+  local manifest="$dir/RELEASE-MANIFEST.json"
+  if ! jq -e 'type == "object"' "$manifest" >/dev/null 2>&1; then
+    echo "[audit] FAIL  $label  RELEASE-MANIFEST.json を JSON として読めない"
+    return 1
+  fi
+
+  # マニフェストは SHA256SUMS 自身のハッシュを記録しており、これが検証チェーンの根に
+  # なる。ここが合っていれば「SHA256SUMS ごと差し替えられていない」ことをマニフェスト
+  # 側からも言える。SHA256SUMS の自己照合だけでは、両方を同時に書き換えられた場合に
+  # 何も検出できない。
+  while IFS=$'\t' read -r name expected; do
+    [[ -n "$name" ]] || continue
+    if [[ ! -f "$dir/$name" ]]; then
+      echo "[audit] FAIL  $label  $name — RELEASE-MANIFEST.json が記録するファイルが資産に無い"
+      failed=1
+      continue
+    fi
+    actual="$(sha256sum "$dir/$name" | awk '{print $1}')"
+    if [[ "$actual" == "$expected" ]]; then
+      echo "[audit] OK    $label  $name  (RELEASE-MANIFEST.json)"
+    else
+      echo "[audit] FAIL  $label  $name — RELEASE-MANIFEST.json の記載と実ファイルが不一致"
+      echo "[audit]         RELEASE-MANIFEST.json 記載: $expected"
+      echo "[audit]         実ファイル再計算          : $actual"
+      failed=1
+    fi
+
+    # 同じファイルが SHA256SUMS にも載っているなら、宣言どうしも直接突き合わせる。
+    # 実ファイルとの比較だけでも不一致は捕まるが、「どちらの宣言が食い違ったか」を
+    # 出力に残さないと、公開物のどこを直せばよいか読み取れない。
+    declared="$(awk -v f="$name" '$2 == f || $2 == "*" f {print $1; exit}' "$dir/SHA256SUMS")"
+    if [[ -n "$declared" && "$declared" != "$expected" ]]; then
+      echo "[audit] FAIL  $label  $name — RELEASE-MANIFEST.json と SHA256SUMS の記載が矛盾"
+      echo "[audit]         RELEASE-MANIFEST.json 記載: $expected"
+      echo "[audit]         SHA256SUMS 記載           : $declared"
+      failed=1
+    fi
+  done < <(jq -r '.checksums // {} | to_entries[] | [.key, .value] | @tsv' "$manifest")
+
+  # assets は「この Release に添付されるファイル」の宣言。宣言されているのに無い
+  # ものは、マニフェストだけを見た利用者が入手手順どおりに取得できない状態を指す。
+  while IFS= read -r name; do
+    [[ -n "$name" ]] || continue
+    if [[ ! -f "$dir/$name" ]]; then
+      echo "[audit] FAIL  $label  $name — RELEASE-MANIFEST.json の assets にあるが資産として存在しない"
+      failed=1
+    fi
+  done < <(jq -r '.assets // [] | .[]' "$manifest")
+
+  # 逆向き（SHA256SUMS にあるのに assets へ載っていない）は NOTE に留める。
+  # 公開済みリリースは不変で、過去分は直せない（v0.7.3 より前の 12 件は assets が
+  # 標準 3 資産のみで bootstrap.sh / doctor.sh を載せていない）。以後のリリースで
+  # この欠落を防ぐ検査は tests/test-release-contract.sh が持つため、ここで落とすと
+  # 直せない過去のせいで監査が恒久的に赤になり、新しい異常が埋もれる。
+  while read -r expected name || [[ -n "$expected" ]]; do
+    [[ -n "$name" ]] || continue
+    name="${name#\*}"
+    if ! jq -e --arg n "$name" '(.assets // []) | index($n)' "$manifest" >/dev/null 2>&1; then
+      echo "[audit] NOTE  $label  $name — SHA256SUMS にあるが RELEASE-MANIFEST.json の assets に無い"
+    fi
+  done < "$dir/SHA256SUMS"
+
+  return "$failed"
+}
+
+# 指定 owner の公開リリース資産を監査する。
+#
+# 存在確認ではなく SHA256 の再計算で整合性を検証する（#193）。存在するだけの検査は
+# 「実質を検査できず、儀式のみを検査できるもの」（`.ai-playbook/shared-ai-rules.md`
+# 12 章）に当たり、資産が差し替わっても素通りしていた。
+#
+# 検査範囲は直近 AUDIT_RELEASE_LIMIT 件（既定 10）。範囲外として見ていない件数を
+# 必ず出力する。黙って打ち切ると「全部見た」と読めてしまうため。
+#
+# 副作用: 読み取りのみ。資産のダウンロード以外に公開状態へ触れない。
 audit_release_assets() {
   local owner="$1"
+  local limit="${AUDIT_RELEASE_LIMIT:-$AUDIT_RELEASE_LIMIT_DEFAULT}"
+
+  if ! [[ "$limit" =~ ^[1-9][0-9]*$ ]]; then
+    echo "error: AUDIT_RELEASE_LIMIT must be a positive integer, got: $limit" >&2
+    return 1
+  fi
+
+  # 呼び出し元（--audit 経路 / リリース末尾）のどちらから来ても同じ前提を要求する。
+  require_cmd gh
+  require_cmd jq
+  require_cmd sha256sum
+
   # ai-playbook は Release 資産を持たない（タグのみ配布）ため監査対象外。
   local repos=("$owner/devcontainer-bootstrap")
   local failed=0
+  local repo tag tags total inspected skipped dir workroot
+  local grand_inspected=0 grand_skipped=0
+  local taglist
 
-  echo "[audit] checking required release assets: ${REQUIRED_RELEASE_ASSETS[*]}"
+  workroot="$(mktemp -d)"
+
+  echo "[audit] verifying release asset integrity by recomputing SHA256 (limit: $limit)"
+
   for repo in "${repos[@]}"; do
-    local tag
-    tag=$(gh release list --repo "$repo" --limit 1 --json tagName --jq '.[0].tagName' 2>/dev/null || true)
-    if [[ -z "$tag" ]]; then
+    if ! tags="$(gh release list --repo "$repo" --limit 1000 --json tagName --jq '.[].tagName' 2>/dev/null)"; then
+      echo "[audit] FAIL  $repo — リリース一覧を取得できない"
+      failed=1
+      continue
+    fi
+
+    total=0
+    inspected=0
+    taglist=()
+    while IFS= read -r tag; do
+      [[ -n "$tag" ]] || continue
+      total=$((total + 1))
+      if [[ $inspected -lt $limit ]]; then
+        taglist+=("$tag")
+        inspected=$((inspected + 1))
+      fi
+    done <<< "$tags"
+
+    if [[ $total -eq 0 ]]; then
       echo "[audit] WARN  $repo — no releases found"
       continue
     fi
-    local present
-    present=$(gh release view "$tag" --repo "$repo" --json assets --jq '[.assets[].name]' 2>/dev/null || echo '[]')
-    for asset in "${REQUIRED_RELEASE_ASSETS[@]}"; do
-      if echo "$present" | grep -qF "\"$asset\""; then
-        echo "[audit] OK    $repo@$tag  $asset"
-      else
-        echo "[audit] MISS  $repo@$tag  $asset"
+
+    skipped=$((total - inspected))
+    grand_inspected=$((grand_inspected + inspected))
+    grand_skipped=$((grand_skipped + skipped))
+    echo "[audit] scope $repo — 公開 $total 件中 $inspected 件を検査（範囲外・未検査: $skipped 件）"
+
+    for tag in "${taglist[@]}"; do
+      dir="$workroot/${repo//\//_}@$tag"
+      mkdir -p "$dir"
+      if ! gh release download "$tag" --repo "$repo" --dir "$dir" >/dev/null 2>&1; then
+        echo "[audit] FAIL  $repo@$tag — 資産を取得できない"
+        failed=1
+        continue
+      fi
+      if ! verify_release_assets_dir "$dir" "$repo@$tag"; then
         failed=1
       fi
+      # 検証の済んだ資産はその場で捨てる。件数に比例して一時領域を食わせない。
+      rm -rf "$dir"
     done
   done
 
+  rm -rf "$workroot"
+
+  # 合否にかかわらず、見た件数と見ていない件数を同じ行で示す。「成功」だけを
+  # 出力すると、範囲外の分まで検証済みと読まれる。
   if [[ $failed -eq 0 ]]; then
-    echo "[audit] all required assets present"
+    echo "[audit] integrity verified — 検査 $grand_inspected 件 / 範囲外・未検査 $grand_skipped 件"
   else
-    echo "[audit] missing required assets detected" >&2
+    echo "[audit] integrity check failed — 検査 $grand_inspected 件 / 範囲外・未検査 $grand_skipped 件" >&2
     return 1
   fi
 }
