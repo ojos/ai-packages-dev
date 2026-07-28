@@ -83,7 +83,7 @@
 
 **規範文書（指示・ポリシー層）:**
 - 形式: 1ファイル内で日本語記述
-- 位置: `.github/` 配下
+- 位置: 全体共通の規範はこのパッケージ（`.ai-playbook/`）配下、プロジェクト共通ルールは利用側の `.github/` 配下、実行環境の入口ファイルは各実行環境が要求する位置（0 章の 3 層に対応）
 - 理由: 解釈のぶれを減らし、運用更新を単純化するため
 
 **利用ガイド（パッケージドキュメント層）:**
@@ -97,15 +97,16 @@ Markdown ファイルの命名は、文書の役割に応じて以下の規則�
 
 | 役割 | 命名形式 | 例 |
 |---|---|---|
-| ポリシー・仕様・契約文書 | `UPPER_SNAKE_CASE.md` | `STATE_MANAGEMENT.md` |
-| ガイド・手順・説明文書 | `lower-kebab-case.md` | `install.md`, `runtime-operations.md` |
+| 固定値・分類コードの定義表 | `UPPER_SNAKE_CASE.md` | `REASON_CODES.md` |
+| 規範・契約・ガイド・手順・説明文書 | `lower-kebab-case.md` | `shared-ai-rules.md`, `review-workflow.md`, `role-contracts/planner.md` |
 | パッケージ README | `README.md` | `README.md` |
-| スキル・テンプレート定義 | `lower-kebab-case.md` | `orchestrator.md`, `intake-template.md` |
+| スキル・テンプレート定義 | `lower-kebab-case.md` | `intake-template.md`, `entry.md` |
 | 連番 issue テンプレート | `NN-lower-kebab-case.md` | `01-project-config.md` |
 
 **判断基準:**
-- 他コンポーネントが参照する規範的定義・契約・方針 → `UPPER_SNAKE_CASE`
-- 人間が読む手順書・解説・ガイド → `lower-kebab-case`
+- 他文書が個々の値を列挙・参照する固定値の表（分類コード、状態コード等）→ `UPPER_SNAKE_CASE`
+- 通読して従う規範・契約・手順・解説 → `lower-kebab-case`
+- 規範であること自体は大文字化の理由になりません。区別する軸は「値の定義表か、通読する文書か」です
 - README/ガイド文書は `*.md` を単一正本として運用する
 
 **例外:** 実行環境の機構が固定ファイル名を要求する場合は、その機構の要求に従う（例: Claude Code はスキル定義ファイル名を `SKILL.md` に固定するため、`lower-kebab-case.md` 規則より機構の制約を優先する）。
@@ -180,17 +181,34 @@ Markdown ファイルの命名は、文書の役割に応じて以下の規則�
 
 ## 13. 構成
 
+この表は、パッケージ直下の実体をすべて列挙します。ファイルを追加・削除・改名した場合は、この表を同一コミットで更新します。
+
 | 対象 | 場所 |
 |---|---|
 | 共通規範（この文書） | `shared-ai-rules.md` |
 | ロール責務 | `role-contracts/` |
 | タスク手順 | `task-playbooks/` |
 | レビュー運用 | `review-workflow.md` |
-| ループ運用（受け入れ検証の機械ゲート化・収束） | `loop-workflow.md` |
+| ループ運用の規範（機械ゲート化・verify ランナー契約・収束） | `loop-workflow.md` |
+| ループ運用の解説ガイド（`loop-workflow.md` の解説版） | `loop-coding-guide.md` |
 | intake 規律・判定根拠 | `intake/` |
 | 導入用の雛形 | `templates/` |
+| パッケージ自身の説明・導入手順（規範ではない） | `README.md` |
+| このパッケージを開発するときの追跡除外設定（規範ではない） | `.gitignore` |
 
-0 章の 3 層構造は、`templates/` の雛形をコピーすることで配線できます。手順は本パッケージの README を参照してください。
+配布経路による差分:
+
+- 規範ファイル（`*.md`）だけを取り込む経路では、`README.md` と `.gitignore` は取り込まれません。どちらも規範ではないためです。取り込み先の追跡除外は、取り込み先の `.gitignore` で管理します。
+- 取り込み側の機構が、取り込んだ版を記録するファイル（例: `VERSION`）をパッケージ直下へ生成する場合があります。これは本パッケージの構成要素ではありません。
+
+0 章の 3 層構造は、`templates/` の雛形を次のとおり配置することで配線できます。
+
+| 雛形 | 配置先 |
+|---|---|
+| `templates/project-ai-rules.md` | `.github/project-ai-rules.md`（2 層目: プロジェクト共通ルール） |
+| `templates/entry.md` | 実行環境ごとの入口ファイル（例: `CLAUDE.md`, `.github/copilot-instructions.md`）（3 層目） |
+
+`README.md` を取り込まない経路（上記）でも、この表だけで 3 層構造を配線できます。
 
 ## 14. 非目標
 

@@ -36,7 +36,8 @@
 | `loop-workflow.md` | ループコーディング運用の規範（受け入れ検証の機械ゲート化・verify ランナー契約・収束） |
 | `loop-coding-guide.md` | ループコーディングの解説ガイド（従来ワークフローとの違い・考え方。`loop-workflow.md` の解説版） |
 | `intake/` | intake テンプレート、相談テンプレート、判定 reason code |
-| `templates/` | 導入用の雛形（入口ファイル・プロジェクト共通ルール・第二意見レビュー・Claude Code の intake 起点スキル） |
+| `templates/` | 導入用の雛形 5 種（`entry.md` 実行環境の入口ファイル / `project-ai-rules.md` プロジェクト共通ルール / `gemini-review.sh` 第二意見レビューの実装例 / `copilot-review.yml` リモート最終ゲートの実装例 / `claude-skill-intake.md` Claude Code の intake 起点スキル） |
+| `.gitignore` | このパッケージを開発するときの追跡除外設定。規範ではないため配布・取り込みの対象外（`shared-ai-rules.md` 13 章） |
 
 共通ルールの補足として、AI からの質問は一問ずつ行い、各質問には意図を添え、回答は選択肢優先で提示します。
 
@@ -102,6 +103,27 @@
 - 利用側プロジェクトは submodule、subtree、手動同期のいずれかで取り込む
 - 取り込み方法に関わらず、採用したタグとコミット SHA を記録する
 
+### 取り込んだ版の記録（`.ai-playbook/VERSION`）
+
+取り込みを機構化する場合、取り込み側が版の記録ファイルを生成することがあります。
+DevContainer Bootstrap（DCB）の `--with-playbook` は、取り込み先の `.ai-playbook/VERSION` に次の内容を書き出します。
+
+```
+# devcontainer-bootstrap が記録した ai-playbook のソース情報。
+# version は --playbook-version 指定時のタグ。未指定なら (unspecified)。
+version=v0.1.4
+source=https://.../v0.1.4.tar.gz
+```
+
+| キー | 意味 |
+|---|---|
+| `version` | 取り込んだタグ。バージョンを明示せずに取り込んだ場合は `(unspecified)` |
+| `source` | 解決したソース（タグの tarball URL、任意 URL、ローカルパスのいずれか） |
+
+- 形式は機械可読な `key=value`（`#` で始まる行はコメント）です。
+- このファイルはこのパッケージの構成要素ではなく、取り込み側が生成する記録です（`shared-ai-rules.md` 13 章）。
+- 生成された環境では、このファイルが「どの版を取り込んだか」の証跡になります。`version` が `(unspecified)` の場合はタグが記録されていないため、`source` とコミット SHA を別途記録してください。
+
 ## インストールスクリプト方針
 
 結論: このパッケージにインストール用シェルスクリプトは提供しません。
@@ -120,7 +142,10 @@
 
 ## 導入手順
 
-このパッケージ単独で完結します。特定の言語・コンテナ・実行環境を前提としません。
+このパッケージは特定の言語・コンテナ・実行環境を前提としません。導入に必要な雛形はすべて `templates/` に含まれます。
+
+ただし雛形には、**利用側が用意する実行体を指す記入欄**があります（受け入れ検証・第二意見レビュー・その単一入口など）。
+このパッケージは規範と雛形のみを配り、実行ランタイムは持ちません（「責務の範囲」）。記入欄を何で埋めるかは利用側が選びます（手順 3・4）。
 
 ### 1. 規範を配置する
 
@@ -133,6 +158,7 @@ submodule / subtree / 手動同期のいずれかで、このパッケージを 
 
 ```bash
 # 2 層目: プロジェクト共通ルール
+mkdir -p .github
 cp .ai-playbook/templates/project-ai-rules.md .github/project-ai-rules.md
 
 # 3 層目: 実行環境の入口ファイル（使う実行環境の数だけ）
@@ -149,6 +175,7 @@ cp .ai-playbook/templates/entry.md .github/copilot-instructions.md
 `review-workflow.md` のクロスモデル二段ゲートを使う場合、別ベンダーのモデルで実行する手段を配置します。
 
 ```bash
+mkdir -p scripts
 cp .ai-playbook/templates/gemini-review.sh scripts/
 chmod +x scripts/gemini-review.sh
 ```
@@ -168,12 +195,35 @@ cp .ai-playbook/templates/claude-skill-intake.md .claude/skills/intake/SKILL.md
 
 このスキルは判定基準・`reason_code` 一覧・intake 票の項目定義を複製せず、`.ai-playbook/intake/` と `.ai-playbook/role-contracts/intake-manager.md` を参照するだけです。Copilot 等 skill 機構を持たない実行環境は、同じ規範を各環境の機構で参照する形になります。
 
+### 6. リモート最終ゲートを配線する（GitHub を使う場合・任意）
+
+`review-workflow.md` のリモート最終ゲートを機構で自動要求する場合、要求が 1 回に限定される雛形を配置します。
+
+```bash
+mkdir -p .github/workflows
+cp .ai-playbook/templates/copilot-review.yml .github/workflows/copilot-review.yml
+```
+
+雛形は 1 つの実装例です。規範が要求するのは「要求回数を 1 回に限定すること」だけなので、手動要求のままでもかまいません。前提条件（レビュー機構の有効化・トークン）は雛形の冒頭コメントに記載しています。
+
 ### 新規プロジェクトの場合
 
-新規に環境ごと立ち上げる場合は、DevContainer Bootstrap（DCB）の `--with-playbook` が上記 1〜4 をまとめて実施します。
-DCB は雛形の内容を持たず、このパッケージの `templates/` をコピーするだけです。正本はこのパッケージ側にあります。
+新規に環境ごと立ち上げる場合は、DevContainer Bootstrap（DCB）の `--with-playbook` が上記の手順の大半を実施します。
+対応は次のとおりです。
 
-DCB は devcontainer と特定言語（node / go / python / php）を前提とするため、それ以外の環境では上記の手順を使ってください。
+| 上記の手順 | DCB の扱い |
+|---|---|
+| 1. 規範を配置する | 実施する（`*.md` のみ。`README.md` は規範ではないため配布対象外） |
+| 2. 3 層構造を配線する | 実施する（`.github/project-ai-rules.md` と入口ファイル 2 種） |
+| 3. プロジェクト固有の値を埋める | **実施しない。** 内容の判断が必要で自動化できないため、生成後に手で埋める |
+| 4. 第二意見レビューを用意する | 実施する（`scripts/gemini-review.sh` を実行可能属性付きで配置） |
+| 5. intake 起点を配線する | Claude Code の装備を選んだ場合のみ実施する |
+| 6. リモート最終ゲートを配線する | 該当のレビュー機構を選んだ場合のみ実施する |
+
+DCB は雛形の内容を持たず、このパッケージの `templates/` をコピーするだけです。正本はこのパッケージ側にあります。
+DCB はあわせて `.ai-playbook/VERSION` を生成し、取り込んだ版の出所を記録します（「取り込んだ版の記録」）。
+
+DCB は devcontainer と特定言語（node / go / python / php / rust）を前提とするため、それ以外の環境では上記の手順を使ってください。
 
 ## ファイル同期ルール
 

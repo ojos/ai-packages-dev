@@ -58,6 +58,7 @@
 3. `applyNow` — 即時反映するか
 4. `deferredIssue` — 後続へ送る場合の issue
 5. `affectedScope` — 影響範囲
+6. `blocking` — ブロッキング相談かどうか（「ブロッキング判定」に従う）
 
 ## 運用ルール
 
