@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
-# 選択された AI CLI ツールを導入する（--with-claude / --with-gemini / --with-copilot）。
+# このリポジトリの開発環境へ AI CLI（claude / gemini）を導入する。
+# 引数は取らず、未導入のものだけを無条件に導入する。
+# 導入対象を選べる --with-claude / --with-gemini / --with-copilot は、生成物側の
+# packages/devcontainer-bootstrap/bootstrap.sh のフラグであり、本スクリプトとは無関係。
 set -euo pipefail
 
 install_if_missing() {

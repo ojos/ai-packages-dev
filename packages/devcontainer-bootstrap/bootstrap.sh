@@ -71,11 +71,11 @@ notes:
 
   Credentials are never injected from the host. remoteEnv carries only
   LOCAL_WORKSPACE_FOLDER; authenticate inside the container (gh auth login,
-  claude /login, ...). Config dirs of the AI CLIs selected with --with-* are
-  persisted in named volumes; gh/cloud logins are not persisted yet, so they
-  must be repeated after a rebuild. Project-scoped values such as
-  GEMINI_API_KEY belong in the project .env, which
-  scripts/load-project-env.sh reads.
+  claude /login, ...). Those logins survive a rebuild: gh is always persisted
+  (gh-storage), and aws / gcloud and the config dirs of the AI CLIs are
+  persisted in named volumes when their --with-* flag is given.
+  Project-scoped values such as GEMINI_API_KEY belong in the project .env,
+  which scripts/load-project-env.sh reads.
 
   Shared AI rules are maintained in a separate repository. This script places
   them into the generated project; it is a distribution mechanism, not the
