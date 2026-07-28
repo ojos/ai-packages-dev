@@ -3,14 +3,15 @@
 #
 # verify.sh がこのスクリプトを実行し、終了コードで合否を判定する。
 #
-# このリポジトリは CI（.github/workflows/ci.yml）の 5 ジョブを完全ミラーする。
+# このリポジトリは CI（.github/workflows/ci.yml）の 5 ジョブ
+# + .github/workflows/identity-guard.yml を完全ミラーする。
 # 「ローカルが緑なら CI も緑」を保つのが目的で、部分ミラーは push してから CI で
 # 落ちる経路を残すため採らない。
 #
 # 二重管理の負債:
-#   ci.yml を変更したら、このファイルも同じ内容へ追随させること。CI とここが
-#   食い違うと、ローカルゲートは「CI の予行演習」ではなくなり、通っても意味を
-#   持たなくなる。追随漏れを機械で検知する仕組みは今のところ無い。
+#   ci.yml / identity-guard.yml を変更したら、このファイルも同じ内容へ追随させる
+#   こと。CI とここが食い違うと、ローカルゲートは「CI の予行演習」ではなくなり、
+#   通っても意味を持たなくなる。追随漏れを機械で検知する仕組みは今のところ無い。
 #
 # 生成既定（言語マニフェスト検出）は使わない:
 #   ルート直下に package.json / go.mod 等が無いため、既定のままでは常に
@@ -133,6 +134,28 @@ done < <(git ls-files '*.md')
 # （条件を書き写さないので、片方だけが古くなる余地がない）。
 echo "[acceptance] (neutrality) no project-specific names in packages or .ai-playbook"
 bash scripts/check-neutrality.sh
+
+# ── CI: identity-guard ───────────────────────────────────────────────────────
+# 判定ロジックの正本は scripts/verify-commit-identity.sh。CI の identity-guard も
+# 同じスクリプトを呼ぶため、条件を書き写さずミラーを保てる。
+#
+# 検査範囲の決め方:
+#   identity-guard.yml は範囲をイベントから決める（pull_request なら base..head、
+#   push(main) なら --full）。ローカルにはイベントが無いため、引数を渡さず
+#   verify-commit-identity.sh 自身の既定解決に委ねる。既定は origin/main が
+#   取得できれば origin/main..HEAD（= PR 経路の base..head と同じ範囲）で、
+#   取得できなければ HEAD の全履歴（= push(main) 経路の --full と同じ）へ落ちる。
+#   2 つの分岐が CI の 2 系統とそのまま対応するため、ここで範囲を計算し直す必要はない。
+#
+#   loop-gate.sh の resolve_review_range は流用しない。あちらは範囲を git diff へ
+#   渡す前提で、起点が無いとき空ツリーへ落とす。git log へ渡す本検査とは
+#   意味が異なり（verify-commit-identity.sh の resolve_range に明記がある）、
+#   3 つ目の範囲定義を増やすことになる。
+#
+#   fail-closed のため、許可 email が解決できなければ落ちる。ローカルでは .env の
+#   GIT_IDENTITY_EMAIL が、CI ではリポジトリ変数 ALLOWED_AUTHOR_EMAILS が供給元。
+echo "[acceptance] (identity) commit identity guard"
+bash scripts/verify-commit-identity.sh
 
 # ── CI: devcontainer-bootstrap tests ─────────────────────────────────────────
 # 所要時間が最も長い（約 4 分）ため最後に置く。手前の速い検査で落ちる差分は、
