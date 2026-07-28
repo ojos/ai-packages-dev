@@ -5,8 +5,11 @@
 #   bash tests/run-tests.sh            # 全テスト
 #   bash tests/run-tests.sh permissions # 名前に permissions を含むテストのみ
 #
-# 依存: bash, python3（URL 経路の検証にローカル HTTP サーバを使う）, tar, curl
+# 依存: bash, python3（URL 経路の検証にローカル HTTP サーバを使う）, tar, curl,
+#       timeout（副作用の前で停止することを検証するテストが使う）
 # ネットワークには出ない。
+#
+# この一覧は下の依存チェックと同じ内容を持つ。片方だけを更新しないこと。
 
 set -uo pipefail
 
