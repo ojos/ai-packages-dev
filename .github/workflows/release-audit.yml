@@ -1,0 +1,68 @@
+# 公開済みリリース資産の整合性を定期的に検査する（#193）。
+#
+# リリース末尾の 1 回だけでは、公開後に資産が差し替わった場合を検出できない。
+# ハッシュ照合へ変える意味は、定期的な再検査があって初めて出る。
+#
+# このワークフローは読み取り専用で、公開状態を一切変更しない（資産のダウンロードと
+# 再計算のみ）。失敗が 2 回連続したときだけ issue を起票する。
+name: release-audit
+
+on:
+  schedule:
+    # 毎週月曜 03:17 UTC。分を 0 からずらすのは、毎時 0 分に集中する実行キューを
+    # 避けるため（GitHub は混雑時に schedule を遅延・間引きする）。
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: "検査する直近リリースの件数（範囲外の件数は出力に明示される）"
+        required: false
+        default: "10"
+
+# 監査は公開リリースを読むだけ。書き込みが要るのは連続失敗時の issue 起票だけで、
+# actions: read は「直前の実行結果」を連続失敗の判定に使うため（permissions を
+# 明示すると、ここに書かないスコープは none になる）。
+permissions:
+  contents: read
+  issues: write
+  actions: read
+
+# 実行が重なると、直前の実行結果に基づく連続失敗の判定が不安定になる。
+# 走っているものは止めず、後続を待たせる。
+concurrency:
+  group: release-audit
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    name: Verify published release asset integrity
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # 検査範囲は 直近 N 件。N の優先順位は
+      # workflow_dispatch の入力 > リポジトリ変数 > スクリプトの既定（10）。
+      - name: Audit release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          AUDIT_RELEASE_LIMIT: ${{ inputs.limit || vars.AUDIT_RELEASE_LIMIT || '10' }}
+        run: |
+          set -o pipefail
+          bash scripts/release-packages.sh --owner "${{ github.repository_owner }}" --audit 2>&1 \
+            | tee audit.log
+
+      # 1 回目の失敗では起票しない。判定の実体は scripts/audit-failure-notify.sh に
+      # あり、連続失敗回数は Actions の実行履歴から解決する（理由は同スクリプトの
+      # 先頭コメント）。
+      - name: Notify on consecutive failures
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          bash scripts/audit-failure-notify.sh \
+            --repo "${{ github.repository }}" \
+            --result failure \
+            --workflow release-audit.yml \
+            --branch "${{ github.ref_name }}" \
+            --run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            --log-file audit.log
