@@ -9,7 +9,7 @@
 
 | パッケージ | リポジトリ | 現行バージョン | 配布形態 |
 |---|---|---|---|
-| devcontainer-bootstrap | `ojos/devcontainer-bootstrap` | v0.7.3 | GitHub Release + 3 資産 |
+| devcontainer-bootstrap | `ojos/devcontainer-bootstrap` | v0.7.3 | GitHub Release + 資産 5 点（配布スクリプト 2: `bootstrap.sh` / `doctor.sh`、生成物 3: `SHA256SUMS` / `RELEASE-MANIFEST.json` / `PACKAGE_ARCHIVE.tar.gz`） |
 | ai-playbook | `ojos/ai-playbook` | v0.1.5 | git タグのみ |
 
 ### 新世代の版更新
