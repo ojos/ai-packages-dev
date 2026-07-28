@@ -201,6 +201,9 @@ if [[ "$DRY_RUN" == "true" || "$DECISION" == "none" ]]; then
 fi
 
 body_file="$(mktemp)"
+# gh issue create / comment が失敗すると set -e で途中終了し、末尾の rm まで届かない。
+# mktemp の直後に trap を置き、どの経路で抜けても一時ファイルが残らないようにする。
+trap 'rm -f "$body_file"' EXIT
 build_body > "$body_file"
 
 case "$DECISION" in
@@ -216,5 +219,3 @@ case "$DECISION" in
     gh issue comment "$EXISTING" --repo "$REPO" --body-file "$body_file"
     ;;
 esac
-
-rm -f "$body_file"

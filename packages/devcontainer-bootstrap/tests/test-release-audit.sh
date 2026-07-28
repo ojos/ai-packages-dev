@@ -173,6 +173,90 @@ else
   fail "空の SHA256SUMS で成功してしまった"
 fi
 
+# ── 4b. 監査対象ディレクトリの外を指す名前は FAIL ────────────────────────────
+# SHA256SUMS / RELEASE-MANIFEST.json に載る名前は監査対象（＝外部）の入力で、
+# そのまま "$dir/$name" へ連結すると外のファイルを照合してしまう。しかも外側に
+# 辻褄の合うファイルを置けば「OK」と出せてしまい、検証が意味を失う。
+# ここでは実際に外側へ正しいハッシュのファイルを置き、素通りしないことを固定する。
+
+# 監査対象の 1 階層外に、ハッシュの一致する「囮」を置く。
+setup_escape_target() {
+  local root="$1"
+  mkdir -p "$root/release"
+  cp -R "$BASE"/. "$root/release"/
+  printf 'escaped\n' > "$root/escape.txt"
+  sha256sum "$root/escape.txt" | awk '{print $1}'
+}
+
+it "SHA256SUMS がディレクトリ外を指す名前を持つと落ちる"
+d="$(new_workdir)/escape-sums"
+mkdir -p "$d"
+h="$(setup_escape_target "$d")"
+printf '%s  ../escape.txt\n' "$h" >> "$d/release/SHA256SUMS"
+out="$(run_verify "$d/release")"
+rc=$?
+if [[ $rc -ne 0 ]]; then
+  assert_contains "$out" "SHA256SUMS の項目名が単一ファイル名でない" "検証出力"
+else
+  fail "ディレクトリ外を指す SHA256SUMS の項目で成功してしまった"
+fi
+
+it "checksums のキーがディレクトリ外を指すと落ちる"
+d="$(new_workdir)/escape-checksums"
+mkdir -p "$d"
+h="$(setup_escape_target "$d")"
+jq --arg h "$h" '.checksums["../escape.txt"] = $h' \
+  "$d/release/RELEASE-MANIFEST.json" > "$d/m.tmp" && mv "$d/m.tmp" "$d/release/RELEASE-MANIFEST.json"
+out="$(run_verify "$d/release")"
+rc=$?
+if [[ $rc -ne 0 ]]; then
+  assert_contains "$out" "checksums のキーが単一ファイル名でない" "検証出力"
+else
+  fail "ディレクトリ外を指す checksums のキーで成功してしまった"
+fi
+
+it "assets の要素がディレクトリ外を指すと落ちる"
+d="$(new_workdir)/escape-assets"
+mkdir -p "$d"
+setup_escape_target "$d" >/dev/null
+jq '.assets += ["../escape.txt"]' \
+  "$d/release/RELEASE-MANIFEST.json" > "$d/m.tmp" && mv "$d/m.tmp" "$d/release/RELEASE-MANIFEST.json"
+out="$(run_verify "$d/release")"
+rc=$?
+if [[ $rc -ne 0 ]]; then
+  assert_contains "$out" "assets の要素が単一ファイル名でない" "検証出力"
+else
+  fail "ディレクトリ外を指す assets の要素で成功してしまった"
+fi
+
+# ── 4c. マニフェストの型不正は FAIL ──────────────────────────────────────────
+# checksums / assets が期待と違う型になると、後続の jq がエラーで何も出力せず
+# 照合ループが空入力のまま素通りする。「検査していないのに緑」を防ぐ。
+
+it "checksums が object でないと落ちる"
+d="$(new_workdir)/bad-checksums-type"
+cp -R "$BASE" "$d"
+jq '.checksums = []' "$d/RELEASE-MANIFEST.json" > "$d/m.tmp" && mv "$d/m.tmp" "$d/RELEASE-MANIFEST.json"
+out="$(run_verify "$d")"
+rc=$?
+if [[ $rc -ne 0 ]]; then
+  assert_contains "$out" "checksums が object でない" "検証出力"
+else
+  fail "checksums の型が不正でも成功してしまった"
+fi
+
+it "assets が array でないと落ちる"
+d="$(new_workdir)/bad-assets-type"
+cp -R "$BASE" "$d"
+jq '.assets = {}' "$d/RELEASE-MANIFEST.json" > "$d/m.tmp" && mv "$d/m.tmp" "$d/RELEASE-MANIFEST.json"
+out="$(run_verify "$d")"
+rc=$?
+if [[ $rc -ne 0 ]]; then
+  assert_contains "$out" "assets が array でない" "検証出力"
+else
+  fail "assets の型が不正でも成功してしまった"
+fi
+
 # ── 5. 検査範囲の明示（何件中何件を見たか）──────────────────────────────────
 # 打ち切った件数を黙って隠すと、出力が「全部見た」と読める。
 
@@ -278,6 +362,61 @@ else
 fi
 rm -rf "$FIXTURE/releases/v0.0.13"
 
+it "通常の件数では取得上限の警告を出さない"
+if printf '%s' "$out" | grep -q '取得上限'; then
+  fail "上限に達していないのに警告が出た"
+else
+  pass
+fi
+
+# ── 5b. リリース名（外部入力）を作業ディレクトリのパスへ使わない ─────────────
+# タグ名は公開リポジトリ側が決める値で、監査プロセスにとっては外部入力。これを
+# パスへ埋め込むと `../` を含むタグで mkdir -p / rm -rf が想定外の場所へ作用する。
+# ここでは作業領域の外に「消えては困るファイル」を置き、それが残ることを固定する。
+
+it "タグ名に ../ を含んでも作業領域の外を壊さない"
+TRAVERSAL_ROOT="$(new_workdir)/traversal"
+mkdir -p "$TRAVERSAL_ROOT/tmp" "$TRAVERSAL_ROOT/victim"
+printf 'keep me\n' > "$TRAVERSAL_ROOT/victim/keep.txt"
+# 作業ディレクトリ（mktemp -d）から 3 つ上がると $TRAVERSAL_ROOT に届く配置にする。
+# タグをパスへ連結する実装なら victim を作り直したうえで rm -rf する。
+: > "$FIXTURE/tags.txt"
+echo '/../../../victim' >> "$FIXTURE/tags.txt"
+out="$(TMPDIR="$TRAVERSAL_ROOT/tmp" run_audit)"
+rc=$?
+if [[ -f "$TRAVERSAL_ROOT/victim/keep.txt" ]]; then
+  pass
+else
+  fail "タグ名の ../ で作業領域の外のファイルが消えた（rc=$rc）:
+$(printf '%s' "$out" | grep -v '^\[audit\] OK' | head -10)"
+fi
+
+# ── 5c. リリース一覧が取得上限で切れたことを隠さない ─────────────────────────
+# 総数は取得した一覧を数えて出しているため、一覧が上限で切れると「公開 N 件中」の
+# N が実際より小さくなる。切り捨てた範囲は必ず出力へ明示する（#193）。
+
+LIST_LIMIT="$(
+  # shellcheck disable=SC1090
+  . "$FNS"
+  printf '%s' "$AUDIT_RELEASE_LIST_LIMIT"
+)"
+
+it "リリース一覧が取得上限に達したら件数が不完全であることを警告する"
+: > "$FIXTURE/tags.txt"
+i=1
+while [[ $i -le $LIST_LIMIT ]]; do
+  echo "v9.9.$i" >> "$FIXTURE/tags.txt"
+  i=$((i + 1))
+done
+out="$(AUDIT_RELEASE_LIMIT=1 run_audit)"
+rc=$?
+if [[ $rc -eq 0 ]]; then
+  assert_contains "$out" "リリース一覧が取得上限 $LIST_LIMIT 件に達した" "監査出力"
+else
+  fail "上限ちょうどの一覧で監査が失敗した:
+$(printf '%s' "$out" | grep -v '^\[audit\] OK' | head -10)"
+fi
+
 # ── 6. 連続失敗時だけ起票する ────────────────────────────────────────────────
 # 1 回目の失敗で起票しないのは、一過性の失敗で issue が溜まると本当の不整合が
 # 埋もれるため。判定は GitHub API を叩かずに検査できる形にしてある。
@@ -334,6 +473,34 @@ if [[ $rc -ne 0 ]]; then
   assert_contains "$out" "--result" "エラー出力"
 else
   fail "不正な値でも通ってしまった"
+fi
+
+# 本文の一時ファイルは gh の失敗経路でも残してはならない。set -e で途中終了すると
+# 末尾の rm まで届かないため、mktemp 直後の trap で片付いていることを固定する。
+it "起票に失敗しても一時ファイルを残さない"
+FAIL_STUB="$(new_workdir)/notify-fail-bin"
+mkdir -p "$FAIL_STUB"
+cat > "$FAIL_STUB/gh" <<'STUB'
+#!/usr/bin/env bash
+if [[ "${1:-}" == "issue" && "${2:-}" == "create" ]]; then
+  echo "STUB: gh issue create failed" >&2
+  exit 1
+fi
+exit 0
+STUB
+chmod +x "$FAIL_STUB/gh"
+NOTIFY_TMP="$(new_workdir)/notify-tmp"
+mkdir -p "$NOTIFY_TMP"
+out="$(PATH="$FAIL_STUB:$PATH" TMPDIR="$NOTIFY_TMP" \
+  bash "$NOTIFY_SH" --repo owner/repo --result failure --previous failure --existing-issue none 2>&1)"
+rc=$?
+leftover="$(find "$NOTIFY_TMP" -mindepth 1 | head -5)"
+if [[ $rc -eq 0 ]]; then
+  fail "起票が失敗したのにスクリプトが成功した"
+elif [[ -n "$leftover" ]]; then
+  fail "起票の失敗で一時ファイルが残った: $(printf '%s' "$leftover" | tr '\n' ' ')"
+else
+  pass
 fi
 
 # ── 7. 定期実行の配線 ────────────────────────────────────────────────────────

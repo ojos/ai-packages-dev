@@ -471,6 +471,31 @@ tag_and_release() {
 # 件数は環境変数 AUDIT_RELEASE_LIMIT で変更できる（定期実行の workflow が渡す）。
 AUDIT_RELEASE_LIMIT_DEFAULT=10
 
+# リリース一覧を引くときに gh へ渡す上限。総数の算出はこの一覧を数えて行うため、
+# 上限に達した場合は総数が実際より少なく見える。切り捨てた範囲は必ず出力へ明示する
+# 方針（#193）に合わせ、達したときは警告を出して件数が不完全であることを示す。
+AUDIT_RELEASE_LIST_LIMIT=1000
+
+# 資産名が「リリース直下の単一ファイル名」であることを検証する。
+# 使い方: is_plain_asset_name <name>
+#
+# SHA256SUMS / RELEASE-MANIFEST.json に載る名前は監査対象（＝外部）の入力であり、
+# そのまま "$dir/$name" へ連結すると `/` や `..` で監査ディレクトリの外を参照できて
+# しまう。リリース資産は Release 直下のフラットなファイルしか無い前提なので、
+# 区切りや相対参照を含む名前は「監査対象が壊れている／悪意がある」ことの徴候その
+# もので、黙って読み飛ばさず呼び出し側で FAIL として報告する。
+#
+# 戻り値: 0 = 単一ファイル名 / 1 = それ以外
+is_plain_asset_name() {
+  local name="$1"
+  [[ -n "$name" ]] || return 1
+  # パス区切りを含むものは、相対・絶対を問わず対象外。`../x` もここで落ちる。
+  [[ "$name" != */* ]] || return 1
+  # 区切りが無くてもディレクトリ自身を指す名前は資産ではない。
+  [[ "$name" != "." && "$name" != ".." ]] || return 1
+  return 0
+}
+
 # ダウンロード済みのリリース資産 1 件分を検証する。
 # 使い方: verify_release_assets_dir <dir> <label>
 #
@@ -510,6 +535,11 @@ verify_release_assets_dir() {
     # sha256sum のバイナリモード印を落とす（"<hash>  *<name>" 形式）。
     name="${name#\*}"
     sums_lines=$((sums_lines + 1))
+    if ! is_plain_asset_name "$name"; then
+      echo "[audit] FAIL  $label  $name — SHA256SUMS の項目名が単一ファイル名でない"
+      failed=1
+      continue
+    fi
     if [[ ! -f "$dir/$name" ]]; then
       echo "[audit] FAIL  $label  $name — SHA256SUMS が列挙するファイルが資産に無い"
       failed=1
@@ -540,12 +570,30 @@ verify_release_assets_dir() {
     return 1
   fi
 
+  # checksums / assets の型も明示的に検査する。壊れた入力でこれらが期待と違う型に
+  # なると、後続の `to_entries[]` / `.[]` が jq のエラーで何も出力せず、照合ループが
+  # 空入力のまま素通りする。「検査対象が壊れているのに緑」になる経路なので、型不正
+  # そのものを FAIL として扱う。未定義（null）は既定値で補うため許容する。
+  if ! jq -e '(.checksums == null) or ((.checksums | type) == "object")' "$manifest" >/dev/null 2>&1; then
+    echo "[audit] FAIL  $label  RELEASE-MANIFEST.json の checksums が object でない"
+    return 1
+  fi
+  if ! jq -e '(.assets == null) or ((.assets | type) == "array")' "$manifest" >/dev/null 2>&1; then
+    echo "[audit] FAIL  $label  RELEASE-MANIFEST.json の assets が array でない"
+    return 1
+  fi
+
   # マニフェストは SHA256SUMS 自身のハッシュを記録しており、これが検証チェーンの根に
   # なる。ここが合っていれば「SHA256SUMS ごと差し替えられていない」ことをマニフェスト
   # 側からも言える。SHA256SUMS の自己照合だけでは、両方を同時に書き換えられた場合に
   # 何も検出できない。
   while IFS=$'\t' read -r name expected; do
     [[ -n "$name" ]] || continue
+    if ! is_plain_asset_name "$name"; then
+      echo "[audit] FAIL  $label  $name — RELEASE-MANIFEST.json の checksums のキーが単一ファイル名でない"
+      failed=1
+      continue
+    fi
     if [[ ! -f "$dir/$name" ]]; then
       echo "[audit] FAIL  $label  $name — RELEASE-MANIFEST.json が記録するファイルが資産に無い"
       failed=1
@@ -577,6 +625,11 @@ verify_release_assets_dir() {
   # ものは、マニフェストだけを見た利用者が入手手順どおりに取得できない状態を指す。
   while IFS= read -r name; do
     [[ -n "$name" ]] || continue
+    if ! is_plain_asset_name "$name"; then
+      echo "[audit] FAIL  $label  $name — RELEASE-MANIFEST.json の assets の要素が単一ファイル名でない"
+      failed=1
+      continue
+    fi
     if [[ ! -f "$dir/$name" ]]; then
       echo "[audit] FAIL  $label  $name — RELEASE-MANIFEST.json の assets にあるが資産として存在しない"
       failed=1
@@ -635,7 +688,7 @@ audit_release_assets() {
   echo "[audit] verifying release asset integrity by recomputing SHA256 (limit: $limit)"
 
   for repo in "${repos[@]}"; do
-    if ! tags="$(gh release list --repo "$repo" --limit 1000 --json tagName --jq '.[].tagName' 2>/dev/null)"; then
+    if ! tags="$(gh release list --repo "$repo" --limit "$AUDIT_RELEASE_LIST_LIMIT" --json tagName --jq '.[].tagName' 2>/dev/null)"; then
       echo "[audit] FAIL  $repo — リリース一覧を取得できない"
       failed=1
       continue
@@ -663,9 +716,19 @@ audit_release_assets() {
     grand_skipped=$((grand_skipped + skipped))
     echo "[audit] scope $repo — 公開 $total 件中 $inspected 件を検査（範囲外・未検査: $skipped 件）"
 
+    # 一覧そのものが上限で切れている場合、$total は「公開されている全件」ではなく
+    # 「取得できた件数」でしかない。範囲外の件数が実際より少なく見えるため、
+    # 数字が不完全であることを出力に明示する（黙って過少報告しない）。
+    if [[ $total -ge $AUDIT_RELEASE_LIST_LIMIT ]]; then
+      echo "[audit] WARN  $repo — リリース一覧が取得上限 $AUDIT_RELEASE_LIST_LIMIT 件に達した。公開件数・範囲外件数は実際より少ない可能性がある"
+    fi
+
     for tag in "${taglist[@]}"; do
-      dir="$workroot/${repo//\//_}@$tag"
-      mkdir -p "$dir"
+      # 作業ディレクトリ名にタグやリポジトリ名を埋め込まない。タグは公開リポジトリ
+      # 側が決める外部入力で、`../` を含む値がそのままパスへ入ると mkdir -p / rm -rf
+      # が想定外の場所へ作用し得る。どのリリースを見ているかは出力の label が持つ
+      # ので、パスは mktemp -d に任せて安全な名前だけを使う。
+      dir="$(mktemp -d "$workroot/asset.XXXXXXXX")"
       if ! gh release download "$tag" --repo "$repo" --dir "$dir" >/dev/null 2>&1; then
         echo "[audit] FAIL  $repo@$tag — 資産を取得できない"
         failed=1
