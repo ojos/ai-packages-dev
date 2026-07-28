@@ -319,14 +319,63 @@ JSON
   popd >/dev/null
 }
 
+# 公開配布物のファイル一覧。開発リポジトリ内のパスと、配布先ルートでの名前を
+# "src:dst" の対で持つ。macOS の bash 3.2 互換を保つため連想配列は使わない。
+#
+# 配布先には docs/release/ という階層が存在しない（ai-playbook は .ai-playbook/ の
+# 中身がルートへ展開され、DCB はごく少数のファイルがルートへ並ぶ）。そのため
+# リリースノートは配布先ルートで解決できる CHANGELOG.md という名前へ移して配る。
+# 変更履歴の正本は開発リポジトリの docs/release/ 側のままで、配布はその写しになる。
+DCB_DISTRIBUTED_FILES=(
+  "packages/devcontainer-bootstrap/bootstrap.sh:bootstrap.sh"
+  "packages/devcontainer-bootstrap/doctor.sh:doctor.sh"
+  "packages/devcontainer-bootstrap/README.md:README.md"
+  "LICENSE:LICENSE"
+  "docs/release/release-notes-devcontainer-bootstrap.md:CHANGELOG.md"
+)
+
+# ai-playbook はツリー全体（.ai-playbook/.）を展開したうえで、開発リポジトリの
+# 別階層にある共通ファイルを追加で載せる。
+PLAYBOOK_DISTRIBUTED_FILES=(
+  "LICENSE:LICENSE"
+  "docs/release/release-notes-ai-playbook.md:CHANGELOG.md"
+)
+
+# 一覧に載っているのに実体が無い場合は落とす。黙って欠けたまま公開すると、
+# 配布先のルートからライセンスや変更履歴が消えたことに誰も気づかない。
+copy_distributed_files() {
+  local dir="$1"
+  shift
+  local entry src dst
+  for entry in "$@"; do
+    src="${entry%%:*}"
+    dst="${entry#*:}"
+    [[ -f "$src" ]] || {
+      echo "error: distribution source not found: $src" >&2
+      exit 1
+    }
+    cp "$src" "$dir/$dst"
+  done
+}
+
+# dry-run で「何が配布先へ載るか」を見えるようにする。実行しないと分からない
+# 状態だと、配布経路へ載せたつもりのファイルが載っていないことを確認できない。
+print_distribution_plan() {
+  local label="$1"
+  shift
+  local entry
+  echo "[plan] $label distributed files:"
+  for entry in "$@"; do
+    echo "[plan]   ${entry%%:*} -> ${entry#*:}"
+  done
+}
+
 prepare_dcb_release_repo() {
   local dir="$1"
   rm -rf "$dir"
   mkdir -p "$dir"
 
-  cp packages/devcontainer-bootstrap/bootstrap.sh "$dir/"
-  cp packages/devcontainer-bootstrap/doctor.sh "$dir/"
-  cp packages/devcontainer-bootstrap/README.md "$dir/"
+  copy_distributed_files "$dir" "${DCB_DISTRIBUTED_FILES[@]}"
 }
 
 prepare_playbook_release_repo() {
@@ -335,6 +384,7 @@ prepare_playbook_release_repo() {
   mkdir -p "$dir"
   # 配布リポジトリのルート = .ai-playbook の中身。ドット始まりの正本を展開する。
   cp -R .ai-playbook/. "$dir/"
+  copy_distributed_files "$dir" "${PLAYBOOK_DISTRIBUTED_FILES[@]}"
 }
 
 init_and_push_release_repo() {
@@ -522,6 +572,16 @@ if [[ -n "$PLAYBOOK_TAG" ]]; then
 fi
 
 echo "[ok] preflight checks passed"
+
+if [[ -n "$DCB_TAG" ]]; then
+  print_distribution_plan "devcontainer-bootstrap" "${DCB_DISTRIBUTED_FILES[@]}"
+fi
+
+if [[ -n "$PLAYBOOK_TAG" ]]; then
+  echo "[plan] ai-playbook distributed files:"
+  echo "[plan]   .ai-playbook/. -> (repository root)"
+  print_distribution_plan "ai-playbook (additional)" "${PLAYBOOK_DISTRIBUTED_FILES[@]}"
+fi
 
 if [[ "$EXECUTE" != "true" ]]; then
   echo "[info] dry-run mode. add --execute to publish releases"

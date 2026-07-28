@@ -2241,12 +2241,13 @@ install_playbook_rules() {
 
   echo "[bootstrap] shared AI rules from: $common_dir"
 
-  # 配布ルート直下の README.md はパッケージ自身の説明であり、利用者が取り込む規範
-  # ではない。フラット化で規範と同階層に並ぶため、明示的に除外する。
+  # 配布ルート直下の README.md / CHANGELOG.md はパッケージ自身の説明と変更履歴で
+  # あり、利用者が取り込む規範ではない。フラット化で規範と同階層に並ぶため、
+  # 明示的に除外する。
   while IFS= read -r src; do
     [[ -n "$src" ]] || continue
     rel="${src#"$common_dir"/}"
-    [[ "$rel" == "README.md" ]] && continue
+    [[ "$rel" == "README.md" || "$rel" == "CHANGELOG.md" ]] && continue
     dest="$OUTPUT_DIR/$PLAYBOOK_REL_ROOT/$rel"
     apply_file_with_policy "$src" "$dest"
     count=$((count + 1))
@@ -2378,7 +2379,7 @@ EOF
     while IFS= read -r src; do
       [[ -n "$src" ]] || continue
       rel="${src#"$PLAYBOOK_DIR"/}"
-      [[ "$rel" == "README.md" ]] && continue
+      [[ "$rel" == "README.md" || "$rel" == "CHANGELOG.md" ]] && continue
       echo "plan: $OUTPUT_DIR/$PLAYBOOK_REL_ROOT/$rel"
     done < <(find "$PLAYBOOK_DIR" -type f -name '*.md' | sort)
     echo "plan: $OUTPUT_DIR/.github/project-ai-rules.md"
