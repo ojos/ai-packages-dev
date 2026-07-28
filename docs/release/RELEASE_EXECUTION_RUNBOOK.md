@@ -22,6 +22,24 @@ DCB の `SHA256SUMS` は、README がダウンロードさせるファイル（`
 検証する人が手元に持たないファイルを列挙すると `sha256sum -c` が失敗するため。
 ai-playbook はリリース資産を持たない。DCB の `--playbook-from` も git 由来の `archive/refs/tags/` tarball を使う。
 
+### 配布リポジトリのルートへ載せるファイル
+
+両パッケージ共通で、配布リポジトリのルートへ次を載せる。正本は開発リポジトリ側にあり、配布はその写しになる。
+一覧は `scripts/release-packages.sh` の `DCB_DISTRIBUTED_FILES` / `PLAYBOOK_DISTRIBUTED_FILES` が正本で、
+`--execute` なしの dry-run が `[plan]` 行として出力する。
+
+| 配布先のファイル | 開発リポジトリ側の正本 |
+|---|---|
+| `LICENSE` | `LICENSE`（MIT） |
+| `CHANGELOG.md` | `docs/release/release-notes-devcontainer-bootstrap.md` / `docs/release/release-notes-ai-playbook.md` |
+
+配布先には `docs/` 階層が存在しないため、リリースノートはルートで解決できる `CHANGELOG.md` へ改名して配る。
+同じ理由で、リリースノート本文にリポジトリ内の相対リンクを書かない（配布先で解決できないリンクになる）。
+`LICENSE` / `CHANGELOG.md` は規範ではないため、DCB の `--with-playbook` による取り込み対象からは外れる。
+
+外部からの貢献は受け付けない。配布リポジトリはリリースのたびに全置換されるため、直接の PR は次のリリースで失われる。
+この方針は両パッケージの README に明記する（CONTRIBUTING ファイルは置かない）。
+
 背景と経緯は [archive/RELEASE_PROCESS_RECORD.md](../archive/RELEASE_PROCESS_RECORD.md)（旧世代の記録）を参照。
 現行のリリース履歴の正本は [RELEASE_HISTORY](RELEASE_HISTORY.md)。
 

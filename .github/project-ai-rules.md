@@ -157,8 +157,9 @@ bash scripts/verify.sh
 
 - 終了コード 0 = `VERIFY_PASS` / 1 = `VERIFY_FAIL`（未達、または受け入れ条件が未定義）。
 - 受け入れ条件の実体は `scripts/acceptance.sh`（プロジェクトが所有・編集します）。環境変数 `VERIFY_ACCEPTANCE` で差し替えられます（例: `VERIFY_ACCEPTANCE=scripts/acceptance-fast.sh bash scripts/verify.sh`）。
-- `scripts/acceptance.sh` は `.github/workflows/ci.yml` の 5 ジョブを完全ミラーします。「ローカルが緑なら CI も緑」を保つための構成で、部分ミラーは採りません。
-- **`ci.yml` を変更したら `scripts/acceptance.sh` も同じ内容へ追随させます。** 追随漏れを機械で検知する仕組みは無く、食い違うとローカルゲートは CI の予行演習でなくなります。
+- `scripts/acceptance.sh` は `.github/workflows/ci.yml` の 5 ジョブと `.github/workflows/identity-guard.yml` を完全ミラーします。「ローカルが緑なら CI も緑」を保つための構成で、部分ミラーは採りません。
+- identity 検査は `scripts/verify-commit-identity.sh` を引数なしで呼び、同スクリプトの既定範囲解決（`origin/main..HEAD`、解決できなければ HEAD の全履歴）に委ねます。CI の 2 系統（`pull_request` の base..head / `push`(main) の `--full`）とそのまま対応します。
+- **`ci.yml` / `identity-guard.yml` を変更したら `scripts/acceptance.sh` も同じ内容へ追随させます。** 追随漏れを機械で検知する仕組みは無く、食い違うとローカルゲートは CI の予行演習でなくなります。
 
 ### 第二意見（クロスモデル）
 
@@ -222,23 +223,7 @@ push / PR 作成後の最終ゲートを、このリポジトリで具体化し�
 - 既存プロジェクト適用時は既存ディレクトリ構造を優先し、非破壊で運用します。
 - サブディレクトリ構造（`src/features` など）は細かく強制せず、オプションの推奨に留めます。
 - 既定構造と異なる生成が必要な場合は、理由を明示して最小変更で対応します。
-
-### 設定ウィザード
-
-ディレクトリ構造テンプレートの設定は次のウィザードで作成します。
-
-```bash
-bash scripts/setup-ai-directory-policy.sh
-```
-
-出力先:
-
-- `.github/ai-directory-policy.json`
-
-運用モード:
-
-- `recommended`: 推奨トップレベル構造を生成時に適用
-- `reference-only`: 推奨を参照のみ（警告中心）
+- 本方針は文書上の規範として扱い、適用はレビューで担保します。設定ファイルやウィザードによる機構は持ちません。
 
 ## 実装委譲パターン
 
