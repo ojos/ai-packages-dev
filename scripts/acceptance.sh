@@ -131,9 +131,13 @@ done < <(git ls-files '*.md')
 # プロジェクト固有の値がパッケージ層と規範層へ混入していないことを検証する。
 # tests/ は除外する（配布されない層であり、生成物に固有名詞が残らないことを
 # 検証する都合上、検査対象語をリテラルで持つ必要があるため）。
+# 対象拡張子は .github/workflows/ci.yml の同名ジョブと一致させる（本スクリプトは
+# CI の完全ミラーであり、片方だけが検知する状態を作らない）。*.yml / *.yaml は
+# 規範層が配布する workflow テンプレート（.ai-playbook/templates/*.yml）を含む。
 echo "[acceptance] (neutrality) no project-specific names in packages or .ai-playbook"
 if grep -rniE 'bascule|ojos' packages/ .ai-playbook/ \
-  --include='*.sh' --include='*.md' --include='*.json' --exclude-dir=tests \
+  --include='*.sh' --include='*.md' --include='*.json' \
+  --include='*.yml' --include='*.yaml' --exclude-dir=tests \
   | grep -v 'ojos/devcontainer-bootstrap' \
   | grep -v 'ojos/ai-playbook'; then
   echo "[acceptance] project-specific names must not leak into packages/ or .ai-playbook/" >&2
