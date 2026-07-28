@@ -144,10 +144,14 @@ jobs:
       # 配布しない（scripts/release-packages.sh 参照）。かつテストは「生成物に固有名詞が
       # 残らないこと」を検証する都合上、検査対象語として固有名詞をリテラルで持つ必要が
       # あるため、ここで検査すると中立性の趣旨と自己矛盾する。
+      #
+      # 対象拡張子は scripts/acceptance.sh の同名チェックと一致させる。*.yml / *.yaml
+      # は規範層が配布する workflow テンプレート（.ai-playbook/templates/*.yml）を含む。
       - name: No project-specific names in packages or .ai-playbook
         run: |
           if grep -rniE 'bascule|ojos' packages/ .ai-playbook/ \
-            --include='*.sh' --include='*.md' --include='*.json' --exclude-dir=tests \
+            --include='*.sh' --include='*.md' --include='*.json' \
+            --include='*.yml' --include='*.yaml' --exclude-dir=tests \
             | grep -v 'ojos/devcontainer-bootstrap' \
             | grep -v 'ojos/ai-playbook'; then
             echo "project-specific names must not leak into packages/ or .ai-playbook/"

@@ -481,6 +481,10 @@ require_cmd gh
 require_cmd bash
 require_cmd tar
 require_cmd sha256sum
+# python3 は validate_markdown_links_in_tree の実体であり、preflight で必ず走る。
+# ここで検査しないと、不在環境では「python3: command not found」という、
+# 何の前提が欠けているのか分からないエラーで preflight が落ちる。
+require_cmd python3
 require_clean_worktree
 
 # 検査は安い順に並べる。版の重複は問い合わせ 1 回で分かるため、テスト実行のような
