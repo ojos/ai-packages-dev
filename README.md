@@ -13,6 +13,8 @@ ai-packages-dev/
 │   ├── role-contracts/              # ロール責務の契約 7 種
 │   ├── task-playbooks/              # タスク手順 4 種
 │   ├── review-workflow.md           # レビュー運用
+│   ├── loop-workflow.md             # ループコーディング運用の規範
+│   ├── loop-coding-guide.md         # ループコーディングの解説ガイド
 │   ├── intake/                      # intake 規律・判定 reason code
 │   └── templates/                   # 導入用の雛形
 ├── packages/
@@ -20,10 +22,22 @@ ai-packages-dev/
 │       ├── bootstrap.sh             # メインスクリプト
 │       ├── doctor.sh                # 自己診断スクリプト
 │       └── tests/                   # 機能テスト
+├── docs/                            # ドキュメント
+│   ├── CATALOG.md                   # docs 配下の索引（正本）
+│   ├── release/                     # リリース実行手順・履歴・リリースノート
+│   ├── records/                     # 判断根拠と実施記録
+│   └── archive/                     # 旧世代（参照のみ・更新しない）
 └── scripts/                         # 運用スクリプト（一覧と用途は scripts/CATALOG.md が正本）
 ```
 
-`scripts/` の個々のファイルはここでは列挙しません。索引は [scripts/CATALOG.md](scripts/CATALOG.md) を正本とし、追加・削除・改名は同一コミットでの更新を CI が検査します（2 箇所へ列挙すると、片方だけ古くなる形で必ずずれるため）。
+`docs/` と `scripts/` の個々のファイルはここでは列挙しません。索引は [docs/CATALOG.md](docs/CATALOG.md) と [scripts/CATALOG.md](scripts/CATALOG.md) を正本とします（2 箇所へ列挙すると、片方だけ古くなる形で必ずずれるため）。
+
+索引と実体のずれは [.github/workflows/ci.yml](.github/workflows/ci.yml) の `consistency` ジョブが検査します。検査対象は `docs/` 配下の `.md` と `scripts/` 配下の `.sh` に限定され、内容は次の 2 点です。
+
+- 追跡対象の `docs/*.md` / `scripts/*.sh` が、それぞれの CATALOG に列挙されていること
+- 各 CATALOG が列挙する `docs/` / `scripts/` のパスが実在すること
+
+`scripts/CATALOG.md` の収録ルールは `scripts/` 配下の運用対象ファイル全般を対象としますが、CI が未記載を検知できるのは `.sh` だけです。`.sh` 以外を追加・削除・改名したときは、同一コミットで CATALOG を手動更新してください。
 
 ## パッケージの役割と関係
 
@@ -64,8 +78,9 @@ ASF は 2026-07 に退役しました。
 
 ## リリースリポジトリとの関係
 
-このセクションは `bash scripts/update-release-status.sh` で更新する。
-リリース実施後は必ず同スクリプトを実行し、README の更新をコミットする。
+このセクションのブロックは `bash scripts/update-release-status.sh` が生成する。
+`scripts/release-packages.sh` がリリース処理の最後に同スクリプトを自動実行するため、通常のリリース経路で手動実行は不要で、差分が出た README をコミットすれば足りる。
+リリースを手動で実施するなど自動実行を経ていない場合だけ、同スクリプトを直接実行する。
 
 <!-- RELEASE_STATUS:START -->
 | パッケージ | 配布状態 |
@@ -73,7 +88,7 @@ ASF は 2026-07 に退役しました。
 | devcontainer-bootstrap | ojos/devcontainer-bootstrap で v0.7.2 まで公開済み |
 | ai-playbook | ojos/ai-playbook で v0.1.4 まで公開済み |
 
-リリース実行手順は各パッケージの `docs/` または `.github/workflows/` を参照する。
+リリース実行手順は [docs/release/RELEASE_EXECUTION_RUNBOOK.md](docs/release/RELEASE_EXECUTION_RUNBOOK.md) を参照する。
 
 ### リリース状況
 

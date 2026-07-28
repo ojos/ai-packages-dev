@@ -128,17 +128,11 @@ done < <(git ls-files '*.md')
 [[ "$link_fail" -eq 0 ]] || exit 1
 
 # ── CI: Package neutrality ───────────────────────────────────────────────────
-# プロジェクト固有の値がパッケージ層と規範層へ混入していないことを検証する。
-# tests/ は除外する（配布されない層であり、生成物に固有名詞が残らないことを
-# 検証する都合上、検査対象語をリテラルで持つ必要があるため）。
+# 検査対象・除外条件の正本は scripts/check-neutrality.sh。CI の同名ジョブも同じ
+# スクリプトを呼ぶため、本スクリプトが CI の完全ミラーであることが構造的に保たれる
+# （条件を書き写さないので、片方だけが古くなる余地がない）。
 echo "[acceptance] (neutrality) no project-specific names in packages or .ai-playbook"
-if grep -rniE 'bascule|ojos' packages/ .ai-playbook/ \
-  --include='*.sh' --include='*.md' --include='*.json' --exclude-dir=tests \
-  | grep -v 'ojos/devcontainer-bootstrap' \
-  | grep -v 'ojos/ai-playbook'; then
-  echo "[acceptance] project-specific names must not leak into packages/ or .ai-playbook/" >&2
-  exit 1
-fi
+bash scripts/check-neutrality.sh
 
 # ── CI: devcontainer-bootstrap tests ─────────────────────────────────────────
 # 所要時間が最も長い（約 4 分）ため最後に置く。手前の速い検査で落ちる差分は、

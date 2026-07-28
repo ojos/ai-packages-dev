@@ -285,14 +285,29 @@ generate_standard_assets() {
   archive_sha=$(sha256sum PACKAGE_ARCHIVE.tar.gz | awk '{print $1}')
   local sums_sha
   sums_sha=$(sha256sum SHA256SUMS | awk '{print $1}')
+
+  # assets は「この Release に添付されるファイル」の一覧。標準 3 資産だけを固定で
+  # 書いていると、README が公式の入手手順として案内する bootstrap.sh / doctor.sh が
+  # 載らず、マニフェストだけを見た利用者は何を取得すればよいか分からない。
+  # SUMS_TARGETS が「利用者が実際にダウンロードするファイル」の正本なので、そこから
+  # 組み立てる。連想配列を使わないのは macOS の bash 3.2 互換を保つため。
+  local assets_json="" asset
+  for asset in RELEASE-MANIFEST.json SHA256SUMS PACKAGE_ARCHIVE.tar.gz "${SUMS_TARGETS[@]}"; do
+    case "$assets_json" in
+      *"\"$asset\""*) continue ;;
+    esac
+    if [[ -n "$assets_json" ]]; then
+      assets_json="$assets_json,"$'\n'
+    fi
+    assets_json="$assets_json    \"$asset\""
+  done
+
   cat > RELEASE-MANIFEST.json <<JSON
 {
   "package": "$pkg_name",
   "version": "$version",
   "assets": [
-    "RELEASE-MANIFEST.json",
-    "SHA256SUMS",
-    "PACKAGE_ARCHIVE.tar.gz"
+$assets_json
   ],
   "checksums": {
     "PACKAGE_ARCHIVE.tar.gz": "$archive_sha",
@@ -481,6 +496,10 @@ require_cmd gh
 require_cmd bash
 require_cmd tar
 require_cmd sha256sum
+# python3 は validate_markdown_links_in_tree の実体であり、preflight で必ず走る。
+# ここで検査しないと、不在環境では「python3: command not found」という、
+# 何の前提が欠けているのか分からないエラーで preflight が落ちる。
+require_cmd python3
 require_clean_worktree
 
 # 検査は安い順に並べる。版の重複は問い合わせ 1 回で分かるため、テスト実行のような
