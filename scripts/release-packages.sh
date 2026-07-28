@@ -40,6 +40,30 @@ require_cmd() {
   }
 }
 
+# リリースの実行場所は GitHub Actions に一本化する。
+#
+# 文書からローカル手順を消すだけでは「規約は禁じているが機構は許している」状態が
+# 残り、保証が指示文に依存する。ここで機構として拒否する。
+#
+# 判定は Actions が必ず設定する GITHUB_ACTIONS で行う。この変数を手で偽装すれば
+# 越えられるが、それは故意の迂回であり、事故としてのローカル実行は必ず止まる。
+# 実行環境の同一性を担保する仕組みであって、権限の境界ではない。
+#
+# 呼び出しは preflight より前に置く。DCB 機能テストに 4 分かけてから拒否しても
+# 実行できないことに変わりはなく、早く止まるほうが手戻りが小さい。
+# dry-run（`--execute` なし）と `--audit` は副作用を持たないため、ローカルでも
+# 従来どおり実行できる。
+require_actions_runtime() {
+  if [[ "${GITHUB_ACTIONS:-}" != "true" ]]; then
+    echo "error: --execute は GitHub Actions 上でのみ実行できます。" >&2
+    echo "       ローカルからのリリース実行は廃止しました。" >&2
+    echo "       release workflow を workflow_dispatch から起動してください" >&2
+    echo "       （手順: docs/release/RELEASE_EXECUTION_RUNBOOK.md）。" >&2
+    echo "       ローカルで実行できるのは --execute なしの dry-run と --audit です。" >&2
+    exit 1
+  fi
+}
+
 # リポジトリ外の一時クローンでコミットする際に使う identity。
 # 供給元はプロジェクト .env（GIT_IDENTITY_NAME / GIT_IDENTITY_EMAIL）に一本化する。
 # global へのフォールバックには依存しない。setup-git-identity.sh が global identity を
@@ -783,6 +807,12 @@ if [[ "$AUDIT" == "true" ]]; then
   require_cmd gh
   audit_release_assets "$OWNER"
   exit $?
+fi
+
+# 副作用を伴う実行は、他の検査より先に実行環境を確かめる。
+# --audit は読み取りのみでここへ到達しないため、ローカルでも従来どおり使える。
+if [[ "$EXECUTE" == "true" ]]; then
+  require_actions_runtime
 fi
 
 [[ -n "$OWNER" ]] || {

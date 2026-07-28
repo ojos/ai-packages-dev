@@ -248,7 +248,10 @@ STUB
 chmod +x "$stub/gh" "$stub/git"
 
 # 版の重複は preflight の先頭で判定されるため、README の版と一致しない任意の版でよい。
-out="$(cd "$REPO_ROOT" && PATH="$stub:$PATH" timeout 60 bash "$RELEASE_SH" \
+# GITHUB_ACTIONS は明示する。--execute は Actions 上でのみ実行できるため、
+# 実行環境（CI かローカルか）で結果が変わらないよう固定する
+# （ガードそのものの検証は test-release-execution-guard.sh が持つ）。
+out="$(cd "$REPO_ROOT" && PATH="$stub:$PATH" GITHUB_ACTIONS=true timeout 60 bash "$RELEASE_SH" \
         --owner test --dcb-version v9.9.9 --execute 2>&1)"
 code=$?
 if [[ $code -eq 0 ]]; then

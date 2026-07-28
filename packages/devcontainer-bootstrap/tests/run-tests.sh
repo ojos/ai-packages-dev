@@ -5,15 +5,22 @@
 #   bash tests/run-tests.sh            # 全テスト
 #   bash tests/run-tests.sh permissions # 名前に permissions を含むテストのみ
 #
-# 依存: bash, python3（URL 経路の検証にローカル HTTP サーバを使う）, tar, curl
+# 依存: bash, python3（URL 経路の検証にローカル HTTP サーバを使う）, tar, curl,
+#       timeout（副作用の前で停止することを検証するテストが使う）
 # ネットワークには出ない。
+#
+# この一覧は下の依存チェックと同じ内容を持つ。片方だけを更新しないこと。
 
 set -uo pipefail
 
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FILTER="${1:-}"
 
-for cmd in python3 tar curl; do
+# timeout は、副作用の前で停止することを検証するテスト（test-release-contract.sh /
+# test-release-execution-guard.sh）が使う。無い環境では該当テストだけが
+# "command not found" で落ち、原因が「依存の欠落」だと分からない形になるため、
+# 他の依存と同じく入口で明示的に検査する。
+for cmd in python3 tar curl timeout; do
   command -v "$cmd" >/dev/null 2>&1 || {
     echo "error: required command not found: $cmd" >&2
     exit 1
