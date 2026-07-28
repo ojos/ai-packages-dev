@@ -1,0 +1,181 @@
+name: release
+
+# パッケージのリリースを実行するワークフロー（#189 の決定 0 / 1 / 2 / 3 / 5、#192）。
+# 実体は scripts/release-packages.sh で、ここはそれを Actions から呼ぶ配線に徹する。
+# 判定ロジックを二重に持たないのは、ローカル実行と同じコードで公開状態を変えるため。
+#
+# トリガーを workflow_dispatch のみにする理由:
+#   タグ push を契機にすると、タグを打った瞬間に公開が始まる。この処理は公開リポジトリの
+#   main を全置換し、Release を作る。誤発火の代償が大きいので、起動は人の明示に限る。
+#
+# environment protection rules による承認ゲートは使えない:
+#   本リポジトリは個人アカウント配下の private で、GitHub Free では branch protection /
+#   rulesets とともに使用できないことを実測で確認した（#189）。代わりに、下の入力検証と
+#   スクリプト側の preflight（公開済みバージョンの再公開拒否）を防御層とする。
+#
+# 失敗時は前進復旧とし、自動巻き戻しは持たない（#189 の決定 3）。副作用は preflight を
+# 全通過してから入り、各操作は冪等（差分が無ければ commit しない / 既存タグは push
+# しない / 公開済み Release は拒否）なので、同じ入力での再実行で収束する。
+
+on:
+  workflow_dispatch:
+    inputs:
+      dcb-version:
+        description: 'devcontainer-bootstrap のタグ（例: v0.7.4）。公開しないときは空にする'
+        required: false
+        type: string
+      playbook-version:
+        description: 'ai-playbook のタグ（例: v0.1.6）。公開しないときは空にする'
+        required: false
+        type: string
+      execute:
+        description: '実際に公開する。false のままなら dry-run で、公開状態には一切触れない'
+        required: false
+        default: false
+        type: boolean
+
+# 公開リポジトリを全置換する処理が並走すると内容が壊れる。副作用の途中でキャンセル
+# するのも同じく危険なため、実行中のものは止めず、後続を待たせる。
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+# 既定トークンは自リポジトリにしかスコープが効かず、公開リポジトリへは push できない。
+# クロスリポジトリの権限は GitHub App の install トークンで別に得るので、ここは
+# 読み取りに留める。
+permissions:
+  contents: read
+
+jobs:
+  release:
+    name: Release packages
+    runs-on: ubuntu-latest
+    steps:
+      # 入力検証を最初に置く。チェックアウトもトークン発行もまだ行っていない位置で
+      # 落とすことで、誤った入力がどの副作用にも到達しない。
+      - name: Validate inputs
+        env:
+          DCB_VERSION: ${{ inputs.dcb-version }}
+          PLAYBOOK_VERSION: ${{ inputs.playbook-version }}
+          EXECUTE: ${{ inputs.execute }}
+          # ブランチ名ではなく ref で判定する。ref_name は tag からの起動でもタグ名を
+          # 返すため、main という名前のタグを作られると素通りする。
+          REF: ${{ github.ref }}
+          BOT_NAME: ${{ vars.RELEASE_BOT_NAME }}
+          BOT_EMAIL: ${{ vars.RELEASE_BOT_EMAIL }}
+        run: |
+          fail=0
+
+          # 版番号は片方だけの指定を許す。パッケージごとに版が独立して進むため、
+          # 一方の修正を他方の公開へ巻き込まない。ただし両方空なら対象が無い。
+          if [ -z "$DCB_VERSION" ] && [ -z "$PLAYBOOK_VERSION" ]; then
+            echo "error: dcb-version / playbook-version の少なくとも一方を指定してください" >&2
+            fail=1
+          fi
+
+          if [ "$EXECUTE" = "true" ]; then
+            # 配布されるのは起動したブランチの内容そのもの。main 以外からの公開は、
+            # レビューを経ていないコードを公開リポジトリへ出すことになる。
+            # 副作用の無い dry-run は、任意のブランチで実行できるままにする
+            # （制限すると、ワークフロー自体の変更を一度も試せなくなる）。
+            if [ "$REF" != "refs/heads/main" ]; then
+              echo "error: execute: true は main からのみ起動できます（現在: $REF）" >&2
+              echo "       dry-run（execute: false）は任意のブランチで実行できます" >&2
+              fail=1
+            fi
+
+            # 一時クローンでの commit 名義。未解決なら release-packages.sh が副作用の
+            # 直前で止まるが、そこへ着くまでに preflight の DCB テストで数分かかる。
+            # 設定漏れは入力の誤りと同じ性質なので、検査の安い側で先に返す。
+            if [ -z "$BOT_NAME" ] || [ -z "$BOT_EMAIL" ]; then
+              echo "error: リポジトリ変数 RELEASE_BOT_NAME / RELEASE_BOT_EMAIL が未設定です" >&2
+              echo "       Settings > Secrets and variables > Actions > Variables に bot の identity を設定してください" >&2
+              fail=1
+            fi
+          fi
+
+          exit $fail
+
+      - uses: actions/checkout@v4
+
+      # クロスリポジトリ push の権限は、実行ごとに発行する短命の install トークンで得る
+      # （#189 の決定 1）。secret に残るのは App の秘密鍵だけで、長命の push 権限を
+      # 保存しない。トークンはジョブ終了後に失効する。
+      - name: Generate a release bot token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          # 配布先の 2 リポジトリだけに絞る。App が他リポジトリへ install されても、
+          # このワークフローが受け取る権限は広がらない。
+          repositories: |
+            devcontainer-bootstrap
+            ai-playbook
+
+      # release-packages.sh は /tmp の一時クローンに対して git clone / push する。
+      # actions/checkout が張る認証はチェックアウト先のリポジトリにしか効かないため、
+      # 一時クローンには届かない。global の credential helper で経路を通す。
+      #
+      # helper はトークンを環境変数から読む。~/.gitconfig へ埋め込むと、ジョブの
+      # 全ステップが読めるファイルに機密が残る（「機密をファイルへ保存しない」）。
+      # 実体の値は、git を起動するステップが GH_TOKEN として渡す。
+      - name: Route git push authentication to the release bot
+        run: |
+          # 空文字を先に置いてヘルパー一覧をリセットする。ランナーの /etc/gitconfig 側に
+          # ヘルパーがあると、そちらが先に応答してこの設定が黙って無視される
+          # （scripts/setup-git-identity.sh が global へ同じ形を適用しているのと同じ理由）。
+          git config --global --replace-all credential.helper ""
+          git config --global --add credential.helper \
+            '!f() { if [ "$1" = get ]; then printf "username=x-access-token\npassword=%s\n" "$GH_TOKEN"; fi; }; f'
+
+      - name: Run the release script
+        env:
+          # gh CLI と、上で設定した credential helper の両方がこの値を読む。
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          # 一時クローンでの commit 名義（#189 の決定 4）。実行主体とコミット名義を
+          # 一致させる。人の名義を機械が打つと履歴が実態と乖離するため。
+          # 値は App 作成後に確定する（email が App ID を含む）ので、ワークフローへ
+          # 焼き込まずリポジトリ変数から渡す。identity-guard.yml の
+          # ALLOWED_AUTHOR_EMAILS と同じ方式。
+          GIT_IDENTITY_NAME: ${{ vars.RELEASE_BOT_NAME }}
+          GIT_IDENTITY_EMAIL: ${{ vars.RELEASE_BOT_EMAIL }}
+          OWNER: ${{ github.repository_owner }}
+          DCB_VERSION: ${{ inputs.dcb-version }}
+          PLAYBOOK_VERSION: ${{ inputs.playbook-version }}
+          EXECUTE: ${{ inputs.execute }}
+        run: |
+          # 入力は env 経由で受け取り、式展開でシェルへ直接埋め込まない。
+          # 展開すると、入力欄の内容がそのままコマンドとして実行され得る。
+          args=(--owner "$OWNER")
+          if [ -n "$DCB_VERSION" ]; then
+            args+=(--dcb-version "$DCB_VERSION")
+          fi
+          if [ -n "$PLAYBOOK_VERSION" ]; then
+            args+=(--playbook-version "$PLAYBOOK_VERSION")
+          fi
+          # execute が false のときは --execute を渡さない。スクリプトは preflight と
+          # 配布計画の表示だけを行い、公開状態には触れずに終了する。
+          if [ "$EXECUTE" = "true" ]; then
+            args+=(--execute)
+          fi
+          bash scripts/release-packages.sh "${args[@]}"
+
+      # release-packages.sh は最後に README の RELEASE_STATUS ブロックを更新するが、
+      # その差分はランナー上のチェックアウトに残るだけで、ジョブ終了とともに消える。
+      # 後追いでモノレポへ反映する必要があることを、実行者が見る場所に残す。
+      - name: Report the follow-up diff
+        if: ${{ inputs.execute }}
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            {
+              echo "## 後追いコミットが必要な差分"
+              echo
+              echo "リリース実行で更新された内容。このリポジトリへ手で反映してください。"
+              echo
+              echo '```diff'
+              git diff
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi

@@ -60,7 +60,7 @@ resolve_release_identity() {
   # 途中まで公開状態を変えてから落ちるより、着手前に止めるほうが安全。
   if [[ -z "$RELEASE_AUTHOR_NAME" || -z "$RELEASE_AUTHOR_EMAIL" ]]; then
     echo "error: GIT_IDENTITY_NAME / GIT_IDENTITY_EMAIL が解決できません。" >&2
-    echo "       プロジェクトルートの .env に設定してください（雛形: .env.example）。" >&2
+    echo "       ローカル実行なら .env（雛形: .env.example）、Actions ならワークフローの env で渡してください。" >&2
     exit 1
   fi
 }
