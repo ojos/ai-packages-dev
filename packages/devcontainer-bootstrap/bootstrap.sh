@@ -36,9 +36,12 @@ PLAYBOOK_DIR=""
 PLAYBOOK_TMP_ROOT=""
 
 usage() {
+  # 1 行目は呼び出しに使われたパスをそのまま示す。開発リポジトリでは
+  # packages/devcontainer-bootstrap/bootstrap.sh、公開配布物ではリポジトリ直下と
+  # 配置が異なるため、固定パスではどちらか一方でしか解決しない。
+  # 以降の本文は $PWD をリテラルで含むため、ヒアドキュメントは引用符付きのまま保つ。
+  printf 'usage: bash %s [options]\n\n' "$0"
   cat <<'EOF'
-usage: bash bootstrap.sh [options]
-
 options:
   --project-name <name>       Project name for devcontainer display name (required)
   --languages <csv>           Language runtimes (CSV: node,go,python,php,rust) (required)
