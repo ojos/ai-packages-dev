@@ -36,7 +36,8 @@
 | `loop-workflow.md` | ループコーディング運用の規範（受け入れ検証の機械ゲート化・verify ランナー契約・収束） |
 | `loop-coding-guide.md` | ループコーディングの解説ガイド（従来ワークフローとの違い・考え方。`loop-workflow.md` の解説版） |
 | `intake/` | intake テンプレート、相談テンプレート、判定 reason code |
-| `templates/` | 導入用の雛形（入口ファイル・プロジェクト共通ルール・第二意見レビュー・Claude Code の intake 起点スキル） |
+| `templates/` | 導入用の雛形 5 種（`entry.md` 実行環境の入口ファイル / `project-ai-rules.md` プロジェクト共通ルール / `gemini-review.sh` 第二意見レビューの実装例 / `copilot-review.yml` リモート最終ゲートの実装例 / `claude-skill-intake.md` Claude Code の intake 起点スキル） |
+| `.gitignore` | このパッケージを開発するときの追跡除外設定。規範ではないため配布・取り込みの対象外（`shared-ai-rules.md` 13 章） |
 
 共通ルールの補足として、AI からの質問は一問ずつ行い、各質問には意図を添え、回答は選択肢優先で提示します。
 
@@ -172,6 +173,17 @@ cp .ai-playbook/templates/claude-skill-intake.md .claude/skills/intake/SKILL.md
 ```
 
 このスキルは判定基準・`reason_code` 一覧・intake 票の項目定義を複製せず、`.ai-playbook/intake/` と `.ai-playbook/role-contracts/intake-manager.md` を参照するだけです。Copilot 等 skill 機構を持たない実行環境は、同じ規範を各環境の機構で参照する形になります。
+
+### 6. リモート最終ゲートを配線する（GitHub を使う場合・任意）
+
+`review-workflow.md` のリモート最終ゲートを機構で自動要求する場合、要求が 1 回に限定される雛形を配置します。
+
+```bash
+mkdir -p .github/workflows
+cp .ai-playbook/templates/copilot-review.yml .github/workflows/copilot-review.yml
+```
+
+雛形は 1 つの実装例です。規範が要求するのは「要求回数を 1 回に限定すること」だけなので、手動要求のままでもかまいません。前提条件（レビュー機構の有効化・トークン）は雛形の冒頭コメントに記載しています。
 
 ### 新規プロジェクトの場合
 
