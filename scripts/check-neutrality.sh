@@ -18,12 +18,26 @@ set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
 
-if hits="$(grep -rniE 'bascule|ojos' packages/ .ai-playbook/ \
+raw="$(grep -rniE 'bascule|ojos' packages/ .ai-playbook/ \
   --include='*.sh' --include='*.md' --include='*.json' \
-  --include='*.yml' --include='*.yaml' --exclude-dir=tests \
-  | grep -v 'ojos/devcontainer-bootstrap' \
-  | grep -v 'ojos/ai-playbook')"; then
-  echo "$hits"
+  --include='*.yml' --include='*.yaml' --exclude-dir=tests || true)"
+
+# 除外は「行ごと捨てる」のではなく「許可された文字列だけを消してから再判定する」。
+# 行単位の grep -v だと、同一行に禁止語と許可 URL が共存したとき
+# （例: `# bascule 用の ojos/devcontainer-bootstrap 設定`）に
+# 禁止語ごと検査を逃れる。報告は元の行で行い、消去後の行は判定にのみ使う。
+hits=""
+while IFS= read -r line; do
+  [ -n "$line" ] || continue
+  stripped="${line//ojos\/devcontainer-bootstrap/}"
+  stripped="${stripped//ojos\/ai-playbook/}"
+  if printf '%s' "$stripped" | grep -qiE 'bascule|ojos'; then
+    hits="${hits}${line}"$'\n'
+  fi
+done <<< "$raw"
+
+if [ -n "$hits" ]; then
+  printf '%s' "$hits"
   echo "error: project-specific names must not leak into packages/ or .ai-playbook/" >&2
   exit 1
 fi
