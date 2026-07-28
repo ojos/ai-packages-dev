@@ -31,7 +31,7 @@ ai-playbook はリリース資産を持たない。DCB の `--playbook-from` も
 
 | # | 検査 | 実行条件 | 実装 |
 |---|---|---|---|
-| 1 | 必要コマンド（`git` / `gh` / `bash` / `tar` / `sha256sum`）が存在する | 常時 | `require_cmd` |
+| 1 | 必要コマンド（`git` / `gh` / `bash` / `tar` / `sha256sum` / `python3`）が存在する | 常時 | `require_cmd` |
 | 2 | 作業ツリーが clean | 常時 | `require_clean_worktree` |
 | 3 | タグ形式が `vX.Y.Z` | 指定した版ごと | `extract_semver` |
 | 4 | 指定バージョンが未公開（DCB は Release の有無、ai-playbook はタグの有無で判定） | 指定した版ごと | `require_version_unpublished` / `require_tag_unpublished` |
