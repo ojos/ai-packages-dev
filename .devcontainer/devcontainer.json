@@ -17,6 +17,7 @@
     },
     "ghcr.io/devcontainers-extra/features/ripgrep:1": {},
     "ghcr.io/devcontainers-extra/features/shellcheck:1": {},
+    "ghcr.io/devcontainers-extra/features/tmux-apt-get:1": {},
     "ghcr.io/devcontainers/features/github-cli:1": {},
     "ghcr.io/devcontainers/features/node:2.1.0": {}
   },
@@ -28,7 +29,9 @@
   "customizations": {
     "vscode": {
       "extensions": [
-        "anthropic.claude-code"
+        "anthropic.claude-code",
+        "Google.gemini-cli-vscode-ide-companion",
+        "ms-azuretools.vscode-containers"
       ]
     }
   }

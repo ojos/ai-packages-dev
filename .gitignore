@@ -194,5 +194,9 @@ vite.config.ts.timestamp-*
 # Local handover note (kept in workspace but never committed)
 GETTING_STARTED.md
 
-# Claude Code のローカル設定（セッションごとの権限許可リスト等）
-.claude/
+# Claude Code のローカル設定（セッションごとの権限許可リスト等）。
+# ディレクトリごと除外すると配下を再包含できないため、直下の要素を個別に除外する。
+.claude/*
+# intake 起点スキルはローカル設定ではなく規範の配布物で、DCB の生成先でも追跡される。
+# ここだけ再包含し、settings.json / settings.local.json / worktrees は除外を保つ。
+!.claude/skills/
