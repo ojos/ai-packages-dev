@@ -79,8 +79,8 @@ ASF は 2026-07 に退役しました。
 ## リリースリポジトリとの関係
 
 このセクションのブロックは `bash scripts/update-release-status.sh` が生成する。
-`scripts/release-packages.sh` がリリース処理の最後に同スクリプトを自動実行するため、通常のリリース経路で手動実行は不要で、差分が出た README をコミットすれば足りる。
-リリースを手動で実施するなど自動実行を経ていない場合だけ、同スクリプトを直接実行する。
+リリースは GitHub Actions で実行するため、`scripts/release-packages.sh` がリリース処理の最後に行う自動更新は runner 側の作業ツリーにしか残らない。
+リリース後は手元で同スクリプトを実行し、差分をコミットする（[RELEASE_EXECUTION_RUNBOOK](docs/release/RELEASE_EXECUTION_RUNBOOK.md) の「事後確認」）。
 
 <!-- RELEASE_STATUS:START -->
 | パッケージ | 配布状態 |

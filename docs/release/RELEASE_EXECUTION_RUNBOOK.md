@@ -2,12 +2,32 @@
 
 このランブックは、実装 issue のマージ後に最終パッケージリリースを実行する手順を定義する。
 
+**リリースの実行場所は GitHub Actions。ローカルからの実行経路は廃止した。**
+
 ## 対象範囲
 
 対象リポジトリ:
 - `ojos/ai-packages-dev`（開発・調整）
 - `ojos/ai-playbook`
 - `ojos/devcontainer-bootstrap`
+
+## 実行場所
+
+リリースは、このリポジトリの release workflow（`.github/workflows/release.yml`）を `workflow_dispatch` で起動して実行する。
+実行環境を一本化するため、ローカル実行は廃止した。2 経路を残すと、手元の環境差（認証・処理系・作業ツリーの状態）に起因する失敗経路が構造的に残り続ける。
+
+廃止は文書だけでなく機構で担保する。`scripts/release-packages.sh` は `GITHUB_ACTIONS` を見て、Actions 外での `--execute` を preflight より前に拒否する（非ゼロ終了・副作用なし）。
+環境変数を手で偽装すれば越えられるが、それは故意の迂回であり、事故としてのローカル実行は必ず止まる。
+
+手元から実行できるのは、公開側へ副作用を出さない次の 2 つに限る。
+
+| 操作 | コマンド | 用途 |
+|---|---|---|
+| dry-run | `bash scripts/release-packages.sh --owner ojos --playbook-version vX.Y.Z` | preflight を手早く回して手戻りを短くする補助。本番の予行演習は Actions 側で行う（実行環境が違うため、手元で通っても本番の保証にはならない） |
+| 資産監査 | `bash scripts/release-packages.sh --owner ojos --audit` | 公開済み Release の必須資産を確認する |
+
+git identity は workflow が GitHub App の bot として渡す。実行者が `.env` に identity を用意する必要はない
+（`.github/project-ai-rules.md`「Git identity」）。
 
 ## 配布方式（パッケージごとに異なる）
 
@@ -26,7 +46,7 @@ ai-playbook はリリース資産を持たない。DCB の `--playbook-from` も
 
 両パッケージ共通で、配布リポジトリのルートへ次を載せる。正本は開発リポジトリ側にあり、配布はその写しになる。
 一覧は `scripts/release-packages.sh` の `DCB_DISTRIBUTED_FILES` / `PLAYBOOK_DISTRIBUTED_FILES` が正本で、
-`--execute` なしの dry-run が `[plan]` 行として出力する。
+dry-run（`execute: false`）が `[plan]` 行として出力する。
 
 | 配布先のファイル | 開発リポジトリ側の正本 |
 |---|---|
@@ -45,7 +65,7 @@ ai-playbook はリリース資産を持たない。DCB の `--playbook-from` も
 
 ## ゲート条件（すべて満たすこと）
 
-`scripts/release-packages.sh` の preflight が以下を自動で検査する。1 つでも落ちれば、公開側にもローカルにも副作用を出さずに終了する。
+`scripts/release-packages.sh` の preflight が以下を自動で検査する。1 つでも落ちれば、公開側にも実行環境にも副作用を出さずに終了する。
 
 | # | 検査 | 実行条件 | 実装 |
 |---|---|---|---|
@@ -75,95 +95,82 @@ DCB は規範パッケージの `templates/` を配布するため、DCB リリ�
 - `ojos/ai-playbook` に `vX.Y.Z`
 - `ojos/devcontainer-bootstrap` に `vX.Y.Z`
 
-`--dcb-version` / `--playbook-version` に渡す値も同じ `vX.Y.Z` 形式。
+workflow の `dcb-version` / `playbook-version` に渡す値も同じ `vX.Y.Z` 形式。
 `extract_semver` が `^v[0-9]+\.[0-9]+\.[0-9]+$` 以外を弾くため、接頭辞付きや `v` 無しは preflight で落ちる。
 
 ## バージョンの正本
 
 - DCB: `packages/devcontainer-bootstrap/README.md` の固定バージョン。
-  preflight の `validate_dcb_docs` が次の **3 箇所**を照合し、1 つでも `--dcb-version` と揃わなければ落ちる。
+  preflight の `validate_dcb_docs` が次の **3 箇所**を照合し、1 つでも `dcb-version` と揃わなければ落ちる。
   1. 見出し行 `最新安定リリース:`（または `Latest stable release:`）が存在すること
   2. 固定行 `` - `vX.Y.Z` `` が存在すること
   3. 取得手順の `TAG=vX.Y.Z` が一致すること
-- ai-playbook: リリース時に `--playbook-version` で指定するタグ（README 側の照合はない）
+- ai-playbook: リリース時に `playbook-version` で指定するタグ（README 側の照合はない）
+
+## workflow の入力
+
+| 入力 | 値 | 既定 | 備考 |
+|---|---|---|---|
+| `dcb-version` | `vX.Y.Z` または空欄 | 空欄 | 出さない側は空欄にする |
+| `playbook-version` | `vX.Y.Z` または空欄 | 空欄 | 両方を空欄にするとエラー |
+| `execute` | `true` / `false` | `false` | `false` は dry-run。`true` は `main` からのみ起動できる |
+
+パッケージは独立してリリースできる。指定した側だけを触り、空欄にした側の公開物には手を触れない。
+
+多重起動は `concurrency` で直列化される。公開リポジトリを全置換する処理が並走すると内容が壊れるため、
+実行中に同じ workflow を起動した場合は待ち合わせになる（進行中の実行はキャンセルされない）。
 
 ## 実行手順
 
-この節のコマンド例は、現行の公開版（DCB `v0.7.2` / ai-playbook `v0.1.4`。正本は [RELEASE_HISTORY](RELEASE_HISTORY.md)）の次のパッチ版を仮に置いたもの。
+この節の版は、現行の公開版（正本は [RELEASE_HISTORY](RELEASE_HISTORY.md)）の次のパッチ版を仮に置いたもの。
 実際に出す版へ読み替える。公開済みの版を指定すると preflight（ゲート条件 #4）で落ちる。
 
-### 1) 前提条件を整える
+### 1) リリース内容を main へ入れる
 
-- 作業ツリーが clean であること。
-  DCB の README 更新やリリースノートの追記は、**コミットまで済ませてから**実行する（ゲート条件 #2）。
-- DCB を出す場合、`packages/devcontainer-bootstrap/README.md` の 3 箇所（「バージョンの正本」節）が目的の版に更新済みであること。
-- 目的のバージョンが未公開であること（公開済みは不変。再公開は preflight で失敗する）。
-- `gh` が認証済みで、配布リポジトリの push / Release 作成権限があること。
-- **`--execute` を使う場合のみ**: プロジェクトルートの `.env` に `GIT_IDENTITY_NAME` と `GIT_IDENTITY_EMAIL` が設定されていること。
+`execute: true` は `main` からしか起動できない。次をすべてコミットし、PR を経て `main` へマージしてから起動する。
 
-`--execute` は `/tmp` 配下の一時クローンでコミットする。そこはこのリポジトリの外なので local 設定を持たず、
-`scripts/setup-git-identity.sh` が global identity を削除して `user.useConfigOnly=true` を立てているためフォールバックも無い。
-`resolve_release_identity` がこの 2 つを解決できないと、公開側へ手を付ける前に exit 1 で停止する。
-雛形は `.env.example`。**値そのものはこのランブックにも他の文書にも書かない**（変数名の記載に留める）。
-identity の解決は preflight 通過後・最初の副作用の前に行われるため、**dry-run では `.env` は不要**。
+- DCB を出す場合、`packages/devcontainer-bootstrap/README.md` の 3 箇所（「バージョンの正本」節）が目的の版へ更新済みであること。
+- 各パッケージの変更点をリリースノートへ追記していること。
 
-### 2) dry-run で事前確認する
+  | パッケージ | リリースノート |
+  |---|---|
+  | `devcontainer-bootstrap` | [release-notes-devcontainer-bootstrap.md](release-notes-devcontainer-bootstrap.md) |
+  | `ai-playbook` | [release-notes-ai-playbook.md](release-notes-ai-playbook.md) |
 
-`--execute` を外して実行すると、preflight だけを走らせて `[info] dry-run mode. add --execute to publish releases` で終了する。
-公開側にもローカルにも副作用は出ないため、本番実行の前に必ず一度通す。
+- [RELEASE_HISTORY](RELEASE_HISTORY.md) の現行バージョン表と版更新表を更新していること。
+
+workflow は起動時の `main` の内容を配布する。マージ前の変更は配布されない。
+
+### 2) dry-run で起動する
+
+`execute: false`（既定）で起動する。preflight だけが走り、公開側にも副作用は出ない。本番実行の前に必ず一度通す。
 
 ```bash
-set -euo pipefail
-cd /workspaces/ojos-ai-packages-dev
+# ai-playbook 側だけ
+gh workflow run release.yml --ref main -f playbook-version=v0.1.6
 
-# ai-playbook 側の事前確認
-bash scripts/release-packages.sh --owner ojos --playbook-version v0.1.5
-
-# DCB 側の事前確認（README を同じ版へ更新・コミット済みであること）
-bash scripts/release-packages.sh --owner ojos --dcb-version v0.7.3
+# DCB 側だけ
+gh workflow run release.yml --ref main -f dcb-version=v0.7.4
 
 # 両方まとめて
-bash scripts/release-packages.sh --owner ojos \
-  --dcb-version v0.7.3 --playbook-version v0.1.5
+gh workflow run release.yml --ref main -f dcb-version=v0.7.4 -f playbook-version=v0.1.6
 ```
 
-`[ok] preflight checks passed` が出れば通過。
-`--dcb-version` を含む dry-run は DCB 機能テスト（ゲート条件 #7）を含むため約 4 分かかる。
+GitHub の Actions 画面から `Run workflow` で起動してもよい。実行ログは `gh run watch` か Actions 画面で追う。
 
-### 3) リリースノート
+ログに `[ok] preflight checks passed` と `[plan]` 行、末尾の `[info] dry-run mode. add --execute to publish releases` が出れば通過。
+`dcb-version` を含む dry-run は DCB 機能テスト（ゲート条件 #7）を含むため約 4 分かかる。
 
-各パッケージの変更点を、該当するファイルへ追記する。
+### 3) リリースを実行する
 
-| パッケージ | リリースノート |
-|---|---|
-| `devcontainer-bootstrap` | [release-notes-devcontainer-bootstrap.md](release-notes-devcontainer-bootstrap.md) |
-| `ai-playbook` | [release-notes-ai-playbook.md](release-notes-ai-playbook.md) |
-
-あわせて [RELEASE_HISTORY](RELEASE_HISTORY.md) の現行バージョン表と版更新表を更新する。
-追記した内容はコミットしてから次へ進む（作業ツリーが clean でないと preflight で落ちる）。
-
-### 4) リリース実行
-
-`scripts/release-packages.sh` が、ソースの反映・タグ付け・（DCB のみ）Release 作成をまとめて行う。
-手動でのタグ作成や clone は不要。
+同じ入力に `execute: true` を足して起動する。
 
 ```bash
-set -euo pipefail
-cd /workspaces/ojos-ai-packages-dev
-
-# 片方だけ
-bash scripts/release-packages.sh --owner ojos --dcb-version v0.7.3 --execute
-bash scripts/release-packages.sh --owner ojos --playbook-version v0.1.5 --execute
-
-# 両方
-bash scripts/release-packages.sh --owner ojos \
-  --dcb-version v0.7.3 --playbook-version v0.1.5 --execute
+gh workflow run release.yml --ref main \
+  -f dcb-version=v0.7.4 -f playbook-version=v0.1.6 -f execute=true
 ```
 
-`--execute` の前に preflight が再度すべて走る。dry-run で通っていても、その後に作業ツリーを汚したり
-公開側の状態が変わったりしていれば、ここで落ちる。
-
-`--dcb-version` / `--playbook-version` は最低 1 つ。指定したパッケージだけを触り、他方の公開物には手を触れない。
+preflight がもう一度すべて走る。dry-run 通過後に `main` や公開側の状態が変わっていれば、ここで落ちる。
 
 パッケージごとの挙動:
 
@@ -171,40 +178,52 @@ bash scripts/release-packages.sh --owner ojos \
   `bootstrap.sh` / `doctor.sh` / `SHA256SUMS` / `RELEASE-MANIFEST.json` / `PACKAGE_ARCHIVE.tar.gz` を添付する。
 - **ai-playbook**: 公開リポジトリへソースを反映し、タグを push する。Release も資産も作らない。
 
-公開処理のあと、`--execute` は次を自動で行う。
+公開リポジトリへの release snapshot コミットは GitHub App の bot 名義になる。実行主体とコミット名義を一致させるため。
 
-1. `scripts/update-release-status.sh --owner <owner> --readme README.md` を実行し、
-   ルート `README.md` の `<!-- RELEASE_STATUS:START -->` 〜 `<!-- RELEASE_STATUS:END -->` ブロックを最新の公開状況へ書き換える
-   （`[info] README release status refreshed. commit README.md if changed.`）。
-   **書き換えるだけでコミットはしない。実行者が `README.md` の差分をコミットする必要がある**（手順 5）。
-2. 各配布リポジトリの直近 3 リリースを一覧表示する。
-3. DCB のリリース資産監査（`audit_release_assets`）を実行する。手順 5 で `--audit` を別途実行する必要はない。
+公開処理のあと、同じ実行の中で次が走る。
 
-やり直す場合は版を上げる。どうしても同じ版でやり直すなら、先に公開側を削除する:
+1. `scripts/update-release-status.sh` によるルート `README.md` の書き換え。
+   **これは runner 上の作業ツリーに対する変更で、このリポジトリへはコミットされない**（手順 4 で手元から反映する）。
+2. 各配布リポジトリの直近 3 リリースの一覧表示。
+3. DCB のリリース資産監査（`audit_release_assets`）。手順 4 で `--audit` を別途実行する必要はない。
 
-```bash
-# DCB（Release + タグ）
-gh release delete <tag> --repo ojos/devcontainer-bootstrap --cleanup-tag
-# ai-playbook（タグのみ）
-git push https://github.com/ojos/ai-playbook.git :refs/tags/<tag>
-```
+### 4) 事後確認
 
-### 5) 事後確認
+- **ルート `README.md` の RELEASE_STATUS ブロックを手元で更新してコミットする。**
+  bot はこのモノレポへコミットしないため、この反映は人が行う。放置すると README の公開状況が実態とずれる。
 
-- **ルート `README.md` の RELEASE_STATUS ブロックの差分をコミットする。**
-  手順 4 で自動更新されるが、コミットは自動化されていない。放置すると README の公開状況が実態とずれる。
-- 資産監査（`RELEASE-MANIFEST.json` / `SHA256SUMS` / `PACKAGE_ARCHIVE.tar.gz` の有無）は手順 4 の末尾で自動実行済み。
-  あとから単独で再確認する場合のみ、次を使う（`--audit` は `--owner` だけを要求し、監査して終了する。
-  ai-playbook は Release を持たないため対象外）:
-
-```bash
-bash scripts/release-packages.sh --owner ojos --audit
-```
+  ```bash
+  bash scripts/update-release-status.sh --owner ojos --readme README.md
+  ```
 
 - 各リポジトリでタグがリモートに見えること。
 - DCB は README の手順（`curl` + `sha256sum -c`）が通ること。
 - ai-playbook は `archive/refs/tags/<tag>.tar.gz` が取得でき、展開したルートが `.ai-playbook/` の中身であること
   （配布リポジトリのルート = `.ai-playbook` の中身。`.ai-playbook` という階層は挟まらない）。
+- 資産監査は手順 3 の末尾で自動実行済み。あとから単独で再確認する場合のみ、手元で次を使う
+  （`--audit` は `--owner` だけを要求し、監査して終了する。ai-playbook は Release を持たないため対象外）:
+
+  ```bash
+  bash scripts/release-packages.sh --owner ojos --audit
+  ```
+
+## 失敗時の対応
+
+**前進復旧のみを持つ。自動の巻き戻しは無い。** 公開済みリリースは不変であり、巻き戻しはその前提と正面から衝突するため。
+
+- **preflight で落ちた場合**: 副作用は出ていない。原因を直して `main` へ入れ、同じ手順をやり直す。
+- **副作用へ入ってから落ちた場合**: 原因を直し、**同じ入力で再実行する**。処理は冪等で、差分が無ければコミットせず、既存タグは push せず、公開済み Release は preflight が拒否する。既に反映済みの部分が二重に適用されることはない。
+- **片方だけ公開できていた場合**: 公開済みの側を空欄にし、残りの版だけを指定して再実行してもよい。公開済みの側を指定したままでも、その側は preflight（ゲート条件 #4）で拒否されるため、再公開はされない。
+- **同じ版でやり直したい場合**: 原則は版を上げる。どうしても同じ版が必要なときに限り、例外として公開側を先に削除する。
+
+  ```bash
+  # DCB（Release + タグ）
+  gh release delete <tag> --repo ojos/devcontainer-bootstrap --cleanup-tag
+  # ai-playbook（タグのみ）
+  git push https://github.com/ojos/ai-playbook.git :refs/tags/<tag>
+  ```
+
+  これは公開状態の手動操作にあたる。実施したら、スクリプト側の前提（README の固定バージョン等）へ後追いで反映する。
 
 ## ロールバック方針
 
@@ -217,5 +236,4 @@ bash scripts/release-packages.sh --owner ojos --audit
 - 意思決定・調整: consult-facilitator
 - 実装: implementer ロール
 - レビュー・承認: reviewer ロール
-- リリース実行: リポジトリの admin / タグ権限を持つメンテナ
-
+- リリース実行: release workflow を起動する権限を持つメンテナ

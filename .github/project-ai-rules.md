@@ -68,17 +68,22 @@
 
 ## Git identity（コミット作者情報）
 
-`ojos/*` リポジトリへのすべての git 操作（commit / tag / リリーススクリプト内の一時クローン含む）は、次の identity で行います。
+`ojos/*` リポジトリへの git 操作の名義は、**操作の主体**で分けます。例外を積み上げるより、主体で分けるほうが機構が増えても破綻しないためです。
 
-- `user.name` = `.env` の `GIT_IDENTITY_NAME`（= `Ido`）
-- `user.email` = `.env` の `GIT_IDENTITY_EMAIL`（= `ido@ojos.jp`）
+| 主体 | 名義 | 適用範囲 |
+|---|---|---|
+| 人の操作 | `user.name` = `.env` の `GIT_IDENTITY_NAME`（= `Ido`） / `user.email` = `.env` の `GIT_IDENTITY_EMAIL`（= `ido@ojos.jp`） | commit / tag / push のすべて（既定） |
+| 機構の操作 | GitHub App の bot（`ojos-release-bot[bot]`） | **公開リポジトリへの release snapshot コミットのみ** |
+
+機構の名義を分けるのは、実行主体とコミット名義を一致させるためです。人の名義を機械が打つと、履歴が実態と乖離します。
+bot の適用範囲は上表のとおりで、本モノレポへは bot がコミットしません（リリース後の `README.md` 更新も人が行います。`docs/release/RELEASE_EXECUTION_RUNBOOK.md`「事後確認」）。
 
 順守事項:
 
 - global の identity には依存しません。`scripts/setup-git-identity.sh` が global の `user.name` / `user.email` を削除し、`user.useConfigOnly=true` を立てます。Dev Container はホストの `~/.gitconfig`（別アカウントの identity の場合がある）をコピーするため、そこへ落ちる経路を残しません。
 - コンテナ接続時に `scripts/on-attach.sh` が `setup-git-identity.sh` を再適用します（リビルドのたびに ~/.gitconfig が再生成されるため）。`bash scripts/setup-git-identity.sh --check` で状態を検証できます。
 - local 設定を持たないリポジトリでは `git commit` が exit 128 で止まります。これは設計どおりです。黙って別名義のコミットが通るより、止まって気づくほうを選びます。
-- リポジトリ外の一時クローンでコミットするスクリプトは、`git -c user.name=... -c user.email=...` で identity を明示します（`scripts/release-packages.sh`）。CI の `Self devcontainer credential isolation` ジョブが明示を検査します。
+- リポジトリ外の一時クローンでコミットするスクリプトは、`git -c user.name=... -c user.email=...` で identity を明示します（`scripts/release-packages.sh`）。CI の `Self devcontainer credential isolation` ジョブが明示を検査します。値の供給元は主体で変わります（release workflow は bot の値を渡し、それ以外は `.env` が供給元です）。
 - push / リリース実行の前に `bash scripts/verify-commit-identity.sh` で作者情報を検証します。別 identity を検出した場合は中断し、`bash scripts/setup-git-identity.sh` を適用したうえで該当コミットを `git rebase` で author ごと作り直します。単発の目視確認には `git log -1 --format='%an <%ae>'` を使います。
 
 ### commit identity の検証層
@@ -97,6 +102,7 @@ bash scripts/verify-commit-identity.sh --full       # HEAD の全履歴
 - 許可 author email の解決順は、`ALLOWED_AUTHOR_EMAILS`（カンマまたは空白区切り）→ `.env` の `GIT_IDENTITY_EMAIL`。どちらでも解決できない場合は「検査対象が無いので通過」にせず、fail-closed で落とします。
 - CI の検知層は `.github/workflows/identity-guard.yml` です。`pull_request`（`opened` / `synchronize` / `reopened`）では PR に含まれる全コミットを、`push`（`main`）では main の全履歴を検査します。PR を経由しない直接 push こそが混入の原因なので、後者を省略しません。
 - 許可 email は生成物へ焼き込まず、**リポジトリ変数** `ALLOWED_AUTHOR_EMAILS`（Settings > Secrets and variables > Actions > Variables）で渡します。CI には `.env` が無いため、これを設定しないと identity-guard は fail-closed で必ず失敗します。
+- **release workflow の bot は許可 email に加えません。** bot が名義を持つのは公開リポジトリへの release snapshot だけで、本モノレポへはコミットしないためです（identity-guard の検査対象は本モノレポのみ）。今は使わない許可を先回りして広げると、その分だけ fail-closed の検知力が落ちます。必要になった時点で加えます。
 
 ## GitHub 認証（gh CLI）
 
@@ -124,6 +130,8 @@ gh CLI の認証はコンテナ内で行い、その状態を named volume に�
 
 - 対象の外部状態: 公開リポジトリ（`ojos/*`）、GitHub Release、タグ
 - 宣言・適用の手段: `scripts/release-packages.sh`。ソースの反映・タグ付け・Release 作成を冪等に行い、公開済みバージョンの再公開を preflight で拒否します（不変性）
+- **実行場所は GitHub Actions（`.github/workflows/release.yml` の `workflow_dispatch`）です。ローカルからのリリース実行は行いません。** 実行環境を一本化し、手元の環境差に起因する失敗経路を残さないためです。手順は `docs/release/RELEASE_EXECUTION_RUNBOOK.md`
+- この禁止は文書ではなく機構で担保します。`scripts/release-packages.sh` は `GITHUB_ACTIONS` を見て、Actions 外での `--execute` を preflight より前に拒否します。副作用を持たない dry-run と `--audit` はローカルでも実行できます
 - 手動 `gh` / `git push` は状態確認・調査に留めます。リリースの恒久的操作はスクリプトを通します
 - やむを得ず手動で公開状態を変えた場合は、スクリプト側の前提（README の固定バージョン等）へ後追いで反映します
 - IaC ツール（Terraform 等）は現状使用しません。GitHub の状態はスクリプトで宣言的に扱います
