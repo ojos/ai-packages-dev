@@ -1,7 +1,6 @@
 ---
 name: 実装タスク
 about: レビューを伴う実装作業
-labels: implementation
 ---
 
 ## 要約（必須）
