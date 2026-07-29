@@ -317,6 +317,124 @@ else
   fail "git 外で exit 非 0: $out_txt"
 fi
 
+# ── 範囲解決: push 済みブランチ（HEAD == 上流） ───────────────────────────────
+#
+# 上流が設定済みでも、push 済みなら上流 == HEAD で @{upstream}..HEAD の差分が
+# 空になる。reviewer は空差分を 0 で返すため、第二意見が一度も差分を見ないまま
+# GATE_PASS が出る（ステージ空の穴と同じ構造の残穴）。ここでは「範囲が渡ること」
+# ではなく「渡した範囲に実際の差分があること」を検証する。
+
+# push 済みブランチのフィクスチャを作る。
+#   $1 = 生成済みプロジェクトのパス
+#   $2 = "main"（既定ブランチのまま push）または "feature"（枝を切って push）
+# 生成物一式を main へ commit し、bare リポジトリを origin として push する。
+# origin/HEAD は clone 以外では自動で作られないため明示的に設定する（実運用の
+# clone 済みリポジトリと同じ状態にするため）。
+make_pushed_repo() {
+  local repo="$1" kind="$2" origin
+  origin="$(new_workdir)/origin.git"
+  git init -q --bare "$origin"
+  (
+    cd "$repo" || exit 1
+    git init -q
+    # 既定ブランチ名は git のバージョン・設定で変わるため明示する。
+    git symbolic-ref HEAD refs/heads/main
+    git add -A
+    git -c user.name=T -c user.email=t@example.com commit -q -m c1
+    git remote add origin "$origin"
+    git push -q -u origin main
+    git remote set-head origin main
+    if [[ "$kind" == "feature" ]]; then
+      git checkout -q -b feat
+      printf 'feature\n' > FEATURE.txt
+      git add FEATURE.txt
+      git -c user.name=T -c user.email=t@example.com commit -q -m c2
+      git push -q -u origin feat
+    fi
+  ) >/dev/null 2>&1
+}
+
+it "push 済みブランチ（HEAD == 上流）でも差分のある範囲を第二意見へ渡す"
+out="$(new_workdir)/p"
+run_bootstrap "$out" >/dev/null 2>&1
+acc="$(new_workdir)/acc-pass.sh"; printf '#!/usr/bin/env bash\nexit 0\n' > "$acc"
+# 範囲そのものに加えて、その範囲が指す差分の量と対象ファイルを stub 側で測る。
+# 範囲が渡るだけでは、空差分の素通りを塞げたことにならない。
+cat > "$out/scripts/gemini-review.sh" <<'STUB'
+#!/usr/bin/env bash
+echo "REVIEW_ARGV:$*"
+if [[ "${1-}" == "--range" ]]; then
+  echo "REVIEW_DIFF_LINES:$(git diff "$2" | wc -l | tr -d ' ')"
+  echo "REVIEW_DIFF_NAMES:$(git diff --name-only "$2" | tr '\n' ',')"
+fi
+exit 0
+STUB
+chmod +x "$out/scripts/gemini-review.sh"
+make_pushed_repo "$out" feature
+if out_txt="$(cd "$out" && VERIFY_ACCEPTANCE="$acc" bash scripts/loop-gate.sh 2>&1)"; then
+  lines="$(printf '%s' "$out_txt" | sed -n 's/^REVIEW_DIFF_LINES://p')"
+  names="$(printf '%s' "$out_txt" | sed -n 's/^REVIEW_DIFF_NAMES://p')"
+  if [[ -n "$lines" && "$lines" -gt 0 ]] \
+     && printf '%s' "$names" | grep -q 'FEATURE.txt' \
+     && printf '%s' "$out_txt" | grep -q 'GATE_PASS'; then
+    # 分岐点起点であること。既定ブランチにしか無いファイル（生成物一式）が
+    # 差分へ混じるなら、範囲がブランチの変更を超えて広がっている。
+    if printf '%s' "$names" | grep -q 'scripts/verify.sh'; then
+      fail "範囲が分岐点を超えて広がっている: $names"
+    else
+      pass
+    fi
+  else
+    fail "push 済みブランチで第二意見の対象が空 (lines=${lines:-none}, names=${names:-none}): $out_txt"
+  fi
+else
+  fail "全段合格なのに exit 非 0: $out_txt"
+fi
+
+it "レビュー対象が本当に無いときは、その旨を明示して GATE_PASS"
+# 既定ブランチを push した直後（HEAD == 上流 == origin/HEAD）。分岐点まで戻しても
+# 差分は無い。ここで空を FAIL にすると差分の無い状態でのゲート実行が落ちるため
+# 通過させるが、黙って通すと偽の緑と区別が付かないので明示する。
+out="$(new_workdir)/p"
+run_bootstrap "$out" >/dev/null 2>&1
+acc="$(new_workdir)/acc-pass.sh"; printf '#!/usr/bin/env bash\nexit 0\n' > "$acc"
+printf '#!/usr/bin/env bash\necho REVIEW_INVOKED\nexit 0\n' > "$out/scripts/gemini-review.sh"
+chmod +x "$out/scripts/gemini-review.sh"
+make_pushed_repo "$out" main
+if out_txt="$(cd "$out" && VERIFY_ACCEPTANCE="$acc" bash scripts/loop-gate.sh 2>&1)"; then
+  if printf '%s' "$out_txt" | grep -q 'no reviewable diff' \
+     && printf '%s' "$out_txt" | grep -q 'GATE_PASS' \
+     && ! printf '%s' "$out_txt" | grep -q 'REVIEW_INVOKED'; then
+    pass
+  else
+    fail "対象なしが明示されない、または対象の無い reviewer を呼んでいる: $out_txt"
+  fi
+else
+  fail "対象が無いだけなのに exit 非 0: $out_txt"
+fi
+
+# ── 配布層とプロジェクト層の一致 ──────────────────────────────────────────────
+
+it "生成される loop-gate.sh はこのリポジトリの scripts/loop-gate.sh と一致する"
+# 同じ欠陥を片方だけ直すと、配布物と開発リポジトリでゲートの挙動が食い違う。
+# 範囲解決だけを比べると比較対象の抜き出し方が別の乖離源になるため、ファイル
+# 全体の一致で固定する（プロジェクト層は配布テンプレートの写しとして運用する）。
+out="$(new_workdir)/p"
+run_bootstrap "$out" >/dev/null 2>&1
+# 末尾改行の有無は比較から外す。bootstrap は雛形をコマンド置換で受け取るため
+# 生成物の末尾改行が必ず落ちる（loop-gate に限らない書き出し側の性質）。ここで
+# 差として扱うと、乖離検知が「編集時に末尾改行が付いたか」で揺れる。
+# awk '{print}' は最終行にも改行を付けるため、両側を同じ形へ揃えられる。
+norm_repo="$(new_workdir)/repo-loop-gate.sh"
+norm_gen="$(new_workdir)/generated-loop-gate.sh"
+awk '{print}' "$REPO_ROOT/scripts/loop-gate.sh" > "$norm_repo"
+awk '{print}' "$out/scripts/loop-gate.sh" > "$norm_gen"
+if d="$(diff -u "$norm_repo" "$norm_gen" 2>&1)"; then
+  pass
+else
+  fail "配布テンプレートとプロジェクト層が乖離している: $(printf '%s' "$d" | head -c 400)"
+fi
+
 # ── doctor 連携 ───────────────────────────────────────────────────────────────
 
 it "doctor はループスクリプトを含めて FAIL=0 で診断する"
