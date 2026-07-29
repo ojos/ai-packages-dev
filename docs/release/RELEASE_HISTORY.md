@@ -9,13 +9,14 @@
 
 | パッケージ | リポジトリ | 現行バージョン | 配布形態 |
 |---|---|---|---|
-| devcontainer-bootstrap | `ojos/devcontainer-bootstrap` | v0.7.3 | GitHub Release + 資産 5 点（配布スクリプト 2: `bootstrap.sh` / `doctor.sh`、生成物 3: `SHA256SUMS` / `RELEASE-MANIFEST.json` / `PACKAGE_ARCHIVE.tar.gz`） |
+| devcontainer-bootstrap | `ojos/devcontainer-bootstrap` | v0.7.4 | GitHub Release + 資産 5 点（配布スクリプト 2: `bootstrap.sh` / `doctor.sh`、生成物 3: `SHA256SUMS` / `RELEASE-MANIFEST.json` / `PACKAGE_ARCHIVE.tar.gz`） |
 | ai-playbook | `ojos/ai-playbook` | v0.1.5 | git タグのみ |
 
 ### 新世代の版更新
 
 | パッケージ | 版 | 公開日 | 要点 |
 |---|---|---|---|
+| devcontainer-bootstrap | v0.7.4 | 2026-07-29 | 生成される `loop-gate.sh` で、**push 済みブランチ（HEAD == 上流）だと第二意見が一度も差分を見ないまま `GATE_PASS` になる**経路を塞いだ（#198）。v0.7.2 が塞いだ穴と同じ構造の残穴で、切り替え先の範囲が空になる場合を見ていなかった。範囲は「解決できたか」ではなく実際に差分があるかで選び、上流との差分が空なら既定ブランチの追跡枝との**分岐点**まで戻してブランチ全体を対象にする。分岐点まで戻しても差分が無い場合は `no reviewable diff` を明示したうえで通過する（空を一律 FAIL にすると差分の無い状態でのゲート実行が落ちる）。空ツリーへの後退は remote が無い場合に限定。後方互換 |
 | devcontainer-bootstrap | v0.7.3 | 2026-07-28 | README と実装の乖離を解消（#170 / #171）。未記載だった `--dry-run` / `--force` / `-h`、実行前提コマンド、rust 対応を追加し、生成物一覧・doctor 節・リリース資産の説明を実装と一致させた。`bootstrap.sh` / `doctor.sh` の usage が開発リポジトリと公開配布物のどちらか一方でしか解決しないパスを示していた問題を修正（#174 / #182）。`LICENSE`（MIT）と `CHANGELOG.md` を配布物へ追加（#177）。**生成物への影響は `.ai-playbook/CHANGELOG.md` を取り込まなくなる 1 点のみ。** 後方互換 |
 | ai-playbook | v0.1.5 | 2026-07-28 | **導入手順が新規プロジェクトで必ず失敗する不具合を修正**（#167。手順 2・4 の `cp` に `mkdir -p` が無かった）。配布先で解決しない参照を除去（#167）、構成表・命名規則・管理対象の自己不整合を解消（#168）、契約・雛形の内部不整合とベンダー中立違反を解消（#169）、`LICENSE`（MIT）と `CHANGELOG.md` を配布物へ追加（#177）。命名規則は分類定義のみ改め、**ファイル改名は行っていない**ため既存の取り込みは壊れない。後方互換 |
 | devcontainer-bootstrap | v0.7.2 | 2026-07-27 | 生成される `loop-gate.sh` で、ステージ済み差分が空のときに第二意見が実質スキップされる経路を塞いだ（#152）。空のときだけ commit 済み範囲へ切り替える。既定ブランチ名は決め打ちせず、起点が無ければ空ツリーを使う（`HEAD` だと `git diff` が作業ツリー比較になり素通りが復活する）。git リポジトリでない場合は従来どおり引数なしで呼ぶ。**v0.7.1（#149）の内容を含む。** 後方互換 |
