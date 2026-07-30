@@ -167,7 +167,7 @@ bash scripts/verify.sh
 
 - 終了コード 0 = `VERIFY_PASS` / 1 = `VERIFY_FAIL`（未達、または受け入れ条件が未定義）。
 - 受け入れ条件の実体は `scripts/acceptance.sh`（プロジェクトが所有・編集します）。環境変数 `VERIFY_ACCEPTANCE` で差し替えられます（例: `VERIFY_ACCEPTANCE=scripts/acceptance-fast.sh bash scripts/verify.sh`）。
-- `scripts/acceptance.sh` は `.github/workflows/ci.yml` の 5 ジョブと `.github/workflows/identity-guard.yml` を完全ミラーします。「ローカルが緑なら CI も緑」を保つための構成で、部分ミラーは採りません。
+- `scripts/acceptance.sh` は `.github/workflows/ci.yml` の 6 ジョブと `.github/workflows/identity-guard.yml` を完全ミラーします。「ローカルが緑なら CI も緑」を保つための構成で、部分ミラーは採りません。
 - identity 検査は `scripts/verify-commit-identity.sh` を引数なしで呼び、同スクリプトの既定範囲解決（`origin/main..HEAD`、解決できなければ HEAD の全履歴）に委ねます。CI の 2 系統（`pull_request` の base..head / `push`(main) の `--full`）とそのまま対応します。
 - **`ci.yml` / `identity-guard.yml` を変更したら `scripts/acceptance.sh` も同じ内容へ追随させます。** 追随漏れを機械で検知する仕組みは無く、食い違うとローカルゲートは CI の予行演習でなくなります。
 
@@ -267,6 +267,12 @@ push / PR 作成後の最終ゲートを、このリポジトリで具体化し�
 - 実装を伴うサブエージェントへ並列委譲する場合、親セッションが `isolation: "worktree"` を指定し、機構でエージェント単位の作業ツリー分離を保証します。
 - 指示文による呼びかけに頼りません。機構が結果そのものを生む場合は、機構を使います。
 - 読み取り専用の調査エージェントには不要です。
+
+#### 統合検証
+
+- **並列実装を統合したら、統合後のツリーで各レーンの受け入れ条件を再実行します。** レーン単位の緑と、統合後の緑は別物です。
+- 各レーンが緑で、`git merge-tree` が衝突を報告しなくても、統合すると意味が壊れることがあります。衝突は同じ行への変更しか見ないため、「一方が実装の一覧を変え、他方が文書の一覧を変えなかった」形の破れは検出できません。
+- この工程は目視の照合に依存しません。実測では、統合検証を実施したうえで 3 件中 1 件を見逃し、リモート最終ゲートが拾いました。**文書が実装の一覧を書き写している箇所は、機械照合（`tests/` のプロジェクト層テスト）へ載せます。**
 
 ### Issue クローズ方針
 

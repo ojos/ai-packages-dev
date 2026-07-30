@@ -3,7 +3,7 @@
 #
 # verify.sh がこのスクリプトを実行し、終了コードで合否を判定する。
 #
-# このリポジトリは CI（.github/workflows/ci.yml）の 5 ジョブ
+# このリポジトリは CI（.github/workflows/ci.yml）の 6 ジョブ
 # + .github/workflows/identity-guard.yml を完全ミラーする。
 # 「ローカルが緑なら CI も緑」を保つのが目的で、部分ミラーは push してから CI で
 # 落ちる経路を残すため採らない。
@@ -156,6 +156,12 @@ bash scripts/check-neutrality.sh
 #   GIT_IDENTITY_EMAIL が、CI ではリポジトリ変数 ALLOWED_AUTHOR_EMAILS が供給元。
 echo "[acceptance] (identity) commit identity guard"
 bash scripts/verify-commit-identity.sh
+
+# ── CI: Project tests ────────────────────────────────────────────────────────
+# 文書と実装のテキスト照合だけで、外部依存も無く秒で終わる。DCB テスト（約 4 分）
+# より前に置き、安い検査から落ちるようにする。
+echo "[acceptance] (project) tests"
+bash tests/run-tests.sh
 
 # ── CI: devcontainer-bootstrap tests ─────────────────────────────────────────
 # 所要時間が最も長い（約 4 分）ため最後に置く。手前の速い検査で落ちる差分は、
