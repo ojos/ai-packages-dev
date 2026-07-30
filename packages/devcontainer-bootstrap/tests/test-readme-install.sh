@@ -61,6 +61,7 @@ code_blocks() {
 INSTALL="$(install_section)"
 INSTALL_CODE="$(install_section | code_blocks)"
 FETCH_DOCTOR="$(doctor_fetch_section)"
+FETCH_DOCTOR_CODE="$(doctor_fetch_section | code_blocks)"
 
 it "README に導入手順の節がある"
 if [[ -n "$INSTALL" ]]; then pass; else fail "「公開リリースからの利用」節を抽出できなかった"; fi
@@ -87,6 +88,22 @@ fi
 it "導入手順が sha256sum --ignore-missing で検証している"
 # SHA256SUMS は doctor.sh も対象にするため、bootstrap.sh だけを取得する手順では必須。
 assert_contains "$INSTALL" 'sha256sum --ignore-missing -c SHA256SUMS' "導入手順"
+
+it "検証とスクリプト実行が && で連結されている"
+# この手順は対話シェルへ貼って使う。set -e が効かないため、検証と実行を別の行に
+# 置くとチェックサムが失敗しても次の bash が走り、「実行前に必ず検証する」という
+# 手順の目的が文面だけのものになる。導入手順と doctor.sh 入手手順の両方を見る。
+unchained="$(printf '%s\n' "$INSTALL_CODE" "$FETCH_DOCTOR_CODE" | awk '
+  # $d 配下のスクリプトを起動する行は、直前の行が && で終わっていなければならない。
+  /^bash "\$d\// { if (prev !~ /&&[[:space:]]*$/) print "  " $0 }
+  { prev = $0 }
+')"
+if [[ -z "$unchained" ]]; then
+  pass
+else
+  fail "検証と連結されていない実行行:
+$unchained"
+fi
 
 it "導入手順が検証を省く curl | bash 形式を含まない"
 if printf '%s\n' "$INSTALL_CODE" | grep -qE 'curl[^|]*\| *(bash|sh)\b'; then

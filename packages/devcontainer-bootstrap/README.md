@@ -63,8 +63,10 @@ curl -sSL "${BASE}/SHA256SUMS"  -o "$d/SHA256SUMS"
 
 # --ignore-missing: SHA256SUMS は doctor.sh も対象にするため、bootstrap.sh だけを
 # 取得した場合は付けないと「doctor.sh が無い」で失敗する。
-( cd "$d" && sha256sum --ignore-missing -c SHA256SUMS )
-
+#
+# 検証と実行は && で連結する。この手順は対話シェルへ貼って使うため set -e が効かず、
+# 行を分けると検証に失敗しても次の bash が走る。
+( cd "$d" && sha256sum --ignore-missing -c SHA256SUMS ) &&
 bash "$d/bootstrap.sh" --project-name myapp --output-dir "$PWD/myapp" \
   --languages node,go --with-aws --with-claude
 ```
@@ -79,7 +81,8 @@ bash "$d/bootstrap.sh" --project-name myapp --output-dir "$PWD/myapp" \
 AI 共通ルールも配置する場合は、ルールの取得元を指定します。一時ディレクトリから実行すると隣接チェックアウトが存在しないため、`--playbook-version` または `--playbook-from` が必要です（[AI 共通ルールの配置](#ai-共通ルールの配置)）。
 
 ```bash
-# 上の手順の最終行を、規範の取得元を足した形へ置き換える。
+# 上の手順の最後（検証と実行）を、規範の取得元を足した形へ置き換える。
+( cd "$d" && sha256sum --ignore-missing -c SHA256SUMS ) &&
 bash "$d/bootstrap.sh" --project-name myapp --output-dir "$PWD/myapp" \
   --languages node,go --with-claude --playbook-version v0.1.4
 ```
@@ -100,8 +103,8 @@ BASE="https://github.com/ojos/devcontainer-bootstrap/releases/download/${TAG}"
 d="$(mktemp -d)"; trap 'rm -rf "$d"' EXIT
 curl -sSL "${BASE}/doctor.sh"  -o "$d/doctor.sh"
 curl -sSL "${BASE}/SHA256SUMS" -o "$d/SHA256SUMS"
-( cd "$d" && sha256sum --ignore-missing -c SHA256SUMS )
 
+( cd "$d" && sha256sum --ignore-missing -c SHA256SUMS ) &&
 bash "$d/doctor.sh" --target-dir ./myapp
 ```
 
