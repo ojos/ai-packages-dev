@@ -63,6 +63,15 @@ jobs:
             exit 1
           fi
 
+  project-tests:
+    name: Project tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run tests
+        run: bash tests/run-tests.sh
+
   dcb-tests:
     name: devcontainer-bootstrap tests
     runs-on: ubuntu-latest
