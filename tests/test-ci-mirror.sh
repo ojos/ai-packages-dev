@@ -78,6 +78,24 @@ it "ci.yml のすべてのジョブが name: を持つ"
 # 照合の対象から静かに外れる。アンカーそのものを先に守る。
 assert_eq "$CI_NAME_COUNT" "$CI_JOB_COUNT" "name: を持つジョブ数"
 
+it "ジョブ名と節見出しに重複が無い"
+# 照合はジョブ名をキーにするため、重複があると対応付けが決まらない。集合として
+# 突き合わせる以上、重複は畳まれて消える。同じ name: を持つジョブを増やすと、
+# ミラーへ足さなくても集合が一致したままになり、ミラー漏れが素通りする。
+dup_msg=""
+dup_ci="$(printf '%s\n' "$CI_JOB_NAMES" | sort | uniq -d | tr '\n' ' ')"
+dup_acc="$(printf '%s\n' "$ACCEPTANCE_SECTIONS" | sort | uniq -d | tr '\n' ' ')"
+[[ -n "${dup_ci% }" ]] && dup_msg="ci.yml で重複するジョブ名: ${dup_ci% }"
+if [[ -n "${dup_acc% }" ]]; then
+  [[ -n "$dup_msg" ]] && dup_msg="$dup_msg / "
+  dup_msg="${dup_msg}acceptance.sh で重複する節見出し: ${dup_acc% }"
+fi
+if [[ -z "$dup_msg" ]]; then
+  pass
+else
+  fail "$dup_msg"
+fi
+
 it "ci.yml のジョブと acceptance.sh のミラーが一致する"
 assert_same_set "$CI_JOB_NAMES" "$ACCEPTANCE_SECTIONS" "ci.yml" "acceptance.sh"
 
