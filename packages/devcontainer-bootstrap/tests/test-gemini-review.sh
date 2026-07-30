@@ -31,8 +31,15 @@ mk_review_repo() {
   ) >/dev/null 2>&1
 }
 
-# 指定した並び（L=LGTM / F=findings）を 1 回ずつ返す stub を作る。
+# 指定した並びを 1 回ずつ返す stub を作る。
 # 呼び出し回数はカウンタファイルで持ち、run ごとに異なる結果を返せるようにする。
+#
+#   L = LGTM のみ            D = 装飾された LGTM のみ（**LGTM**）
+#   F = 指摘のみ             M = ファイル別講評（LGTM 行と致命バグが混在）
+#   W = stderr へ警告 + LGTM  T = 指摘の末尾へ **LGTM** を添える
+#
+# M / T は「通過を示す一意な出力」ではないが LGTM 行を含む形で、モデルが自然に
+# 取る出力。行の存在で判定すると重大な指摘ごと通過する。
 mk_gemini_stub() {
   local bindir="$1" seq="$2"
   mkdir -p "$bindir"
@@ -45,11 +52,17 @@ n=\$((n + 1))
 echo "\$n" > "$bindir/.count"
 seq="$seq"
 c="\${seq:\$((n - 1)):1}"
-if [[ "\$c" == "L" ]]; then
-  echo "LGTM"
-else
-  echo "### 指摘 \$n: 何かがおかしい"
-fi
+case "\$c" in
+  L) echo "LGTM" ;;
+  D) echo '**LGTM**' ;;
+  W) echo "Warning: 256-color support not detected." >&2
+     echo "Ripgrep is not available. Falling back to GrepTool." >&2
+     echo "LGTM" ;;
+  M) printf '%s\n' "### verify.sh" "LGTM" "" "### acceptance.sh" \
+       "1. 致命バグ \$n: 配列展開が壊れている" ;;
+  T) printf '%s\n' "1. 致命バグ \$n: 境界条件を見落としている" "**LGTM**" ;;
+  *) echo "### 指摘 \$n: 何かがおかしい" ;;
+esac
 exit 0
 STUB
   chmod +x "$bindir/gemini"
@@ -80,6 +93,57 @@ d="$(new_workdir)/r"; b="$(new_workdir)/bin"
 mk_review_repo "$d"; mk_gemini_stub "$b" "LL"
 run_review "$d" "$b" >/dev/null
 assert_eq "$(cat "$b/.count")" "1" "既定の呼び出し回数"
+
+# ── 通過判定は出力全体の一意性で見る ──────────────────────────────────────────
+#
+# 規範（review-workflow.md）が第二意見へ求めているのは「通過を示す一意な出力」で
+# あって「一意な出力を含むこと」ではない。LGTM 行の存在で判定すると、重大な指摘が
+# 同時に出ていても通過する。ローカル事前ゲートは push 前の最後の機械判定なので、
+# ここで偽の緑を出すと指摘がそのまま通る。
+
+it "ファイル別の講評に LGTM 行が混ざる出力を通過させない"
+d="$(new_workdir)/r"; b="$(new_workdir)/bin"
+mk_review_repo "$d"; mk_gemini_stub "$b" "M"
+out="$(run_review "$d" "$b")"; rc=$?
+if [[ "$rc" -eq 1 ]]; then
+  assert_contains "$out" "致命バグ" "混在出力の内容"
+else
+  fail "致命バグを含む出力を通した (exit $rc): $out"
+fi
+
+it "指摘の末尾へ **LGTM** を添えた出力を通過させない"
+d="$(new_workdir)/r"; b="$(new_workdir)/bin"
+mk_review_repo "$d"; mk_gemini_stub "$b" "T"
+out="$(run_review "$d" "$b")"; rc=$?
+if [[ "$rc" -eq 1 ]]; then
+  assert_contains "$out" "致命バグ" "混在出力の内容"
+else
+  fail "致命バグを含む出力を通した (exit $rc): $out"
+fi
+
+it "装飾された LGTM のみは通過する"
+# 判定を厳しくした結果 **LGTM** や LGTM. まで落とすと、ゲートが常に赤くなって
+# 無視されるようになる。装飾の除去は残す。
+d="$(new_workdir)/r"; b="$(new_workdir)/bin"
+mk_review_repo "$d"; mk_gemini_stub "$b" "D"
+out="$(run_review "$d" "$b")"; rc=$?
+if [[ "$rc" -eq 0 ]]; then
+  assert_contains "$out" "run 1/1: LGTM" "装飾された LGTM の判定"
+else
+  fail "装飾された LGTM を落とした (exit $rc): $out"
+fi
+
+it "CLI が stderr へ出す警告を判定へ混ぜない"
+# 警告を出力へ混ぜると、LGTM 一意の回答が「LGTM 以外も含む」に化けて、
+# ゲートが常に赤くなる。判定はモデルの回答（stdout）だけで行う。
+d="$(new_workdir)/r"; b="$(new_workdir)/bin"
+mk_review_repo "$d"; mk_gemini_stub "$b" "W"
+out="$(run_review "$d" "$b")"; rc=$?
+if [[ "$rc" -eq 0 ]]; then
+  assert_contains "$out" "run 1/1: LGTM" "警告付き LGTM の判定"
+else
+  fail "警告を判定へ混ぜて落とした (exit $rc): $out"
+fi
 
 # ── 多数決 ────────────────────────────────────────────────────────────────────
 it "N=3 で指摘が 1 回だけなら通過する（閾値 2）"

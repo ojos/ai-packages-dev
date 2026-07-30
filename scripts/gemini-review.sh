@@ -146,21 +146,38 @@ args=(--skip-trust -p "$PROMPT")
 [[ -n "$MODEL" ]] && args=(-m "$MODEL" "${args[@]}")
 
 # 通過判定はモデルの出力ゆれに耐える必要がある。LGTM とだけ返すよう指示していても、
-# **LGTM** / `LGTM` / LGTM. のように装飾されることがある。装飾・空白・句点を除いてから
-# 行単位で厳密一致させる（文中の LGTM は通過させない）。
+# **LGTM** / `LGTM` / LGTM. のように装飾されることがある。装飾・空白（改行を含む）・
+# 末尾の句点を落とした結果が LGTM「のみ」になることを判定する。
+#
+# 行単位の存在判定にはしない。ファイル別に講評して途中の 1 行へ LGTM と書く形や、
+# 指摘の末尾へ **LGTM** を添える形は、モデルが自然に取る出力で実際に起きる。行の存在で
+# 判定すると、重大な指摘が同時に出ていても通過する。review-workflow.md が第二意見へ
+# 求めているのは「通過を示す一意な出力」であって「一意な出力を含むこと」ではない。
+#
+# 逆に部分一致へ緩めることもしない。`not LGTM` や `LGTM とは言えない` の類まで通過する。
 is_lgtm() {
-  printf '%s\n' "$1" \
-    | sed 's/[`*_#]//g; s/[[:space:]]//g; s/[.。]$//' \
-    | grep -qix 'LGTM'
+  local normalized
+  normalized="$(printf '%s' "$1" | tr -d '`*_#[:space:]')"
+  normalized="${normalized%.}"
+  normalized="${normalized%。}"
+  printf '%s\n' "$normalized" | grep -qix 'LGTM'
 }
+
+# CLI の警告や進捗表示は「回答」ではない。判定へ混ぜると、警告が 1 行出ただけで
+# LGTM が指摘ありに化け、ゲートが常に赤くなる（実測: 端末の色数や ripgrep 不在の
+# 警告が stderr に出る）。判定はモデルの回答（stdout）だけで行い、stderr は失敗した
+# ときの診断に回す。
+stderr_file="$(mktemp)"
+trap 'rm -f "$stderr_file"' EXIT
 
 findings=0
 run=0
 while [[ "$run" -lt "$RUNS" ]]; do
   run=$((run + 1))
 
-  output="$(printf '%s' "$diff_text" | gemini "${args[@]}" 2>&1)" || {
+  output="$(printf '%s' "$diff_text" | gemini "${args[@]}" 2>"$stderr_file")" || {
     echo "error: gemini review failed (run $run/$RUNS)" >&2
+    cat "$stderr_file" >&2
     printf '%s\n' "$output" >&2
     exit 1
   }
