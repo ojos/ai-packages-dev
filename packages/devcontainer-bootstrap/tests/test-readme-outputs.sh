@@ -71,7 +71,7 @@ impl_outputs() {
   local out_root="$1"
   bash "$BOOTSTRAP" \
     --project-name outcheck \
-    --languages node,go,python,php,rust \
+    --languages node,go,python,php,rust,ruby \
     --with-aws --with-gcp --with-claude --with-gemini --with-copilot \
     --with-playbook \
     --output-dir "$out_root" \

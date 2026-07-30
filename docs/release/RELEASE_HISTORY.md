@@ -9,13 +9,14 @@
 
 | パッケージ | リポジトリ | 現行バージョン | 配布形態 |
 |---|---|---|---|
-| devcontainer-bootstrap | `ojos/devcontainer-bootstrap` | v0.7.4 | GitHub Release + 資産 5 点（配布スクリプト 2: `bootstrap.sh` / `doctor.sh`、生成物 3: `SHA256SUMS` / `RELEASE-MANIFEST.json` / `PACKAGE_ARCHIVE.tar.gz`） |
+| devcontainer-bootstrap | `ojos/devcontainer-bootstrap` | v0.8.0 | GitHub Release + 資産 5 点（配布スクリプト 2: `bootstrap.sh` / `doctor.sh`、生成物 3: `SHA256SUMS` / `RELEASE-MANIFEST.json` / `PACKAGE_ARCHIVE.tar.gz`） |
 | ai-playbook | `ojos/ai-playbook` | v0.1.6 | git タグのみ |
 
 ### 新世代の版更新
 
 | パッケージ | 版 | 公開日 | 要点 |
 |---|---|---|---|
+| devcontainer-bootstrap | v0.8.0 | 2026-07-30 | `--languages` に **`ruby` を第 6 の選択肢として追加**した（#206）。既存 5 言語と同等の生成・検査・診断・文書体験を提供する。`ghcr.io/devcontainers/features/ruby:1` を feature として配線し、`.gitignore` へ `Ruby` テンプレートを取り込み、`doctor.sh` と生成物 `post-rebuild-check.sh` の検査対象に含め、選択時のみ `Shopify.ruby-lsp` を配線する。`ruby` は feature 名と実行ファイル名が一致するため `rust`→`cargo` のような写像分岐は持たない。acceptance は Minitest / RSpec を決め打ちせず `bundle exec rake` で `Rakefile` の default タスクへ委譲する（マニフェストは `Gemfile`、ツール可用性は `bundle` で判定）。あわせて対応言語の README 追随漏れを機械で落とす**両方向の集合照合**を追加した（個別言語の取りこぼし検査は書いた言語しか守れないため）。後方互換 |
 | ai-playbook | v0.1.6 | 2026-07-29 | 並列実装後の統合検証を規範へ追加した（#199）。レーン単体の受け入れ検証が緑でマージの衝突検査も無言のまま統合欠陥が残る構造（8 レーン並列で 3 件、3 レーン並列で 5 件の実測）に対し、統合ツリーで各レーンの受け入れ条件を再実行する工程を `review-workflow.md` へ明記。あわせて `shared-ai-rules.md` 12 章へ「文書が実装の一覧を書き写している箇所は実装の出力と機械照合できる形にする」判断軸を追加した。規範の追加のみで後方互換 |
 | devcontainer-bootstrap | v0.7.4 | 2026-07-29 | 生成される `loop-gate.sh` で、**push 済みブランチ（HEAD == 上流）だと第二意見が一度も差分を見ないまま `GATE_PASS` になる**経路を塞いだ（#198）。v0.7.2 が塞いだ穴と同じ構造の残穴で、切り替え先の範囲が空になる場合を見ていなかった。範囲は「解決できたか」ではなく実際に差分があるかで選び、上流との差分が空なら既定ブランチの追跡枝との**分岐点**まで戻してブランチ全体を対象にする。分岐点まで戻しても差分が無い場合は `no reviewable diff` を明示したうえで通過する（空を一律 FAIL にすると差分の無い状態でのゲート実行が落ちる）。空ツリーへの後退は remote が無い場合に限定。後方互換 |
 | devcontainer-bootstrap | v0.7.3 | 2026-07-28 | README と実装の乖離を解消（#170 / #171）。未記載だった `--dry-run` / `--force` / `-h`、実行前提コマンド、rust 対応を追加し、生成物一覧・doctor 節・リリース資産の説明を実装と一致させた。`bootstrap.sh` / `doctor.sh` の usage が開発リポジトリと公開配布物のどちらか一方でしか解決しないパスを示していた問題を修正（#174 / #182）。`LICENSE`（MIT）と `CHANGELOG.md` を配布物へ追加（#177）。**生成物への影響は `.ai-playbook/CHANGELOG.md` を取り込まなくなる 1 点のみ。** 後方互換 |
