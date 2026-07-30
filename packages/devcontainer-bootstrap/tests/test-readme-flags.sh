@@ -200,6 +200,73 @@ else
   fail ".gitignore 暗黙ターゲットの対応表に rust→Rust が無い"
 fi
 
+# ── 対応言語の集合照合（両方向） ──────────────────────────────────────────────
+#
+# 個別言語の「取りこぼし」検査（下記）は、書いた言語しか守れない。言語を追加した
+# ときに検査ごと足し忘れると、README の追随漏れがそのまま通る。フラグと同じく
+# 実装側から一覧を生成して両方向の差集合を見る
+# （規範 .ai-playbook/shared-ai-rules.md「一覧の複製は機械照合で担保する」）。
+
+# 入力検証 case の受理集合を実装から取り出す。
+impl_languages() {
+  sed -n 's/^[[:space:]]*\(node|[a-z|]*\)) ;;$/\1/p' "$PKG_DIR/bootstrap.sh" \
+    | head -1 | tr '|' '\n' | sort -u
+}
+
+# README「言語サポート」節の箇条書きから取り出す。節内の ### 小見出し（拡張表）は
+# 箇条書きを持たないため、節末まで拾って差し支えない。
+readme_languages() {
+  awk '/^## 言語サポート$/{f=1;next} /^## /{f=0} f' "$README" \
+    | sed -n 's/^- `\([a-z0-9]*\)`（.*$/\1/p' | sort -u
+}
+
+it "対応言語の抽出が両側で空でない（抽出ロジック自体の破損検知）"
+impl_langs="$(impl_languages)"
+readme_langs="$(readme_languages)"
+if [[ -n "$impl_langs" && -n "$readme_langs" ]]; then
+  pass
+else
+  fail "抽出が空: impl='$impl_langs' readme='$readme_langs'"
+fi
+
+it "実装が受理する言語はすべて README に載っている"
+missing="$(comm -23 <(printf '%s\n' "$impl_langs") <(printf '%s\n' "$readme_langs"))"
+if [[ -z "$missing" ]]; then pass; else fail "README に無い対応言語: $(printf '%s' "$missing" | tr '\n' ' ')"; fi
+
+it "README に載る言語はすべて実装が受理する"
+extra="$(comm -13 <(printf '%s\n' "$impl_langs") <(printf '%s\n' "$readme_langs"))"
+if [[ -z "$extra" ]]; then pass; else fail "実装が受理しない言語が README にある: $(printf '%s' "$extra" | tr '\n' ' ')"; fi
+
+# ── ruby の取りこぼし ────────────────────────────────────────────────────────
+
+it "検証ルールの対応言語に ruby が含まれる"
+if grep -q 'node|go|python|php|rust|ruby' "$README"; then
+  pass
+else
+  fail "検証ルール 1 の対応言語列挙に ruby が無い"
+fi
+
+it ".gitignore の暗黙ターゲット表に ruby→Ruby が含まれる"
+if grep -q '`ruby`→`Ruby`' "$README"; then
+  pass
+else
+  fail ".gitignore 暗黙ターゲットの対応表に ruby→Ruby が無い"
+fi
+
+it "言語サポート節に ruby が列挙される"
+if grep -q '^- `ruby`' "$README"; then
+  pass
+else
+  fail "言語サポート節に ruby の項目が無い"
+fi
+
+it "language server 拡張表に ruby→Shopify.ruby-lsp が含まれる"
+if grep -q '`Shopify.ruby-lsp`' "$README"; then
+  pass
+else
+  fail "language server 拡張表に Shopify.ruby-lsp が無い"
+fi
+
 it "--gitignore-targets の表記例に Rust が含まれる"
 if grep -q '`Rust`' "$README"; then
   pass

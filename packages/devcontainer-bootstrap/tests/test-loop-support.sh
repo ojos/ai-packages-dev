@@ -125,7 +125,7 @@ fi
 
 it "--languages の各組み合わせで生成 acceptance.sh が bash -n を通る"
 bad=""
-for c in node go python php rust node,go node,go,python,php,rust python,rust; do
+for c in node go python php rust ruby node,go node,go,python,php,rust,ruby python,rust ruby,node; do
   o="$(new_workdir)/p"
   run_bootstrap "$o" --languages "$c" >/dev/null 2>&1
   bash -n "$o/scripts/acceptance.sh" 2>/dev/null || bad="$bad $c"

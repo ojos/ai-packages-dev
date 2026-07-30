@@ -223,7 +223,7 @@ cp .ai-playbook/templates/copilot-review.yml .github/workflows/copilot-review.ym
 DCB は雛形の内容を持たず、このパッケージの `templates/` をコピーするだけです。正本はこのパッケージ側にあります。
 DCB はあわせて `.ai-playbook/VERSION` を生成し、取り込んだ版の出所を記録します（「取り込んだ版の記録」）。
 
-DCB は devcontainer と特定言語（node / go / python / php / rust）を前提とするため、それ以外の環境では上記の手順を使ってください。
+DCB は devcontainer と特定言語（node / go / python / php / rust / ruby）を前提とするため、それ以外の環境では上記の手順を使ってください。
 
 ## ファイル同期ルール
 
