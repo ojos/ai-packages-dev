@@ -166,8 +166,11 @@ while IFS= read -r f; do
     *.md) found="$(fenced_code_only < "$REPO_ROOT/$f" | bare_mktemp_lines)" ;;
     *)    found="$(bare_mktemp_lines < "$REPO_ROOT/$f")" ;;
   esac
-  [[ -n "$found" ]] && hits="$hits$(printf '%s\n' "$found" | sed "s|^|$f:|")
-"
+  # 改行は $'\n' で明示する。行末に開いた引用符を次の行で閉じる書き方でも同じ結果に
+  # なるが、閉じ引用符だけが 1 行に残る形は構文エラーと読み違えられる。
+  if [[ -n "$found" ]]; then
+    hits="$hits$(printf '%s\n' "$found" | sed "s|^|$f:|")"$'\n'
+  fi
 done <<EOF
 $(cd "$REPO_ROOT" && git ls-files '*.sh' '*.md')
 EOF
