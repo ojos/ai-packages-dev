@@ -38,6 +38,48 @@ bare_mktemp_lines() {
   grep -nE "$BARE_MKTEMP_RE" | grep -vE '^[0-9]+:[[:space:]]*#'
 }
 
+# 標準入力を読み、``` で囲まれたコード部分だけを返す。コード外の行は空行に置き換えて
+# 行番号を保つ（報告する行番号が元ファイルとずれると、指摘を追えない）。
+#
+# 文書を検査対象へ入れるのは、README の導入手順が利用者のホストで実行されるため。
+# 素の呼び出しが手順に残っていると、macOS 利用者は取得の 1 行目で落ちる。
+# 地の文まで拾わないのは、リリースノート等が `mktemp` を説明として書くため。
+# 全文へ当てると、検査が文章の書き方に依存する。
+#
+# フェンスの開閉は単純な反転で判定しない。文書では「コードブロックの書き方」を示すために
+# フェンスを入れ子にすることがあり（外側を 4 個以上のバッククォートで囲む）、反転だと
+# 内側の開始で外へ出たことになる。以降の内外がずれ続け、コード内の呼び出しを見落とし、
+# 地の文を誤検出する。開いたときの長さを覚え、それ以上の長さで、かつ言語指定を持たない
+# 行だけを閉じとして扱う（CommonMark のフェンス規則）。
+fenced_code_only() {
+  awk '
+    function fence_len(s,   n) {
+      sub(/^[[:space:]]*/, "", s)
+      n = 0
+      while (substr(s, n + 1, 1) == "`") n++
+      return n
+    }
+    {
+      fl = fence_len($0)
+      if (fl >= 3) {
+        if (!inside) {
+          inside = 1
+          open_len = fl
+        } else if (fl >= open_len && $0 ~ /^[[:space:]]*`+[[:space:]]*$/) {
+          inside = 0
+        } else {
+          # 内側のフェンス行はコードの一部。ただしフェンス自体に呼び出しは書けない。
+          print ""
+          next
+        }
+        print ""
+        next
+      }
+      if (inside) print; else print ""
+    }
+  '
+}
+
 # ── 検査ロジック自身の検証 ────────────────────────────────────────────────────
 #
 # 検査が何も拾わないまま緑になる状態を防ぐ。実装を直したあとは、対象が 0 件でも
@@ -84,15 +126,53 @@ if [[ "$bad" -eq 0 ]]; then pass; else fail "正しい呼び出しやコメン�
 
 # ── リポジトリ全体の検査 ──────────────────────────────────────────────────────
 
-it "追跡対象の .sh にテンプレート無しの mktemp が無い"
+it "コードブロック内は検出し、地の文は検出しない"
+# 文書側の検査は、コード部分だけを対象にしないと成立しない。
+doc="$(printf '%s\n' \
+  "素の \`$bad_cmd\` は macOS で落ちる。" \
+  '```bash' \
+  "d=\"\$($bad_cmd -d)\"" \
+  '```' \
+  "\`$bad_cmd -d\` を使う場合は注意する。")"
+found="$(printf '%s\n' "$doc" | fenced_code_only | bare_mktemp_lines)"
+if [[ "$(printf '%s\n' "$found" | grep -c .)" == "1" ]] && printf '%s' "$found" | grep -q '^3:'; then
+  pass
+else
+  fail "コードブロック内の 3 行目だけを拾えていない: $found"
+fi
+
+it "入れ子のフェンスで内外の判定がずれない"
+# 反転で判定すると、内側の開始で外へ出たことになり、以降の内外がずれ続ける。
+# コード内の呼び出しを見落とし、そのあとの地の文を誤検出する。
+nested="$(printf '%s\n' \
+  '````markdown' \
+  '```bash' \
+  "d=\"\$($bad_cmd -d)\"" \
+  '```' \
+  '````' \
+  "素の \`$bad_cmd\` は macOS で落ちる。")"
+found="$(printf '%s\n' "$nested" | fenced_code_only | bare_mktemp_lines)"
+if [[ "$(printf '%s\n' "$found" | grep -c .)" == "1" ]] && printf '%s' "$found" | grep -q '^3:'; then
+  pass
+else
+  fail "入れ子フェンスの 3 行目だけを拾えていない: $found"
+fi
+
+it "追跡対象の .sh と .md にテンプレート無しの mktemp が無い"
 hits=""
 while IFS= read -r f; do
   [[ -f "$REPO_ROOT/$f" ]] || continue
-  found="$(bare_mktemp_lines < "$REPO_ROOT/$f")"
-  [[ -n "$found" ]] && hits="$hits$(printf '%s\n' "$found" | sed "s|^|$f:|")
-"
+  case "$f" in
+    *.md) found="$(fenced_code_only < "$REPO_ROOT/$f" | bare_mktemp_lines)" ;;
+    *)    found="$(bare_mktemp_lines < "$REPO_ROOT/$f")" ;;
+  esac
+  # 改行は $'\n' で明示する。行末に開いた引用符を次の行で閉じる書き方でも同じ結果に
+  # なるが、閉じ引用符だけが 1 行に残る形は構文エラーと読み違えられる。
+  if [[ -n "$found" ]]; then
+    hits="$hits$(printf '%s\n' "$found" | sed "s|^|$f:|")"$'\n'
+  fi
 done <<EOF
-$(cd "$REPO_ROOT" && git ls-files '*.sh')
+$(cd "$REPO_ROOT" && git ls-files '*.sh' '*.md')
 EOF
 
 if [[ -z "$hits" ]]; then
