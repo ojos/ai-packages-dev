@@ -38,6 +38,20 @@ bare_mktemp_lines() {
   grep -nE "$BARE_MKTEMP_RE" | grep -vE '^[0-9]+:[[:space:]]*#'
 }
 
+# 標準入力を読み、``` で囲まれたコード部分だけを返す。コード外の行は空行に置き換えて
+# 行番号を保つ（報告する行番号が元ファイルとずれると、指摘を追えない）。
+#
+# 文書を検査対象へ入れるのは、README の導入手順が利用者のホストで実行されるため。
+# 素の呼び出しが手順に残っていると、macOS 利用者は取得の 1 行目で落ちる。
+# 地の文まで拾わないのは、リリースノート等が `mktemp` を説明として書くため。
+# 全文へ当てると、検査が文章の書き方に依存する。
+fenced_code_only() {
+  awk '
+    /^[[:space:]]*```/ { inside = !inside; print ""; next }
+    { if (inside) print; else print "" }
+  '
+}
+
 # ── 検査ロジック自身の検証 ────────────────────────────────────────────────────
 #
 # 検査が何も拾わないまま緑になる状態を防ぐ。実装を直したあとは、対象が 0 件でも
@@ -84,15 +98,33 @@ if [[ "$bad" -eq 0 ]]; then pass; else fail "正しい呼び出しやコメン�
 
 # ── リポジトリ全体の検査 ──────────────────────────────────────────────────────
 
-it "追跡対象の .sh にテンプレート無しの mktemp が無い"
+it "コードブロック内は検出し、地の文は検出しない"
+# 文書側の検査は、コード部分だけを対象にしないと成立しない。
+doc="$(printf '%s\n' \
+  "素の \`$bad_cmd\` は macOS で落ちる。" \
+  '```bash' \
+  "d=\"\$($bad_cmd -d)\"" \
+  '```' \
+  "\`$bad_cmd -d\` を使う場合は注意する。")"
+found="$(printf '%s\n' "$doc" | fenced_code_only | bare_mktemp_lines)"
+if [[ "$(printf '%s\n' "$found" | grep -c .)" == "1" ]] && printf '%s' "$found" | grep -q '^3:'; then
+  pass
+else
+  fail "コードブロック内の 3 行目だけを拾えていない: $found"
+fi
+
+it "追跡対象の .sh と .md にテンプレート無しの mktemp が無い"
 hits=""
 while IFS= read -r f; do
   [[ -f "$REPO_ROOT/$f" ]] || continue
-  found="$(bare_mktemp_lines < "$REPO_ROOT/$f")"
+  case "$f" in
+    *.md) found="$(fenced_code_only < "$REPO_ROOT/$f" | bare_mktemp_lines)" ;;
+    *)    found="$(bare_mktemp_lines < "$REPO_ROOT/$f")" ;;
+  esac
   [[ -n "$found" ]] && hits="$hits$(printf '%s\n' "$found" | sed "s|^|$f:|")
 "
 done <<EOF
-$(cd "$REPO_ROOT" && git ls-files '*.sh')
+$(cd "$REPO_ROOT" && git ls-files '*.sh' '*.md')
 EOF
 
 if [[ -z "$hits" ]]; then
