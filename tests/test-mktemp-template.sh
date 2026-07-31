@@ -45,10 +45,38 @@ bare_mktemp_lines() {
 # 素の呼び出しが手順に残っていると、macOS 利用者は取得の 1 行目で落ちる。
 # 地の文まで拾わないのは、リリースノート等が `mktemp` を説明として書くため。
 # 全文へ当てると、検査が文章の書き方に依存する。
+#
+# フェンスの開閉は単純な反転で判定しない。文書では「コードブロックの書き方」を示すために
+# フェンスを入れ子にすることがあり（外側を 4 個以上のバッククォートで囲む）、反転だと
+# 内側の開始で外へ出たことになる。以降の内外がずれ続け、コード内の呼び出しを見落とし、
+# 地の文を誤検出する。開いたときの長さを覚え、それ以上の長さで、かつ言語指定を持たない
+# 行だけを閉じとして扱う（CommonMark のフェンス規則）。
 fenced_code_only() {
   awk '
-    /^[[:space:]]*```/ { inside = !inside; print ""; next }
-    { if (inside) print; else print "" }
+    function fence_len(s,   n) {
+      sub(/^[[:space:]]*/, "", s)
+      n = 0
+      while (substr(s, n + 1, 1) == "`") n++
+      return n
+    }
+    {
+      fl = fence_len($0)
+      if (fl >= 3) {
+        if (!inside) {
+          inside = 1
+          open_len = fl
+        } else if (fl >= open_len && $0 ~ /^[[:space:]]*`+[[:space:]]*$/) {
+          inside = 0
+        } else {
+          # 内側のフェンス行はコードの一部。ただしフェンス自体に呼び出しは書けない。
+          print ""
+          next
+        }
+        print ""
+        next
+      }
+      if (inside) print; else print ""
+    }
   '
 }
 
@@ -111,6 +139,23 @@ if [[ "$(printf '%s\n' "$found" | grep -c .)" == "1" ]] && printf '%s' "$found" 
   pass
 else
   fail "コードブロック内の 3 行目だけを拾えていない: $found"
+fi
+
+it "入れ子のフェンスで内外の判定がずれない"
+# 反転で判定すると、内側の開始で外へ出たことになり、以降の内外がずれ続ける。
+# コード内の呼び出しを見落とし、そのあとの地の文を誤検出する。
+nested="$(printf '%s\n' \
+  '````markdown' \
+  '```bash' \
+  "d=\"\$($bad_cmd -d)\"" \
+  '```' \
+  '````' \
+  "素の \`$bad_cmd\` は macOS で落ちる。")"
+found="$(printf '%s\n' "$nested" | fenced_code_only | bare_mktemp_lines)"
+if [[ "$(printf '%s\n' "$found" | grep -c .)" == "1" ]] && printf '%s' "$found" | grep -q '^3:'; then
+  pass
+else
+  fail "入れ子フェンスの 3 行目だけを拾えていない: $found"
 fi
 
 it "追跡対象の .sh と .md にテンプレート無しの mktemp が無い"
