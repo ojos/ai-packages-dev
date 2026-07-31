@@ -140,9 +140,29 @@ read -r -d '' PROMPT <<'EOF' || true
 EOF
 
 echo "[gemini-review] reviewing $scope (runs=$RUNS)"
-# 差分を stdin で渡すだけで、モデルにツール実行は不要。信頼済みフォルダの確認は
-# 対話を要求するため、非対話実行では明示的に読み取り専用として扱う。
-args=(--skip-trust -p "$PROMPT")
+
+# 差分を CLI の解釈対象へ載せない。stdin や -p へ差分本文を混ぜると、gemini CLI が
+# 本文中の @ をファイル参照（@ メンション）として展開し、モデルには壊れたテキストが
+# 渡る。実測では `noreply@github.com` が `noreply @github.com` に、`*@*` の `@*` が
+# リポジトリ内の実在パスに化けた。モデルは壊れた側を読んで実在しない誤りを致命バグ
+# として報告する。同じ差分なら同じ化け方をするため、多数決でも落とせない。
+# 該当するのは @ を含む差分すべて（メールアドレス、`${arr[@]}`、デコレータ等）。
+#
+# 一時ファイルへ書き、@<パス> で参照させる。@ で注入されたファイルの中身は再展開
+# されないため、差分は素通しでモデルへ渡る（実測済み）。一時ディレクトリは
+# --include-directories で workspace へ加える。加えないと CLI は応答を返さない。
+# テンプレートを明示する。BSD 系（macOS）の mktemp はテンプレート無しの呼び出しを
+# 受け付けず、この雛形は Linux 以外へ配布されうる。
+work_dir="$(mktemp -d "${TMPDIR:-/tmp}/gemini-review.XXXXXX")"
+diff_file="$work_dir/review.diff"
+stderr_file="$work_dir/stderr"
+trap 'rm -rf "$work_dir"' EXIT
+printf '%s\n' "$diff_text" > "$diff_file"
+
+# モデルにツール実行は不要。信頼済みフォルダの確認は対話を要求するため、
+# 非対話実行では明示的に読み取り専用として扱う。
+args=(--skip-trust --include-directories "$work_dir" -p "@$diff_file
+$PROMPT")
 [[ -n "$MODEL" ]] && args=(-m "$MODEL" "${args[@]}")
 
 # 通過判定はモデルの出力ゆれに耐える必要がある。LGTM とだけ返すよう指示していても、
@@ -163,19 +183,16 @@ is_lgtm() {
   printf '%s\n' "$normalized" | grep -qix 'LGTM'
 }
 
-# CLI の警告や進捗表示は「回答」ではない。判定へ混ぜると、警告が 1 行出ただけで
-# LGTM が指摘ありに化け、ゲートが常に赤くなる（実測: 端末の色数や ripgrep 不在の
-# 警告が stderr に出る）。判定はモデルの回答（stdout）だけで行い、stderr は失敗した
-# ときの診断に回す。
-stderr_file="$(mktemp)"
-trap 'rm -f "$stderr_file"' EXIT
-
 findings=0
 run=0
 while [[ "$run" -lt "$RUNS" ]]; do
   run=$((run + 1))
 
-  output="$(printf '%s' "$diff_text" | gemini "${args[@]}" 2>"$stderr_file")" || {
+  # CLI の警告や進捗表示は「回答」ではない。判定へ混ぜると、警告が 1 行出ただけで
+  # LGTM が指摘ありに化け、ゲートが常に赤くなる（実測: 端末の色数や ripgrep 不在の
+  # 警告が stderr に出る）。判定はモデルの回答（stdout）だけで行い、stderr は失敗
+  # したときの診断に回す。標準入力は渡さない（差分はファイル参照で渡している）。
+  output="$(gemini "${args[@]}" </dev/null 2>"$stderr_file")" || {
     echo "error: gemini review failed (run $run/$RUNS)" >&2
     cat "$stderr_file" >&2
     printf '%s\n' "$output" >&2

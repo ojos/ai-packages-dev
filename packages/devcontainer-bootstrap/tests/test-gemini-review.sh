@@ -45,8 +45,21 @@ mk_gemini_stub() {
   mkdir -p "$bindir"
   cat > "$bindir/gemini" <<STUB
 #!/usr/bin/env bash
-# 引数と stdin は読み捨てる。判定ロジックだけを検証する stub。
-cat >/dev/null 2>&1 || true
+# 受け取った引数と stdin を記録する。判定ロジックに加えて、差分をどう渡している
+# かを検証できるようにする（差分本文が CLI の引数や stdin に載っていると、CLI が
+# 本文中の @ をファイル参照として展開してしまう）。
+printf '%s\n' "\$@" > "$bindir/.argv"
+cat > "$bindir/.stdin" 2>/dev/null || true
+# @<パス> で参照されているファイルがあれば、渡された中身をそのまま控える。
+for __a in "\$@"; do
+  case "\$__a" in
+    @*)
+      __f="\$(printf '%s' "\${__a#@}" | head -1)"
+      [[ -f "\$__f" ]] && cp "\$__f" "$bindir/.injected"
+      printf '%s' "\$__f" > "$bindir/.injected_path"
+      ;;
+  esac
+done
 n=\$(cat "$bindir/.count" 2>/dev/null || echo 0)
 n=\$((n + 1))
 echo "\$n" > "$bindir/.count"
@@ -66,7 +79,20 @@ esac
 exit 0
 STUB
   chmod +x "$bindir/gemini"
-  rm -f "$bindir/.count"
+  rm -f "$bindir/.count" "$bindir/.argv" "$bindir/.stdin" "$bindir/.injected" "$bindir/.injected_path"
+}
+
+# @ を含む差分をステージする。メールアドレス・シェルの配列展開・パターンの 3 形。
+# いずれも CLI がファイル参照として展開しうる形で、実際のコードに日常的に現れる。
+stage_at_diff() {
+  local dir="$1"
+  (
+    cd "$dir" \
+      && printf '%s\n' \
+           'ALLOWED=("${ARR[@]}" "noreply@github.com")' \
+           '[[ "$n" == *@* ]] && return 0' > at.sh \
+      && git add at.sh
+  ) >/dev/null 2>&1
 }
 
 run_review() {
@@ -143,6 +169,67 @@ if [[ "$rc" -eq 0 ]]; then
   assert_contains "$out" "run 1/1: LGTM" "警告付き LGTM の判定"
 else
   fail "警告を判定へ混ぜて落とした (exit $rc): $out"
+fi
+
+# ── 差分は CLI の解釈対象へ載せない ───────────────────────────────────────────
+#
+# 差分本文を stdin や -p へ混ぜると、gemini CLI が本文中の @ をファイル参照として
+# 展開し、モデルには壊れたテキストが渡る。実測では `noreply@github.com` が
+# `noreply @github.com` に、`*@*` の `@*` がリポジトリ内の実在パスに化けた。モデルは
+# 壊れた側を読み、実在しない誤りを致命バグとして報告する。同じ差分なら同じ化け方を
+# するため、多数決でも落とせない。一時ファイルへ書いて @<パス> で参照させる。
+
+it "差分本文を CLI の引数にも標準入力にも載せない"
+d="$(new_workdir)/r"; b="$(new_workdir)/bin"
+mk_review_repo "$d"; mk_gemini_stub "$b" "L"
+stage_at_diff "$d"
+run_review "$d" "$b" >/dev/null
+argv="$(cat "$b/.argv" 2>/dev/null || true)"
+stdin_seen="$(cat "$b/.stdin" 2>/dev/null || true)"
+bad=0
+case "$argv" in *'noreply@github.com'*) echo "  差分本文が引数に載っている"; bad=1 ;; esac
+case "$stdin_seen" in *'noreply@github.com'*) echo "  差分本文が標準入力に載っている"; bad=1 ;; esac
+if [[ "$bad" -eq 0 ]]; then pass; else fail "差分が CLI の解釈対象になっている"; fi
+
+it "差分はファイル参照で渡し、中身は加工せず素通しする"
+# 参照させるファイルの中身が差分と 1 文字でも違うと、モデルは違う差分をレビューする。
+d="$(new_workdir)/r"; b="$(new_workdir)/bin"
+mk_review_repo "$d"; mk_gemini_stub "$b" "L"
+stage_at_diff "$d"
+run_review "$d" "$b" >/dev/null
+if [[ -f "$b/.injected" ]]; then
+  expected="$( cd "$d" && git diff --cached )"
+  assert_eq "$(cat "$b/.injected")" "$expected" "参照させた差分の中身"
+else
+  fail "@<パス> によるファイル参照が引数に無い"
+fi
+
+it "一時ディレクトリを workspace へ加えている"
+# 加えないと CLI は参照先を読めず、応答を返さないまま止まる（実測）。
+d="$(new_workdir)/r"; b="$(new_workdir)/bin"
+mk_review_repo "$d"; mk_gemini_stub "$b" "L"
+stage_at_diff "$d"
+run_review "$d" "$b" >/dev/null
+argv="$(cat "$b/.argv" 2>/dev/null || true)"
+inc_dir="$(printf '%s\n' "$argv" | grep -A1 -- '--include-directories' | tail -1)"
+ref_path="$(cat "$b/.injected_path" 2>/dev/null || true)"
+if [[ -n "$inc_dir" && -n "$ref_path" && "$ref_path" == "$inc_dir"/* ]]; then
+  pass
+else
+  fail "参照先 '$ref_path' が --include-directories '$inc_dir' の配下にない"
+fi
+
+it "レビュー後に差分の一時ファイルを残さない"
+# 差分がプロセス終了後も一時領域に残ると、機密を含む差分がそのまま溜まる。
+d="$(new_workdir)/r"; b="$(new_workdir)/bin"
+mk_review_repo "$d"; mk_gemini_stub "$b" "L"
+stage_at_diff "$d"
+run_review "$d" "$b" >/dev/null
+ref_path="$(cat "$b/.injected_path" 2>/dev/null || true)"
+if [[ -n "$ref_path" && ! -e "$ref_path" && ! -d "$(dirname "$ref_path")" ]]; then
+  pass
+else
+  fail "一時ファイルが残っている: $ref_path"
 fi
 
 # ── 多数決 ────────────────────────────────────────────────────────────────────
