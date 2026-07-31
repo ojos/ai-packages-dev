@@ -151,7 +151,9 @@ echo "[gemini-review] reviewing $scope (runs=$RUNS)"
 # 一時ファイルへ書き、@<パス> で参照させる。@ で注入されたファイルの中身は再展開
 # されないため、差分は素通しでモデルへ渡る（実測済み）。一時ディレクトリは
 # --include-directories で workspace へ加える。加えないと CLI は応答を返さない。
-work_dir="$(mktemp -d)"
+# テンプレートを明示する。BSD 系（macOS）の mktemp はテンプレート無しの呼び出しを
+# 受け付けず、この雛形は Linux 以外へ配布されうる。
+work_dir="$(mktemp -d "${TMPDIR:-/tmp}/gemini-review.XXXXXX")"
 diff_file="$work_dir/review.diff"
 stderr_file="$work_dir/stderr"
 trap 'rm -rf "$work_dir"' EXIT
