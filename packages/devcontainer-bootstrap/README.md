@@ -57,7 +57,8 @@
 TAG=v0.8.1
 BASE="https://github.com/ojos/devcontainer-bootstrap/releases/download/${TAG}"
 
-d="$(mktemp -d "${TMPDIR:-/tmp}/dcb.XXXXXX")"; trap 'rm -rf "$d"' EXIT
+d="$(mktemp -d "${TMPDIR:-/tmp}/dcb.XXXXXX")" || exit 1
+trap 'rm -rf "$d"' EXIT
 curl -sSL "${BASE}/bootstrap.sh" -o "$d/bootstrap.sh"
 curl -sSL "${BASE}/SHA256SUMS"  -o "$d/SHA256SUMS"
 
@@ -100,7 +101,8 @@ bash "$d/bootstrap.sh" --project-name myapp --output-dir "$PWD/myapp" \
 TAG=v0.8.1
 BASE="https://github.com/ojos/devcontainer-bootstrap/releases/download/${TAG}"
 
-d="$(mktemp -d "${TMPDIR:-/tmp}/dcb.XXXXXX")"; trap 'rm -rf "$d"' EXIT
+d="$(mktemp -d "${TMPDIR:-/tmp}/dcb.XXXXXX")" || exit 1
+trap 'rm -rf "$d"' EXIT
 curl -sSL "${BASE}/doctor.sh"  -o "$d/doctor.sh"
 curl -sSL "${BASE}/SHA256SUMS" -o "$d/SHA256SUMS"
 
