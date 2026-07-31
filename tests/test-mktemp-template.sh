@@ -17,11 +17,16 @@ set -uo pipefail
 echo "test-mktemp-template"
 
 # テンプレート引数を持たない呼び出しの形。mktemp のあとにオプションだけが並び、
-# コマンド置換の閉じ括弧やパイプ、行末で終わるものを拾う。
+# コマンド置換の閉じ括弧・パイプ・リダイレクト・行内コメント・行末で終わるものを拾う。
+#
+# 左側の境界を必須にする。付けないと、名前の末尾が mktemp である変数や関数
+# （`run_with_mktemp;` など）を呼び出しとして誤検出する。誤検出は「正しい記述を
+# 直そうとして戻す」方向の修正を招くため、検出漏れと同じくらい避ける。
 #
 # 終端に引用符を含めない。`mktemp -d "$dir/x.XXXXXX"` のようにテンプレートを渡した
-# 正しい呼び出しまで拾ってしまうため。
-BARE_MKTEMP_RE='mktemp([[:space:]]+-[a-zA-Z-]+)*[[:space:]]*([)|;&`]|$)'
+# 正しい呼び出しまで拾ってしまうため。逆にリダイレクト（`> /dev/null`）と行内
+# コメントは終端に含める。含めないと、素の呼び出しがそのまま検査をすり抜ける。
+BARE_MKTEMP_RE='(^|[^[:alnum:]_.-])mktemp([[:space:]]+-[a-zA-Z-]+)*[[:space:]]*([)|;&`<>#]|$)'
 
 # 標準入力を読み、該当する行を "行番号:内容" で返す。
 #
@@ -44,7 +49,14 @@ bad_cmd="mk""temp"
 
 it "テンプレート無しの呼び出しを検出する"
 bad=0
-for sample in "dir=\"\$($bad_cmd -d)\"" "f=\"\$($bad_cmd)\"" "$bad_cmd -d | head -1"; do
+for sample in \
+  "dir=\"\$($bad_cmd -d)\"" \
+  "f=\"\$($bad_cmd)\"" \
+  "$bad_cmd -d | head -1" \
+  "$bad_cmd -d > /dev/null" \
+  "$bad_cmd -d # 一時ディレクトリ" \
+  "$bad_cmd" \
+; do
   if ! printf '%s\n' "$sample" | bare_mktemp_lines >/dev/null; then
     echo "  検出できなかった: $sample"
     bad=1
@@ -59,6 +71,9 @@ for sample in \
   'dir="$(mktemp -d "${TMPDIR:-/tmp}/x.XXXXXX")"' \
   'f="$(mktemp "$ROOT/y.XXXXXX")"' \
   '  # 素の mktemp は macOS で落ちる' \
+  'run_with_mktemp;' \
+  'has_mktemp=true' \
+  'echo "$new_mktemp"' \
 ; do
   if printf '%s\n' "$sample" | bare_mktemp_lines >/dev/null; then
     echo "  誤検出した: $sample"
