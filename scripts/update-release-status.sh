@@ -78,7 +78,7 @@ get_latest_semver_tag() {
 DCB_TAG="$(get_latest_release devcontainer-bootstrap)"
 PLAYBOOK_TAG="$(get_latest_semver_tag ai-playbook)"
 
-BLOCK_FILE="$(mktemp)"
+BLOCK_FILE="$(mktemp "${TMPDIR:-/tmp}/release-status-block.XXXXXX")"
 cat >"$BLOCK_FILE" <<EOF
 | パッケージ | 配布状態 |
 |---|---|
@@ -93,7 +93,7 @@ cat >"$BLOCK_FILE" <<EOF
 - \`ai-playbook\`: \`$OWNER/ai-playbook\` で \`$PLAYBOOK_TAG\` まで公開済み
 EOF
 
-OUT_FILE="$(mktemp)"
+OUT_FILE="$(mktemp "${TMPDIR:-/tmp}/release-status-out.XXXXXX")"
 awk -v block_file="$BLOCK_FILE" '
 BEGIN {
   while ((getline line < block_file) > 0) {

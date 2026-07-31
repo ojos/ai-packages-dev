@@ -200,7 +200,7 @@ if [[ "$DRY_RUN" == "true" || "$DECISION" == "none" ]]; then
   exit 0
 fi
 
-body_file="$(mktemp)"
+body_file="$(mktemp "${TMPDIR:-/tmp}/audit-failure-body.XXXXXX")"
 # gh issue create / comment が失敗すると set -e で途中終了し、末尾の rm まで届かない。
 # mktemp の直後に trap を置き、どの経路で抜けても一時ファイルが残らないようにする。
 trap 'rm -f "$body_file"' EXIT

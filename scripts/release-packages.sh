@@ -277,7 +277,7 @@ generate_standard_assets() {
   pushd "$dir" >/dev/null
 
   # PACKAGE_ARCHIVE.tar.gz — .git ディレクトリを除いた全ツリー
-  archive_tmp="$(mktemp)"
+  archive_tmp="$(mktemp "${TMPDIR:-/tmp}/release-archive.XXXXXX")"
   tar \
     --exclude='./.git' \
     --exclude='./PACKAGE_ARCHIVE.tar.gz' \
@@ -707,7 +707,7 @@ audit_release_assets() {
   local grand_inspected=0 grand_skipped=0
   local taglist
 
-  workroot="$(mktemp -d)"
+  workroot="$(mktemp -d "${TMPDIR:-/tmp}/release-audit.XXXXXX")"
 
   echo "[audit] verifying release asset integrity by recomputing SHA256 (limit: $limit)"
 

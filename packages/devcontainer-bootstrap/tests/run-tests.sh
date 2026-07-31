@@ -27,7 +27,7 @@ for cmd in python3 tar curl timeout; do
   }
 done
 
-TEST_TMP_ROOT="$(mktemp -d)"
+TEST_TMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/dcb-tests.XXXXXX")"
 export TEST_TMP_ROOT
 
 # テストが停止処理へ到達せず終わった場合（アサーション失敗による早期 return、
