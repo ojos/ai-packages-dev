@@ -198,8 +198,8 @@ check() {
 
   # 状態の検査を先に行う。適用を先に走らせると「未適用」を検出できなくなるため、
   # 冪等性の検査（apply を伴う）は最後に置く。
-  SNAPSHOT="$(mktemp)"
-  TMP_SNAPSHOT="$(mktemp)"
+  SNAPSHOT="$(mktemp "${TMPDIR:-/tmp}/git-identity-snapshot.XXXXXX")"
+  TMP_SNAPSHOT="$(mktemp "${TMPDIR:-/tmp}/git-identity-snapshot.XXXXXX")"
   cp "$global_config" "$SNAPSHOT" 2>/dev/null || : >"$SNAPSHOT"
 
   # 1) global に identity が残っていないこと。
@@ -250,7 +250,7 @@ check() {
 
   # 5) local 設定を持たないリポジトリでは identity 解決が失敗すること。
   #    これが本題。黙って global へ落ちないことを確かめる。
-  TMP_REPO="$(mktemp -d)"
+  TMP_REPO="$(mktemp -d "${TMPDIR:-/tmp}/git-identity-repo.XXXXXX")"
   git init -q "$TMP_REPO"
   if (cd "$TMP_REPO" && git_ident_without_env var GIT_AUTHOR_IDENT >/dev/null 2>&1); then
     err "NG  local 未設定のリポジトリで author identity が解決できてしまう"
@@ -278,7 +278,7 @@ check() {
   #    ここが本題。設定を持たない新規リポジトリでも、上位スコープのヘルパーが
   #    生き残っていないことを、実際に一時リポジトリを作って確かめる。
   #    git は空文字で一覧をリセットするため、最後の空要素より後ろだけが実効値になる。
-  TMP_REPO="$(mktemp -d)"
+  TMP_REPO="$(mktemp -d "${TMPDIR:-/tmp}/git-identity-repo.XXXXXX")"
   git init -q "$TMP_REPO"
   local effective
   effective="$(cd "$TMP_REPO" && git config --get-all credential.helper 2>/dev/null \
