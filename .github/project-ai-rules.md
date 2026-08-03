@@ -200,8 +200,19 @@ push / PR 作成後の最終ゲートを、このリポジトリで具体化し�
 - **要求は 1 回だけ**: 契機を `pull_request` の `types: [opened]` に限定し、PR 更新（`synchronize`）では再要求しません。これが「1 回だけ」を運用者の記憶に頼らず機構で保証している実体です。
 - **fork からの PR はスキップ**: `github.event.pull_request.head.repo.full_name == github.repository` のときだけジョブを実行します。fork の PR は書き込みトークンを持たないためです。
 - **トークンのフォールバック**: `secrets.COPILOT_REVIEW_TOKEN || secrets.GITHUB_TOKEN`。既定の `GITHUB_TOKEN` で要求できない場合、リポジトリ Secrets に `COPILOT_REVIEW_TOKEN`（pull-requests 書き込み権限を持つ PAT）を設定すれば自動で切り替わります。
-- **前提**: リポジトリ所有者の Copilot サブスクリプションで「Copilot code review」が有効であること。無効だと reviewers 要求が 422 で失敗します。
+- **前提**: リポジトリ所有者の Copilot サブスクリプションで「Copilot code review」が有効であること。無効だと reviewers 要求が 422 で失敗します。失敗時は `::error::` で切り分け手順（所有者側の有効化 / `COPILOT_REVIEW_TOKEN` の設定 / 規範側の方針変更）を出し、実行を落とします。**握り潰してスキップにしません。** ゲートが実行されていないのに緑を出すと、偽の緑と通過の区別が付かなくなるためです。
 - 指摘の打ち切りは `.ai-playbook/review-workflow.md` の収束規則に従います。2 巡目以降の軽微な指摘は人間が却下し、AI 同士を往復させません。
+
+#### 要求されたことの確認（`review-gate.yml`）
+
+- 手段: `.github/workflows/review-gate.yml`。**要求はせず、要求されたことを確かめるだけです。** 要求と確認を分けるのは、確認側も要求すると「1 回だけ」が 2 か所から壊れるためです。
+- **`pull_request` の `opened` は届かないことがあります。** 届かなければ `copilot-review.yml` は起動せず、`::error::` も出ず、CI は緑なので、**最終ゲートだけが黙って抜けます。**
+- **`opened` を見る 2 本目のワークフローでは塞げません。** 届いていないのはイベントそのものなので、同じ契機を見る側も同じように起動しません。`review-gate.yml` が `opened` / `synchronize` / `reopened` / `ready_for_review` に加えて**20 分ごとの定期実行**を持つのはこのためです。
+- 判定は head SHA への commit status（`review-gate`）として出します。定期実行から見た PR にはジョブの成否が紐づかないため、status でなければ PR 上に何も現れません。
+- `opened` の契機だけ、要求が届くまで 120 秒待ってから判定します。同時に走るため、待たないと必ず「要求されていない」になります。
+- 確かめられなかった場合（GitHub API から読めない）は status を付けず、次の定期実行へ判定を持ち越します。読めなかったことを「要求されていない」と同じに扱いません。
+- **required check にはしません。** Copilot 側の遅延や障害でマージが止まる副作用があるためで、ここで止めたいのは「要求されていないことに気づかないまま通ること」だけです。
+- 注意: `gh pr view --json reviewRequests` には Copilot が出ません。要求の有無は REST の `/pulls/{n}/requested_reviewers` で確認します。
 
 ### ドキュメント分離運用
 

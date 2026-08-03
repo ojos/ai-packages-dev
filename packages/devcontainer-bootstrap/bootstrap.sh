@@ -2348,9 +2348,16 @@ install_playbook_rules() {
   # リモート最終ゲートの雛形は、その機構を明示選択した場合のみ配置する。
   # 規範（review-workflow.md）はベンダー中立で「1 回に限定される機構なら自動でよい」
   # とだけ述べ、具体機構は選択時に雛形として置く分離を守る。
+  #
+  # 雛形は 2 本で 1 組。copilot-review.yml が要求し、review-gate.yml が要求された
+  # ことを別の契機（PR 更新・定期実行）から確認する。要求側の契機は届かないことが
+  # あり、届かなければ最終ゲートが黙って抜けるため、確認側だけを落として配置する
+  # 選択肢は持たせない（規範 review-workflow.md「要求されたことを別の契機で確認する」）。
   if has_with copilot; then
     tpl="$(require_playbook_template copilot-review.yml)"
     apply_file_with_policy "$tpl" "$OUTPUT_DIR/.github/workflows/copilot-review.yml"
+    tpl="$(require_playbook_template review-gate.yml)"
+    apply_file_with_policy "$tpl" "$OUTPUT_DIR/.github/workflows/review-gate.yml"
   fi
 
   # Claude Code 向け intake 起点スキル。--with-claude を選んだときだけ配置する
@@ -2456,6 +2463,7 @@ EOF
     echo "plan: $OUTPUT_DIR/scripts/gemini-review.sh"
     if has_with copilot; then
       echo "plan: $OUTPUT_DIR/.github/workflows/copilot-review.yml"
+      echo "plan: $OUTPUT_DIR/.github/workflows/review-gate.yml"
     fi
     has_with claude && echo "plan: $OUTPUT_DIR/.claude/skills/intake/SKILL.md"
     echo "plan: $OUTPUT_DIR/$PLAYBOOK_REL_ROOT/VERSION"
