@@ -100,6 +100,8 @@ bash scripts/verify-commit-identity.sh --full       # HEAD の全履歴
 - 判定は名前ではなく **email** で行います（GitHub の Contributors は既定ブランチのコミット author の email で集計されるため）。対象は author / committer / `Co-Authored-By` の 3 つです。
 - committer には `noreply@github.com` を、`Co-Authored-By` にはさらに `noreply@anthropic.com` を追加で許可します（squash merge / web UI コミット、および AI コーディング規約の trailer に対応）。
 - 許可 author email の解決順は、`ALLOWED_AUTHOR_EMAILS`（カンマまたは空白区切り）→ `.env` の `GIT_IDENTITY_EMAIL`。どちらでも解決できない場合は「検査対象が無いので通過」にせず、fail-closed で落とします。
+- 許可エントリは既定で完全一致です。加えて `@example.com` / `*@example.com` の **2 形だけ**をドメイン一括指定として解釈します。任意の glob を許さないのは、設定ミスの `*` 1 文字で全 email が通り、検知層が黙って無効化されるためです（`*` 単体は何も許可しません）。ローカル部は 1 文字以上を要求し、`@` を含む形（`attacker@untrusted.com@example.com`）は通しません。
+- committer が `noreply@github.com` のコミットに限り、author が `<login>@users.noreply.github.com` の形であれば許可します。GitHub 側でメール非公開を有効にした利用者の PR マージ・web UI 編集がこの形になるためです。許可を committer に縛ることで、ローカルで作ったコミットには適用されません（identity 適用漏れの検知力を落とさない）。書き込み権限を持つアカウントが Contributors に現れることは許容し、誰に権限を与えるかはリポジトリ側の責務として切り分けます。
 - CI の検知層は `.github/workflows/identity-guard.yml` です。`pull_request`（`opened` / `synchronize` / `reopened`）では PR に含まれる全コミットを、`push`（`main`）では main の全履歴を検査します。PR を経由しない直接 push こそが混入の原因なので、後者を省略しません。
 - 許可 email は生成物へ焼き込まず、**リポジトリ変数** `ALLOWED_AUTHOR_EMAILS`（Settings > Secrets and variables > Actions > Variables）で渡します。CI には `.env` が無いため、これを設定しないと identity-guard は fail-closed で必ず失敗します。
 - **release workflow の bot は許可 email に加えません。** bot が名義を持つのは公開リポジトリへの release snapshot だけで、本モノレポへはコミットしないためです（identity-guard の検査対象は本モノレポのみ）。今は使わない許可を先回りして広げると、その分だけ fail-closed の検知力が落ちます。必要になった時点で加えます。
