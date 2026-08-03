@@ -347,6 +347,24 @@ else
   fail "許可外ドメインの author を通した (exit $vrc)"
 fi
 
+it "通常の許可 email はドメイン指定として解釈されない"
+# case のパターン '*@'* は、引用された '*@' がリテラルで、後ろの引用されていない
+# '*' だけがワイルドカードである。この引用が外れると、'alice@example.com' のような
+# 通常の許可エントリまでドメイン分岐へ入り、**完全一致のつもりが接尾辞一致になる**
+# （'xalice@example.com' が通る）。
+#
+# 引用の有無は目で見て気づきにくく、「パターンを整理する」類の変更で静かに外れる。
+# 変更が入った瞬間に落ちるよう、ここで固定する。
+vr12="$(new_workdir)/vr12"; mk_repo "$vr12" verify-commit-identity.sh
+commit_as "$vr12" "xalice@example.com" "xalice@example.com" d6
+vo="$(cd "$vr12" && env ALLOWED_AUTHOR_EMAILS='alice@example.com' \
+    bash scripts/verify-commit-identity.sh --full 2>&1)"; vrc=$?
+if [[ "$vrc" -eq 1 ]]; then
+  assert_contains "$vo" "IDENTITY_FAIL" "接尾辞一致の拒否"
+else
+  fail "完全一致の許可エントリが接尾辞一致として働いた (exit $vrc)"
+fi
+
 # ── CI ワークフロー ───────────────────────────────────────────────────────────
 it "identity-guard.yml が pull_request と push(main) の 2 系統を張る"
 if grep -q 'pull_request:' "$WF" && grep -q 'push:' "$WF" && grep -q 'branches: \[main\]' "$WF"; then
