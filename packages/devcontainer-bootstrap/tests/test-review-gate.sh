@@ -5,6 +5,10 @@
 # 役割が違う 2 本を 1 つのテストへ混ぜると、片方が落ちたときにどちらの機構が壊れた
 # のか出力から読めなくなるため、ファイルを分ける。
 #
+# 配置の契機は 2 本とも --with-copilot-review で、ローカル装備の --with-copilot では
+# 置かない（issue #230）。要求側だけを移すと 2 本の配置条件がずれ、片方だけが置かれる
+# 状態を作れてしまうため、確認側でも同じ条件を検査する。
+#
 # 確認側が守る不変条件は「要求しないこと」と「別の契機を持つこと」の 2 つ。前者は
 # 要求が 2 か所から出ると規範の「1 回だけ」が壊れるため、後者は届かないイベントを
 # 同じ契機から見ても起動しないため（規範 review-workflow.md「要求されたことを別の
@@ -25,9 +29,9 @@ assert_file_exists "$TPL/review-gate.yml"
 
 # ── 選択時のみ配置する ────────────────────────────────────────────────────────
 
-it "--with-copilot --with-playbook で review-gate.yml が配置される"
+it "--with-copilot-review --with-playbook で review-gate.yml が配置される"
 out="$(new_workdir)/p"
-run_bootstrap "$out" --with-copilot --with-playbook >/dev/null 2>&1
+run_bootstrap "$out" --with-copilot-review --with-playbook >/dev/null 2>&1
 assert_file_exists "$out/$WF_REL"
 
 it "配置された review-gate.yml は雛形と完全一致する（コピーであって再生成でない）"
@@ -37,25 +41,37 @@ it "要求側と確認側は 2 本そろって配置される"
 # 片方だけの配置は、この機構が塞ごうとしている穴（要求されないまま通る）を残す。
 assert_file_exists "$out/.github/workflows/copilot-review.yml"
 
-it "--with-copilot なし（--with-playbook のみ）では配置しない"
+it "--with-copilot-review なし（--with-playbook のみ）では配置しない"
 out="$(new_workdir)/p"
 run_bootstrap "$out" --with-playbook >/dev/null 2>&1
 assert_file_absent "$out/$WF_REL"
 
-it "--with-copilot でも規範を配置しない構成（雛形ソース無し）では置かない"
-# 雛形は規範パッケージが持つ。playbook を配置しないなら参照元が無く、配置は起きない。
+it "--with-copilot 単独（+規範）では配置しない"
+# 確認側も要求側と同じ契機で配置する。ローカル装備のフラグでリモート機構が付いて
+# くる形へ戻っていないことを、2 本ともで見る（issue #230）。
 out="$(new_workdir)/p"
-run_bootstrap "$out" --with-copilot >/dev/null 2>&1
+run_bootstrap "$out" --with-copilot --with-playbook >/dev/null 2>&1
 assert_file_absent "$out/$WF_REL"
 
-it "dry-run は copilot 選択時に review-gate.yml を計画へ含める"
+it "--with-copilot-review でも規範を配置しない構成ではエラー終了する"
+# 雛形は規範パッケージが持つ。playbook を配置しないなら参照元が無いため、生成物を
+# 1 つも書かずに落ちる（書き込み前に落ちることの検査は test-copilot-review.sh 側）。
 out="$(new_workdir)/p"
-output="$(run_bootstrap "$out" --with-copilot --with-playbook --dry-run 2>&1)"
+run_bootstrap "$out" --with-copilot-review >/dev/null 2>&1
+rc=$?
+if [[ "$rc" -ne 0 ]]; then pass; else fail "規範なしなのに成功した（exit $rc）"; fi
+
+it "その構成では review-gate.yml も置かれない"
+assert_file_absent "$out/$WF_REL"
+
+it "dry-run は copilot-review 選択時に review-gate.yml を計画へ含める"
+out="$(new_workdir)/p"
+output="$(run_bootstrap "$out" --with-copilot-review --with-playbook --dry-run 2>&1)"
 assert_contains "$output" "$WF_REL" "dry-run 計画"
 
-it "dry-run は copilot 未選択なら review-gate.yml を計画へ含めない"
+it "dry-run は copilot-review 未選択なら review-gate.yml を計画へ含めない"
 out="$(new_workdir)/p"
-output="$(run_bootstrap "$out" --with-playbook --dry-run 2>&1)"
+output="$(run_bootstrap "$out" --with-copilot --with-playbook --dry-run 2>&1)"
 case "$output" in
   *"$WF_REL"*) fail "未選択なのに計画へ現れた" ;;
   *) pass ;;
@@ -64,7 +80,7 @@ esac
 # ── 確認側が守る不変条件 ──────────────────────────────────────────────────────
 
 out="$(new_workdir)/p"
-run_bootstrap "$out" --with-copilot --with-playbook >/dev/null 2>&1
+run_bootstrap "$out" --with-copilot-review --with-playbook >/dev/null 2>&1
 wf="$out/$WF_REL"
 
 it "確認側は要求できる権限を持たない（pull-requests は read）"

@@ -13,8 +13,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_NAME=""
 OUTPUT_DIR=""
 LANGUAGES=()
-# --with-* で選択された装備（cloud / AI ツール）の集合。空既定。
-# 例: aws gcp claude gemini copilot。has_with で参照する。
+# --with-* で選択された装備（cloud / AI ツール / リモート機構）の集合。空既定。
+# 例: aws gcp claude gemini copilot copilot-review。has_with で参照する。
+# 判定は完全一致なので、copilot-review を足しても copilot の判定には影響しない。
 WITH_SET=()
 FORCE="false"
 DRY_RUN="false"
@@ -50,6 +51,8 @@ options:
   --with-claude               Install Claude Code CLI + extension (persisted)
   --with-gemini               Install Gemini CLI + extension (persisted)
   --with-copilot              Install GitHub Copilot CLI + extensions (persisted)
+  --with-copilot-review       Place the remote review-gate workflows only
+                              (requires rules placement; no local tooling)
   --output-dir <path>         Output directory (default: $PWD/<project-name>)
   --base-image <image>        Override auto-selected devcontainer base image
   --dry-run                   Show planned outputs without writing files
@@ -71,6 +74,13 @@ notes:
   AI CLIs are installed only when their --with flag is present (no token-based
   auto-install); each --with AI tool also adds its VS Code extension and
   persists its config across rebuilds.
+
+  Local tooling and the remote review mechanism are separate flags.
+  --with-copilot wires only the local side (CLI, extensions, persisted config);
+  --with-copilot-review places only the remote workflows. The latter requires a
+  rules placement (--with-playbook / --playbook-version / --playbook-from),
+  because those workflow templates are owned by the rules package; without one
+  the run stops before writing any file.
 
   Credentials are never injected from the host. remoteEnv carries only
   LOCAL_WORKSPACE_FOLDER; authenticate inside the container (gh auth login,
@@ -95,6 +105,10 @@ while [[ $# -gt 0 ]]; do
     --with-claude)      WITH_SET+=("claude"); shift ;;
     --with-gemini)      WITH_SET+=("gemini"); shift ;;
     --with-copilot)     WITH_SET+=("copilot"); shift ;;
+    # ローカル装備（--with-copilot）とは別のフラグにする。両者は性質が違い
+    # （手元の開発ツール / リモートのレビュー機構）、片方だけ欲しい構成が実在する。
+    # 1 つのフラグで束ねると「リモートのゲートだけ欲しい」を機構で表現できない。
+    --with-copilot-review) WITH_SET+=("copilot-review"); shift ;;
     --output-dir)       OUTPUT_DIR="$2"; shift 2 ;;
     # 廃止フラグは黙殺せず、移行先を示して停止する。黙って無視すると
     # 「指定したのに注入されない」状態を作り、資格情報の所在をふたたび曖昧にする。
@@ -2416,11 +2430,16 @@ install_playbook_rules() {
   # 規範（review-workflow.md）はベンダー中立で「1 回に限定される機構なら自動でよい」
   # とだけ述べ、具体機構は選択時に雛形として置く分離を守る。
   #
+  # 判定は --with-copilot ではなく --with-copilot-review で行う。前者はローカルの
+  # 開発ツール（CLI・拡張・永続 volume）を配線するフラグで、リモートのレビュー機構
+  # とは効く場所が違う。1 つのフラグで両方を制御すると、リモートのゲートだけを
+  # 使う構成が機構で表現できない（issue #230）。
+  #
   # 雛形は 2 本で 1 組。copilot-review.yml が要求し、review-gate.yml が要求された
   # ことを別の契機（PR 更新・定期実行）から確認する。要求側の契機は届かないことが
   # あり、届かなければ最終ゲートが黙って抜けるため、確認側だけを落として配置する
   # 選択肢は持たせない（規範 review-workflow.md「要求されたことを別の契機で確認する」）。
-  if has_with copilot; then
+  if has_with copilot-review; then
     tpl="$(require_playbook_template copilot-review.yml)"
     apply_file_with_policy "$tpl" "$OUTPUT_DIR/.github/workflows/copilot-review.yml"
     tpl="$(require_playbook_template review-gate.yml)"
@@ -2487,6 +2506,26 @@ write_file() {
 
 # ── メイン処理 ──────────────────────────────────────────────────────────────────────
 
+# --with-copilot-review が配置するのは規範パッケージの雛形だけなので、規範を配置
+# しない構成では供給元そのものが無い。require_playbook_template に任せると、規範や
+# 入口ファイルを書いたあとで停止し、中途半端な生成物が残る（実測済みの既存挙動）。
+# 取得元が解決できなければ 1 つも書かない（v0.4.2）に揃え、書き込み前のここで落とす。
+#
+# 判定条件は should_install_playbook をそのまま使う。配置は --with-playbook だけで
+# なく --playbook-from / --playbook-version でも成立するため、条件を書き写すと
+# 「ソース指定だけで配置した構成」を誤って弾く形でずれる。
+#
+# 検査をここへ置くのは、引数解析の直後では has_with / should_install_playbook が
+# まだ定義されていないため。ファイルを 1 つも書いていない点は同じで、アトミック
+# 停止の約束は満たす（--dry-run も同じ経路を通り、計画を出す前に落ちる）。
+if has_with copilot-review && ! should_install_playbook; then
+  echo "error: --with-copilot-review は規範の配置を前提とします。" >&2
+  echo "       配置するワークフローの雛形は規範パッケージが持つため、規範を配置しない構成では供給元がありません。" >&2
+  echo "       --with-playbook / --playbook-version <tag> / --playbook-from <path|url> のいずれかを併せて指定してください。" >&2
+  echo "       （--without-playbook を指定している場合は、両立しないためどちらかを外してください）" >&2
+  exit 1
+fi
+
 echo "[bootstrap] languages=${LANGUAGES[*]} with=${WITH_SET[*]:-(none)}"
 echo "[bootstrap] output=$OUTPUT_DIR"
 
@@ -2528,7 +2567,7 @@ EOF
     echo "plan: $OUTPUT_DIR/CLAUDE.md"
     echo "plan: $OUTPUT_DIR/.github/copilot-instructions.md"
     echo "plan: $OUTPUT_DIR/scripts/gemini-review.sh"
-    if has_with copilot; then
+    if has_with copilot-review; then
       echo "plan: $OUTPUT_DIR/.github/workflows/copilot-review.yml"
       echo "plan: $OUTPUT_DIR/.github/workflows/review-gate.yml"
     fi

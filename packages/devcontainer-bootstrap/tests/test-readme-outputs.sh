@@ -67,12 +67,17 @@ normalize_paths() {
       -e 's|^@KEEP@||'
 }
 
+# 条件付きの生成物も一覧の照合対象にするため、装備フラグはすべて立てて実行する。
+# --with-copilot-review はローカル装備とは別のフラグなので、これを外すとリモート
+# 最終ゲートの 2 本が dry-run に現れず、README 側の記載だけが「生成されない」として
+# 落ちる（issue #230 でフラグを分けた際に実際にそうなった）。
 impl_outputs() {
   local out_root="$1"
   bash "$BOOTSTRAP" \
     --project-name outcheck \
     --languages node,go,python,php,rust,ruby \
     --with-aws --with-gcp --with-claude --with-gemini --with-copilot \
+    --with-copilot-review \
     --with-playbook \
     --output-dir "$out_root" \
     --dry-run 2>/dev/null \
