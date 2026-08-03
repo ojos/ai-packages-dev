@@ -205,21 +205,146 @@ if [[ "$vrc" -eq 0 ]]; then assert_contains "$vo" "IDENTITY_PASS" "フォール�
 it "許可 email に glob メタ文字があってもファイル名で展開されない"
 # クォートなしの配列代入は単語分割と同時にパス名展開も行う。許可リストが
 # リポジトリ内のファイル名で変わると、検知層の判定が検査対象の中身に左右される。
-# 判定は完全一致なので、'*@example.com' はどんな author にも一致してはならない。
+#
+# プローブに 'allowed@*.com' を使う。ドメイン一括許可として解釈されるのは
+# '@example.com' / '*@example.com' の 2 形だけで、この形はどちらにも当たらないため
+# 完全一致でしか判定されず、どんな author にも一致してはならない。逆に
+# '*@example.com' はドメイン形として正しく通るようになったので、展開の有無を
+# 区別するプローブには使えない（通っても展開のせいか許可のせいか判別できない）。
 vr3="$(new_workdir)/vr3"; mk_repo "$vr3" verify-commit-identity.sh
 commit_as "$vr3" "allowed@example.com" "allowed@example.com" c1
 # author と同名のファイルをルートに置く。展開が起きるなら許可リストが
 # 'allowed@example.com' になり、誤って通してしまう。
 : > "$vr3/allowed@example.com"
-vo="$(cd "$vr3" && env ALLOWED_AUTHOR_EMAILS='*@example.com' \
+vo="$(cd "$vr3" && env ALLOWED_AUTHOR_EMAILS='allowed@*.com' \
     bash scripts/verify-commit-identity.sh --full 2>&1)"; vrc=$?
 rm -f "$vr3/allowed@example.com"
-vo2="$(cd "$vr3" && env ALLOWED_AUTHOR_EMAILS='*@example.com' \
+vo2="$(cd "$vr3" && env ALLOWED_AUTHOR_EMAILS='allowed@*.com' \
     bash scripts/verify-commit-identity.sh --full 2>&1)"; vrc2=$?
 if [[ "$vrc" -eq 1 && "$vrc2" -eq 1 ]]; then
   assert_contains "$vo" "IDENTITY_FAIL" "glob 展開の抑止"
 else
   fail "ファイルの有無で判定が変わった (あり: exit $vrc / なし: exit $vrc2)"
+fi
+
+# ── GitHub 由来コミット（noreply 経路） ───────────────────────────────────────
+# GitHub 側で「メールアドレスを非公開にする」を有効にしていると、PR のマージや
+# web UI での編集で作られるコミットの author は <login>@users.noreply.github.com に
+# なる。committer は常に noreply@github.com。ローカルの identity 適用漏れとは
+# 発生経路が別なので、許可リストへ個別 email を足して回る運用にしない。
+it "committer が noreply@github.com なら noreply 形の author を通す"
+vr4="$(new_workdir)/vr4"; mk_repo "$vr4" verify-commit-identity.sh
+commit_as "$vr4" "1234567+octocat@users.noreply.github.com" "noreply@github.com" gh1
+vo="$(cd "$vr4" && env ALLOWED_AUTHOR_EMAILS="allowed@example.com" \
+    bash scripts/verify-commit-identity.sh --full 2>&1)"; vrc=$?
+if [[ "$vrc" -eq 0 ]]; then
+  assert_contains "$vo" "IDENTITY_PASS" "noreply 経路の許可"
+else
+  fail "GitHub 由来コミットが弾かれた (exit $vrc): $(printf '%s' "$vo" | tail -1)"
+fi
+
+it "author のローカル部に @ を含む noreply 形は拒否する"
+# 末尾一致だけで見ると x@evil.com@users.noreply.github.com が通る。git は author
+# email を検証しないため、この形は実際に作れる。ここが通ると許可の根拠（GitHub が
+# 割り当てた email であること）が崩れる。
+vr5="$(new_workdir)/vr5"; mk_repo "$vr5" verify-commit-identity.sh
+commit_as "$vr5" "x@evil.com@users.noreply.github.com" "noreply@github.com" gh2
+vo="$(cd "$vr5" && env ALLOWED_AUTHOR_EMAILS="allowed@example.com" \
+    bash scripts/verify-commit-identity.sh --full 2>&1)"; vrc=$?
+if [[ "$vrc" -eq 1 ]]; then
+  assert_contains "$vo" "IDENTITY_FAIL" "@ 二重混入の拒否"
+else
+  fail "@ を 2 つ持つ author を通した (exit $vrc)"
+fi
+
+it "committer が noreply@github.com でなければ noreply 形の author も拒否する"
+# 許可を committer に縛らないと、ローカルで author だけ noreply 形に詐称した
+# コミットが通り、identity 適用漏れの検知層としての意味が消える。
+vr6="$(new_workdir)/vr6"; mk_repo "$vr6" verify-commit-identity.sh
+commit_as "$vr6" "octocat@users.noreply.github.com" "allowed@example.com" gh3
+vo="$(cd "$vr6" && env ALLOWED_AUTHOR_EMAILS="allowed@example.com" \
+    bash scripts/verify-commit-identity.sh --full 2>&1)"; vrc=$?
+if [[ "$vrc" -eq 1 ]]; then
+  assert_contains "$vo" "IDENTITY_FAIL" "committer 条件の必須化"
+else
+  fail "committer が GitHub でないのに noreply 形 author を通した (exit $vrc)"
+fi
+
+# ── ドメイン一括許可 ──────────────────────────────────────────────────────────
+it "'@example.com' 形のドメイン許可が効く"
+vr7="$(new_workdir)/vr7"; mk_repo "$vr7" verify-commit-identity.sh
+commit_as "$vr7" "member@example.com" "member@example.com" d1
+vo="$(cd "$vr7" && env ALLOWED_AUTHOR_EMAILS='@example.com' \
+    bash scripts/verify-commit-identity.sh --full 2>&1)"; vrc=$?
+if [[ "$vrc" -eq 0 ]]; then
+  assert_contains "$vo" "IDENTITY_PASS" "'@domain' 形の許可"
+else
+  fail "'@example.com' がドメイン許可として効かない (exit $vrc): $(printf '%s' "$vo" | tail -1)"
+fi
+
+it "'*@example.com' 形のドメイン許可も同じく効く"
+# 2 形を等価に扱う。書き手がどちらを選んでも結果が変わらないことを保証する。
+vo="$(cd "$vr7" && env ALLOWED_AUTHOR_EMAILS='*@example.com' \
+    bash scripts/verify-commit-identity.sh --full 2>&1)"; vrc=$?
+if [[ "$vrc" -eq 0 ]]; then
+  assert_contains "$vo" "IDENTITY_PASS" "'*@domain' 形の許可"
+else
+  fail "'*@example.com' がドメイン許可として効かない (exit $vrc): $(printf '%s' "$vo" | tail -1)"
+fi
+
+it "ドメイン許可は別ドメインへ波及しない"
+# 末尾一致だけで見ると evil-example.com のような接尾辞の一致も通る。区切りの
+# '@' ごと突き合わせているかを確認する。
+vr8="$(new_workdir)/vr8"; mk_repo "$vr8" verify-commit-identity.sh
+commit_as "$vr8" "member@evil-example.com" "member@evil-example.com" d2
+vo="$(cd "$vr8" && env ALLOWED_AUTHOR_EMAILS='@example.com' \
+    bash scripts/verify-commit-identity.sh --full 2>&1)"; vrc=$?
+if [[ "$vrc" -eq 1 ]]; then
+  assert_contains "$vo" "IDENTITY_FAIL" "別ドメインの拒否"
+else
+  fail "接尾辞が一致するだけの別ドメインを通した (exit $vrc)"
+fi
+
+it "'*' 単体は何も許可しない"
+# 設定ミスの '*' 1 文字で全 email が通ると、検知層が黙って無効化される。
+# ドメイン形に限定した理由そのものなので、ここを最優先で固定する。
+vr9="$(new_workdir)/vr9"; mk_repo "$vr9" verify-commit-identity.sh
+commit_as "$vr9" "evil@other.example" "evil@other.example" d3
+vo="$(cd "$vr9" && env ALLOWED_AUTHOR_EMAILS='*' \
+    bash scripts/verify-commit-identity.sh --full 2>&1)"; vrc=$?
+if [[ "$vrc" -eq 1 ]]; then
+  assert_contains "$vo" "IDENTITY_FAIL" "'*' 単体の無効化"
+else
+  fail "'*' 単体が全 email を通した (exit $vrc)"
+fi
+
+it "ドメイン許可は '@example.com' という email そのものを許可しない"
+# ローカル部 1 文字以上を要求する。ドメイン形のエントリは「そのドメインに属する
+# 誰か」を許可するものであって、ローカル部を持たない文字列を許可する指定ではない。
+#
+# 許可エントリ側は '*@example.com' を使う。'@example.com' を指定した場合は、
+# ドメイン判定より手前の完全一致（明示列挙）が先に当たるため、ドメイン許可の
+# 判定そのものを検査できない。
+vr10="$(new_workdir)/vr10"; mk_repo "$vr10" verify-commit-identity.sh
+commit_as "$vr10" "@example.com" "@example.com" d4
+vo="$(cd "$vr10" && env ALLOWED_AUTHOR_EMAILS='*@example.com' \
+    bash scripts/verify-commit-identity.sh --full 2>&1)"; vrc=$?
+if [[ "$vrc" -eq 1 ]]; then
+  assert_contains "$vo" "IDENTITY_FAIL" "ローカル部 0 文字の拒否"
+else
+  fail "'@example.com' という email を通した (exit $vrc)"
+fi
+
+it "ドメイン許可を足してもローカルの identity 適用漏れは検知し続ける"
+# 許可範囲を広げる変更なので、元の検知対象が落ちていないことを固定する。
+vr11="$(new_workdir)/vr11"; mk_repo "$vr11" verify-commit-identity.sh
+commit_as "$vr11" "other-account@personal.example" "other-account@personal.example" d5
+vo="$(cd "$vr11" && env ALLOWED_AUTHOR_EMAILS='@example.com' \
+    bash scripts/verify-commit-identity.sh --full 2>&1)"; vrc=$?
+if [[ "$vrc" -eq 1 ]]; then
+  assert_contains "$vo" "IDENTITY_FAIL" "適用漏れの検知"
+else
+  fail "許可外ドメインの author を通した (exit $vrc)"
 fi
 
 # ── CI ワークフロー ───────────────────────────────────────────────────────────

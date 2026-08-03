@@ -1136,14 +1136,60 @@ init_allowlists() {
   ALLOWED_COAUTHOR_EMAILS_ARR=("${ALLOWED_AUTHOR_EMAILS_ARR[@]}" "noreply@github.com" "noreply@anthropic.com")
 }
 
+# 許可エントリは既定で完全一致。加えて "@example.com" / "*@example.com" の形だけを
+# ドメイン一括許可として解釈する。
+#
+# ドメイン形に限定するのは、任意の glob を許すと設定ミスの '*' 1 文字で全 email が
+# 通り、検知層が黙って無効化されるため。形を限定しておけば、書き間違えても影響範囲は
+# そのドメインに閉じる。'*' 単体はどちらの形にも当たらず、何も許可しない。
+#
+# 大文字小文字は区別する（既存の完全一致と同じ扱い）。git の email は通常小文字で、
+# ここだけ緩めると判定基準が 2 種類になる。
 is_allowed() {
   local needle="$1"
   shift
-  local candidate
+  local candidate domain
   for candidate in "$@"; do
     [[ "$needle" == "$candidate" ]] && return 0
+
+    case "$candidate" in
+      '*@'*) domain="${candidate#\*}" ;;
+      '@'*)  domain="$candidate" ;;
+      *)     continue ;;
+    esac
+    # ローカル部が 1 文字以上あることを要求する。"@example.com" という email
+    # そのものを許可しないため。
+    #
+    # あわせてローカル部に @ が無いことを要求する。末尾一致だけで見ると
+    # "attacker@untrusted.com@example.com" のような @ を 2 つ持つ email が
+    # 通る。git は author email を検証しないため、この形は実際に作れる。
+    [[ "$needle" == ?*"$domain" && "${needle%"$domain"}" != *@* ]] && return 0
   done
   return 1
+}
+
+# GitHub 上の操作（PR のマージ、web UI での編集）で作られたコミットかを判定する。
+#
+# GitHub 側で「メールアドレスを非公開にする」を有効にしていると、これらのコミットの
+# author は <login>@users.noreply.github.com（または <id>+<login>@...）になる。
+# committer は常に noreply@github.com。ローカルの identity 適用漏れとは発生経路が
+# 別で、許可リストに個別の email を足して回っても、メンバーが増えるたびに同じ穴が開く。
+#
+# 許可は「committer が noreply@github.com であること」に縛る。GitHub 自身が作成した
+# コミットに限定され、ローカルで作ったコミットには適用されない。
+#
+# トレードオフ: リポジトリへの書き込み権限を持つアカウントであれば、その GitHub
+# アカウントが Contributors に現れることを許容する。この検知層が塞ぐのはローカルの
+# identity 適用漏れ（別アカウントの個人 email の混入）であり、誰に書き込み権限を
+# 与えるかはリポジトリ側の責務として切り分ける。
+is_github_authored() {
+  local author="$1" committer="$2"
+  [[ "$committer" == "noreply@github.com" ]] || return 1
+  # ローカル部が 1 文字以上あり、かつ @ を含まないことを要求する（ドメイン許可と
+  # 同じ判定。末尾一致だけだと x@evil.com@users.noreply.github.com が通る）。
+  [[ "$author" == ?*"@users.noreply.github.com" ]] || return 1
+  [[ "${author%"@users.noreply.github.com"}" != *@* ]] || return 1
+  return 0
 }
 
 resolve_range() {
@@ -1210,7 +1256,8 @@ main() {
 
     IFS=$'\x1f' read -r sha author_email committer_email subject coauthors <<<"$record"
 
-    if ! is_allowed "$author_email" "${ALLOWED_AUTHOR_EMAILS_ARR[@]}"; then
+    if ! is_allowed "$author_email" "${ALLOWED_AUTHOR_EMAILS_ARR[@]}" \
+      && ! is_github_authored "$author_email" "$committer_email"; then
       echo "[identity] NG ${sha:0:8} author=<${author_email}> — ${subject}" >&2
       violations=$((violations + 1))
     fi
