@@ -177,7 +177,7 @@ tar -xzf PACKAGE_ARCHIVE.tar.gz
 | `--with-claude` | Claude Code CLI（`@anthropic-ai/claude-code`）+ `anthropic.claude-code` 拡張 + `~/.claude` 永続化 |
 | `--with-gemini` | Gemini CLI（`@google/gemini-cli`）+ `Google.gemini-cli-vscode-ide-companion` 拡張 + `~/.gemini` 永続化 |
 | `--with-copilot` | GitHub Copilot CLI（`@github/copilot`）+ `github.copilot` / `github.copilot-chat` 拡張 + `~/.copilot` 永続化 |
-| `--with-copilot-review` | リモート最終ゲートのワークフロー 2 本（`.github/workflows/copilot-review.yml` / `review-gate.yml`）。**ローカルの装備は一切入りません。** 規範の配置が前提（下記） |
+| `--with-copilot-review` | リモート最終ゲートのワークフロー 2 本（`.github/workflows/copilot-review.yml` / `.github/workflows/review-gate.yml`）。**ローカルの装備は一切入りません。** 規範の配置が前提（下記） |
 
 - **ローカル装備とリモート機構は別フラグ**: `--with-copilot` が配線するのは手元の開発ツール（CLI・拡張・永続 volume）だけで、リモートのレビュー機構は `--with-copilot-review` が担います。効く場所が違うものを 1 つのフラグで束ねると、「リモートのレビューゲートだけ欲しい」構成を機構で表現できないためです（[リモートレビュー分離への移行](#リモートレビュー分離への移行)）。
 - **`--with-copilot-review` は規範の配置が前提**: 配置するワークフローの雛形は規範パッケージが持つため、規範を配置しない構成では供給元がありません。`--with-playbook` / `--playbook-version` / `--playbook-from` のいずれも指定せずに（または `--without-playbook` と併せて）指定すると、**ファイルを 1 つも書かずに**エラー終了します。
@@ -607,7 +607,7 @@ WARN は「コンテナの外から実行したので言語ランタイムが見
 
 - **これまで `--with-copilot` + 規範の配置でワークフローを得ていた場合**は、`--with-copilot-review` を足してください。それだけで従来と同じ生成結果になります。
 - **ローカルの CLI・拡張だけが目的だった場合**は、変更は不要です。`--with-copilot` の意味がローカル配線だけに縮んだ形になります。
-- **既存の生成物は、再生成しない限り影響を受けません。** 配置済みの `.github/workflows/copilot-review.yml` / `review-gate.yml` はそのまま残ります。`--with-copilot-review` を付けずに `--force` 付きで再生成した場合も、DCB はこの 2 本を削除しません（生成しないだけです）。ただし規範側の更新が反映されなくなるため、リモート最終ゲートを使い続けるなら新フラグを付けてください。
+- **既存の生成物は、再生成しない限り影響を受けません。** 配置済みの `.github/workflows/copilot-review.yml` / `.github/workflows/review-gate.yml` はそのまま残ります。`--with-copilot-review` を付けずに `--force` 付きで再生成した場合も、DCB はこの 2 本を削除しません（生成しないだけです）。ただし規範側の更新が反映されなくなるため、リモート最終ゲートを使い続けるなら新フラグを付けてください。
 - `--with-copilot-review` は規範の配置（`--with-playbook` / `--playbook-version` / `--playbook-from`）が前提です。規範なしで指定すると、**ファイルを 1 つも書かずに**エラー終了します。
 
 ## mode オプションからの移行
