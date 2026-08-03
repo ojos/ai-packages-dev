@@ -126,10 +126,23 @@ assert_same_set \
   "本テストの分類"
 
 for rel in $EXCLUDED_RELS; do
+  # 抽出の成否を先に切り分ける。抽出が空でも次のプレースホルダ検査は素通しせず
+  # 落ちるが、「プレースホルダが消えている」という**原因と違うメッセージ**になる。
+  # 実際の原因は case ラベルやヒアドキュメント書式の変更で、直す先が別の場所に
+  # あるため、次に踏んだ人を遠回りさせる。MIRRORED 側と同じく段を分ける。
+  it "$rel のヒアドキュメント本文を抽出できる"
+  body="$(extract_template "$rel")"
+  if [[ -n "$body" ]]; then
+    pass
+  else
+    fail "$rel のヒアドキュメントを抽出できない（case ラベルか cat <<'TMPL' の書式が変わった可能性）"
+    continue
+  fi
+
   it "$rel が置換プレースホルダを持つ（検査対象外である理由が保たれている）"
   # 除外理由は「生成時に展開されるので一致し得ない」の 1 点。プレースホルダが
   # 外れたらその理由は成立せず、一致必須へ移すべき状態になっている。
-  if extract_template "$rel" | grep -q '^__[A-Z_]*LINES__$'; then
+  if printf '%s\n' "$body" | grep -q '^__[A-Z_]*LINES__$'; then
     pass
   else
     fail "$rel からプレースホルダが消えている（MIRRORED_RELS へ移すか、除外理由を書き直す）"
