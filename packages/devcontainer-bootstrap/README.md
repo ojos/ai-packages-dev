@@ -494,15 +494,26 @@ OAuth トークン（`CLAUDE_CODE_OAUTH_TOKEN`）を `remoteEnv` へ注入する
 - `.github/project-ai-rules.md`
 - `CLAUDE.md` / `.github/copilot-instructions.md`
 - `scripts/gemini-review.sh`（第二意見レビュー。`scripts/loop-gate.sh` が存在を検出して自動で直列化します。上記「ループコーディング支援」参照）
-- `.github/workflows/copilot-review.yml`（`--with-copilot` も併せて選択した場合のみ。下記参照）
+- `.github/workflows/copilot-review.yml` / `.github/workflows/review-gate.yml`（`--with-copilot` も併せて選択した場合のみ。2 本で 1 組。下記参照）
 - `.claude/skills/intake/SKILL.md`（`--with-claude` を併せて指定した場合のみ。intake 起点スキル）
 
 なお bootstrap.sh は生成先の README.md を読み書きしません。セットアップ手順を README へ追記する処理は持たないため、生成後の README への反映は利用者側の作業です。
 
 #### リモート最終ゲート（Copilot）ワークフロー
-規範を配置し、かつ `--with-copilot` を選択した場合のみ `.github/workflows/copilot-review.yml` を配置します。これは PR 作成時（`pull_request: types: [opened]`）に一度だけ Copilot へコードレビューを要求するワークフローで、`synchronize`（push 更新）では再要求しないため「1 回だけ」を機構で保証します（規範 `.ai-playbook/review-workflow.md`「リモート最終ゲート」に対応）。フォークからの PR はスキップします。既定の `GITHUB_TOKEN` で要求できない構成では、リポジトリ Secrets に `COPILOT_REVIEW_TOKEN`（`pull-requests` 書き込み権限を持つ PAT）を設定すると自動で切り替わります。
+規範を配置し、かつ `--with-copilot` を選択した場合のみ、**要求側と確認側の 2 本**を配置します（規範 `.ai-playbook/review-workflow.md`「リモート最終ゲート」に対応）。
 
-> **前提**: リポジトリ所有者の Copilot サブスクリプションで「Copilot code review」が有効でないと、reviewers 要求が 422 で失敗します。`--with-copilot` を指定しなければ、このワークフローは配置されません（他ベンダーのリモートレビューを使う場合は強制されません）。
+| ファイル | 役割 |
+|---|---|
+| `.github/workflows/copilot-review.yml` | **要求側。** PR 作成時（`pull_request: types: [opened]`）に一度だけ Copilot へコードレビューを要求します。`synchronize`（push 更新）では再要求しないため「1 回だけ」を機構で保証します |
+| `.github/workflows/review-gate.yml` | **確認側。** 要求されたことを別の契機から確認します。要求はしません |
+
+要求側は、フォークからの PR をスキップします。既定の `GITHUB_TOKEN` で要求できない構成では、リポジトリ Secrets に `COPILOT_REVIEW_TOKEN`（`pull-requests` 書き込み権限を持つ PAT）を設定すると自動で切り替わります。要求に失敗した場合は、切り分け手順を `::error::` で出力して実行を落とします（握り潰してスキップにはしません。リモート最終ゲートが実行されていないのに緑を出すと、偽の緑と通過の区別が付かなくなるためです）。
+
+確認側を別に置くのは、**要求側の契機が届かないことがある**ためです。届かなければ要求側は起動せず、エラーも出ず、他のチェックは緑なので、最終ゲートだけが黙って抜けます。同じ契機を見る 2 本目では塞げないため、確認側は `opened` / `synchronize` / `reopened` / `ready_for_review` に加えて**20 分ごとの定期実行**を張ります。判定は head SHA への commit status（`review-gate`）として出します。定期実行から見た PR にはジョブの成否が紐づかず、status でなければ PR 上に何も現れないためです。`opened` の契機だけは、要求が届くまで 120 秒待ってから判定します（要求側と同時に走るため）。
+
+> **前提**: リポジトリ所有者の Copilot サブスクリプションで「Copilot code review」が有効でないと、reviewers 要求が 422 で失敗します。`--with-copilot` を指定しなければ、これらのワークフローは配置されません（他ベンダーのリモートレビューを使う場合は強制されません）。
+
+> **注意**: `review-gate.yml` は required check にしないでください。Copilot 側の遅延や障害でマージが止まる副作用があるためです。ここで止めたいのは「要求されていないことに気づかないまま通ること」だけです。
 
 ### `.gitignore` と github/gitignore の連携
 - managed セクションの中身は `github/gitignore` から取得したテンプレートだけです（DCB 固有の静的な無視パターンは持ちません）。マーカー行で挟んだこの区間だけを差し替え、セクション外の行は保持します。
