@@ -563,6 +563,26 @@ __load_project_env() {
   # スクリプト位置から解決（scripts/ の 1 階層上がルート）。CWD にもパスにも依存しない。
   project_root="$(cd "$(dirname "$src")/.." && pwd)"
   env_file="${PROJECT_ENV_FILE:-$project_root/.env}"
+
+  # git worktree から実行された場合はメインの作業コピーの .env へ回り込む。
+  # worktree は追跡ファイルしか持たず、.gitignore された .env は複製されない。
+  # プロジェクト規約は並列実装に worktree 分離を機構で要求するため、ここで .env を
+  # 引けないと worktree 側でローカルゲート（identity 検査を含む）が使えなくなる。
+  # --git-common-dir はメインリポジトリの .git を指すので、その親がメインの作業コピー。
+  # PROJECT_ENV_FILE で明示された場合は回り込まない（明示指定を上書きしないため）。
+  if [[ -z "${PROJECT_ENV_FILE:-}" && ! -f "$env_file" ]] && command -v git >/dev/null 2>&1; then
+    local common_dir main_root
+    if common_dir="$(git -C "$project_root" rev-parse --git-common-dir 2>/dev/null)" && [[ -n "$common_dir" ]]; then
+      case "$common_dir" in
+        /*) ;;
+        *) common_dir="$project_root/$common_dir" ;;
+      esac
+      if main_root="$(cd "$common_dir/.." 2>/dev/null && pwd)" && [[ -f "$main_root/.env" ]]; then
+        env_file="$main_root/.env"
+      fi
+    fi
+  fi
+
   [[ -f "$env_file" ]] || return 0
 
   while IFS= read -r line || [[ -n "$line" ]]; do

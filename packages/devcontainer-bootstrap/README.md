@@ -526,6 +526,28 @@ OAuth トークン（`CLAUDE_CODE_OAUTH_TOKEN`）を `remoteEnv` へ注入する
 
 > **注意**: `--languages` の値は小文字（`node`, `go`, `python`, `php`, `rust`, `ruby`）で指定します。一方 `--gitignore-targets` の値は [github/gitignore](https://github.com/github/gitignore) リポジトリのファイル名に合わせた大文字始まり（`Node`, `Go`, `PHP`, `Rust`, `Ruby`, `macOS` など）で指定してください。これらは別々の用途を持つため、意図的に表記が異なります。
 
+### 生成されるスクリプトの分類（そのまま配布 / 生成時に展開）
+
+`scripts/*.sh` の正本は `bootstrap.sh` の `get_template_content()` 内のヒアドキュメントです。テンプレートは**そのまま書き出されるもの**と、**生成時に構成へ応じて展開されるもの**の 2 種類に分かれます。生成先で内容が食い違って見えたときに、追随漏れなのか設計どおりなのかを判別できるよう、分類を明示します。
+
+| テンプレート | 生成時の扱い | 展開されるもの |
+|---|---|---|
+| `scripts/load-project-env.sh` | そのまま書き出す | — |
+| `scripts/loop-gate.sh` | そのまま書き出す | — |
+| `scripts/on-attach.sh` | そのまま書き出す | — |
+| `scripts/setup-git-identity.sh` | そのまま書き出す | — |
+| `scripts/verify-commit-identity.sh` | そのまま書き出す | — |
+| `scripts/verify.sh` | そのまま書き出す | — |
+| `scripts/acceptance.sh` | 生成時に展開 | 選択言語のマニフェストに応じた検証行。**生成後はプロジェクトが所有・編集します** |
+| `scripts/fix-mount-owner.sh` | 生成時に展開 | `--with-*` で配線した永続 volume のマウント先 |
+| `scripts/install-ai-tools.sh` | 生成時に展開 | `--with-<ai>` で選んだ AI CLI の導入行 |
+| `scripts/post-rebuild-check.sh` | 生成時に展開 | 永続 volume の実マウント検査、選択言語ランタイム、選択装備の CLI |
+
+- **「そのまま書き出す」側は、生成先で編集しないことを想定しています。** `--force` を付けて再実行するとテンプレートの内容へ戻ります（[再実行したときの挙動](#再実行したときの挙動)）。恒久的に変えたい場合はテンプレート側を直してください。
+- **「生成時に展開」側は、生成後にプロジェクトが手を入れる前提です。** とくに `scripts/acceptance.sh` は雛形であり、プロジェクトの実態（テスト・ビルド・lint・E2E）へ合わせて書き換えることを想定しています。
+
+この開発リポジトリ自身も DCB の生成物を取り込んで使っており、`scripts/` はテンプレートの写しにあたります。上表の「そのまま書き出す」6 本は、正本と写しがバイト一致していることを `tests/test-template-mirror.sh` が機械照合します（片方だけ直しても両方のテストが緑になり、配布物と手元が黙って食い違うため）。「生成時に展開」側はプレースホルダを持ち一致し得ないので検査対象外とし、その判断と理由を同テストのコメントに残しています（「検査していない」と「検査対象外と判断した」を読み分けられるようにするため）。
+
 ## Doctor 自己診断
 
 生成後、生成先を対象に実行して構成を検証します。公開リリースから `doctor.sh` を入手する手順は [doctor.sh を後から取得する](#doctorsh-を後から取得する) を参照してください。
