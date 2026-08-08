@@ -1008,6 +1008,11 @@ check() {
   TMP_REPO="$(mktemp -d "${TMPDIR:-/tmp}/dcb-git-identity-repo.XXXXXX")"
   git init -q "$TMP_REPO"
   local effective
+  # 末尾の `|| true` は if-then-else の代用（A && B || C）ではない。ヘルパーが
+  # 1 件も無ければ git config が非ゼロを返すため、空文字を得るための既定値として
+  # 置いている。A が真でも C が走ってよく、set -e 下で検査自体を落とさないための
+  # ものなので、SC2015 の想定する誤用には当たらない。
+  # shellcheck disable=SC2015
   effective="$(cd "$TMP_REPO" && git config --get-all credential.helper 2>/dev/null \
     | awk '$0 == "" { n = 0; next } { v[++n] = $0 } END { for (i = 1; i <= n; i++) print v[i] }' \
     | tr '\n' '|' || true)"
@@ -1020,6 +1025,40 @@ check() {
   fi
   rm -rf "$TMP_REPO"
   TMP_REPO=""
+
+  # 7.5) system スコープ（/etc/gitconfig 等）に置かれた credential.helper を
+  #      可視化する。判定には影響させない。
+  #
+  #      6) は global、7) は実効値しか見ないため、system に何が置かれていても
+  #      どちらの出力にも現れない。遮断そのものは成立している（global 先頭の
+  #      空文字が一覧をリセットするため system の helper は実効値から外れ、
+  #      それは 7) が一時リポジトリで実測済み）。ここで見たいのは遮断の可否では
+  #      なく、「自分たちが置いた覚えのないヘルパーが system にある」という
+  #      事実そのもの。
+  #
+  #      分かるのは存在の有無だけで、誰がいつ置いたかはこの検査から判定できない。
+  #      そのため出力は「検出」に留め、原因を断定しない。
+  #
+  #      失敗させない理由: 置く側が接続のたびに書き戻す構成では常時検出され
+  #      続けるため、失敗にすると常時赤になる。恒常的な赤は「赤を無視する習慣」
+  #      を生み、警告より悪い状態を作る。判定は変えず事実だけを出す。
+  #
+  #      プレフィクスは log に一元化する（直書きすると log の書式を変えたときに
+  #      この行だけが取り残される）。
+  local system_helpers system_helper
+  # git config は該当キーが無いと非ゼロを返す。ここは検出の有無を見るだけなので、
+  # 空文字を既定値として受け取る（set -e 下で検査自体を落とさないため）。
+  system_helpers="$(git config --system --get-all credential.helper 2>/dev/null || true)"
+  if [[ -n "$system_helpers" ]]; then
+    log "INFO system スコープに credential.helper があります（実効値からは外れています。上記 7) を参照）:"
+    while IFS= read -r system_helper; do
+      [[ -n "$system_helper" ]] || continue
+      log "INFO   $system_helper"
+    done <<<"$system_helpers"
+    log "INFO 誰がいつ置いたかはこの検査では判定できません。検出のみで、判定には影響させません。"
+  else
+    log "OK  system スコープに credential.helper は無い"
+  fi
 
   # 8) 冪等性。
   #    適用をもう一度走らせ、global 設定ファイルが 1 バイトも変わらないことを見る。
