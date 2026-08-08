@@ -525,13 +525,33 @@ OAuth トークン（`CLAUDE_CODE_OAUTH_TOKEN`）を `remoteEnv` へ注入する
 > **注意**: `review-gate.yml` は required check にしないでください。Copilot 側の遅延や障害でマージが止まる副作用があるためです。ここで止めたいのは「要求されていないことに気づかないまま通ること」だけです。
 
 ### `.gitignore` と github/gitignore の連携
-- managed セクションの中身は `github/gitignore` から取得したテンプレートだけです（DCB 固有の静的な無視パターンは持ちません）。マーカー行で挟んだこの区間だけを差し替え、セクション外の行は保持します。
+- managed セクションはマーカー行で挟んだ区間だけを差し替え、セクション外の行は保持します。中身は **github/gitignore から取得したテンプレート**と、その後ろに続く **`--with-*` 連動の除外**の 2 部構成です。
 - 暗黙ターゲットは `macOS` + `--languages` で指定した言語対応テンプレート（`node`→`Node` / `go`→`Go` / `python`→`Python` / `php`→`PHP` / `rust`→`Rust` / `ruby`→`Ruby`）です。
 - `--gitignore-targets <csv>` を指定すると、暗黙ターゲットに追加で合成します（重複は除去）。
 - テンプレート取得は `https://github.com/github/gitignore` から行います（`<name>.gitignore` と `Global/<name>.gitignore` を順に探索）。
 - 取得できないテンプレート名は警告を出してスキップします（処理は継続）。
 
 > **注意**: `--languages` の値は小文字（`node`, `go`, `python`, `php`, `rust`, `ruby`）で指定します。一方 `--gitignore-targets` の値は [github/gitignore](https://github.com/github/gitignore) リポジトリのファイル名に合わせた大文字始まり（`Node`, `Go`, `PHP`, `Rust`, `Ruby`, `macOS` など）で指定してください。これらは別々の用途を持つため、意図的に表記が異なります。
+
+#### `--with-*` 連動の除外（`# devcontainer-bootstrap owned ignores`）
+
+github/gitignore のテンプレートは言語・OS・エディタの生成物だけを対象としており、**装備フラグで入れたツールが作るファイルは含みません。** 入れた側が後始末を持たないと各プロジェクトが同じ行を手書きすることになり、書き漏らしがそのまま機密の混入になります。そのため、選択した装備に応じた除外を DCB 自身が管理セクションへ書き出します。
+
+**装備を選ばなかった構成へは 1 行も出しません**（使わない除外を配ると、その行が何のためにあるのか判断できなくなるため）。github/gitignore ブロックより後ろへ置くのは、`.gitignore` が後に書いた行を優先するため、テンプレート側の再包含（`!` 行）で除外が打ち消されない順序にするためです。
+
+| 条件 | 除外するもの | 理由 |
+|---|---|---|
+| `--with-claude` | `.mcp.json` | プロジェクトスコープの MCP 設定。トークン方式の MCP サーバを追加すると**平文の資格情報がここへ入る**ため、`.env` と同じ扱いにします |
+| `--with-claude` | `.claude/worktrees/` | 中身はリポジトリ全体のチェックアウトそのもので、除外しないと `git add .` で**リポジトリが自分自身を抱え込みます** |
+| `--with-aws` / `--with-gcp` | `**/.terraform/*` / `*.tfstate` / `*.tfstate.*` / `*.tfvars` / `*.tfvars.json` / `tfplan` / `*.tfplan` / `crash.log` / `crash.*.log` / `override.tf` 系 / `.terraformrc` / `terraform.rc` | **tfstate は機密を平文で保持します。** tfvars も同様に機密を含みやすく、plan の出力は**変数の値が解決済みで展開される**ため state / tfvars と同じ理由で機密が載ります（`-out=tfplan` が慣用のため、拡張子なしと `*.tfplan` の両方を書きます） |
+
+> **`.claude/` はディレクトリごと除外しません。** `.claude/skills/` には追跡する成果物（intake 起点スキル）が入るため、`.claude/worktrees/` だけを除外します。
+
+> **`.terraform.lock.hcl` は追跡します。** プロバイダ版の固定に必要なため、意図して除外していません（管理セクション内にもその旨のコメントを出力します）。
+
+> **`.claude/settings.local.json`** は管理セクションでは扱いません。`.claude/` の中で閉じる除外は `.claude/` を配る側の責務とし、同じ除外を 2 か所に持たないためです（2 か所にあると、片方だけ直したときにどちらが効いているのか読めなくなります）。
+
+> **既存プロジェクトへの影響**: 管理セクションは再実行で丸ごと置換されるため、再生成するとこれらの行が入ります。セクション外へ手書きしていた同じ内容の行はそのまま残りますが、`.gitignore` の重複は無害です。**なお `.gitignore` は既に追跡済みのファイルを追跡対象から外しません。** 既にコミットされている場合は `git rm --cached` が別途必要です。
 
 ### 生成されるスクリプトの分類（そのまま配布 / 生成時に展開）
 
