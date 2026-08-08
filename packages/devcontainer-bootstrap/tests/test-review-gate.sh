@@ -119,6 +119,55 @@ for t in opened synchronize reopened ready_for_review; do
 done
 if [[ -z "$missing" ]]; then pass; else fail "types に不足:$missing"; fi
 
+it "timeline（起きたことの記録）を判定材料に持つ"
+# 要求一覧と投稿済み一覧はどちらも「いまの状態」で、レビューが始まってから投稿
+# されるまでの間、両方が空になる窓がある。状態しか見ない確認側は、その窓の中で
+# 「要求されていない」と誤判定する（規範 review-workflow.md「要求されたことを
+# 別の契機で確認する」）。
+if grep -qF 'issues/${pr}/timeline' "$wf"; then
+  pass
+else
+  fail "timeline エンドポイントを参照していない"
+fi
+
+it "timeline を読む権限を宣言している（issues: read）"
+# 隣接する系統の権限でたまたま読めても、宣言を省くと提供側の扱いが変わった日に
+# 判定が全 PR で出なくなる。
+if grep -Eq '^[[:space:]]*issues: read' "$wf"; then
+  pass
+else
+  fail "permissions に issues: read が無い"
+fi
+
+it "確認側は issues への書き込み権限を持たない"
+# 確認側は確かめるだけで、PR へ何かを書き足す役ではない。
+if grep -Eq '^[[:space:]]*issues: write' "$wf"; then
+  fail "permissions に issues: write がある（確認側に書き込みは要らない）"
+else
+  pass
+fi
+
+it "要求の取り消しを勘定に入れる"
+# 出来事が残っていることだけを見ると、要求してすぐ取り消しても「要求された」に
+# なり、要求を出して消すだけでゲートが外れる。
+if grep -qF 'review_request_removed' "$wf"; then
+  pass
+else
+  fail "review_request_removed を見ていない（取り消しを勘定に入れていない）"
+fi
+
+it "timeline を読めなかったことを「要求されていない」と混ぜない"
+# 3 本目にも、既存の 2 本と同じ第 3 の戻り値（判定保留）が要る。読めなかったことを
+# 1（＝落とす）へ落とすと、上の 2 本で避けている偽の赤を 3 本目から作り直す。
+if awk '/issues\/\$\{pr\}\/timeline/ { found = 1 }
+        found && /return 2/ { hit = 1 }
+        found && /^ *fi$/ { exit }
+        END { exit !hit }' "$wf"; then
+  pass
+else
+  fail "timeline の取得失敗が return 2（判定保留）へ落ちていない"
+fi
+
 it "判定を commit status として書ける権限を持つ"
 # ジョブの成否だけでは、定期実行から見た PR に何も現れない。status が出力先である。
 if grep -Eq '^[[:space:]]*statuses: write' "$wf"; then

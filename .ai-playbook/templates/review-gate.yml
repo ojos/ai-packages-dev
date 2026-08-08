@@ -43,6 +43,10 @@ on:
 permissions:
   contents: read
   pull-requests: read
+  # timeline（`/issues/{n}/timeline`）を読む。**呼んでいる先の権限は宣言する。**
+  # PR は issue でもあるため `pull-requests: read` だけでも読めることは実測されて
+  # いるが、宣言を省くと、GitHub 側の扱いが変わった日に判定が全 PR で出なくなる。
+  issues: read
   # commit status を書く。これが判定の出力先である。
   statuses: write
 
@@ -100,9 +104,24 @@ jobs:
           # 確かめていないものを通したことになる。どちらでもない第 3 の答えが要る。
           #
           # **`gh pr view --json reviewRequests` を使わない。** Copilot はそこに
-          # 出ない（実測）。REST の 2 つを見る。
+          # 出ない（実測）。REST の 3 つを見る。
+          #
+          # **3 つ目（timeline）が要る理由。** requested_reviewers と reviews は
+          # どちらも「いまの状態」を返すもので、**その 2 つがともに空になる窓が
+          # ある。** Copilot はレビューを開始した時点で requested_reviewers から
+          # 消え、投稿するまで reviews に現れない。ある利用プロジェクトの実運用
+          # では、要求の 7 秒後に requested_reviewers から消え、投稿までの約 3 分間
+          # どちらにも現れなかった。同じ日に開いた PR 2 本がともにこの窓の中で
+          # 判定され、要求は成功しているのに failure が出ている。
+          #
+          # **GRACE_SEC を延ばしても抜けられない。** あの猶予が待っているのは
+          # 「要求がまだ出ていない」場合で、この窓は要求が出た**後**にある。
+          # 延ばすほど窓の中で判定することになる。
+          #
+          # timeline が返すのは「起きたこと」である。**要求されたという出来事は、
+          # レビューがどこまで進んでも消えない**ため、進行状態に左右されない。
           has_review() {
-            local pr="$1" requested reviews
+            local pr="$1" requested reviews timeline
             # **終了コードで見る。`|| echo ''` で流さない。** gh は 404 のとき
             # エラー本文を stdout に出すため、握り潰すと `{"message":"Not Found",
             # "documentation_url":"..."}` がそのまま判定対象の文字列に入る。実際に
@@ -125,6 +144,45 @@ jobs:
             for name in $requested $reviews; do
               is_copilot "$name" && return 0
             done
+
+            # ここまでで答えが出なかったときだけ timeline を読む。掃き寄せは open な
+            # PR を全件見るので、既に答えの出ている PR にまで 1 本余計な呼び出しを
+            # 払わせない。
+            #
+            # **ここでも終了コードで見る。読めなかったら 2 を返す。** 読めなかった
+            # ことを「要求されていない」と同じに扱うと、上の 2 つで作らないように
+            # している偽の赤を、3 つ目から作り直すことになる。
+            #
+            # チーム宛の要求（`requested_team`）は落とす。Copilot は利用者として
+            # 要求されるため、`requested_reviewer` が null の出来事は判定材料に
+            # ならない（`.requested_reviewer.login` を無条件に取ると null が
+            # 空文字として並び、行の対応がずれる）。
+            if ! timeline="$(gh api --paginate \
+                 "repos/${REPO}/issues/${pr}/timeline?per_page=100" \
+                 --jq '.[] | select(.event == "review_requested" or .event == "review_request_removed")
+                           | select(.requested_reviewer != null)
+                           | "\(.event) \(.requested_reviewer.login)"' 2>/dev/null)"; then
+              return 2
+            fi
+
+            # **取り消しを勘定に入れる。** 出来事が残っていることだけを見ると、
+            # 要求してすぐ取り消した PR も「要求された」になり、**要求を出して消す
+            # だけでゲートが外れる。** timeline は時系列で返るので、同じ相手の
+            # 最後の 1 件が review_requested のときだけ、要求が生きていると見る。
+            #
+            # なお **Copilot がレビューを始めて requested_reviewers から消えるとき
+            # review_request_removed は出ない**（実測。上記 2 本で確認した）。
+            # 進行中の窓と取り消しは、ここで別物として扱える。
+            local ev login last=""
+            while read -r ev login; do
+              [ -n "${ev:-}" ] || continue
+              is_copilot "$login" || continue
+              last="$ev"
+            done <<< "$timeline"
+            if [ "$last" = "review_requested" ]; then
+              return 0
+            fi
+
             return 1
           }
 
