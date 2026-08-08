@@ -75,7 +75,13 @@ echo "test-template-mirror"
 BOOTSTRAP="$REPO_ROOT/packages/devcontainer-bootstrap/bootstrap.sh"
 
 # 一致を必須にする写し。プレースホルダを持たず、正本がそのまま生成物になるもの。
-MIRRORED_RELS='scripts/load-project-env.sh
+#
+#   check-no-secrets.sh を MIRRORED に入れる理由: 判定（機密とみなすパターン・
+#   .env 系の検査）は生成条件に依らず全構成で同一であり、置換プレースホルダを
+#   1 つも持たない。加えて、このリポジトリ自身の verify.sh がこの写しを呼ぶため、
+#   正本と写しがずれると「配布物では落ちるが手元では通る」機密が生まれる。
+MIRRORED_RELS='scripts/check-no-secrets.sh
+scripts/load-project-env.sh
 scripts/loop-gate.sh
 scripts/on-attach.sh
 scripts/setup-git-identity.sh

@@ -267,6 +267,20 @@ assert_contains "$fn_txt" "DEFINED" "関数定義"
 # まま終了コード 0 になる。「出力が無く exit 0」は緑と見分けが付かないため、
 # 実行時に合否がそのまま現れることを両方向で確認する。
 
+# ゲート本体を実行する前に、生成物を git 管理下へ置く。verify.sh が受け入れ条件の
+# 手前で呼ぶ機密混入検査（check-no-secrets.sh）は、git の作業ツリーでない場合と
+# 追跡ファイルが 1 件も無い場合を「検査が成立していない」として落とすため、
+# 生成したままでは step 1 で止まる。ここで見たいのは source ガードが効きすぎて
+# いないこと（実行すればゲート本体が走ること）なので、前提だけ整える。
+(
+  cd "$GEN" || exit 1
+  git init -q
+  git symbolic-ref HEAD refs/heads/main
+  git add -A
+  # shellcheck disable=SC2086
+  git $GIT_AUTHOR commit -q -m c1
+) >/dev/null 2>&1
+
 it "実行するとゲート本体が走り、合格なら GATE_PASS を出して 0 で終わる"
 acc_pass="$(new_workdir)/acc-pass.sh"; printf '#!/usr/bin/env bash\nexit 0\n' > "$acc_pass"
 if out_txt="$(cd "$GEN" && VERIFY_ACCEPTANCE="$acc_pass" LOOP_GATE_REVIEW_CMD='' bash scripts/loop-gate.sh 2>&1)"; then

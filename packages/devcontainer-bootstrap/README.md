@@ -266,13 +266,15 @@ AI エージェントの反復（実装 → 検証 → 修正 → …）を、**
 | スクリプト | 役割 |
 |---|---|
 | `scripts/acceptance.sh` | このプロジェクトの受け入れ条件（プロジェクトが所有・編集）。選択言語のうち、ルート直下にマニフェストが存在する対象だけを慣習的テストで検証する |
-| `scripts/verify.sh` | `acceptance.sh` を非対話実行し、一意な通過信号（`VERIFY_PASS` / 終了コード 0）を返す接地信号 |
+| `scripts/verify.sh` | `acceptance.sh` を非対話実行し、一意な通過信号（`VERIFY_PASS` / 終了コード 0）を返す接地信号。手前で `check-no-secrets.sh` を実行する |
+| `scripts/check-no-secrets.sh` | 機密混入の検知ゲート（`SECRETS_PASS` / 終了コード 0）。判定の正本で、`verify.sh` と CI が共用する。下記「[機密混入検査](#機密混入検査)」参照 |
 | `scripts/loop-gate.sh` | push / PR 前のローカル事前ゲート。`verify.sh` と、任意の第二意見レビューを直列で通す単一入口（`GATE_PASS` / 終了コード 0） |
 | `scripts/acceptance-remote.sh` | **外部層**の受け入れ条件（プロジェクトが所有・編集）。`--with-aws` / `--with-gcp` を選んだときだけ配置する骨格のみの雛形。下記「受け入れ条件の二層」参照 |
 
 - `acceptance.sh` は生成時、選択言語ごとに**ルート直下のマニフェストの実在を確認してから**慣習的コマンド（`node`/`package.json`→`npm test`、`go`/`go.mod`→`go test ./...`、`python`/`pyproject.toml`・`requirements.txt`→`python -m pytest`、`php`/`composer.json`→`composer test`、`rust`/`Cargo.toml`→`cargo test`、`ruby`/`Gemfile`→`bundle exec rake`）を実行します。マニフェストが無い言語は理由を出して**スキップ**し（失敗させない）、マニフェストはあるがツールが無い場合は導入手順を添えて**失敗**させます（スキップと混同しない）。1 つも検証を実行できなければ「受け入れ条件が未定義」として**非 0 で終了**します（全スキップで誤って緑になる事故を防ぐ）。スクリプト位置からルートを解決するため、起動時の作業ディレクトリに依存しません。プロジェクトの実態に合わせて編集してください。受け入れ条件が検証可能であるほど、反復が収束しやすくなります。
   - monorepo など、各言語がルート直下ではなくサブディレクトリ（例 `apps/*`）に配置される構成では、生成直後は対象が見つからず「未定義」で失敗します。これは**意図した既定**であり、実配置のマニフェストを見るよう `acceptance.sh` を編集して受け入れ条件を確定させてください。
 - `verify.sh` の受け入れ定義は `VERIFY_ACCEPTANCE` 環境変数で差し替えできます（既定は `scripts/acceptance.sh`）。層を増やすときも同じランナーを使い、受け入れ定義だけを差し替えます（下記「受け入れ条件の二層」）。
+- `verify.sh` は受け入れ条件の**手前**で `scripts/check-no-secrets.sh` を実行します。`acceptance.sh` 側へ置かないのは、あちらがプロジェクトの所有物で受け入れ条件を書き足すたびに触られ、規範由来の検査が消える経路ができるためです。`check-no-secrets.sh` が不在なら `VERIFY_FAIL` で止まります（検査が成立していないことを合格にしないため）。**この検査は git を前提にします**（下記「[機密混入検査](#機密混入検査)」参照）。
 - `loop-gate.sh` の第二意見は、`scripts/gemini-review.sh` が存在すれば直列化し、無ければ優雅にスキップします。`LOOP_GATE_REVIEW_CMD` で任意のレビューコマンドへ差し替え、空文字で無効化できます。
 - 第二意見へ渡す**差分の範囲**は次の順で決まります。ステージ済み差分があるときはレビュー実行体の既定に委ね（範囲を渡しません）、空のときだけ commit 済み範囲へ切り替えます。切り替え先の既定は `@{upstream}..HEAD` で、下のいずれかに当たる場合は**既定ブランチとの分岐点（merge-base）を起点**にします。既定ブランチは `origin/HEAD` → `origin/main` → `origin/master` の順で解決し、汚染の判定と分岐点の算出は**同じ枝**を見ます（別々に決めると、汚染ありと判定した枝と分岐点を取った枝が別物になりうるため）。**上流以外を起点に採った場合は、その理由を 1 行出力します**（黙って範囲を変えると、なぜその差分が対象なのかを読み手が追えないため）。
   - **上流との差分が空**（push 済みで上流 == HEAD）。ここで空のまま第二意見を呼ぶと、一度も差分を見ないまま通過する偽の緑になります。
@@ -530,6 +532,33 @@ CI に固有の email を焼き込まないため、**利用側リポジトリ�
 
 未設定のまま CI が走ると、`verify-commit-identity.sh` は許可 email を解決できず fail-closed で失敗します（検査を素通りさせないため）。コンテナ内・手元では `.env` の `GIT_IDENTITY_EMAIL` が自動でフォールバックとして使われるため、通常は追加設定なしで `bash scripts/verify-commit-identity.sh` を実行できます。
 
+## 機密混入検査
+
+共通規範「機密をコミットしない」を機械化した検知ゲートを `scripts/check-no-secrets.sh` として常に配置します。**判定はスクリプト側が持ち、`scripts/verify.sh` と CI は呼ぶだけ**という形は `verify-commit-identity.sh` と同じです。`acceptance.sh` 雛形へ書かないのは、あちらがプロジェクトの所有物で、受け入れ条件を書き足すたびに触られ、規範由来の検査が消える経路ができるためです。
+
+```bash
+bash scripts/check-no-secrets.sh   # 終了コード 0 / 標準出力 SECRETS_PASS
+```
+
+検査は 4 つあります。
+
+| 検査 | 見るもの | 落とす場所 |
+|---|---|---|
+| 追跡前 | `git add --all --dry-run` が「追加する」と言うパス | 手元。追跡対象へ入る**前**に落とす |
+| 追跡済み | `git ls-files` が返すパス | CI。機密を含んだままの PR を落とす |
+| 雛形の値 | `.env.example` の機密キーに値が入っていないこと | 手元と CI |
+| キー整合 | `.env` にあるキーが `.env.example` にもあること | 手元（`.env` が無い環境ではスキップ） |
+
+- **2 経路あって初めて成立します。** checkout 直後の作業ツリーはクリーンなので dry-run の出力は空になり、追跡前の検査だけでは CI が「何も検査していない状態」で合格します。CI が本来捕まえたいのは機密を含んだままの PR、すなわち追跡済みの状態です。逆に追跡済みの検査だけでは、手元で追加しようとしている段階を止められません（誤ってコミットしてからでは、削除コミットでは漏洩は解消せず、履歴からの除去と資格情報の失効・再発行が必要になります）。
+- **検知対象は 2 経路で同じパターンです。** `.env` 系 / `.netrc` / `.pgpass` / `.git-credentials` / SSH 秘密鍵（`id_rsa` 等）/ `credentials.json` / `client_secret*` / `service-account*` / `*.pem` `*.key` `*.p12` `*.pfx` `*.jks` `*.keystore` `*.kdbx` `*.tfstate` `*.tfvars` を対象とし、いずれも直後に `.` `-` `_` `~` で始まる接尾が付く形（`credentials.json.bak` / `terraform.tfstate-backup`）まで拾います。片方だけ末尾一致に絞ると、こうした改名・退避ファイルが片側だけすり抜けます。
+- **値のない雛形と公開鍵は除外します**（`*.example` / `*.sample` / `*.template` / `*.dist` / `*.pub`）。名前で判定するため、機密を `.example` という名前で置けばこの層はすり抜けます。配布する唯一の雛形である `.env.example` については、キー名で機密を判定して**値が空であること**を別に検査し、第 2 層にしています。
+- **`.env.example` の機密値検査は、機密を示す語を含むキーと identity キーだけを対象にします。** 機密でない設定既定値（回数・モデル名など）は雛形で共有する意味があるためです。判定は部分一致で、語尾一致にすると `AWS_SECRET_ACCESS_KEY_ID` のような修飾付きがすり抜けます（`PAT` だけは `PATH` との衝突を避けて語境界を要求します）。**検出時に出すのはキー名だけで、値は決して出力しません。**
+- **キーの抽出は `scripts/load-project-env.sh` 自身に読ませます。** 別に書くと「実際には読まれるのに検査からは見えないキー」が生まれ、機密値の検査に穴が開きます。呼び出し元のシェルが既に `.env` を読み込んでいても結果が変わらないよう、`env -i` を通した最小環境で読み込みます。
+- **キー整合は `.env` 側にしか無いキーだけを落とします。** 雛形にあって `.env` に無い向きは `NOTICE` に留めます。雛形へキーが増えた直後は各環境の `.env` が追いつくまで必ずその状態を通るため、ここで落とすと配布物の更新のたびに全利用者のローカルゲートが赤くなり、直す先が追跡ファイルではなく各人の手元になります。値が解決できないことが実害になる経路は、それを必要とする検査がそれぞれ fail-closed で落とします（例: `verify-commit-identity.sh` の許可 email）。
+- **検査が成立していないことを合格にしません。** git の作業ツリーでない、`git add` / `git ls-files` が失敗した、追跡ファイルが 1 件も無い、`.env.example` が無い、のいずれも `SECRETS_FAIL` です。空の出力を「該当なし」と読むと、検査していないのに合格になります。**したがって生成直後のプロジェクトでは、`git init` して追跡対象を 1 件以上コミットするまで `verify.sh` / `loop-gate.sh` は通りません。**
+- **ロケールを `LC_ALL=C` に固定します。** 追跡前の検査は `git add --dry-run` の人間向け出力（`add '<path>'`）を解析するため、その文字列が翻訳されると「該当なし」として通り、失敗の仕方がサイレントな合格になります（実測では git 2.53.0 の翻訳カタログに当該 msgid は無く、現時点では翻訳されません。それでも人間向け出力への依存は残るため固定します）。キー整合の `sort` / `comm` も同じ理由です。GNU `sort` の照合順はロケールで変わり、両辺が別の照合順で並ぶと `comm` は警告を出しつつ終了コード 0 で誤った差集合を返します。
+- **`git ls-files` には `-c core.quotePath=false` を渡します。** 既定（`true`）では非 ASCII やスペースを含むパスが `"..."` で囲まれ、非 ASCII 部分が `\NNN` の 8 進エスケープへ置き換わります。閉じ引用符が付くことで名前の末尾を見る判定が阻まれ、追跡済みの「非 ASCII ディレクトリ/`.env`」がすり抜けるうえ、`.env.example` の除外判定も末尾が `example"` になって成立せず逆に誤検知します。1 行で両方を塞げます。
+
 ## AI エンジン導入マトリックス
 
 このパッケージが生成する環境における、AI CLI の導入・認証要件のマトリックスです。
@@ -570,6 +599,7 @@ OAuth トークン（`CLAUDE_CODE_OAUTH_TOKEN`）を `remoteEnv` へ注入する
 - `scripts/setup-git-identity.sh` / `scripts/verify-commit-identity.sh`（git identity ガード。下記参照）
 - `.github/workflows/identity-guard.yml`（コミット identity の検証 CI。下記参照）
 - `scripts/verify.sh` / `scripts/acceptance.sh` / `scripts/loop-gate.sh`（ループコーディング支援。下記参照）
+- `scripts/check-no-secrets.sh`（機密混入の検知ゲート。`verify.sh` が受け入れ条件の手前で呼ぶ。下記参照）
 - `.gitignore` の managed セクション（言語構成に応じて自動更新。`--no-gitignore` で無効化）
 
 規範を配置する場合（`--with-playbook` / `--playbook-version` / `--playbook-from`）は、加えて次を出力します。
@@ -643,6 +673,7 @@ github/gitignore のテンプレートは言語・OS・エディタの生成物�
 
 | テンプレート | 生成時の扱い | 展開されるもの |
 |---|---|---|
+| `scripts/check-no-secrets.sh` | そのまま書き出す | — |
 | `scripts/load-project-env.sh` | そのまま書き出す | — |
 | `scripts/loop-gate.sh` | そのまま書き出す | — |
 | `scripts/on-attach.sh` | そのまま書き出す | — |
@@ -660,7 +691,7 @@ github/gitignore のテンプレートは言語・OS・エディタの生成物�
 
 - **配置されるかどうかは、この 2 分類とは別軸です。** `scripts/acceptance-remote.sh` は展開を持たない（そのまま書き出す）一方で、配置は `--with-aws` / `--with-gcp` の選択に従います。
 
-この開発リポジトリ自身も DCB の生成物を取り込んで使っており、`scripts/` はテンプレートの写しにあたります。上表のうち**写しを持つ 6 本**（`load-project-env.sh` / `loop-gate.sh` / `on-attach.sh` / `setup-git-identity.sh` / `verify-commit-identity.sh` / `verify.sh`）は、正本と写しがバイト一致していることを `tests/test-template-mirror.sh` が機械照合します（片方だけ直しても両方のテストが緑になり、配布物と手元が黙って食い違うため）。「生成時に展開」側はプレースホルダを持ち一致し得ないので検査対象外です。`scripts/acceptance-remote.sh` も検査対象外ですが理由が異なり、**この開発リポジトリが写しを持たない**（cloud 装備を使わないため）ので比べる相手がありません。いずれも判断と理由を同テストのコメントに残し、写しを置いた時点で一致必須へ移す判断が要ることも機械で担保しています（「検査していない」と「検査対象外と判断した」を読み分けられるようにするため）。
+この開発リポジトリ自身も DCB の生成物を取り込んで使っており、`scripts/` はテンプレートの写しにあたります。上表のうち**写しを持つ 7 本**（`check-no-secrets.sh` / `load-project-env.sh` / `loop-gate.sh` / `on-attach.sh` / `setup-git-identity.sh` / `verify-commit-identity.sh` / `verify.sh`）は、正本と写しがバイト一致していることを `tests/test-template-mirror.sh` が機械照合します（片方だけ直しても両方のテストが緑になり、配布物と手元が黙って食い違うため）。「生成時に展開」側はプレースホルダを持ち一致し得ないので検査対象外です。`scripts/acceptance-remote.sh` も検査対象外ですが理由が異なり、**この開発リポジトリが写しを持たない**（cloud 装備を使わないため）ので比べる相手がありません。いずれも判断と理由を同テストのコメントに残し、写しを置いた時点で一致必須へ移す判断が要ることも機械で担保しています（「検査していない」と「検査対象外と判断した」を読み分けられるようにするため）。
 
 ## Doctor 自己診断
 
@@ -684,7 +715,7 @@ github/gitignore のテンプレートは言語・OS・エディタの生成物�
 
 | カテゴリ | 検査内容 |
 |---|---|
-| 静的構造 | `.devcontainer/devcontainer.json` / `.env.example` / `scripts/on-attach.sh` / `scripts/fix-mount-owner.sh` / `scripts/post-rebuild-check.sh` / `scripts/verify.sh` / `scripts/acceptance.sh` / `scripts/loop-gate.sh` の実在。`devcontainer.json` が妥当な JSON であること。**`${localEnv:` の混入が無いこと**（下記）。`dockerComposeFile` が参照する compose ファイルが実在すること |
+| 静的構造 | `.devcontainer/devcontainer.json` / `.env.example` / `scripts/on-attach.sh` / `scripts/fix-mount-owner.sh` / `scripts/post-rebuild-check.sh` / `scripts/verify.sh` / `scripts/acceptance.sh` / `scripts/loop-gate.sh` / `scripts/check-no-secrets.sh` の実在。`devcontainer.json` が妥当な JSON であること。**`${localEnv:` の混入が無いこと**（下記）。`dockerComposeFile` が参照する compose ファイルが実在すること |
 | スクリプト検査 | 生成した各スクリプトの `bash -n` 構文検査（NG なら FAIL）と実行ビットの有無（無ければ WARN） |
 | 実行時コマンドの可用性 | `bash` / `jq` / `perl` / `gh`。`devcontainer.json` の features から検出した言語ランタイム（`rust` は feature 名と実行ファイル名が異なるため `cargo` で判定。`ruby` は一致するため `ruby` で判定）。`--with-aws` / `--with-gcp` で配線した cloud CLI（`aws` / `gcloud` / `terraform`）。`docker-outside-of-docker` を配線していれば `docker`。いずれも不在は WARN |
 
