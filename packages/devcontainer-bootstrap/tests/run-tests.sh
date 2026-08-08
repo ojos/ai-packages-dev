@@ -6,7 +6,8 @@
 #   bash tests/run-tests.sh permissions # 名前に permissions を含むテストのみ
 #
 # 依存: bash, python3（URL 経路の検証にローカル HTTP サーバを使う）, tar, curl,
-#       timeout（副作用の前で停止することを検証するテストが使う）
+#       timeout（副作用の前で停止することを検証するテストが使う）,
+#       静的解析器 shellcheck（生成物が素で解析を通ることを検証するテストが使う）
 # ネットワークには出ない。
 #
 # この一覧は下の依存チェックと同じ内容を持つ。片方だけを更新しないこと。
@@ -20,7 +21,12 @@ FILTER="${1:-}"
 # test-release-execution-guard.sh）が使う。無い環境では該当テストだけが
 # "command not found" で落ち、原因が「依存の欠落」だと分からない形になるため、
 # 他の依存と同じく入口で明示的に検査する。
-for cmd in python3 tar curl timeout; do
+#
+# 静的解析器 shellcheck は、生成物が素の状態で解析を通ることを検証するテスト
+# （test-generated-shellcheck.sh）が使う。同テストは不在をスキップ扱いにせず失敗
+# させるが、そこで初めて分かるのでは原因が「依存の欠落」だと読み取りにくいため、
+# timeout と同じくここで先に落とす。
+for cmd in python3 tar curl timeout shellcheck; do
   command -v "$cmd" >/dev/null 2>&1 || {
     echo "error: required command not found: $cmd" >&2
     exit 1

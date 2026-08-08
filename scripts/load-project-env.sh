@@ -26,6 +26,11 @@ __load_project_env() {
     src="${BASH_SOURCE[0]}"
   elif [ -n "${ZSH_VERSION:-}" ]; then
     # zsh: 現在ソース中ファイルの絶対/相対パス。
+    # この展開は zsh 固有で bash には無い。shellcheck は bash として解析するため
+    # 構文エラー（SC2296）に見えるが、この行へ到達するのは ZSH_VERSION が立つ
+    # zsh のときだけで、bash では評価されない。注記が無いと、scripts/ を静的解析に
+    # 掛ける受け入れ条件を持つプロジェクトが、配布物のせいで赤になる。
+    # shellcheck disable=SC2296
     src="${(%):-%x}"
   else
     src="$0"
