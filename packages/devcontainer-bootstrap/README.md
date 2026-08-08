@@ -174,7 +174,7 @@ tar -xzf PACKAGE_ARCHIVE.tar.gz
 |---|---|
 | `--with-aws` | AWS CLI feature + `amazonwebservices.aws-toolkit-vscode` 拡張 + Terraform（下記） |
 | `--with-gcp` | Google Cloud CLI feature（外部 `dhoeric`）+ `GoogleCloudTools.cloudcode` 拡張 + Terraform（下記） |
-| `--with-claude` | Claude Code CLI（`@anthropic-ai/claude-code`）+ `anthropic.claude-code` 拡張 + `~/.claude` 永続化 |
+| `--with-claude` | Claude Code CLI（`@anthropic-ai/claude-code`）+ `anthropic.claude-code` 拡張 + `~/.claude` 永続化 + マージ確認フック（下記） |
 | `--with-gemini` | Gemini CLI（`@google/gemini-cli`）+ `Google.gemini-cli-vscode-ide-companion` 拡張 + `~/.gemini` 永続化 |
 | `--with-copilot` | GitHub Copilot CLI（`@github/copilot`）+ `github.copilot` / `github.copilot-chat` 拡張 + `~/.copilot` 永続化 |
 | `--with-copilot-review` | リモート最終ゲートのワークフロー 2 本（`.github/workflows/copilot-review.yml` / `.github/workflows/review-gate.yml`）。**ローカルの装備は一切入りません。** 規範の配置が前提（下記） |
@@ -602,6 +602,12 @@ OAuth トークン（`CLAUDE_CODE_OAUTH_TOKEN`）を `remoteEnv` へ注入する
 - `scripts/check-no-secrets.sh`（機密混入の検知ゲート。`verify.sh` が受け入れ条件の手前で呼ぶ。下記参照）
 - `.gitignore` の managed セクション（言語構成に応じて自動更新。`--no-gitignore` で無効化）
 
+`--with-claude` を選んだ場合は、規範の配置とは独立に次を出力します（下記「[マージ確認フック](#マージ確認フックclaude-code)」参照）。
+
+- `scripts/confirm-merge-hook.sh`（マージ実行の前に確認を挟む PreToolUse フックの本体）
+- `.claude/settings.json`（上記フックの配線。既存ファイルは既定ポリシー `skip` で温存します）
+- `.claude/.gitignore`（`settings.local.json` を追跡しない）
+
 規範を配置する場合（`--with-playbook` / `--playbook-version` / `--playbook-from`）は、加えて次を出力します。
 
 - `.ai-playbook/**`（AI 共通ルール一式。内容の正本は ai-playbook 側にあり、DCB は木ごと配置するだけです）
@@ -617,6 +623,42 @@ OAuth トークン（`CLAUDE_CODE_OAUTH_TOKEN`）を `remoteEnv` へ注入する
 - `scripts/acceptance-remote.sh`（**外部層**の受け入れ条件の雛形。宣言と実際の外部状態の一致を検証する骨格のみ。上記「受け入れ条件の二層」参照）
 
 なお bootstrap.sh は生成先の README.md を読み書きしません。セットアップ手順を README へ追記する処理は持たないため、生成後の README への反映は利用者側の作業です。
+
+#### マージ確認フック（Claude Code）
+
+`--with-claude` を選ぶと、**マージを実行しようとしたときに確認を挟む** PreToolUse フックを配置します。規範 `.ai-playbook/role-contracts/closer.md` の「既定の merge 方針は手動承認とする」に対応する機構で、規範を配置しない構成でも配線されます（規範パッケージの雛形ではなく DCB 自身のテンプレートです）。
+
+| ファイル | 役割 |
+|---|---|
+| `scripts/confirm-merge-hook.sh` | フック本体。標準入力の JSON を読み、マージ実行にあたるコマンドなら `permissionDecision: ask` を返します |
+| `.claude/settings.json` | 配線。`PreToolUse` の `matcher: "Bash"` から上記を呼びます |
+
+**保証するのは「黙ってマージしない」ことであって、「マージさせない」ことではありません。** 判定は `deny` ではなく `ask` で、承認すればマージは実行されます。指示に従うマージまで塞ぐと「PR を作り、指示を待ち、指示されたらマージする」という運用が成り立たないためです。
+
+検査するのは次の 3 つで、いずれも「文字列に含まれるか」ではなく**実行しようとしているか**で判定します。
+
+| 検査対象 | 条件 |
+|---|---|
+| `gh pr merge` | **コマンド位置**にあるもの（行頭、または `;` `&&` `\|\|` `\|` `(` の直後。先行する環境変数代入は読み飛ばします） |
+| `pulls/<n>/merge` | **かつ `--method PUT` / `-X PUT` を同じ行で指定しているもの。** `--method=PUT`（= 連結）・`-XPUT`（連結形）・`--method put`（小文字）も拾います。GET はマージ済みか調べるだけで状態を変えないため対象外です |
+| `mergePullRequest` | **かつ `gh api graphql` から呼ばれているもの** |
+
+単純な部分一致にしていないのは、`grep -rn 'mergePullRequest' .` や `git log -S 'gh pr merge'` まで確認を求めると、**内容を読まずに承認する習慣ができて機構が形だけになる**ためです。
+
+**`.claude/settings.json` の `permissions.ask` では代替できません。** `allow` / `ask` / `deny` はコマンド名と引数文字列の**前方一致**で判定するため、次を表現できません（実測値は無害な `echo` で確認しています）。
+
+- **同じ操作の別経路**: `gh pr merge` を対象にした規則は `gh api --method PUT .../pulls/1/merge` にも `gh api graphql` の `mergePullRequest` にも一致しません。`gh api` ごと対象にすると、状態を変えない GET まで確認を求めます。
+- **引数の位置に依らない判定**: `--method PUT` が引数の途中や末尾へ来る綴りは捕捉できません（実測: `deny` 規則 `Bash(echo --method PUT:*)` は `echo --method PUT repos/o/r/pulls/1/merge` を止めますが、`echo repos/o/r/pulls/1/merge --method PUT` は素通りします）。
+
+> **既知の限界**: これは「うっかり実行」に確認を挟む guardrail であり、**意図的な迂回を防ぐ security boundary ではありません。** 文字列照合である以上、書き方を変えれば抜けられます。`gh -R owner/repo pr merge`（`gh` とサブコマンドの間にオプションが挟まる形）/ `/usr/bin/gh pr merge`（絶対パス起動）/ `env gh pr merge`（プレフィックス）/ `bash -c "gh pr merge 1"`（引用符の内側）/ `gh api .../pulls/$N/merge`（URL の変数展開）/ `gh api graphql -F query=@q.gql`（クエリを外部ファイルから読む形）はいずれも通ります。**塞ぐたびに新しい書き方が見つかるため完全性は達成できません。** 完全であるかのように書くと実態より強い保証があると誤認させるため、限界をそのまま記録しています。なお `gh api -XPUT` / `--method=PUT` / 小文字 `put` は、意図的な迂回ではなく普通の綴りにあたるため既知の限界には含めず、上の判定が拾います。
+
+> **副作用**: マージコマンドに見える文字列を**行頭に含む**コミットメッセージやテストは、そのままでは実行できず確認を求められます。`git commit -F <file>` のようにファイル経由で渡すか、テストスクリプトへ書き出して実行すれば回避できます。引用符の内側（`grep 'gh pr merge'`）は元から通ります。
+
+> **`main` への直接 push は扱いません。** ブランチ保護がサーバ側で拒否するほうが確実で、ブランチ名に `main` を含む feature ブランチへの push を誤って止める副作用も避けられるためです。
+
+> **`jq` が無くても検査を飛ばしません。** コマンドを取り出せない場合（`jq` 不在・壊れた JSON・将来のペイロード変更）はペイロード全体を検査対象にします。「取れなければ通す」にすると検査が黙って無効化され、**このフックが防ごうとしている「気づかないまま実行できる」状態そのものを再現する**ためです。出力側も同じ理由で `printf` のフォールバックを持ちます。
+
+> **他の実行環境へ一般化できるか**: 現時点ではできません。`.claude/settings.json` の `PreToolUse` は Claude Code 固有の機構で、`--with-gemini` / `--with-copilot` に同等の「ツール実行前に判定を差し込む」配線がありません。フック本体（`scripts/confirm-merge-hook.sh`）は標準入力の JSON を読んで標準出力へ判定を返すだけなので、同種の機構を持つ実行環境が現れたら**配線だけを足せば再利用できます。** 判定ロジックを実行環境ごとに複製しない形にしてあります。
 
 #### リモート最終ゲート（Copilot）ワークフロー
 規範を配置し、かつ `--with-copilot-review` を選択した場合のみ、**要求側と確認側の 2 本**を配置します（規範 `.ai-playbook/review-workflow.md`「リモート最終ゲート」に対応）。
@@ -663,7 +705,7 @@ github/gitignore のテンプレートは言語・OS・エディタの生成物�
 
 > **`.terraform.lock.hcl` は追跡します。** プロバイダ版の固定に必要なため、意図して除外していません（管理セクション内にもその旨のコメントを出力します）。
 
-> **`.claude/settings.local.json`** は管理セクションでは扱いません。`.claude/` の中で閉じる除外は `.claude/` を配る側の責務とし、同じ除外を 2 か所に持たないためです（2 か所にあると、片方だけ直したときにどちらが効いているのか読めなくなります）。
+> **`.claude/settings.local.json`** は管理セクションでは扱いません。`--with-claude` が配る **`.claude/.gitignore`** がこの 1 行を持ちます。`.claude/` の中で閉じる除外は `.claude/` を配る側の責務とし、同じ除外を 2 か所に持たないためです（2 か所にあると、片方だけ直したときにどちらが効いているのか読めなくなります）。`settings.local.json` には対話中に許可した操作の一覧が入るため、追跡すると**その場の判断で許可した強い操作が clone した全員へ配られます。**
 
 > **既存プロジェクトへの影響**: 管理セクションは再実行で丸ごと置換されるため、再生成するとこれらの行が入ります。セクション外へ手書きしていた同じ内容の行はそのまま残りますが、`.gitignore` の重複は無害です。**なお `.gitignore` は既に追跡済みのファイルを追跡対象から外しません。** 既にコミットされている場合は `git rm --cached` が別途必要です。
 
@@ -674,6 +716,7 @@ github/gitignore のテンプレートは言語・OS・エディタの生成物�
 | テンプレート | 生成時の扱い | 展開されるもの |
 |---|---|---|
 | `scripts/check-no-secrets.sh` | そのまま書き出す | — |
+| `scripts/confirm-merge-hook.sh` | そのまま書き出す | —（`--with-claude` のときだけ生成） |
 | `scripts/load-project-env.sh` | そのまま書き出す | — |
 | `scripts/loop-gate.sh` | そのまま書き出す | — |
 | `scripts/on-attach.sh` | そのまま書き出す | — |
@@ -692,6 +735,8 @@ github/gitignore のテンプレートは言語・OS・エディタの生成物�
 - **配置されるかどうかは、この 2 分類とは別軸です。** `scripts/acceptance-remote.sh` は展開を持たない（そのまま書き出す）一方で、配置は `--with-aws` / `--with-gcp` の選択に従います。
 
 この開発リポジトリ自身も DCB の生成物を取り込んで使っており、`scripts/` はテンプレートの写しにあたります。上表のうち**写しを持つ 7 本**（`check-no-secrets.sh` / `load-project-env.sh` / `loop-gate.sh` / `on-attach.sh` / `setup-git-identity.sh` / `verify-commit-identity.sh` / `verify.sh`）は、正本と写しがバイト一致していることを `tests/test-template-mirror.sh` が機械照合します（片方だけ直しても両方のテストが緑になり、配布物と手元が黙って食い違うため）。「生成時に展開」側はプレースホルダを持ち一致し得ないので検査対象外です。`scripts/acceptance-remote.sh` も検査対象外ですが理由が異なり、**この開発リポジトリが写しを持たない**（cloud 装備を使わないため）ので比べる相手がありません。いずれも判断と理由を同テストのコメントに残し、写しを置いた時点で一致必須へ移す判断が要ることも機械で担保しています（「検査していない」と「検査対象外と判断した」を読み分けられるようにするため）。
+
+`scripts/confirm-merge-hook.sh` も同じく**写しを持たない**ため照合対象外です。この開発リポジトリは `.claude/settings.json` を追跡しておらず（`.gitignore` が `.claude/*` を除外し、再包含するのは `!.claude/skills/` と `!.claude/agents/` だけ）フックを配線できないため、写しだけを置くと誰も起動しないスクリプトが `scripts/` とカタログに並びます。**写しを置いた時点で「照合する相手が無い」という理由は成立しなくなるので、一致必須への付け替えを要求して落ちます。**
 
 ## Doctor 自己診断
 

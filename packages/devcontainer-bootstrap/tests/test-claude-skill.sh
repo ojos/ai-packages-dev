@@ -28,11 +28,14 @@ outn="$(new_workdir)/p"
 run_bootstrap "$outn" --with-playbook >/dev/null 2>&1
 assert_file_absent "$outn/.claude"
 
-it "--with-claude でも規範を配置しないなら .claude/ を生成しない"
+it "--with-claude でも規範を配置しないならスキルを配置しない"
 # skill は規範導入経路に相乗りする。playbook を入れないなら skill も置かない。
+# .claude/ ディレクトリそのものの不在では判定しない。--with-claude は規範とは独立に
+# .claude/settings.json（PreToolUse フックの配線）と .claude/.gitignore を配るため、
+# ディレクトリは規範を入れなくても作られる。ここで見たいのは skill の有無だけ。
 outc="$(new_workdir)/p"
 run_bootstrap "$outc" --with-claude --without-playbook >/dev/null 2>&1
-assert_file_absent "$outc/.claude"
+assert_file_absent "$outc/.claude/skills"
 
 # ── 参照のみ・複製なし（issue の受け入れ条件の中核）──────────────────────────
 
