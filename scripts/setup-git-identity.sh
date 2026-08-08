@@ -318,16 +318,23 @@ check() {
   #
   #      プレフィクスは log に一元化する（直書きすると log の書式を変えたときに
   #      この行だけが取り残される）。
-  local system_helpers system_helper
-  # git config は該当キーが無いと非ゼロを返す。ここは検出の有無を見るだけなので、
-  # 空文字を既定値として受け取る（set -e 下で検査自体を落とさないため）。
-  system_helpers="$(git config --system --get-all credential.helper 2>/dev/null || true)"
-  if [[ -n "$system_helpers" ]]; then
+  #
+  #      検出は 1 つの文字列の空判定ではなく、行数で数える。`helper = `（空文字）
+  #      だけが置かれている場合、--get-all は空行 1 件を返すが、コマンド置換は
+  #      末尾改行を落とすため「1 件ある」と「0 件」が区別できない。キーがあるのに
+  #      「無い」と報告するのは、この検査が唯一報告すべきことを取り違えた状態。
+  local -a system_helpers=()
+  local system_helper
+  # git config は該当キーが無いと非ゼロを返す（未設定は正常系）。ここは検出の
+  # 有無を見るだけなので、空として受け取る（set -e 下で検査自体を落とさないため）。
+  while IFS= read -r system_helper; do
+    system_helpers+=("$system_helper")
+  done < <(git config --system --get-all credential.helper 2>/dev/null || true)
+  if [[ "${#system_helpers[@]}" -gt 0 ]]; then
     log "INFO system スコープに credential.helper があります（実効値からは外れています。上記 7) を参照）:"
-    while IFS= read -r system_helper; do
-      [[ -n "$system_helper" ]] || continue
-      log "INFO   $system_helper"
-    done <<<"$system_helpers"
+    for system_helper in "${system_helpers[@]}"; do
+      log "INFO   ${system_helper:-<空文字>}"
+    done
     log "INFO 誰がいつ置いたかはこの検査では判定できません。検出のみで、判定には影響させません。"
   else
     log "OK  system スコープに credential.helper は無い"

@@ -169,6 +169,18 @@ else
   fail "system helper の検出で --check が落ちた (rc=$src): $(printf '%s' "$so" | tail -1)"
 fi
 
+it "system の credential.helper が空文字でも「無い」と誤判定しない"
+# `helper = ` に対して --get-all は空行 1 件を返す。これをコマンド置換で 1 つの
+# 文字列として受けると末尾改行が落ち、「1 件ある」と「0 件」が区別できなくなる。
+# キーがあるのに OK を出すのは、この検査が唯一報告すべきことを取り違えた状態。
+printf '[credential]\n\thelper = \n' > "$sysconf"
+eo="$(cd "$r" && env GIT_CONFIG_SYSTEM="$sysconf" bash scripts/setup-git-identity.sh --check 2>&1)"; erc=$?
+if [[ "$erc" -eq 0 ]]; then
+  assert_contains "$eo" "INFO   <空文字>" "--check 出力"
+else
+  fail "空文字の system helper で --check が落ちた (rc=$erc): $(printf '%s' "$eo" | tail -1)"
+fi
+
 # ── local 未設定リポジトリでの commit 失敗（本題） ────────────────────────────
 it "local 設定を持たない別リポジトリでは git commit が非ゼロで失敗する"
 nr="$(new_workdir)/nr"; mkdir -p "$nr"; ( cd "$nr" && git init -q )
