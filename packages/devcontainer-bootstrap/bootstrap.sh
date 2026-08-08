@@ -1815,6 +1815,73 @@ build_remote_gitignore_block() {
   } | sed '/^$/N;/^\n$/D'
 }
 
+# --with-* で入れた装備が作るファイルの除外を出力する。
+#
+# github/gitignore のテンプレートは言語・OS・エディタの生成物だけを対象にしており、
+# 装備フラグで入れたツールの生成物は含まれない。装備を入れた側が後始末を持たないと、
+# 各プロジェクトが同じ行を手書きすることになり、書き漏らしがそのまま機密の混入になる。
+#
+# 出力は github/gitignore ブロックより後ろへ置く。.gitignore は後に書いた行が勝つため、
+# テンプレート側の再包含（! 行）でここの除外が打ち消されない順序にする。
+#
+# 装備を選んでいない構成へは 1 行も出さない。使わない除外を配ると、その行が何のために
+# あるのかを利用者が判断できなくなる。
+build_static_gitignore_block() {
+  local body
+
+  # 出力する行はそのまま .gitignore へ入るため、展開の起きない引用符付き
+  # ヒアドキュメントで literal に書く（* や ** をシェルへ解釈させない）。
+  body="$(
+    if has_with claude; then
+      cat <<'CLAUDE_IGNORES'
+
+# Claude Code (--with-claude)
+# .mcp.json はプロジェクトスコープの MCP 設定。トークン方式の MCP サーバを追加すると
+# 平文の資格情報がここへ入るため、.env と同じ理由で共有しない。
+.mcp.json
+# .claude/worktrees/ の中身はリポジトリ全体のチェックアウトそのもので、除外しないと
+# git add . でリポジトリが自分自身を抱え込む。.claude/ 配下には追跡する成果物
+# （skills/）があるため、.claude/ ごとではなくこのディレクトリだけを除外する。
+.claude/worktrees/
+CLAUDE_IGNORES
+    fi
+
+    if with_feature_active terraform; then
+      cat <<'TERRAFORM_IGNORES'
+
+# Terraform (--with-aws / --with-gcp)
+# tfstate は機密を平文で保持する。tfvars も同じく機密を含みやすい。
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.tfvars.json
+# plan の出力は変数の値が解決済みで展開されるため、state / tfvars と同じ理由で
+# 機密が載る。-out=tfplan（拡張子なし）が慣用のため、両方の書き方を除外する。
+tfplan
+*.tfplan
+# crash log には実行時の変数値が出ることがある。
+crash.log
+crash.*.log
+# override 系と CLI 設定は端末ごとのローカル上書きで、共有すると他者の実行を変える。
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+# .terraform.lock.hcl はプロバイダ版の固定に必要なため、意図して除外しない。
+TERRAFORM_IGNORES
+    fi
+  )"
+
+  [[ -n "$body" ]] || return 0
+
+  printf '%s\n' ""
+  printf '%s\n' "# devcontainer-bootstrap owned ignores"
+  printf '%s\n' "$body"
+}
+
 # 言語ランタイムの存在検査に使うコマンド名を返す。
 # 既定は言語名と同一だが、rust は実行ファイルが cargo/rustc に分かれ
 # 「rust」という実行ファイルが無いため、代表コマンド cargo へ写像する。
@@ -2134,11 +2201,15 @@ render_content() {
 }
 
 build_gitignore_block() {
-  local remote_block=""
+  local remote_block="" static_block=""
 
   remote_block="$(build_remote_gitignore_block)"
+  static_block="$(build_static_gitignore_block)"
   if [[ -n "$remote_block" ]]; then
     printf '%s\n' "$remote_block"
+  fi
+  if [[ -n "$static_block" ]]; then
+    printf '%s\n' "$static_block"
   fi
 }
 

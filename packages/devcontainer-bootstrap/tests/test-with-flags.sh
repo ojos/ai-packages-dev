@@ -259,4 +259,148 @@ out="$(new_workdir)/p"
 run_bootstrap "$out" --with-claude --with-gemini --with-copilot >/dev/null 2>&1
 if bash -n "$out/scripts/install-ai-tools.sh" 2>/dev/null; then pass; else fail "構文エラー"; fi
 
+# ── .gitignore 管理セクションへの装備連動（機密の除外） ───────────────────────
+#
+# 装備フラグで入れたツールの生成物には、機密を平文で持つものがある（.mcp.json /
+# *.tfstate / *.tfvars / tfplan）。除外を配らないと各プロジェクトが手書きすることに
+# なり、書き漏らしがそのまま漏洩になる。ここでは両方向を見る。装備を選んだときに
+# 出ることと、選ばなかったときに出ないことの片方だけでは、条件配線を担保できない。
+#
+# 判定は「行の存在」と「git 自身の判定」の 2 段で行う。行があっても綴りや再包含との
+# 相互作用で意図した除外になっていないことがあり、逆に git の判定だけでは、どの行が
+# 効いているのかが分からず回帰時の切り分けができない。
+
+# 管理セクションの中身だけを取り出す。セクション外の行は DCB の生成物ではないため、
+# ファイル全体を見ると利用者の手書きを DCB の出力と取り違える。
+managed_section() {
+  awk '
+    $0 == "# >>> devcontainer-bootstrap managed section >>>" { inside = 1; next }
+    $0 == "# <<< devcontainer-bootstrap managed section <<<" { inside = 0 }
+    inside { print }
+  ' "$1"
+}
+
+# 管理セクションが行そのものとして持つかを見る（コメント中の言及に一致させない）。
+section_has_line() {
+  managed_section "$1" | grep -qFx "$2"
+}
+
+# 生成先を git リポジトリにして、パスの除外可否を git 自身に判定させる。
+# 実行者の global な除外設定を拾うと判定が環境依存になるため、明示的に切る。
+init_ignore_probe() {
+  git -C "$1" init -q
+}
+path_ignored() {
+  git -C "$1" -c core.excludesFile=/dev/null check-ignore -q "$2"
+}
+
+it "--with-claude: .mcp.json と .claude/worktrees/ が管理セクションへ入る"
+out="$(new_workdir)/p"
+run_bootstrap "$out" --with-claude >/dev/null 2>&1
+gi="$out/.gitignore"
+if section_has_line "$gi" ".mcp.json" && section_has_line "$gi" ".claude/worktrees/"; then
+  pass
+else
+  fail "Claude 群の除外行が無い"
+fi
+
+it "--with-claude: git 判定でも .mcp.json / .claude/worktrees/ が除外される"
+init_ignore_probe "$out"
+if path_ignored "$out" ".mcp.json" && path_ignored "$out" ".claude/worktrees/wt/README.md"; then
+  pass
+else
+  fail "行はあるが git は除外と判定しない"
+fi
+
+it "--with-claude: .claude/skills/ は除外に巻き込まれない"
+# .claude/ ごと除外すると intake 起点スキルが配布されなくなる。ここが壊れると
+# --with-playbook --with-claude の生成物から SKILL.md が消えるため、git 判定で見る。
+if path_ignored "$out" ".claude/skills/intake/SKILL.md"; then
+  fail ".claude/skills/ が除外されている（.claude/ ごと除外していないか）"
+else
+  pass
+fi
+
+it "--with-claude: settings.local.json の除外は管理セクションが持たない"
+# .claude/ の中で閉じる除外は .claude/ を配る側の責務にする。二重に持つと、片方だけを
+# 直したときに食い違い、どちらが効いているのかが読めなくなる。
+if managed_section "$gi" | grep -q 'settings\.local\.json'; then
+  fail "管理セクションが settings.local.json を持っている（配置先の二重化）"
+else
+  pass
+fi
+
+it "--with-claude: cloud 未選択なら Terraform 群は入らない"
+if section_has_line "$gi" "*.tfstate" || section_has_line "$gi" "tfplan"; then
+  fail "cloud 未選択なのに Terraform の除外がある"
+else
+  pass
+fi
+
+it "--with-aws: Terraform 群（state / tfvars / plan / crash / override）が入る"
+out="$(new_workdir)/p"
+run_bootstrap "$out" --with-aws >/dev/null 2>&1
+gi="$out/.gitignore"
+missing=""
+for line in '**/.terraform/*' '*.tfstate' '*.tfstate.*' '*.tfvars' '*.tfvars.json' \
+            'tfplan' '*.tfplan' 'crash.log' 'crash.*.log' \
+            'override.tf' 'override.tf.json' '*_override.tf' '*_override.tf.json' \
+            '.terraformrc' 'terraform.rc'; do
+  section_has_line "$gi" "$line" || missing="$missing $line"
+done
+if [[ -z "$missing" ]]; then pass; else fail "Terraform の除外行が欠けている:$missing"; fi
+
+it "--with-aws: .terraform.lock.hcl は除外しない（プロバイダ版の固定に必要）"
+init_ignore_probe "$out"
+if path_ignored "$out" ".terraform.lock.hcl" || path_ignored "$out" "infra/.terraform.lock.hcl"; then
+  fail "lock ファイルが除外されている"
+else
+  pass
+fi
+
+it "--with-aws: git 判定で state / tfvars / plan が除外される"
+if path_ignored "$out" "infra/terraform.tfstate" \
+   && path_ignored "$out" "infra/prod.tfvars" \
+   && path_ignored "$out" "tfplan" \
+   && path_ignored "$out" "infra/apply.tfplan" \
+   && path_ignored "$out" "infra/.terraform/providers/registry"; then
+  pass
+else
+  fail "Terraform の機密ファイルが除外されていない"
+fi
+
+it "--with-aws: Claude 群は入らない"
+if section_has_line "$gi" ".mcp.json" || section_has_line "$gi" ".claude/worktrees/"; then
+  fail "--with-claude 未指定なのに Claude 群がある"
+else
+  pass
+fi
+
+it "--with-gcp でも Terraform 群が入る"
+out="$(new_workdir)/p"
+run_bootstrap "$out" --with-gcp >/dev/null 2>&1
+if section_has_line "$out/.gitignore" "*.tfstate"; then pass; else fail "gcp 選択で Terraform の除外が無い"; fi
+
+it "--with-aws --with-gcp: Terraform 群は 1 回だけ出る"
+out="$(new_workdir)/p"
+run_bootstrap "$out" --with-aws --with-gcp >/dev/null 2>&1
+n="$(managed_section "$out/.gitignore" | grep -cFx '*.tfstate')"
+assert_eq "$n" "1" "*.tfstate の出現回数"
+
+it "素の生成物には Claude 群も Terraform 群も入らない"
+out="$(new_workdir)/p"
+run_bootstrap "$out" >/dev/null 2>&1
+found=""
+for line in '.mcp.json' '.claude/worktrees/' '**/.terraform/*' '*.tfstate' '*.tfvars' 'tfplan'; do
+  section_has_line "$out/.gitignore" "$line" && found="$found $line"
+done
+if [[ -z "$found" ]]; then pass; else fail "装備未選択なのに除外行がある:$found"; fi
+
+it "素の生成物の管理セクションには DCB 固有ブロックの見出しが出ない"
+if managed_section "$out/.gitignore" | grep -q 'devcontainer-bootstrap owned ignores'; then
+  fail "装備未選択なのに DCB 固有ブロックの見出しがある"
+else
+  pass
+fi
+
 exit_with_result

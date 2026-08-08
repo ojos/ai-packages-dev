@@ -189,6 +189,17 @@ vite.config.ts.timestamp-*
 
 # Built Visual Studio Code Extensions
 *.vsix
+
+# devcontainer-bootstrap owned ignores
+
+# Claude Code (--with-claude)
+# .mcp.json はプロジェクトスコープの MCP 設定。トークン方式の MCP サーバを追加すると
+# 平文の資格情報がここへ入るため、.env と同じ理由で共有しない。
+.mcp.json
+# .claude/worktrees/ の中身はリポジトリ全体のチェックアウトそのもので、除外しないと
+# git add . でリポジトリが自分自身を抱え込む。.claude/ 配下には追跡する成果物
+# （skills/）があるため、.claude/ ごとではなくこのディレクトリだけを除外する。
+.claude/worktrees/
 # <<< devcontainer-bootstrap managed section <<<
 
 # Local handover note (kept in workspace but never committed)
