@@ -23,9 +23,11 @@ SETUP="$out/scripts/setup-git-identity.sh"
 it ".env.example が生成される"
 assert_file_exists "$out/.env.example"
 
-it ".env.example が 3 つのキーを持つ"
+it ".env.example が 4 つのキーを持つ"
+# GH_TOKEN の詳細（PAT 固定経路の理由・案内の出し分け）は test-gh-token-pat.sh が
+# 担当する。ここでは供給元の一覧としてキーが欠けていないことだけを見る。
 missing=""
-for k in GEMINI_API_KEY GIT_IDENTITY_NAME GIT_IDENTITY_EMAIL; do
+for k in GEMINI_API_KEY GH_TOKEN GIT_IDENTITY_NAME GIT_IDENTITY_EMAIL; do
   grep -q "^${k}=" "$out/.env.example" || missing="$missing $k"
 done
 if [[ -z "$missing" ]]; then pass; else fail "不足:$missing"; fi
