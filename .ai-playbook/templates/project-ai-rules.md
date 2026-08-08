@@ -62,6 +62,8 @@
 
 push / PR 作成後の最終ゲートを、このプロジェクトで具体化します（`.ai-playbook/review-workflow.md`「リモート最終ゲート」）。
 
-- 手段: （記載。例: GitHub Copilot code review を PR 作成時に 1 回要求する。DCB の `--with-copilot` で `.github/workflows/copilot-review.yml` を配置できます）
+- 手段: （記載。例: GitHub Copilot code review を PR 作成時に 1 回要求する。DCB の `--with-copilot-review` で `.github/workflows/copilot-review.yml`（要求側）と `.github/workflows/review-gate.yml`（確認側）を配置できます）
+- **要求側と確認側の 2 本で 1 組です。** 確認側だけを省くと、要求側の契機が届かなかったときに最終ゲートが黙って抜けます（`.ai-playbook/review-workflow.md`「要求されたことを別の契機で確認する」）。確認側は要求しません。
+- ローカル装備の `--with-copilot`（CLI・拡張・設定の永続化）ではワークフローは配置されません。効く場所が違うため別のフラグです。
 - 要求は 1 回に限定します。機構で自動要求する場合は、再要求されないイベント（例: `pull_request` の `opened` のみ）に限定します（`.ai-playbook/review-workflow.md`）。
 - 前提条件・失敗時の扱い: （記載。例: リポジトリ所有者の Copilot code review が有効でないと 422 で失敗する）
