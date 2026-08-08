@@ -211,3 +211,7 @@ GETTING_STARTED.md
 # intake 起点スキルはローカル設定ではなく規範の配布物で、DCB の生成先でも追跡される。
 # ここだけ再包含し、settings.json / settings.local.json / worktrees は除外を保つ。
 !.claude/skills/
+# サブエージェント定義も同じ理由で追跡する。委譲先の model / tools をここで固定する
+# ことがこの仕組みの本体で、追跡されないと機構として成立しない（規範は
+# .github/project-ai-rules.md「委譲可能な役割とモデル配分」）。
+!.claude/agents/
