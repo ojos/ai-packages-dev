@@ -292,6 +292,12 @@ GEMINI_API_KEY=
 # 空にすると従来どおり、コンテナ内の `gh auth login` で保存した OAuth トークン
 # （~/.config/gh/hosts.yml）が使われる。PAT を持たない利用者はこのまま空でよい。
 #
+# ただし GITHUB_TOKEN も未設定（または空）であることが条件。gh は
+# GH_TOKEN -> GITHUB_TOKEN の順に環境変数を読み、空文字だけを読み飛ばす
+# （gh 2.96.0 で実測）。GITHUB_TOKEN に値があると、GH_TOKEN を空にしても
+# 保存済み認証へは戻らず GITHUB_TOKEN が使われる。GITHUB_TOKEN は恒久的に
+# 設定しないこと。空の GH_TOKEN は GITHUB_TOKEN に対する盾にならない。
+#
 # ここへ PAT を書き写すのは、gh の OAuth App に「ユーザー × アプリ × scope あたり
 # 10 トークン」の上限があるため。上限に達した状態でどこかの環境が認証すると、
 # GitHub が既存のトークンを 1 本破棄する（理由コード max_for_app）。溜まる単位は
@@ -750,13 +756,31 @@ strip_docker_creds_store
 
 # gh の認証状態を確認する。
 #
-# 判定は「いま実際に使われている資格情報が有効か」だけに絞る（--active）。GH_TOKEN と
-# hosts.yml の保存済み認証は共存しうるため、--active を付けないと gh は両方を並べて
-# 報告し、使っていない側が無効なだけで exit=1 になる。
+# 判定は「いま実際に使われている資格情報が有効か」だけに絞る（--active）。環境変数の
+# トークンと hosts.yml の保存済み認証は共存しうるため、--active を付けないと gh は
+# 両方を並べて報告し、使っていない側が無効なだけで exit=1 になる。
 GH_AUTH_TIMEOUT_SECS=10
 
+# gh が資格情報として読む環境変数のうち、いま効いているものの名前を返す（無ければ空）。
+#
+# gh は GH_TOKEN → GITHUB_TOKEN の順に読み、空文字は読み飛ばして次へ落ちる
+# （gh 2.96.0 で実測。GH_TOKEN= だけなら保存済み認証、GH_TOKEN= かつ
+# GITHUB_TOKEN=<値> なら GITHUB_TOKEN が使われる）。空文字を未設定と同じに扱うのは、
+# この gh 側の境界へ合わせるため。GITHUB_TOKEN を見落とすと、実際は環境変数で
+# 認証しているのに「保存済み認証を使用」と報告し、失敗時には 'gh auth login' を
+# 案内してしまう。
+gh_active_env_token_var() {
+  if [[ -n "${GH_TOKEN:-}" ]]; then
+    printf 'GH_TOKEN'
+  elif [[ -n "${GITHUB_TOKEN:-}" ]]; then
+    printf 'GITHUB_TOKEN'
+  fi
+}
+
 check_gh_auth() {
-  local rc=0
+  local rc=0 env_var
+  env_var="$(gh_active_env_token_var)"
+
   # 応答が返らないまま接続処理を止め続けない。timeout が無い環境では打ち切れない
   # ため、その場合だけ素で呼ぶ（124 の分岐へは入らなくなる）。
   if command -v timeout >/dev/null 2>&1; then
@@ -766,10 +790,15 @@ check_gh_auth() {
   fi
 
   if [[ "$rc" -eq 0 ]]; then
-    if [[ -n "${GH_TOKEN:-}" ]]; then
-      echo "[on-attach] gh auth OK (GH_TOKEN の PAT を使用)"
+    if [[ -n "$env_var" ]]; then
+      echo "[on-attach] gh auth OK ($env_var の値を使用)"
     else
       echo "[on-attach] gh auth OK (コンテナ内の保存済み認証を使用)"
+    fi
+    # GITHUB_TOKEN は供給元として想定していない。設定されていると、保存済み認証も
+    # .env の GH_TOKEN も黙って上書きされる。動いているうちに知らせる。
+    if [[ "$env_var" == "GITHUB_TOKEN" ]]; then
+      echo "[on-attach] WARN: GITHUB_TOKEN が保存済み認証より優先されています。恒久的に設定しないでください（空にすれば GH_TOKEN か保存済み認証へ戻ります）。" >&2
     fi
     return 0
   fi
@@ -794,14 +823,18 @@ check_gh_auth() {
     echo "[on-attach] WARN: gh の認証を確認できませんでした。認証は判定していません（資格情報が無効か、GitHub へ到達できていない可能性があります）。" >&2
   fi
 
-  if [[ -n "${GH_TOKEN:-}" ]]; then
-    # PAT モードでは 'gh auth login' を案内しない。GH_TOKEN があるあいだは env が優先
-    # されるためログイン結果は使われず、それでも OAuth トークンは 1 本発行される。
-    # 上限に達していれば GitHub が既存のトークンを 1 本破棄する（理由コード
-    # max_for_app）。案内どおりに実行すると、他環境のトークンを 1 本失効させるだけの
-    # 結果になる。
-    echo "[on-attach] WARN: GH_TOKEN が設定されています（PAT モード）。'gh auth login' は実行しないでください。env が優先されるためログイン結果は使われず、他環境の認証を 1 本失効させるだけになります。" >&2
-    echo "[on-attach] WARN: .env の GH_TOKEN（有効期限・権限・値の取り違え）と、ネットワークへ出られるかを確認してください。" >&2
+  if [[ -n "$env_var" ]]; then
+    # 環境変数で認証しているあいだは 'gh auth login' を案内しない。
+    #
+    # gh 2.96.0 で実測: 値が設定されているあいだ、gh はログインを拒否する
+    # （--with-token / --web のいずれでも "The value of the <VAR> environment
+    # variable is being used for authentication." で終了し、通信もしない）。
+    # 危ないのはその先で、拒否メッセージ（"first clear the value from the
+    # environment"）に従って値を空にしてログインすると、OAuth トークンの上限枠を
+    # 1 つ消費する。上限に達していれば GitHub が既存のトークンを 1 本破棄する
+    # （理由コード max_for_app）。ここで案内すると、その手順へ誘導することになる。
+    echo "[on-attach] WARN: $env_var が設定されています。gh はこの値を保存済み認証より優先します。'gh auth login' は実行しないでください（gh 自身も値が設定されているあいだはログインを拒否します）。値を空にしてログインすると OAuth トークンの上限枠を 1 つ消費し、上限に達していれば他環境の認証が 1 本失効します。" >&2
+    echo "[on-attach] WARN: $env_var の値（有効期限・権限・値の取り違え）と、ネットワークへ出られるかを確認してください。" >&2
   else
     echo "[on-attach] WARN: 未認証であれば、コンテナ内で 'gh auth login' を実行してください。ホストのトークンは注入されません。" >&2
   fi

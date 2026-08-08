@@ -36,12 +36,13 @@ PLAYBOOK_SRC="$REPO_ROOT/.ai-playbook"
 # GIT_CONFIG_GLOBAL はここに含めない。git 自身が読む変数で、テストが一時的な
 # global 設定へ向けるために意図的に設定する経路がある。
 #
-# GH_TOKEN を含める理由: 生成される on-attach.sh は GH_TOKEN の有無で案内を出し
-# 分ける。実行者のシェルが .env の autoload で GH_TOKEN を持っていると、「空の
-# とき」を検証するケースが PAT モードの分岐へ落ちる。実行者が PAT を設定して
-# いるかどうかでテスト結果が変わり、CI（PAT を持たない）でだけ緑になる。
+# GH_TOKEN / GITHUB_TOKEN を含める理由: 生成される on-attach.sh は、gh が読む
+# 環境変数トークン（GH_TOKEN -> GITHUB_TOKEN の順）の有無で案内を出し分ける。
+# 実行者のシェルが .env の autoload や CI から値を持っていると、「どちらも空の
+# とき」を検証するケースが環境変数モードの分岐へ落ちる。実行者がトークンを
+# 持っているかどうかでテスト結果が変わり、片方の環境でだけ緑になる。
 # gh を実際に呼ぶテストは無く（すべてスタブ）、落としても副作用が無い。
-TEST_ISOLATED_ENV_VARS="GEMINI_API_KEY GEMINI_REVIEW_RUNS GEMINI_REVIEW_MODEL ALLOWED_AUTHOR_EMAILS GH_TOKEN GIT_IDENTITY_NAME GIT_IDENTITY_EMAIL LOOP_GATE_REVIEW_CMD VERIFY_ACCEPTANCE PROJECT_ENV_FILE"
+TEST_ISOLATED_ENV_VARS="GEMINI_API_KEY GEMINI_REVIEW_RUNS GEMINI_REVIEW_MODEL ALLOWED_AUTHOR_EMAILS GH_TOKEN GITHUB_TOKEN GIT_IDENTITY_NAME GIT_IDENTITY_EMAIL LOOP_GATE_REVIEW_CMD VERIFY_ACCEPTANCE PROJECT_ENV_FILE"
 
 # 語分割で 1 つずつ落とす。bash 3.2 互換のため配列を使わない。
 for __isolated_var in $TEST_ISOLATED_ENV_VARS; do

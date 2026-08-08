@@ -16,9 +16,12 @@
 #      読まないと GH_TOKEN が常に空に見え、PAT モードの利用者が未認証と誤認される。
 #   3. gh auth status に --active が付くこと。GH_TOKEN と hosts.yml の保存済み認証は
 #      共存しうるため、付けないと使っていない側が無効なだけで exit=1 になる。
-#   4. 案内が GH_TOKEN の有無で出し分かること。PAT モードで 'gh auth login' を案内
-#      すると、案内どおりに実行した利用者は他環境のトークンを 1 本失効させるだけの
-#      結果になる（env が優先されログイン結果は使われない）。
+#   4. 案内が「gh が読む環境変数トークン」の有無で出し分かること。対象は GH_TOKEN
+#      だけではない。gh は GH_TOKEN -> GITHUB_TOKEN の順に読み、空文字だけを読み
+#      飛ばす。GH_TOKEN しか見ないと、GITHUB_TOKEN が効いている環境で「保存済み
+#      認証を使用」と誤報告し、失敗時に 'gh auth login' を案内する。案内どおりに
+#      進めると、gh の拒否メッセージに従って値を空にしてログインすることになり、
+#      OAuth トークンの上限枠を 1 つ消費する。
 #
 # 到達性については「断定しない」ことを検査する。gh の出力では「到達できない」と
 # 「認証が無効」を区別できず（到達できないときも "The token in GH_TOKEN is invalid."
@@ -169,16 +172,17 @@ assert_contains "$res" '認証は判定していません' "on-attach 出力"
 
 res="$(run_on_attach 0 'GH_TOKEN=dummy-pat-value')"
 it ".env の GH_TOKEN を on-attach.sh 自身が読む（PAT モードとして報告する）"
-assert_contains "$res" 'GH_TOKEN の PAT を使用' "on-attach 出力"
+assert_contains "$res" 'GH_TOKEN の値を使用' "on-attach 出力"
 
 res="$(run_on_attach 1 'GH_TOKEN=dummy-pat-value')"
 it "PAT モードで認証を確認できないとき、'gh auth login' を実行しないよう案内する"
 assert_contains "$res" "'gh auth login' は実行しないでください" "on-attach 出力"
 
 it "PAT モードでは 'gh auth login' を実行させる案内を出さない"
-# ここが両方向の出し分けの要。PAT モードで案内どおりに login すると、env が優先
-# されてログイン結果は使われないまま OAuth トークンが 1 本発行され、上限に達して
-# いれば他環境のトークンが 1 本失効する。
+# ここが両方向の出し分けの要。gh は値が設定されているあいだログインを拒否するため
+# 案内が空振りするうえ（gh 2.96.0 で実測）、拒否メッセージ "first clear the value
+# from the environment" に従って値を空にしてログインすると上限枠を 1 つ消費し、
+# 上限に達していれば他環境のトークンが 1 本失効する。
 case "$res" in
   *"を実行してください"*) fail "PAT モードで login を促す案内が出ている: $(printf '%s' "$res" | grep -F '実行してください' | head -1)" ;;
   *) pass ;;
@@ -211,6 +215,50 @@ assert_contains "$res" '保存済み認証を使用' "on-attach 出力"
 res="$(run_on_attach 1 'GH_TOKEN=')"
 it ".env の GH_TOKEN が空なら、認証を確認できないとき 'gh auth login' を案内する"
 assert_contains "$res" "'gh auth login' を実行してください" "on-attach 出力"
+
+# ── GITHUB_TOKEN も同じ扱いにする ────────────────────────────────────────────
+#
+# gh は GH_TOKEN -> GITHUB_TOKEN の順に環境変数を読み、空文字だけを読み飛ばす
+# （gh 2.96.0 で実測。`GITHUB_TOKEN=" " gh api user` は Bad credentials、
+# `GITHUB_TOKEN=" " GH_TOKEN="" gh api user` も Bad credentials、
+# `GITHUB_TOKEN="" gh api user` は保存済み認証で成功）。
+#
+# GH_TOKEN だけを見ると、GITHUB_TOKEN が効いている環境で「保存済み認証を使用」と
+# 誤って報告し、失敗時には 'gh auth login' を案内する。案内どおりに進めると、
+# 拒否メッセージに従って値を空にしてログインすることになり、上限枠を 1 つ消費する。
+# 本票が塞ごうとしている事故そのものなので、GH_TOKEN と同じ扱いにする。
+
+res="$(run_on_attach 0 'GITHUB_TOKEN=dummy-token-value')"
+it "GITHUB_TOKEN が効いているとき「保存済み認証」とは報告しない"
+case "$res" in
+  *'保存済み認証を使用'*) fail "GITHUB_TOKEN が使われているのに保存済み認証と報告している" ;;
+  *) pass ;;
+esac
+
+it "GITHUB_TOKEN が効いていることを名前を挙げて報告する"
+assert_contains "$res" 'GITHUB_TOKEN の値を使用' "on-attach 出力"
+
+it "GITHUB_TOKEN が優先されている旨を WARN で知らせる"
+assert_contains "$res" '恒久的に設定しないでください' "on-attach 出力"
+
+res="$(run_on_attach 1 'GITHUB_TOKEN=dummy-token-value')"
+it "GITHUB_TOKEN が効いているときも 'gh auth login' を案内しない"
+case "$res" in
+  *"を実行してください"*) fail "GITHUB_TOKEN 使用時に login を促す案内が出ている: $(printf '%s' "$res" | grep -F '実行してください' | head -1)" ;;
+  *) pass ;;
+esac
+
+res="$(run_on_attach 0 'GH_TOKEN=
+GITHUB_TOKEN=dummy-token-value')"
+it "GH_TOKEN が空で GITHUB_TOKEN に値があるとき、GITHUB_TOKEN 側として扱う"
+# 「GH_TOKEN を空にすれば保存済み認証へ戻る」は GITHUB_TOKEN があると成立しない。
+# 空の GH_TOKEN は GITHUB_TOKEN に対する盾にならない。
+assert_contains "$res" 'GITHUB_TOKEN の値を使用' "on-attach 出力"
+
+res="$(run_on_attach 0 'GH_TOKEN=dummy-pat-value
+GITHUB_TOKEN=dummy-token-value')"
+it "両方に値があるときは gh の優先順に合わせて GH_TOKEN 側として扱う"
+assert_contains "$res" 'GH_TOKEN の値を使用' "on-attach 出力"
 
 # ── --active と打ち切り ──────────────────────────────────────────────────────
 
