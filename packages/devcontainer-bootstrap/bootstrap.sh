@@ -267,6 +267,30 @@ template_rel_paths() {
     'scripts/verify.sh'
 }
 
+# --with-* の選択に応じて書き出すテンプレートの相対パス。
+# 無条件のものは template_rel_paths() が持つ。両者を分けるのは、
+# tests/test-template-mirror.sh が「生成対象の全件」を抽出するとき、
+# 条件付きのものを取りこぼさないようにするため（あちらは 2 つの関数の本体を
+# 別々の書式で読む。1 つの関数へ混ぜると、条件行を抽出できず分類漏れが素通りする）。
+#
+# 判定は has_with に依るが、この関数の定義位置は has_with より前でよい。呼び出しは
+# 書き出し直前（メイン処理）で、そこでは両方とも定義済みになっている。
+#
+# 条件は if 文で書く。`has_with aws || has_with gcp && printf ...` の形は、bash では
+# || と && が同じ優先順位・左結合なので条件の意味自体は等価だが（実測）、どちらも
+# 偽のとき関数の終了ステータスが 1 になる。呼び出し側は下記のとおり
+# `{ template_rel_paths; conditional_template_rel_paths; } | sort` で集めており、
+# bootstrap.sh は set -euo pipefail なので pipefail がこの 1 をパイプライン全体の
+# 失敗へ持ち上げ、**装備を選んでいない構成で bootstrap がその場で停止する**
+# （実測: 何も出力しないまま終了コード 1）。if 文は条件が偽でも 0 を返すため起きない。
+conditional_template_rel_paths() {
+  # 外部層の受け入れ条件は、外部状態を持つ構成だけへ配る。cloud 装備を選んでいない
+  # 構成へ空の雛形を配ると、使わないファイルを消す作業をさせることになる。
+  if has_with aws || has_with gcp; then
+    printf '%s\n' 'scripts/acceptance-remote.sh'
+  fi
+}
+
 get_template_content() {
   local rel="$1"
   case "$rel" in
@@ -1646,6 +1670,118 @@ fi
 echo "[acceptance] OK"
 TMPL
       ;;
+    'scripts/acceptance-remote.sh')
+      # 外部層の雛形は骨格だけを持つ。何が外部状態かはプロジェクトごとに違うため、
+      # 具体的な検査を決め打つと必ず外れる。骨格（run ヘルパー・一時ログ・失敗の集計・
+      # 前提の記述位置）だけを配り、検査は利用側が足す。
+      cat <<'TMPL'
+#!/usr/bin/env bash
+# acceptance-remote.sh — 外部層の受け入れ条件（プロジェクトが所有・編集する）
+#
+# 受け入れ条件はローカル層と外部層に分かれる。
+#
+#   ローカル層（scripts/acceptance.sh）  ネットワークも外部認証も要さない検査。
+#                                        ループの接地信号。これが緑なら実装は前へ
+#                                        進んでよい。
+#   外部層（このファイル）               宣言（IaC 等）と実際の外部状態が一致して
+#                                        いるかの検査。外部認証とネットワークを要する。
+#
+# 起動方法:
+#   VERIFY_ACCEPTANCE=scripts/acceptance-remote.sh bash scripts/verify.sh
+#
+# scripts/loop-gate.sh へは含めない:
+#   あちらは push / PR 前の単一入口だが、外部層をそこへ入れると、認証の失効や
+#   オフラインでゲート全体が止まる。実装が正しいのにループが止まる状態を作らない。
+#   単一入口の目的は「複数の検査を別々に思い出す運用は破綻する」ことを機構で塞ぐ
+#   ことであって、外部の可用性をゲートの前提条件に持ち込むことではない。
+#
+# 通す契機:
+#   外部状態の宣言を変更したとき。反復のたびに回す層ではない。
+#
+# 前提:
+#   対象サービスへ認証済みであること。このスクリプトは認証を行わない（資格情報を
+#   スクリプトへ書き写す経路を作らないため）。未認証やオフラインで回すと個々の検査が
+#   失敗するが、それは「宣言と外部状態が食い違っている」ことを意味しない。前提の
+#   不成立と実際の乖離を読み分けられるよう、前提の確認（ログイン状態の検査など）を
+#   最初の検査として置くとよい。
+#
+# 終了コード: 0 = 合格 / 非0 = 不合格・未定義
+#
+# set -e は使わない。1 件目の失敗で止めず、全件を見てから落とすため。
+set -uo pipefail
+
+# 検証はプロジェクトルート基準で行う。scripts/ の 1 階層上がルート。
+# 任意の作業ディレクトリから起動しても結果が不変になるよう、起動時 CWD に依存しない。
+#
+# set -e を使わないため、失敗しうる代入には個別にガードを置く。HERE の解決に失敗
+# しても止めないと、空の HERE に対して dirname が "." を返し、続く cd が「成功」して
+# ガードを素通りする（実測: dirname "" = "." で cd は 0）。ルートへ移れていないのに
+# 検査を始めると、相対パスが別の場所を指したまま合否を出すことになる。
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" || exit 1
+cd "$(dirname "$HERE")" || exit 1
+
+echo "[acceptance-remote] external state checks"
+
+# 実際に検査を 1 つでも実行したか。1 つも実行できなければ「合格」ではなく失敗にする。
+# 検証していないことを合格として報告するのが最悪であるため。
+ran_any=0
+# 失敗件数。外部状態の乖離は複数箇所へ同時に出ることが多く、1 件ずつ往復すると
+# 回数だけ増える。
+failed=0
+
+# 各検査の出力を退避する一時ログ。mktemp のテンプレートで作り、$$ 由来の予測可能な
+# 名前は使わない（同名を先に置かれると書き込み先を乗っ取られる）。
+#
+# ここも代入ガードを置く（set -e が無いため）。作成に失敗したまま進むと LOG が空になり、
+# run の中の >"$LOG" が必ず失敗して、実行できていない検査が「失敗した検査」として
+# 報告される（実測: 空の対象へのリダイレクトは rc=1）。原因の異なる赤を同じ形で
+# 出さないよう、ここで落とす。
+LOG="$(mktemp "${TMPDIR:-/tmp}/acceptance-remote.XXXXXX")" || exit 1
+trap 'rm -f "$LOG"' EXIT
+
+# ラベル付きで 1 件実行する。成功時は出力を捨て、失敗したときだけ出力を見せる。
+# 正常な実行の出力で画面が埋まると、失敗の位置が読めなくなる。
+#
+#   run "<ラベル>" <コマンド> [引数...]
+#
+# サブシェル（パイプの構成要素・コマンド置換・( ) の中）から呼ばないこと。
+# ran_any と failed の更新が親へ伝わらず、実行したのに「未定義」、失敗したのに
+# 合格という報告になる。
+run() {
+  local label="$1"
+  shift
+  ran_any=1
+  printf '[acceptance-remote] %s\n' "$label"
+  if "$@" >"$LOG" 2>&1; then
+    return 0
+  fi
+  failed=$((failed + 1))
+  printf '[acceptance-remote] FAIL: %s\n' "$label" >&2
+  sed 's/^/    /' "$LOG" >&2
+  return 1
+}
+
+# ── ここへ外部状態の検査を足す ────────────────────────────────────────────────
+#
+# 宣言と実体が一致しているかを見る形にする（例: 宣言の差分検出コマンドが差分なしを
+# 返すこと、宣言したリソースが実在すること）。検査を足すまで、このスクリプトは
+# 下の判定で失敗する。未定義を合格として報告しないため。
+
+if [[ "$ran_any" -eq 0 ]]; then
+  echo "[acceptance-remote] 外部層の受け入れ条件が未定義です。検査を 1 つも実行していません。" >&2
+  echo "[acceptance-remote] 宣言と実際の外部状態を照合する検査を scripts/acceptance-remote.sh へ定義してください。" >&2
+  exit 1
+fi
+
+if [[ "$failed" -gt 0 ]]; then
+  echo "[acceptance-remote] $failed 件の検査が失敗しました。" >&2
+  echo "[acceptance-remote] 対象サービスへ認証済みか、ネットワークへ到達できるかを先に確認すること。" >&2
+  exit 1
+fi
+
+echo "[acceptance-remote] OK"
+TMPL
+      ;;
     # 範囲選択の回帰テストは生成先へ配らない（#242 の判断）。生成先の scripts/ は
     # プロジェクトが所有する運用スクリプトの置き場であり、この配布物の内部実装に
     # 対する回帰テストを置くと、プロジェクトが所有すべきでないものを持たせること
@@ -2882,8 +3018,10 @@ if should_install_playbook; then
   resolve_playbook_source_or_die
 fi
 
-# 生成する相対パスを収集してソートする（bash 3 互換）
-sorted_rels="$(template_rel_paths | sort)"
+# 生成する相対パスを収集してソートする（bash 3 互換）。無条件ぶん（template_rel_paths）と
+# --with-* 条件ぶん（conditional_template_rel_paths）を 1 つの一覧へまとめる。ここで
+# 合流させるので、dry-run の計画と実際の書き込みは条件付きファイルでも一致する。
+sorted_rels="$( { template_rel_paths; conditional_template_rel_paths; } | sort)"
 
 if [[ "$DRY_RUN" == "true" ]]; then
   echo "[bootstrap] dry-run: no files will be written"
