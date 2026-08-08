@@ -110,4 +110,70 @@ for f in .ai-playbook/shared-ai-rules.md .ai-playbook/role-contracts/planner.md 
 done
 if [[ -z "$missing" ]]; then pass; else fail "参照先が不在:$missing"; fi
 
+# ── 雛形が書く --with-* フラグ名が実装に存在する ──────────────────────────────
+#
+# 雛形の本文は bootstrap.sh のフラグ名を書き写している。書き写した一覧は必ず古く
+# なる（shared-ai-rules.md 12 章「一覧の複製は機械照合で担保する」）。実例として、
+# --with-copilot からリモートレビュー機構を --with-copilot-review へ分離したあと、
+# 雛形は旧名のまま残り、両パッケージのテストは緑のままだった。旧名は今も受理される
+# ため、利用者は「指定したのにワークフローが置かれない」ことに気づけない。
+#
+# **検知するもの**: 雛形の *.md 本文に現れる --with-<名前> が、bootstrap.sh の引数
+# パースが受理しないフラグ名であること。改名・廃止・打ち間違いが該当する。
+#
+# **検知しないもの**（塞げていないので、塞げているかのように読まないこと）:
+#   - フラグと配置物の対応。「--with-X で Y が置かれる」の Y が誤っていても通る。
+#     ここまで照合するには雛形の自然文を解析することになり、書き方の変更で壊れる
+#     脆い検査になるため、意図して範囲外にしている。上記の分離のような改名の
+#     取りこぼしは、名前の存在だけを見ても捕まる。
+#   - 記載の欠落。雛形が触れるべきフラグに触れていなくても通る（書かれていない
+#     ものは抽出されない）。
+#   - *.md 以外の雛形（*.yml / *.sh）の本文。
+#
+# 実装側の抽出は lib.sh の impl_flags() を使う（test-readme-flags.sh と共用）。
+# 抽出のアンカーを 2 か所に持つと、片方だけが bootstrap.sh の変更に追随して、
+# もう片方が黙って空を返す。
+
+it "bootstrap.sh の引数パースから --with-* の受理集合を抽出できる"
+# 抽出が空になると、以降の照合は「空集合に含まれるかを誰にも問わない」形で緑に
+# なる。アンカーの書式が変わったときに黙って無効化されないよう、先に検査する。
+accepted_with="$(impl_flags | grep '^--with-' || true)"
+if [[ -n "$accepted_with" ]]; then
+  pass
+else
+  fail "引数パースから --with-* を抽出できなかった（while ループか case ラベルの書式が変わった可能性）"
+fi
+
+it "雛形の本文から --with-* の言及を抽出できる"
+# こちらも空抽出で素通ししない。雛形からフラグの案内を意図して消した場合は、この
+# 検査が何も守らなくなるので、消した側が判断して書き換えること。
+# `--with-*` のようなワイルドカード表記は拾わない（名前を 1 文字以上要求する）。
+mentioned_with="$(grep -oh -- '--with-[a-z0-9][a-z0-9-]*' "$TPL"/*.md 2>/dev/null | sort -u)"
+if [[ -n "$mentioned_with" ]]; then
+  pass
+else
+  fail "雛形の *.md に --with-* の言及が 1 つも無い（案内を消したなら本検査の要否を見直す）"
+fi
+
+it "雛形が書く --with-* フラグ名がすべて bootstrap.sh に実在する"
+if [[ -z "$accepted_with" || -z "$mentioned_with" ]]; then
+  fail "前段の抽出に失敗しているため照合できない"
+else
+  unknown=""
+  for flag in $mentioned_with; do
+    if ! printf '%s\n' "$accepted_with" | grep -qx -- "$flag"; then
+      # どの雛形に書かれているかまで出す。雛形は複数あり、名前だけでは直す先が
+      # 分からない。
+      where="$(grep -l -- "$flag" "$TPL"/*.md 2>/dev/null | xargs -n1 basename 2>/dev/null | tr '\n' ' ')"
+      unknown="$unknown $flag($where)"
+    fi
+  done
+  if [[ -z "$unknown" ]]; then
+    pass
+  else
+    fail "bootstrap.sh が受理しないフラグ名を雛形が書いている:$unknown
+     受理集合: $(printf '%s' "$accepted_with" | tr '\n' ' ')"
+  fi
+fi
+
 exit_with_result
