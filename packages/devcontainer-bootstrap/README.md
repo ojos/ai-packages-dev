@@ -183,7 +183,7 @@ tar -xzf PACKAGE_ARCHIVE.tar.gz
 - **`--with-copilot-review` は規範の配置が前提**: 配置するワークフローの雛形は規範パッケージが持つため、規範を配置しない構成では供給元がありません。`--with-playbook` / `--playbook-version` / `--playbook-from` のいずれも指定せずに（または `--without-playbook` と併せて）指定すると、**ファイルを 1 つも書かずに**エラー終了します。
 - **Terraform は cloud 随伴**: `--with-aws` または `--with-gcp` のいずれかを指定すると、Terraform feature + `hashicorp.terraform` 拡張が **1 回だけ** 同梱されます（両指定でも 1 回、cloud 無指定なら入りません）。
 - **AI ツールは明示 opt-in のみ**: `--with-<ai>` を指定したときだけ、CLI 導入・VS Code 拡張・設定ディレクトリの永続化（compose named volume）を行います。トークン有無による自動導入は行いません。
-- **資格情報はホストから注入しません**: `remoteEnv` が運ぶのは作業ディレクトリのパス（`LOCAL_WORKSPACE_FOLDER`）だけです。認証はコンテナ内で行い、その状態を named volume に残します（下記「資格情報の扱い」）。
+- **資格情報はホストから注入しません**: `remoteEnv` が運ぶのは作業ディレクトリのパス（`LOCAL_WORKSPACE_FOLDER`）だけです。認証はコンテナ内で行い、その状態を named volume に残します。唯一の例外は GitHub CLI で、PAT を `.env` の `GH_TOKEN` へ置けます（下記「[資格情報の扱い](#資格情報の扱い)」）。
 
 ### オプション入力
 - `--output-dir <path>`（既定: カレントディレクトリ直下に `<project-name>/` を作成して展開）
@@ -394,16 +394,57 @@ gcloud auth login             # --with-gcp のとき（gcloud-storage）
 
 | 種類 | 供給元 | 永続化 |
 |---|---|---|
-| 認証（GitHub / cloud / AI CLI） | **コンテナ内でのログイン**（`gh auth login` / `aws sso login` / `gcloud auth login` / `claude /login`） | named volume（`gh-storage` / `aws-storage` / `gcloud-storage` / `<ai>-storage`）。リビルドを跨いで残る |
+| 認証（GitHub / cloud / AI CLI） | **コンテナ内でのログイン**（`gh auth login` / `aws sso login` / `gcloud auth login` / `claude /login`）。GitHub だけは `.env` の `GH_TOKEN` で PAT に固定する経路もあります（[理由](#github-認証だけが例外である理由)）。`GITHUB_TOKEN` は[供給元にしません](#github_token-は設定しない) | named volume（`gh-storage` / `aws-storage` / `gcloud-storage` / `<ai>-storage`）。リビルドを跨いで残る |
 | プロジェクト固有値（API キー・コミット identity） | **プロジェクトの `.env`**（雛形: 生成される `.env.example`） | ファイルとして目に見える。`scripts/load-project-env.sh` が読む |
 
 `.env.example` が持つキー:
 
 - `GEMINI_API_KEY` — 第二意見レビュー（`scripts/gemini-review.sh`）が読みます。
+- `GH_TOKEN` — GitHub の PAT。**上表の「コンテナ内でのログイン」に対する唯一の例外**です（下記「[GitHub 認証だけが例外である理由](#github-認証だけが例外である理由)」）。空にすれば従来どおり `gh auth login` の保存済み認証で動きます（**`GITHUB_TOKEN` も未設定であることが条件**。下記「[`GITHUB_TOKEN` は設定しない](#github_token-は設定しない)」）。
 - `GIT_IDENTITY_NAME` / `GIT_IDENTITY_EMAIL` — コミット identity。`scripts/setup-git-identity.sh` が local へ適用します。
   - `GIT_AUTHOR_NAME` / `GIT_AUTHOR_EMAIL` という名前を使わないのは、それが **git 自身の読む環境変数**だからです。環境に置くと local 設定を持たないリポジトリでも identity が解決でき、`user.useConfigOnly` による保護（未設定なら commit を止める）が無効になります。
 
-`GH_TOKEN` / `GITHUB_TOKEN` を恒久的に設定しないでください。gh に登録済みのアカウントより優先され、コンテナ内のログイン状態が無視されます。
+### GitHub 認証だけが例外である理由
+
+トークンをファイルへ書き写さず、ツール自身のログイン状態に持たせるのがこのパッケージの原則です。**GitHub CLI だけはこの原則の例外**として、PAT を `.env` の `GH_TOKEN` へ置く経路を用意します。
+
+gh の OAuth App には「ユーザー × アプリ × scope あたり 10 トークン」の上限があります。上限に達した状態でどこかの環境が認証すると、GitHub が既存のトークンを 1 本破棄します（理由コード `max_for_app`）。溜まる単位は環境ではなく**認証の回数**で、`gh auth login` も `gh auth refresh` も自分の古い枠を返しません。失効に気づいた環境が再認証し、それがまた別の環境を失効させる連鎖になるため、**運用ルールでは回避できません**。作業中に `HTTP 401: Bad credentials` が繰り返し出る体感の正体がこれです。PAT は OAuth App の認可ではないため、この枠の外にあります。
+
+| `GH_TOKEN` | 使われる資格情報 | `gh auth login` | 上限枠の消費 |
+|---|---|---|---|
+| 空（かつ `GITHUB_TOKEN` も空） | `hosts.yml` の OAuth トークン | できる | する |
+| PAT | PAT に固定 | 使えない（env が優先） | しない |
+
+- **名前は gh 自身が読む `GH_TOKEN` をそのまま使います。** `GIT_IDENTITY_*` を別名にしているのと方針が逆に見えますが、理由が違います。git は自身が読む名前を環境へ置くと `user.useConfigOnly` の保護が無効になるため別名にします。gh には、環境変数を置くことで無効化される保護がありません。別名にすると受け渡しの仕掛けを足すだけになります。
+- **PAT を設定しているあいだ `gh auth login` は使えません。これは制約ではなく安全装置です。** うっかり再認証して他環境のトークンを殺す事故が構造的に起きなくなります。gh 2.96.0 で実測したところ、値が設定されているあいだ gh はログインを拒否します（`--with-token` / `--web` のいずれでも `The value of the GH_TOKEN environment variable is being used for authentication.` で終了し、通信もしません）。危ないのはその先で、拒否メッセージ（`first clear the value from the environment`）に従って値を空にしてログインすると、上限枠を 1 つ消費します。
+- **`GH_TOKEN` が空の環境は従来どおり**保存済み認証で動きます（`GITHUB_TOKEN` も未設定である場合。下記）。PAT を持たない利用者を壊しません。
+- 発行手順と必要権限は、対象リポジトリと行う操作で変わるため、このパッケージは決め打ちしません。プロジェクト層（`.ai-playbook/templates/project-ai-rules.md` の「機密の具体化」）に記述してください。
+
+### `GITHUB_TOKEN` は設定しない
+
+**`GITHUB_TOKEN` を恒久的に設定しないでください。** gh に登録済みのアカウントより優先され、コンテナ内のログイン状態が無視されます。`GH_TOKEN` と違い、この経路はこのパッケージが供給元として想定していません。
+
+**`GH_TOKEN` を空にすることは `GITHUB_TOKEN` に対する盾になりません。** gh は `GH_TOKEN` → `GITHUB_TOKEN` の順に環境変数を読み、**空文字だけを読み飛ばして次へ落ちます**。gh 2.96.0 で実測した結果は次のとおりです（`hosts.yml` にログイン済みの状態）。
+
+| `GH_TOKEN` | `GITHUB_TOKEN` | `gh api user` の結果 |
+|---|---|---|
+| 未設定 | 未設定 | 成功（`hosts.yml` の保存済み認証） |
+| 空 | 未設定 | 成功（保存済み認証へフォールバック） |
+| 未設定 | 空 | 成功（保存済み認証へフォールバック） |
+| 未設定 | 非空（無効値） | **失敗** `Bad credentials` |
+| 空 | 非空（無効値） | **失敗** `Bad credentials` |
+| 非空（無効値） | 非空 | **失敗**（`gh auth status` は `GH_TOKEN` 側を報告する） |
+
+境界は「未設定かどうか」ではなく「**空でない値かどうか**」です。生成される `scripts/on-attach.sh` の判定もこの境界に合わせており、`GITHUB_TOKEN` が効いている場合は「保存済み認証を使用」とは報告せず、優先されている旨を WARN で知らせます。認証を確認できないときも `gh auth login` を案内しません（案内すると、値を空にして再ログインする手順へ誘導することになるためです）。
+
+### 接続時の gh 認証チェック
+
+`scripts/on-attach.sh` は接続のたびに `gh auth status --active` を実行します。
+
+- **`--active` を付けます。** 環境変数のトークンと `hosts.yml` の保存済み認証は共存しうるため、付けないと gh は両方を並べて報告し、**使っていない側が無効なだけで exit=1** になります。判定したいのは「いま使われている資格情報が有効か」だけです。
+- **「到達できない」とも「認証が無効」とも断定しません。** gh の出力では両者を区別できないことを実測しています（到達できないときも `The token in GH_TOKEN is invalid.` と言います）。到達性を `/dev/tcp` で自前に測る案は採っていません。測れるのは直接経路だけで、gh が使うのはプロキシ経路です。プロキシ経由でしか外へ出られない環境では直接接続が塞がれ、疎通しているのに「到達できません」と誤判定します。断定できるのは打ち切り（`timeout` の exit 124）だけなので、そこだけを分けて報告します。
+- **環境変数で認証しているあいだ（`GH_TOKEN` / `GITHUB_TOKEN` のいずれかが非空）は `gh auth login` を案内しません。** gh 自身が値の設定中はログインを拒否するため案内が空振りするうえ、拒否メッセージに従って値を空にしてログインすると上限枠を 1 つ消費し、上限に達していれば他環境のトークンが 1 本失効します。
+- `on-attach.sh` は自分自身でも `scripts/load-project-env.sh` を読みます。rc への注入は「これから開く対話シェル」にしか効かず、`bash` で実行される `on-attach.sh` 自身には届かないためです。読まないと `GH_TOKEN` が常に空に見え、PAT モードの利用者へ `gh auth login` を案内してしまいます。
 
 ### ホスト側 VS Code に必要な設定
 
