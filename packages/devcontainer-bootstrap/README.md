@@ -429,7 +429,14 @@ VS Code は接続のたびにコンテナの `~/.docker/config.json` へ `credsS
   - global の `user.name` / `user.email` を削除し、`user.useConfigOnly=true` を立てます。これにより **local 設定を持たないリポジトリでは `git commit` が exit 128 で停止**します（黙って別名義になるより止まって気づく）。
   - 当リポジトリの local へ、`.env` の `GIT_IDENTITY_NAME` / `GIT_IDENTITY_EMAIL` を適用します。未設定なら local 適用はスキップし WARN に留めます。
   - global の `credential.helper` を「空 → `!gh auth git-credential`」の順に固定します。git はヘルパーを定義順に試し、**空文字は一覧をリセットする**ため、この順序だと `/etc/gitconfig` 側やエディタが注入したヘルパーが応答しなくなります。資格情報の供給元がコンテナ内の `gh` だけに絞られます。
-  - 冪等です（2 回実行しても git config は不変）。`bash scripts/setup-git-identity.sh --check` で状態を検証できます。`--check` は identity に加えて、上記の固定順序と「local 設定を持たない一時リポジトリでの実効ヘルパーが `gh` のみであること」も検査します。`gh` を呼ばないためオフラインでも動きます。
+  - 冪等です（2 回実行しても git config は不変）。`bash scripts/setup-git-identity.sh --check` で状態を検証できます。`gh` を呼ばないためオフラインでも動きます。`--check` が出力する項目は次のとおりです。
+    - global の `user.name` / `user.email` が未設定であること、`user.useConfigOnly=true` であること。
+    - 当リポジトリの local identity が `.env` の値と一致し、author identity を解決できること。
+    - local 設定を持たない一時リポジトリで author identity の解決が**失敗する**こと。
+    - global の `credential.helper` が「空 → `gh`」の順に固定されていること。
+    - local 設定を持たない一時リポジトリでの実効ヘルパーが `gh` のみであること。
+    - **system スコープ（`/etc/gitconfig` 等）の `credential.helper` の検出結果**。あれば `INFO` として列挙し、無ければ `OK` を出します。上の 2 項目は global と実効値しか見ないため、system に何が置かれていても出力に現れないので別に出します。**判定には影響させません**（`INFO` が出ても `--check` は成功します）。実効値からは外れており遮断は成立していること、置く側が接続のたびに書き戻す構成では常時検出され続けること、そして**誰がいつ置いたかはこの検査からは判定できない**ことが理由です。恒常的な赤は「赤を無視する習慣」を生むため、事実の提示に留めます。
+    - 冪等性（再適用で global 設定ファイルが 1 バイトも変わらないこと）。先行する検査が失敗している場合は実行しません。
   - `on-attach.sh` からの呼び出しは、失敗しても **on-attach 全体を落としません**（WARN と `--check` の案内に留める）。
 - `scripts/verify-commit-identity.sh`（検証。CI と手元で共用）
   - コミット履歴の author / committer / Co-Authored-By を **email のみ**で判定します（name は表記揺れで判定に使わない）。許可外の author email を含む範囲で exit 1。

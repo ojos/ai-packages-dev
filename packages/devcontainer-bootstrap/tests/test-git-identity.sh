@@ -139,6 +139,48 @@ else
   fail "--check が非ゼロ終了 (rc=$crc): $(printf '%s' "$co" | tail -1)"
 fi
 
+# ── system スコープの credential.helper の可視化 ──────────────────────────────
+# --check の 6) は global、7) は実効値しか見ないため、system に置かれたヘルパーは
+# どちらの出力にも現れない。遮断は 7) が実測しているので、ここで固定するのは
+# 「存在の事実が出力に現れること」と「それで判定が変わらないこと」の 2 点。
+#
+# system スコープを実際に書き換えない。/etc/gitconfig はランナー共有で、テストが
+# 触ると他のジョブや利用者の環境まで巻き込む。git 自身の差し替え口である
+# GIT_CONFIG_SYSTEM を一時ファイルへ向ける（このファイルは冒頭で既にサンドボックス
+# 用に /dev/null へ向けてあり、同じ機構の延長で書ける）。検査部分を関数として
+# 切り出して単体で呼ぶ案は採らない。ここで見たいことの半分は「--check が失敗しない」
+# ことであり、それは --check を丸ごと通さないと確かめられない。
+it "system に credential.helper が無ければ OK を出す"
+# サンドボックスの GIT_CONFIG_SYSTEM は /dev/null。前段の --check 出力を再利用する。
+assert_contains "$co" "OK  system スコープに credential.helper は無い" "--check 出力"
+
+it "system に credential.helper があれば INFO として列挙する"
+sysconf="$SB/fake-system-gitconfig"
+printf '[credential]\n\thelper = !fake-system-helper\n' > "$sysconf"
+so="$(cd "$r" && env GIT_CONFIG_SYSTEM="$sysconf" bash scripts/setup-git-identity.sh --check 2>&1)"; src=$?
+assert_contains "$so" "INFO   !fake-system-helper" "--check 出力"
+
+it "system に credential.helper があっても --check は失敗しない"
+# 置く側が接続のたびに書き戻す構成では常時検出され続ける。ここを失敗にすると
+# 常時赤になり、赤を無視する習慣を生む。判定へ影響させないことをここで固定する。
+if [[ "$src" -eq 0 ]]; then
+  assert_contains "$so" "IDENTITY_SETUP_OK" "--check 出力"
+else
+  fail "system helper の検出で --check が落ちた (rc=$src): $(printf '%s' "$so" | tail -1)"
+fi
+
+it "system の credential.helper が空文字でも「無い」と誤判定しない"
+# `helper = ` に対して --get-all は空行 1 件を返す。これをコマンド置換で 1 つの
+# 文字列として受けると末尾改行が落ち、「1 件ある」と「0 件」が区別できなくなる。
+# キーがあるのに OK を出すのは、この検査が唯一報告すべきことを取り違えた状態。
+printf '[credential]\n\thelper = \n' > "$sysconf"
+eo="$(cd "$r" && env GIT_CONFIG_SYSTEM="$sysconf" bash scripts/setup-git-identity.sh --check 2>&1)"; erc=$?
+if [[ "$erc" -eq 0 ]]; then
+  assert_contains "$eo" "INFO   <空文字>" "--check 出力"
+else
+  fail "空文字の system helper で --check が落ちた (rc=$erc): $(printf '%s' "$eo" | tail -1)"
+fi
+
 # ── local 未設定リポジトリでの commit 失敗（本題） ────────────────────────────
 it "local 設定を持たない別リポジトリでは git commit が非ゼロで失敗する"
 nr="$(new_workdir)/nr"; mkdir -p "$nr"; ( cd "$nr" && git init -q )
