@@ -37,11 +37,22 @@
 #      あとで写しを置いたら理由は成立しなくなるため、そのときは MIRRORED へ移す
 #      判断を強制する（置いた側が気づかないまま、照合されない写しが増えるのを防ぐ）。
 #
-# scripts/ 以外のテンプレート（.env.example / .devcontainer/* / identity-guard.yml）を
-# 対象にしない理由: いずれも生成時の置換またはプロジェクト側の編集を前提とする。
-# 本テストが扱うのは「同じシェルスクリプトが 2 か所にあることによる追随漏れ」で、
-# それらは構造が異なる。scripts/gemini-review.sh も対象外で、正本は
-# .ai-playbook/templates/gemini-review.sh 側にありヒアドキュメント方式ではない。
+# scripts/ 以外のテンプレートを対象にしない理由は 2 つに分かれる。混ぜて 1 文で
+# 済ませると、後者が「理由の書かれていない除外」に見える（#250 で実際に読み落ちた）。
+#
+#   .env.example / .devcontainer/* / .github/workflows/identity-guard.yml
+#       正本は bootstrap.sh のヒアドキュメントにあるが、いずれも生成時の置換または
+#       プロジェクト側の編集を前提とする。本テストが扱うのは「同じシェルスクリプトが
+#       2 か所にあることによる追随漏れ」で、これらは構造が異なる。
+#
+#   gemini-review.sh / copilot-review.yml / review-gate.yml
+#       正本が規範パッケージ（.ai-playbook/templates/）側にある。bootstrap.sh は
+#       ヒアドキュメントを持たず require_playbook_template でコピーするだけなので、
+#       template_rel_paths() にも載らず、ここの抽出経路（case ラベル + cat <<'TMPL'）に
+#       そもそも乗らない。うち .yml の 2 本はこのリポジトリ自身が逐語の写しを
+#       .github/workflows/ に持つため、tests/test-workflow-mirror.sh が正本を
+#       規範パッケージ側に取って別に照合する（#250）。gemini-review.sh の写しは
+#       CLI の導入手段を案内する 1 行だけ雛形と異なるため、逐語一致の対象ではない。
 #
 # 末尾改行の差は許容する。ヒアドキュメントは必ず改行で終わり、写しは末尾改行を
 # 持たない場合がある。この差はシェルの挙動に影響せず、ここで落としても直す先が
