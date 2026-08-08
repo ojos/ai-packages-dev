@@ -38,13 +38,17 @@ else
   fail "docker のリッチさが標準化されていない"
 fi
 
-it "素の生成物に開発補助ツール（ripgrep / tmux）が常時同梱される"
+it "素の生成物に開発補助ツール（ripgrep / shellcheck / tmux）が常時同梱される"
 # ripgrep と同様、tmux も装備フラグに依らず常時同梱する（--with-* の意味論を広げない）。
+# 静的解析器 shellcheck も同じ扱いにする。生成物が配る scripts/* は選択言語や装備フラグに依らず
+# 必ずシェルスクリプトであり、受け入れ条件の雛形が静的解析を前提にできる価値が
+# feature 1 つぶんのビルド時間を上回るため、フラグ待ちにしない。
 if has_feature "$dc" "ghcr.io/devcontainers-extra/features/ripgrep:1" \
+   && has_feature "$dc" "ghcr.io/devcontainers-extra/features/shellcheck:1" \
    && has_feature "$dc" "ghcr.io/devcontainers-extra/features/tmux-apt-get:1"; then
   pass
 else
-  fail "ripgrep / tmux が常時同梱されていない"
+  fail "ripgrep / shellcheck / tmux が常時同梱されていない"
 fi
 
 it "生成された devcontainer.json は妥当な JSON である"

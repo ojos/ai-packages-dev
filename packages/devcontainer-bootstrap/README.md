@@ -362,7 +362,9 @@ gcloud auth login             # --with-gcp のとき（gcloud-storage）
 ## Feature フラグ
 
 常に導入する feature（既定）:
-- `common-utils` / `docker-outside-of-docker`（buildx + compose-switch を標準装備）/ `ripgrep` / `tmux` / `github-cli`
+- `common-utils` / `docker-outside-of-docker`（buildx + compose-switch を標準装備）/ `ripgrep` / `shellcheck` / `tmux` / `github-cli`
+
+`shellcheck` は `--with-*` ではなく常時導入です。生成物が配る `scripts/*` は選択言語や装備フラグに依らず必ずシェルスクリプトであるため、`scripts/acceptance.sh` を編集して受け入れ条件に `shellcheck scripts/*.sh` を加える判断を、各プロジェクトが導入手順から始めずに済むようにしています。配布するスクリプトは素の状態で `shellcheck -S warning` を通ります（`tests/test-generated-shellcheck.sh` が生成物に対して検査しています）。
 
 条件付き feature:
 - `node` / `go` / `python` / `php` / `rust` / `ruby`（`--languages` に含む場合。`python` は uv を `toolsToInstall` に同梱）
