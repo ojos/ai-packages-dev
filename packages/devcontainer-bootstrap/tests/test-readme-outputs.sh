@@ -3,7 +3,7 @@
 #
 # 一覧は利用者が「何が自分のリポジトリへ書き込まれるか」を事前に知る唯一の手段で、
 # レビュー時の差分の当たりもここから付ける。載っていない生成物（install-ai-tools.sh /
-# gemini-review.sh / .ai-playbook/VERSION が実際にこの状態だった）は不意打ちになり、
+# second-opinion-review.sh / .ai-playbook/VERSION が実際にこの状態だった）は不意打ちになり、
 # 生成しないものの記載（「README のセットアップ節更新」）は「書き換えられた」という
 # 誤解を生む。
 #

@@ -19,7 +19,7 @@ model: haiku
 
 - コードの編集。`tools` から `Edit` / `Write` / `NotebookEdit` を外し、専用の編集経路を塞ぐ。
 - 設計判断・優先度判断。判断材料を返すところまでを担う。
-- レビュー（差分の良し悪しの評価）。これは呼び出し元と `scripts/gemini-review.sh` が担う。
+- レビュー（差分の良し悪しの評価）。これは呼び出し元と `scripts/second-opinion-review.sh` が担う。
 
 ### 編集不可は機構では完結しない
 

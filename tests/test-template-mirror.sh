@@ -51,14 +51,15 @@
 #       存在しないので、上の「写し無し」の分類ではなく抽出対象そのものから外れる
 #       （網羅性検査の左辺は scripts/ に限っている）。
 #
-#   gemini-review.sh / copilot-review.yml / review-gate.yml
+#   second-opinion-review.sh / copilot-review.yml / review-gate.yml
 #       正本が規範パッケージ（.ai-playbook/templates/）側にある。bootstrap.sh は
 #       ヒアドキュメントを持たず require_playbook_template でコピーするだけなので、
 #       template_rel_paths() にも載らず、ここの抽出経路（case ラベル + cat <<'TMPL'）に
 #       そもそも乗らない。うち .yml の 2 本はこのリポジトリ自身が逐語の写しを
 #       .github/workflows/ に持つため、tests/test-workflow-mirror.sh が正本を
-#       規範パッケージ側に取って別に照合する（#250）。gemini-review.sh の写しは
-#       CLI の導入手段を案内する 1 行だけ雛形と異なるため、逐語一致の対象ではない。
+#       規範パッケージ側に取って別に照合する（#250）。second-opinion-review.sh の写しは
+#       CLI の導入手段を案内する行（エンジンごとに 1 行、計 2 行）だけ雛形と異なるため、
+#       逐語一致の対象ではない。
 #
 # 末尾改行の差は許容する。ヒアドキュメントは必ず改行で終わり、写しは末尾改行を
 # 持たない場合がある。この差はシェルの挙動に影響せず、ここで落としても直す先が

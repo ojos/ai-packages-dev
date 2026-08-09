@@ -36,7 +36,7 @@
 | `loop-workflow.md` | ループコーディング運用の規範（受け入れ検証の機械ゲート化・verify ランナー契約・収束） |
 | `loop-coding-guide.md` | ループコーディングの解説ガイド（従来ワークフローとの違い・考え方。`loop-workflow.md` の解説版） |
 | `intake/` | intake テンプレート、相談テンプレート、判定 reason code |
-| `templates/` | 導入用の雛形 6 種（`entry.md` 実行環境の入口ファイル / `project-ai-rules.md` プロジェクト共通ルール / `gemini-review.sh` 第二意見レビューの実装例 / `copilot-review.yml` リモート最終ゲートの要求側の実装例 / `review-gate.yml` リモート最終ゲートの確認側の実装例 / `claude-skill-intake.md` Claude Code の intake 起点スキル） |
+| `templates/` | 導入用の雛形 6 種（`entry.md` 実行環境の入口ファイル / `project-ai-rules.md` プロジェクト共通ルール / `second-opinion-review.sh` 第二意見レビューの実装例 / `copilot-review.yml` リモート最終ゲートの要求側の実装例 / `review-gate.yml` リモート最終ゲートの確認側の実装例 / `claude-skill-intake.md` Claude Code の intake 起点スキル） |
 | `.gitignore` | このパッケージを開発するときの追跡除外設定。規範ではないため配布・取り込みの対象外（`shared-ai-rules.md` 13 章） |
 
 共通ルールの補足として、AI からの質問は一問ずつ行い、各質問には意図を添え、回答は選択肢優先で提示します。
@@ -176,11 +176,13 @@ cp .ai-playbook/templates/entry.md .github/copilot-instructions.md
 
 ```bash
 mkdir -p scripts
-cp .ai-playbook/templates/gemini-review.sh scripts/
-chmod +x scripts/gemini-review.sh
+cp .ai-playbook/templates/second-opinion-review.sh scripts/
+chmod +x scripts/second-opinion-review.sh
 ```
 
-雛形は 1 つの実装例です。要件（別ベンダー・非対話・一意な通過出力）を満たせば別の手段でかまいません。
+雛形は 1 つの実装例です。要件（別ベンダー・非対話・**出力の最後の行に置く一意な判定トークン**）を満たせば別の手段でかまいません。
+
+この雛形は認証手段の違う 2 つの CLI から選べます（`--engine gemini|antigravity`。既定は `gemini`）。どの CLI をどう導入するかはプロジェクト層が決めます。判定ロジックはエンジンによらず 1 か所に集約してあり、エンジンごとに違うのは CLI 名・認証・差分の渡し方だけです。
 
 ### 5. intake 起点を配線する（Claude Code を使う場合・任意）
 
@@ -219,7 +221,7 @@ cp .ai-playbook/templates/review-gate.yml .github/workflows/review-gate.yml
 | 1. 規範を配置する | 実施する（`*.md` のみ。`README.md` と `CHANGELOG.md` は規範ではないため配布対象外） |
 | 2. 3 層構造を配線する | 実施する（`.github/project-ai-rules.md` と入口ファイル 2 種） |
 | 3. プロジェクト固有の値を埋める | **実施しない。** 内容の判断が必要で自動化できないため、生成後に手で埋める |
-| 4. 第二意見レビューを用意する | 実施する（`scripts/gemini-review.sh` を実行可能属性付きで配置） |
+| 4. 第二意見レビューを用意する | 実施する（`scripts/second-opinion-review.sh` を実行可能属性付きで配置） |
 | 5. intake 起点を配線する | Claude Code の装備を選んだ場合のみ実施する |
 | 6. リモート最終ゲートを配線する | 該当のレビュー機構を選んだ場合のみ実施する |
 

@@ -227,13 +227,13 @@ else
   assert_contains "$out_txt" "GATE_FAIL" "loop-gate 出力"
 fi
 
-it "第二意見（gemini-review.sh）が存在すれば直列化して通過する"
+it "第二意見（second-opinion-review.sh）が存在すれば直列化して通過する"
 out="$(new_workdir)/p"
 run_bootstrap "$out" >/dev/null 2>&1
 make_tracked_repo "$out"
 acc="$(new_workdir)/acc-pass.sh"; printf '#!/usr/bin/env bash\nexit 0\n' > "$acc"
-printf '#!/usr/bin/env bash\necho stub-lgtm\nexit 0\n' > "$out/scripts/gemini-review.sh"
-chmod +x "$out/scripts/gemini-review.sh"
+printf '#!/usr/bin/env bash\necho stub-lgtm\nexit 0\n' > "$out/scripts/second-opinion-review.sh"
+chmod +x "$out/scripts/second-opinion-review.sh"
 if out_txt="$(cd "$out" && VERIFY_ACCEPTANCE="$acc" bash scripts/loop-gate.sh 2>&1)"; then
   if printf '%s' "$out_txt" | grep -q 'stub-lgtm' && printf '%s' "$out_txt" | grep -q 'GATE_PASS'; then
     pass
@@ -248,8 +248,8 @@ it "第二意見が指摘を返すと GATE_FAIL"
 out="$(new_workdir)/p"
 run_bootstrap "$out" >/dev/null 2>&1
 acc="$(new_workdir)/acc-pass.sh"; printf '#!/usr/bin/env bash\nexit 0\n' > "$acc"
-printf '#!/usr/bin/env bash\necho stub-findings\nexit 1\n' > "$out/scripts/gemini-review.sh"
-chmod +x "$out/scripts/gemini-review.sh"
+printf '#!/usr/bin/env bash\necho stub-findings\nexit 1\n' > "$out/scripts/second-opinion-review.sh"
+chmod +x "$out/scripts/second-opinion-review.sh"
 if out_txt="$(cd "$out" && VERIFY_ACCEPTANCE="$acc" bash scripts/loop-gate.sh 2>&1)"; then
   fail "第二意見が指摘したのに通過: $out_txt"
 else
@@ -262,8 +262,8 @@ run_bootstrap "$out" >/dev/null 2>&1
 make_tracked_repo "$out"
 acc="$(new_workdir)/acc-pass.sh"; printf '#!/usr/bin/env bash\nexit 0\n' > "$acc"
 # reviewer が存在しても、空文字指定なら実行しない
-printf '#!/usr/bin/env bash\necho SHOULD_NOT_RUN\nexit 1\n' > "$out/scripts/gemini-review.sh"
-chmod +x "$out/scripts/gemini-review.sh"
+printf '#!/usr/bin/env bash\necho SHOULD_NOT_RUN\nexit 1\n' > "$out/scripts/second-opinion-review.sh"
+chmod +x "$out/scripts/second-opinion-review.sh"
 if out_txt="$(cd "$out" && LOOP_GATE_REVIEW_CMD='' VERIFY_ACCEPTANCE="$acc" bash scripts/loop-gate.sh 2>&1)"; then
   if printf '%s' "$out_txt" | grep -q 'GATE_PASS' && ! printf '%s' "$out_txt" | grep -q 'SHOULD_NOT_RUN'; then
     pass
@@ -275,7 +275,7 @@ else
 fi
 
 it "ステージが空の git リポジトリでは commit 済み範囲を第二意見へ渡す"
-# gemini-review.sh の既定対象はステージ済み差分で、空なら 0 を返す。commit 後に
+# second-opinion-review.sh の既定対象はステージ済み差分で、空なら 0 を返す。commit 後に
 # ゲートを回すと第二意見が実質スキップされたまま GATE_PASS が出る（偽の緑）。
 #
 # 範囲が渡ることだけでは足りない。reviewer は範囲を git diff に渡すため、
@@ -284,7 +284,7 @@ it "ステージが空の git リポジトリでは commit 済み範囲を第二
 out="$(new_workdir)/p"
 run_bootstrap "$out" >/dev/null 2>&1
 acc="$(new_workdir)/acc-pass.sh"; printf '#!/usr/bin/env bash\nexit 0\n' > "$acc"
-cat > "$out/scripts/gemini-review.sh" <<'STUB'
+cat > "$out/scripts/second-opinion-review.sh" <<'STUB'
 #!/usr/bin/env bash
 echo "REVIEW_ARGV:$*"
 if [[ "${1-}" == "--range" ]]; then
@@ -292,7 +292,7 @@ if [[ "${1-}" == "--range" ]]; then
 fi
 exit 0
 STUB
-chmod +x "$out/scripts/gemini-review.sh"
+chmod +x "$out/scripts/second-opinion-review.sh"
 (
   cd "$out" && git init -q && git add -A \
     && git -c user.name=T -c user.email=t@example.com commit -q -m c1
@@ -333,8 +333,8 @@ it "git 管理外のプロジェクトでは機密混入検査が成立せず GA
 out="$(new_workdir)/p"
 run_bootstrap "$out" >/dev/null 2>&1
 acc="$(new_workdir)/acc-pass.sh"; printf '#!/usr/bin/env bash\nexit 0\n' > "$acc"
-printf '#!/usr/bin/env bash\necho "REVIEW_ARGV:$*"\nexit 0\n' > "$out/scripts/gemini-review.sh"
-chmod +x "$out/scripts/gemini-review.sh"
+printf '#!/usr/bin/env bash\necho "REVIEW_ARGV:$*"\nexit 0\n' > "$out/scripts/second-opinion-review.sh"
+chmod +x "$out/scripts/second-opinion-review.sh"
 if out_txt="$(cd "$out" && VERIFY_ACCEPTANCE="$acc" bash scripts/loop-gate.sh 2>&1)"; then
   fail "git 管理外で通過してしまった: $out_txt"
 elif printf '%s' "$out_txt" | grep -q 'GATE_FAIL' \
@@ -406,7 +406,7 @@ run_bootstrap "$out" >/dev/null 2>&1
 acc="$(new_workdir)/acc-pass.sh"; printf '#!/usr/bin/env bash\nexit 0\n' > "$acc"
 # 範囲そのものに加えて、その範囲が指す差分の量と対象ファイルを stub 側で測る。
 # 範囲が渡るだけでは、空差分の素通りを塞げたことにならない。
-cat > "$out/scripts/gemini-review.sh" <<'STUB'
+cat > "$out/scripts/second-opinion-review.sh" <<'STUB'
 #!/usr/bin/env bash
 echo "REVIEW_ARGV:$*"
 if [[ "${1-}" == "--range" ]]; then
@@ -415,7 +415,7 @@ if [[ "${1-}" == "--range" ]]; then
 fi
 exit 0
 STUB
-chmod +x "$out/scripts/gemini-review.sh"
+chmod +x "$out/scripts/second-opinion-review.sh"
 make_pushed_repo "$out" feature
 if out_txt="$(cd "$out" && VERIFY_ACCEPTANCE="$acc" bash scripts/loop-gate.sh 2>&1)"; then
   lines="$(printf '%s' "$out_txt" | sed -n 's/^REVIEW_DIFF_LINES://p')"
@@ -444,8 +444,8 @@ it "レビュー対象が本当に無いときは、その旨を明示して GAT
 out="$(new_workdir)/p"
 run_bootstrap "$out" >/dev/null 2>&1
 acc="$(new_workdir)/acc-pass.sh"; printf '#!/usr/bin/env bash\nexit 0\n' > "$acc"
-printf '#!/usr/bin/env bash\necho REVIEW_INVOKED\nexit 0\n' > "$out/scripts/gemini-review.sh"
-chmod +x "$out/scripts/gemini-review.sh"
+printf '#!/usr/bin/env bash\necho REVIEW_INVOKED\nexit 0\n' > "$out/scripts/second-opinion-review.sh"
+chmod +x "$out/scripts/second-opinion-review.sh"
 make_pushed_repo "$out" main
 if out_txt="$(cd "$out" && VERIFY_ACCEPTANCE="$acc" bash scripts/loop-gate.sh 2>&1)"; then
   if printf '%s' "$out_txt" | grep -q 'no reviewable diff' \

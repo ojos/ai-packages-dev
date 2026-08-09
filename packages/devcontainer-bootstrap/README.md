@@ -214,7 +214,7 @@ tar -xzf PACKAGE_ARCHIVE.tar.gz
 
 - `--force` 未指定（既定）: 既に存在するファイルは `skip (exists): <path>` と表示して**そのまま温存**します。テンプレートを更新した DCB で再実行しても、生成済みファイルは古いままになります。
 - `--force` 指定: 既存ファイルを新しいテンプレートで**上書き**します。
-- `--playbook-conflict-policy` が効くのは**規範ファイル**（`.ai-playbook/**` / 入口ファイル / `scripts/gemini-review.sh` など）だけで、`.devcontainer/` や `scripts/` のテンプレート生成物には効きません。テンプレート生成物の上書きは `--force` が唯一の手段です。
+- `--playbook-conflict-policy` が効くのは**規範ファイル**（`.ai-playbook/**` / 入口ファイル / `scripts/second-opinion-review.sh` など）だけで、`.devcontainer/` や `scripts/` のテンプレート生成物には効きません。テンプレート生成物の上書きは `--force` が唯一の手段です。
 - `.gitignore` の managed セクションだけは `--force` に依らず毎回差し替えます（セクション外の行は保持）。
 - 何が書かれるかを先に確かめたい場合は `--dry-run` を使います。
 
@@ -235,7 +235,7 @@ tar -xzf PACKAGE_ARCHIVE.tar.gz
 | `.ai-playbook/VERSION` | 取り込んだ規範の出所（`version=` / `source=`）を on-disk に残す証跡。どの版の規範が入っているかを生成後の環境から照合できる |
 | `.github/project-ai-rules.md` | プロジェクト共通ルールの雛形 |
 | `CLAUDE.md` / `.github/copilot-instructions.md` | 実行環境の入口ファイル（3 層の優先順位を配線） |
-| `scripts/gemini-review.sh` | 第二意見レビューの実行体。`scripts/loop-gate.sh` が存在すれば自動で直列化する |
+| `scripts/second-opinion-review.sh` | 第二意見レビューの実行体。`scripts/loop-gate.sh` が存在すれば自動で直列化する。既定は `gemini` CLI（Antigravity CLI への切り替えにも対応するが、`agy` の導入はこの生成器の対象外） |
 | `.claude/skills/intake/SKILL.md` | Claude Code 向け intake 起点スキル（`--with-claude` 指定時のみ）。規範を複製せず `.ai-playbook/intake/` を参照するだけの薄いスキル |
 
 取得元は次の順で解決します。
@@ -275,14 +275,14 @@ AI エージェントの反復（実装 → 検証 → 修正 → …）を、**
   - monorepo など、各言語がルート直下ではなくサブディレクトリ（例 `apps/*`）に配置される構成では、生成直後は対象が見つからず「未定義」で失敗します。これは**意図した既定**であり、実配置のマニフェストを見るよう `acceptance.sh` を編集して受け入れ条件を確定させてください。
 - `verify.sh` の受け入れ定義は `VERIFY_ACCEPTANCE` 環境変数で差し替えできます（既定は `scripts/acceptance.sh`）。層を増やすときも同じランナーを使い、受け入れ定義だけを差し替えます（下記「受け入れ条件の二層」）。
 - `verify.sh` は受け入れ条件の**手前**で `scripts/check-no-secrets.sh` を実行します。`acceptance.sh` 側へ置かないのは、あちらがプロジェクトの所有物で受け入れ条件を書き足すたびに触られ、規範由来の検査が消える経路ができるためです。`check-no-secrets.sh` が不在なら `VERIFY_FAIL` で止まります（検査が成立していないことを合格にしないため）。**この検査は git を前提にします**（下記「[機密混入検査](#機密混入検査)」参照）。
-- `loop-gate.sh` の第二意見は、`scripts/gemini-review.sh` が存在すれば直列化し、無ければ優雅にスキップします。`LOOP_GATE_REVIEW_CMD` で任意のレビューコマンドへ差し替え、空文字で無効化できます。
+- `loop-gate.sh` の第二意見は、`scripts/second-opinion-review.sh` が存在すれば直列化し、無ければ優雅にスキップします。`LOOP_GATE_REVIEW_CMD` で任意のレビューコマンドへ差し替え、空文字で無効化できます。
 - 第二意見へ渡す**差分の範囲**は次の順で決まります。ステージ済み差分があるときはレビュー実行体の既定に委ね（範囲を渡しません）、空のときだけ commit 済み範囲へ切り替えます。切り替え先の既定は `@{upstream}..HEAD` で、下のいずれかに当たる場合は**既定ブランチとの分岐点（merge-base）を起点**にします。既定ブランチは `origin/HEAD` → `origin/main` → `origin/master` の順で解決し、汚染の判定と分岐点の算出は**同じ枝**を見ます（別々に決めると、汚染ありと判定した枝と分岐点を取った枝が別物になりうるため）。**上流以外を起点に採った場合は、その理由を 1 行出力します**（黙って範囲を変えると、なぜその差分が対象なのかを読み手が追えないため）。
   - **上流との差分が空**（push 済みで上流 == HEAD）。ここで空のまま第二意見を呼ぶと、一度も差分を見ないまま通過する偽の緑になります。
   - **上流が未設定**。
   - **`@{upstream}..HEAD` が既定ブランチへ到達可能なコミットを含む**（＝このブランチへ既定ブランチを取り込んだ直後）。`@{upstream}..HEAD` は 2 点間の比較なので、取り込んだ側のコミットがまるごと差分へ入り、既にレビューを通った他ブランチの成果を巻き込みます。判定は「マージコミットを含むか」ではなく到達可能性（`git rev-list --count <up>..HEAD` と `git rev-list --count <up>..HEAD ^<base>` の一致）で行うため、マージコミットを作らない fast-forward や rebase での取り込みも同じく検出します。なお squash / cherry-pick での取り込みは新しいコミットを作るだけで到達可能性を生まないため、どの起点を選んでも差分から外れません（範囲の選び方だけでは解けない制約です）。
   - 既定ブランチの追跡枝を解決できない環境では汚染を判定できないため、**従来どおり上流を使います**（判定不能を汚染扱いにすると、分岐点も取れないまま範囲を失うため）。
 - `loop-gate.sh` は source ガードを持ち、`source`（`.`）で読み込んだだけではゲート本体を実行せず、範囲解決の関数だけを提供します。範囲の決め方を単体で検証できるようにするためで、ルートへの `cd` もゲート本体側に置いてあり、読み込んだ側の作業ディレクトリを動かしません。
-- これらは純粋な機構であり、規範（受け入れ検証の機械ゲート化・収束規則・verify ランナー契約）は ai-playbook の `loop-workflow.md` が正本です。規範を配置した場合（`--with-playbook` / `--playbook-version` / `--playbook-from`）は、第二意見の `gemini-review.sh` も配置され、`loop-gate.sh` が自動で直列化します。
+- これらは純粋な機構であり、規範（受け入れ検証の機械ゲート化・収束規則・verify ランナー契約）は ai-playbook の `loop-workflow.md` が正本です。規範を配置した場合（`--with-playbook` / `--playbook-version` / `--playbook-from`）は、第二意見の `second-opinion-review.sh` も配置され、`loop-gate.sh` が自動で直列化します。
 - 上の 3 本は**手元から起動する入口**で、実行するかどうかは人に委ねられています。**回し忘れれば何も起きません。** それを塞ぐため、`verify.sh` を CI でも回す `.github/workflows/verify.yml` を**常に**配置します（下記「受け入れ検証の CI ワークフロー」参照）。
 
 ```bash
@@ -443,7 +443,7 @@ gcloud auth login             # --with-gcp のとき（gcloud-storage）
 
 `.env.example` が持つキー:
 
-- `GEMINI_API_KEY` — 第二意見レビュー（`scripts/gemini-review.sh`）が読みます。
+- `GEMINI_API_KEY` — 第二意見レビュー（`scripts/second-opinion-review.sh`）が読みます。
 - `GH_TOKEN` — GitHub の PAT。**上表の「コンテナ内でのログイン」に対する唯一の例外**です（下記「[GitHub 認証だけが例外である理由](#github-認証だけが例外である理由)」）。空にすれば従来どおり `gh auth login` の保存済み認証で動きます（**`GITHUB_TOKEN` も未設定であることが条件**。下記「[`GITHUB_TOKEN` は設定しない](#github_token-は設定しない)」）。
 - `GIT_IDENTITY_NAME` / `GIT_IDENTITY_EMAIL` — コミット identity。`scripts/setup-git-identity.sh` が local へ適用します。
   - `GIT_AUTHOR_NAME` / `GIT_AUTHOR_EMAIL` という名前を使わないのは、それが **git 自身の読む環境変数**だからです。環境に置くと local 設定を持たないリポジトリでも identity が解決でき、`user.useConfigOnly` による保護（未設定なら commit を止める）が無効になります。
@@ -512,7 +512,7 @@ VS Code は接続のたびにコンテナの `~/.docker/config.json` へ `credsS
 - **`source` しません。** `KEY=VALUE` のみを安全にパースして `export` するため、`.env` の内容は任意コードとして実行されません（`FOO=$(...)` や単独の `echo` 行があっても実行されない）。壊れた `.env` がシェルの初期化ごと落とす事故を防ぎます。
 - **CWD 非依存。** スクリプト自身の位置（`scripts/` の 1 階層上）から `.env` を解決するため、サブディレクトリから呼んでも正しく読み込みます。`PROJECT_ENV_FILE` で対象ファイルを明示指定できます。
 - **bash / zsh 双方**で動作し、CRLF・`export KEY=VALUE`・`KEY = VALUE`・クォート囲みの各形式を吸収します。複数回読み込んでも安全（冪等）。`.env` が無ければ何もしません。
-- 対話シェルへは `scripts/on-attach.sh` が `~/.bashrc` / `~/.zshrc` へマーカー付きで**冪等に**注入するため、ターミナルから起動する CLI（`gemini` 等）にも `.env` の値が効きます。非対話実行（`scripts/gemini-review.sh` 等）は各スクリプトが冒頭で明示的に読み込みます。
+- 対話シェルへは `scripts/on-attach.sh` が `~/.bashrc` / `~/.zshrc` へマーカー付きで**冪等に**注入するため、ターミナルから起動する CLI（`gemini` 等）にも `.env` の値が効きます。非対話実行（`scripts/second-opinion-review.sh` 等）は各スクリプトが冒頭で明示的に読み込みます。
 
 ## Git identity ガード
 
@@ -633,7 +633,7 @@ OAuth トークン（`CLAUDE_CODE_OAUTH_TOKEN`）を `remoteEnv` へ注入する
 - `.ai-playbook/VERSION`（DCB が記録する取得元の証跡。`version=`（`--playbook-version` のタグ。未指定なら `(unspecified)`）と `source=`（解決したディレクトリまたは URL）の 2 行を持つ機械可読な key=value 形式。規範ファイルと同じ `--playbook-conflict-policy` に従うため、規範を skip した実行では VERSION も更新されません）
 - `.github/project-ai-rules.md`
 - `CLAUDE.md` / `.github/copilot-instructions.md`
-- `scripts/gemini-review.sh`（第二意見レビュー。`scripts/loop-gate.sh` が存在を検出して自動で直列化します。上記「ループコーディング支援」参照）
+- `scripts/second-opinion-review.sh`（第二意見レビュー。`scripts/loop-gate.sh` が存在を検出して自動で直列化します。上記「ループコーディング支援」参照）
 - `.github/workflows/copilot-review.yml` / `.github/workflows/review-gate.yml`（`--with-copilot-review` を併せて選択した場合のみ。2 本で 1 組。下記参照）
 - `.claude/skills/intake/SKILL.md`（`--with-claude` を併せて指定した場合のみ。intake 起点スキル）
 

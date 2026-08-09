@@ -19,7 +19,7 @@
 #
 # 対象の組み合わせ: 言語の選択（--languages）は生成されるスクリプトの集合を変えない
 # ため代表 1 件で足りるが、装備フラグは変える（--with-gemini + 規範配置で
-# scripts/gemini-review.sh が増える）。素の構成と全部入りの構成の 2 件を見る。
+# scripts/second-opinion-review.sh が増える）。素の構成と全部入りの構成の 2 件を見る。
 #
 # 空振りさせない: 生成に失敗した、あるいは対象が 0 件だった場合を合格にしない。
 # 検証していないことを合格として報告するのが最悪であり、この不変条件は
@@ -100,9 +100,9 @@ bash "$BOOTSTRAP" \
 check_generated_scripts "$outf" "全部入りの構成"
 
 it "全部入りの構成で第二意見スクリプトまで生成されている"
-# 規範パッケージ由来の scripts/gemini-review.sh は、装備フラグを付けたときだけ
+# 規範パッケージ由来の scripts/second-opinion-review.sh は、装備フラグを付けたときだけ
 # 現れる。素の構成しか見ていないと、この 1 本が検査から抜けたまま緑になる。
-assert_file_exists "$outf/scripts/gemini-review.sh"
+assert_file_exists "$outf/scripts/second-opinion-review.sh"
 
 # ── 空振り防止 ────────────────────────────────────────────────────────────────
 

@@ -26,8 +26,8 @@ assert_mode "$out/.devcontainer/devcontainer.json" "644"
 it "生成されたスクリプトは 755"
 assert_mode "$out/scripts/on-attach.sh" "755"
 
-it "生成された gemini-review.sh は 755"
-assert_mode "$out/scripts/gemini-review.sh" "755"
+it "生成された second-opinion-review.sh は 755"
+assert_mode "$out/scripts/second-opinion-review.sh" "755"
 
 it "配置された規範は 644"
 assert_mode "$out/.ai-playbook/shared-ai-rules.md" "644"

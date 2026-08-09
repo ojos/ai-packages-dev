@@ -9,10 +9,10 @@
 # 無ければ優雅にスキップする（外部パッケージの導入を前提にしない）。
 #
 # 第二意見レビュー:
-#   既定で scripts/gemini-review.sh があれば実行する。
+#   既定で scripts/second-opinion-review.sh があれば実行する。
 #   LOOP_GATE_REVIEW_CMD で任意のコマンドへ差し替え可能。空文字でスキップする。
 #
-#   gemini-review.sh の既定対象はステージ済み差分で、空なら「レビュー対象なし」
+#   second-opinion-review.sh の既定対象はステージ済み差分で、空なら「レビュー対象なし」
 #   として 0 を返す。commit 後（ステージが空）にこのゲートを回すと、第二意見が
 #   実質スキップされたまま GATE_PASS が出ることになる。push 前ゲートとしては
 #   偽の緑なので、ステージが空のときは commit 済み範囲を対象に切り替える。
@@ -211,7 +211,7 @@ main() {
 
   echo "[loop-gate] step 2: second opinion"
   if [[ "${LOOP_GATE_REVIEW_CMD-__UNSET__}" == "__UNSET__" ]]; then
-    if [[ -f "$HERE/gemini-review.sh" ]]; then
+    if [[ -f "$HERE/second-opinion-review.sh" ]]; then
       resolve_review_range
       local review_ok=0
       if [[ -n "$REVIEW_RANGE" ]]; then
@@ -221,14 +221,14 @@ main() {
           echo "[loop-gate] $REVIEW_RANGE_REASON"
         fi
         echo "[loop-gate] staged diff is empty; reviewing $REVIEW_RANGE"
-        bash "$HERE/gemini-review.sh" --range "$REVIEW_RANGE" || review_ok=1
+        bash "$HERE/second-opinion-review.sh" --range "$REVIEW_RANGE" || review_ok=1
       elif [[ "$REVIEW_NO_TARGET" -eq 1 ]]; then
         # レビューできる差分が 1 行も無い。第二意見を呼んでも対象が無いため、
         # その事実を明示したうえで通過させる（空を FAIL にすると、差分の無い
         # 状態でのゲート実行が落ちる）。黙って通すと偽の緑と区別が付かない。
         echo "[loop-gate] no reviewable diff; second opinion has nothing to review"
       else
-        bash "$HERE/gemini-review.sh" || review_ok=1
+        bash "$HERE/second-opinion-review.sh" || review_ok=1
       fi
       if [[ "$review_ok" -ne 0 ]]; then
         echo "[loop-gate] second opinion reported findings" >&2

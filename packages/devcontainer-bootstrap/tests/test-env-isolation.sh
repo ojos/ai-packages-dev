@@ -62,7 +62,7 @@ if [[ -z "$leaked" ]]; then pass; else fail "実行環境から漏れている:$
 
 it "隔離対象は全て生成物が実際に読む変数である"
 # 使われなくなった変数がリストに残ると、隔離しているつもりの範囲と実態がずれる。
-# 生成物の供給元は bootstrap.sh と、規範パッケージが持つ gemini-review.sh の雛形。
+# 生成物の供給元は bootstrap.sh と、規範パッケージが持つ second-opinion-review.sh の雛形。
 #
 # -w で単語として照合する。部分一致だと、廃止された変数がリストに残っていても
 # 名前を接頭辞に持つ別の変数へ一致して「使われている」と誤判定する
@@ -70,7 +70,7 @@ it "隔離対象は全て生成物が実際に読む変数である"
 unused=""
 for v in $TEST_ISOLATED_ENV_VARS; do
   if grep -qw "$v" "$BOOTSTRAP" 2>/dev/null; then continue; fi
-  if grep -qw "$v" "$PLAYBOOK_SRC/templates/gemini-review.sh" 2>/dev/null; then continue; fi
+  if grep -qw "$v" "$PLAYBOOK_SRC/templates/second-opinion-review.sh" 2>/dev/null; then continue; fi
   unused="$unused $v"
 done
 if [[ -z "$unused" ]]; then pass; else fail "生成物が読まない変数がリストにある:$unused"; fi
