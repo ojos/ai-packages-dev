@@ -45,6 +45,12 @@
 #       プロジェクト側の編集を前提とする。本テストが扱うのは「同じシェルスクリプトが
 #       2 か所にあることによる追随漏れ」で、これらは構造が異なる。
 #
+#   .claude/*（.gitignore / settings.json）
+#       このリポジトリは .claude/* を .gitignore で除外しており（再包含するのは
+#       skills/ と agents/ だけ）、写しを追跡していない。比べる相手が作業ツリーに
+#       存在しないので、上の「写し無し」の分類ではなく抽出対象そのものから外れる
+#       （網羅性検査の左辺は scripts/ に限っている）。
+#
 #   gemini-review.sh / copilot-review.yml / review-gate.yml
 #       正本が規範パッケージ（.ai-playbook/templates/）側にある。bootstrap.sh は
 #       ヒアドキュメントを持たず require_playbook_template でコピーするだけなので、
@@ -124,7 +130,17 @@ scripts/post-rebuild-check.sh'
 #                         scripts/ とその索引（scripts/CATALOG.md）へ増える。
 #                         写しが無いので追随漏れは起き得ず、MIRRORED にはできない
 #                         （一致相手が無い）。
-EXCLUDED_NO_COPY_RELS='scripts/acceptance-remote.sh'
+#
+#   confirm-merge-hook.sh --with-claude でのみ配る PreToolUse フック。このリポジトリは
+#                         .claude/settings.json を追跡しない（.gitignore が .claude/* を
+#                         除外し、!.claude/skills/ と !.claude/agents/ だけ再包含する）
+#                         ため、フックを配線できない。配線しないまま写しだけを置くと、
+#                         誰も起動しないスクリプトが scripts/ と scripts/CATALOG.md に
+#                         並ぶ。配線を入れる判断をしたときは、写しを置いて
+#                         MIRRORED_RELS へ移すこと（下の「写しが実在しない」検査が
+#                         要求する）。
+EXCLUDED_NO_COPY_RELS='scripts/acceptance-remote.sh
+scripts/confirm-merge-hook.sh'
 
 # get_template_content() の case ラベルから、指定パスのヒアドキュメント本文を取り出す。
 # シングルクォートは awk へ変数で渡す（awk のプログラム自体をシングルクォートで
