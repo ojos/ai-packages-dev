@@ -37,6 +37,9 @@ mk_review_repo() {
 #   L = LGTM のみ            D = 装飾された LGTM のみ（**LGTM**）
 #   F = 指摘のみ             M = ファイル別講評（LGTM 行と致命バグが混在）
 #   W = stderr へ警告 + LGTM  T = 指摘の末尾へ **LGTM** を添える
+#   N = 前置き + VERDICT: LGTM        P = 前置き + 装飾された判定トークン + 空行
+#   X = 前置き + 素の LGTM（判定トークン無し）
+#   G = 指摘 + VERDICT: FINDINGS      Z = 否定形の判定トークン
 #
 # M / T は「通過を示す一意な出力」ではないが LGTM 行を含む形で、モデルが自然に
 # 取る出力。行の存在で判定すると重大な指摘ごと通過する。
@@ -74,6 +77,17 @@ case "\$c" in
   M) printf '%s\n' "### verify.sh" "LGTM" "" "### acceptance.sh" \
        "1. 致命バグ \$n: 配列展開が壊れている" ;;
   T) printf '%s\n' "1. 致命バグ \$n: 境界条件を見落としている" "**LGTM**" ;;
+  N) printf '%s\n' \
+       "I will run the \\\`run-tests.sh\\\` script filtering for the changed test to verify that it passes." \
+       "VERDICT: LGTM" ;;
+  P) printf '%s\n' \
+       "テストの動作確認のため、テストスクリプトを実行し、期待どおりパスするか確認します。" \
+       "**VERDICT: LGTM**" "" ;;
+  X) printf '%s\n' \
+       "I will execute the test runner to ensure that the test suite passes with these changes." \
+       "LGTM" ;;
+  G) printf '%s\n' "1. 致命バグ \$n: 配列展開が壊れている" "VERDICT: FINDINGS" ;;
+  Z) printf '%s\n' "VERDICT: not LGTM" ;;
   *) echo "### 指摘 \$n: 何かがおかしい" ;;
 esac
 exit 0
@@ -158,6 +172,79 @@ if [[ "$rc" -eq 0 ]]; then
 else
   fail "装飾された LGTM を落とした (exit $rc): $out"
 fi
+
+# ── 前置き（作業ナレーション）で偽の赤を出さない ──────────────────────────────
+#
+# モデルは回答の前に「これから何をするか」を述べることがある。出力全体の一意性で
+# 判定していた頃は、これが出た瞬間に「指摘あり」へ化けた。実測では 3 run すべてが
+# この形で落ち、指摘は 1 件も無かった。ナレーションは同じ差分なら毎回同じように
+# 出るため、run 数を増やしても消えない。偽の赤が定常化するとゲートが読まれなくなる。
+#
+# 判定は「出力の最後の行に置かれた判定トークン」で行う。前置きの有無で判定が
+# 変わらず、かつ指摘と併記された LGTM では通過しない形にする。
+
+it "前置きが付いていても判定トークンがあれば通過する"
+d="$(new_workdir)/r"; b="$(new_workdir)/bin"
+mk_review_repo "$d"; mk_gemini_stub "$b" "N"
+out="$(run_review "$d" "$b")"; rc=$?
+if [[ "$rc" -eq 0 ]]; then
+  assert_contains "$out" "run 1/1: LGTM" "前置き付き判定トークンの判定"
+else
+  fail "前置きだけで落とした (exit $rc): $out"
+fi
+
+it "判定トークンが装飾されていても、後ろに空行が続いても通過する"
+# 判定を厳しくした結果 **VERDICT: LGTM** まで落とすと、ゲートが常に赤くなって
+# 無視されるようになる。装飾の除去と末尾空行の切り落としは残す。
+d="$(new_workdir)/r"; b="$(new_workdir)/bin"
+mk_review_repo "$d"; mk_gemini_stub "$b" "P"
+out="$(run_review "$d" "$b")"; rc=$?
+if [[ "$rc" -eq 0 ]]; then
+  assert_contains "$out" "run 1/1: LGTM" "装飾された判定トークンの判定"
+else
+  fail "装飾された判定トークンを落とした (exit $rc): $out"
+fi
+
+it "3 run すべてが前置きを出しても通過する"
+# #267 の実測がこの形。回数を増やす対策は、ぶれが run ごとに独立して現れる場合に
+# しか効かない。毎回同じように崩れる出力は多数決では救えない。
+d="$(new_workdir)/r"; b="$(new_workdir)/bin"
+mk_review_repo "$d"; mk_gemini_stub "$b" "NPN"
+out="$(run_review "$d" "$b" --runs 3)"; rc=$?
+if [[ "$rc" -eq 0 ]]; then
+  assert_contains "$out" "0/3 runs reported findings" "3 run の集計"
+else
+  fail "前置きだけで 3 run とも落とした (exit $rc): $out"
+fi
+
+it "判定トークンの無い出力は通さず、理由を示す"
+# 指示に従わなかった出力を通すと、判定していないものを緑として報告することになる。
+# 一方、指摘本文だけを出して赤にすると、なぜ落ちたのかが読み取れない。
+d="$(new_workdir)/r"; b="$(new_workdir)/bin"
+mk_review_repo "$d"; mk_gemini_stub "$b" "X"
+out="$(run_review "$d" "$b")"; rc=$?
+if [[ "$rc" -eq 1 ]]; then
+  assert_contains "$out" "判定トークンが見つかりません" "判定トークン欠落時の診断"
+else
+  fail "判定トークンの無い出力を通した (exit $rc): $out"
+fi
+
+it "判定トークンが FINDINGS の出力は落とす"
+d="$(new_workdir)/r"; b="$(new_workdir)/bin"
+mk_review_repo "$d"; mk_gemini_stub "$b" "G"
+out="$(run_review "$d" "$b")"; rc=$?
+if [[ "$rc" -eq 1 ]]; then
+  assert_contains "$out" "致命バグ" "FINDINGS の出力内容"
+else
+  fail "FINDINGS を通した (exit $rc): $out"
+fi
+
+it "否定形の判定トークンを通過させない"
+# 部分一致へ緩めると `VERDICT: not LGTM` の類まで通過する。
+d="$(new_workdir)/r"; b="$(new_workdir)/bin"
+mk_review_repo "$d"; mk_gemini_stub "$b" "Z"
+out="$(run_review "$d" "$b")"; rc=$?
+if [[ "$rc" -eq 1 ]]; then pass; else fail "否定形を通した (exit $rc): $out"; fi
 
 it "CLI が stderr へ出す警告を判定へ混ぜない"
 # 警告を出力へ混ぜると、LGTM 一意の回答が「LGTM 以外も含む」に化けて、

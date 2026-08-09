@@ -22,6 +22,16 @@
 #   限界: 少数回しか現れない指摘は通過する。これは意図した妥協で、レビューの
 #   位置づけは「補助」であり、主レビューを省略してよい根拠にはならない。
 #
+#   回数では消えない故障もある。モデルが回答の前に作業ナレーションを出す形は、
+#   同じ差分なら毎回同じように出るため、run を増やしても全 run が同じように落ちる。
+#   これは回数ではなく判定側で受ける（下記「通過判定」）。
+#
+# 通過判定:
+#   出力の最後の行に置かれた判定トークン `VERDICT: LGTM` を通過とみなす。
+#   出力全体の一致では判定しない（前置きが 1 行出ただけで偽の赤になる）。
+#   行の存在でも判定しない（指摘と併記された LGTM で偽の緑になる）。
+#   理由の詳細は is_lgtm のコメントに置く。
+#
 # 終了コード:
 #   0 = LGTM（過半数の run が指摘なし。push 可）
 #   1 = 重大な指摘あり、または実行不能
@@ -135,8 +145,11 @@ read -r -d '' PROMPT <<'EOF' || true
 - 差分の範囲外にある既存コードの問題
 
 出力形式:
-- 上記 4 点に該当する指摘が 1 件もなければ、`LGTM` とだけ出力してください。
-- 指摘がある場合は、各指摘について「該当ファイルと行」「何が問題か」「なぜ問題か（再現条件や影響）」を簡潔に記述してください。
+- **出力の最後の行**に、次のいずれかの判定トークンを必ず 1 行で書いてください。
+  - 上記 4 点に該当する指摘が 1 件もない場合: `VERDICT: LGTM`
+  - 指摘がある場合: `VERDICT: FINDINGS`
+- 指摘がある場合は、判定トークンより前に、各指摘について「該当ファイルと行」「何が問題か」「なぜ問題か（再現条件や影響）」を簡潔に記述してください。
+- 通過判定は最後の行だけで行います。判定トークンの無い出力は指摘ありとして扱います。
 EOF
 
 echo "[gemini-review] reviewing $scope (runs=$RUNS)"
@@ -165,22 +178,57 @@ args=(--skip-trust --include-directories "$work_dir" -p "@$diff_file
 $PROMPT")
 [[ -n "$MODEL" ]] && args=(-m "$MODEL" "${args[@]}")
 
-# 通過判定はモデルの出力ゆれに耐える必要がある。LGTM とだけ返すよう指示していても、
-# **LGTM** / `LGTM` / LGTM. のように装飾されることがある。装飾・空白（改行を含む）・
-# 末尾の句点を落とした結果が LGTM「のみ」になることを判定する。
+# 通過判定は「出力の最後の行に置かれた判定トークン」で行う。
 #
-# 行単位の存在判定にはしない。ファイル別に講評して途中の 1 行へ LGTM と書く形や、
-# 指摘の末尾へ **LGTM** を添える形は、モデルが自然に取る出力で実際に起きる。行の存在で
-# 判定すると、重大な指摘が同時に出ていても通過する。review-workflow.md が第二意見へ
-# 求めているのは「通過を示す一意な出力」であって「一意な出力を含むこと」ではない。
+# 出力全体が判定トークンと一致することを要求してはいけない。モデルは回答の前に
+# 「これから何をするか」という作業ナレーションを出すことがあり、それが出た瞬間に、
+# 指摘が 1 件も無くても「指摘あり」へ化ける。実測では 3 run すべてがこの形で落ちた。
+# ナレーションは同じ差分なら毎回同じように出るため、run 数を増やしても消えない。
+# 偽の赤が定常化すると、ゲートそのものが読まれなくなる。
 #
-# 逆に部分一致へ緩めることもしない。`not LGTM` や `LGTM とは言えない` の類まで通過する。
-is_lgtm() {
+# 逆に「LGTM を含む」へ緩めることもしない。ファイル別に講評して途中の 1 行へ LGTM と
+# 書く形や、指摘の末尾へ **LGTM** を添える形は、モデルが自然に取る出力で実際に起きる。
+# 行の存在で判定すると、重大な指摘が同時に出ていても通過する。判定トークンを
+# `VERDICT:` 付きの専用の形にしているのはこのためで、末尾に装飾された LGTM が
+# 置かれていても判定トークンではないので通過しない。
+#
+# 部分一致にもしない。`VERDICT: not LGTM` の類は一致しない。
+#
+# 判定トークンが無い出力は指摘ありとして扱う（安全側）。指示に従わなかった出力を
+# 通すと、判定していないものを緑として報告することになる。
+#
+# 装飾（`**` / `` ` `` / `_` / `#`）と空白・末尾の句点は落としてから比較する。判定を
+# 厳しくした結果ゲートが常に赤くなると、無視されるようになる。
+normalize_verdict() {
   local normalized
   normalized="$(printf '%s' "$1" | tr -d '`*_#[:space:]')"
   normalized="${normalized%.}"
   normalized="${normalized%。}"
-  printf '%s\n' "$normalized" | grep -qix 'LGTM'
+  printf '%s' "$normalized"
+}
+
+# 最後の非空行。判定トークンの後ろに空行が続く出力を取りこぼさない。
+last_nonempty_line() {
+  printf '%s\n' "$1" | grep -v '^[[:space:]]*$' | tail -n 1
+}
+
+is_lgtm() {
+  # 後方互換の通過経路。出力全体が LGTM だけの場合は、判定トークンが無くても通す。
+  # 「LGTM とだけ返す」旧仕様に従うモデルを、仕様変更だけで赤にしないため。
+  if [[ "$(normalize_verdict "$1")" == "" ]]; then
+    return 1
+  fi
+  if printf '%s\n' "$(normalize_verdict "$1")" | grep -qix 'LGTM'; then
+    return 0
+  fi
+  printf '%s\n' "$(normalize_verdict "$(last_nonempty_line "$1")")" | grep -qix 'VERDICT:LGTM'
+}
+
+# 判定トークンが「無い」のか「FINDINGS だった」のかを区別して診断へ出す。無い場合、
+# モデルが出力形式に従っていない可能性があり、指摘本文を読んでも原因が分からない。
+has_verdict_token() {
+  printf '%s\n' "$(normalize_verdict "$(last_nonempty_line "$1")")" \
+    | grep -qiE '^VERDICT:(LGTM|FINDINGS)$'
 }
 
 findings=0
@@ -205,7 +253,13 @@ while [[ "$run" -lt "$RUNS" ]]; do
     echo "[gemini-review] run $run/$RUNS: LGTM"
   else
     findings=$((findings + 1))
-    echo "[gemini-review] run $run/$RUNS: findings"
+    if has_verdict_token "$output"; then
+      echo "[gemini-review] run $run/$RUNS: findings"
+    else
+      # 判定トークンが無い出力を黙って「指摘あり」に数えると、モデルが形式に
+      # 従わなかっただけの赤と、実在の指摘による赤が区別できない。
+      echo "[gemini-review] run $run/$RUNS: findings (判定トークンが見つかりません。最後の行に VERDICT: LGTM または VERDICT: FINDINGS が必要です)"
+    fi
     printf '%s\n' "$output"
   fi
 done
