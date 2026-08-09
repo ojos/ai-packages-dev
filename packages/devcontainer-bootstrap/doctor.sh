@@ -136,7 +136,10 @@ if [[ -f "$TARGET_DIR/scripts/post-rebuild-check.sh" ]]; then
 fi
 
 # ループコーディングの機構（受け入れゲート）。単体で動作する前提で検査する。
-for loop_script in verify.sh acceptance.sh loop-gate.sh; do
+# acceptance-remote.sh（外部層）は --with-aws / --with-gcp を選んだ構成にだけ存在する
+# ため、実在検査（require_file）は張らず、あるときだけ構文と実行ビットを見る。
+# 生成後にプロジェクトが検査を書き足すファイルなので、構文の検査対象へ入れる価値がある。
+for loop_script in verify.sh acceptance.sh loop-gate.sh acceptance-remote.sh; do
   if [[ -f "$TARGET_DIR/scripts/$loop_script" ]]; then
     if bash -n "$TARGET_DIR/scripts/$loop_script"; then
       ok "$loop_script syntax OK"

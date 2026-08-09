@@ -413,6 +413,160 @@ else
   fail "対象が無いだけなのに exit 非 0: $out_txt"
 fi
 
+# ── 外部層の受け入れ条件（acceptance-remote.sh） ───────────────────────────────
+#
+# 受け入れ条件はローカル層（acceptance.sh）と外部層（acceptance-remote.sh）に分かれる。
+# 外部層は外部認証とネットワークを要するため、ループの接地信号にも push 前ゲートにも
+# 含めない（規範の正本は loop-workflow.md「受け入れ条件の二層」）。ここでは配置条件と
+# 骨格、そして「検査未定義を合格にしない」ことを検証する。
+
+it "装備を選ばない構成では acceptance-remote.sh を配置しない"
+# 外部状態を持たない構成へ空の雛形を配ると、消す作業をさせることになる。
+# 併せて、条件付き一覧が空になる経路で bootstrap 自身が停止しないことも見る
+# （集約側は set -euo pipefail のパイプラインなので、条件関数が非 0 を返すと
+# 生成が丸ごと止まる）。
+out="$(new_workdir)/p"
+run_bootstrap "$out" >/dev/null 2>&1
+if [[ -f "$out/scripts/verify.sh" ]]; then
+  assert_file_absent "$out/scripts/acceptance-remote.sh"
+else
+  fail "装備なしの構成で生成そのものが失敗している（条件付き一覧の終了ステータスを確認）"
+fi
+
+it "--with-aws / --with-gcp のいずれかで acceptance-remote.sh を配置する"
+missing=""
+for flag in --with-aws --with-gcp; do
+  o="$(new_workdir)/p"
+  run_bootstrap "$o" "$flag" >/dev/null 2>&1
+  [[ -f "$o/scripts/acceptance-remote.sh" ]] || missing="$missing $flag"
+done
+if [[ -z "$missing" ]]; then pass; else fail "配置されないフラグ:$missing"; fi
+
+out="$(new_workdir)/p"
+run_bootstrap "$out" --with-aws >/dev/null 2>&1
+REMOTE="$out/scripts/acceptance-remote.sh"
+
+it "acceptance-remote.sh は有効な bash 構文で実行可能（755）"
+if bash -n "$REMOTE" 2>/dev/null; then
+  assert_mode "$REMOTE" "755"
+else
+  fail "構文エラー: $REMOTE"
+fi
+
+it "検査未定義の acceptance-remote.sh は VERIFY_FAIL / exit 1 になる"
+# 検証していないことを合格として報告するのが最悪であるため、雛形は「検査を 1 件も
+# 実行していない」状態を失敗として扱う（acceptance.sh の ran_any と同じ構え）。
+if out_txt="$(cd "$out" && VERIFY_ACCEPTANCE=scripts/acceptance-remote.sh bash scripts/verify.sh 2>&1)"; then
+  fail "検査が未定義なのに通過してしまった: $out_txt"
+else
+  if printf '%s' "$out_txt" | grep -q 'VERIFY_FAIL' \
+     && printf '%s' "$out_txt" | grep -q '未定義'; then
+    pass
+  else
+    fail "未定義である旨と VERIFY_FAIL が揃わない: $out_txt"
+  fi
+fi
+
+it "acceptance-remote.sh の一時ログは mktemp のテンプレートで作り、\$\$ 由来の名前を使わない"
+# 予測可能な名前は、同名を先に置かれると書き込み先を乗っ取られる。
+# コメント行は落として本体だけを見る（雛形のコメントがこの理由を説明するために
+# \$\$ という文字列そのものを含むため、全文へ当てると自分の説明文で落ちる）。
+# 照合は grep -F で行う（パターン側が \$ や引用符を含み、正規表現として解釈させる
+# 理由が無い）。
+remote_code="$(grep -v '^[[:space:]]*#' "$REMOTE")"
+if printf '%s\n' "$remote_code" | grep -Fq 'mktemp "${TMPDIR:-/tmp}/acceptance-remote.XXXXXX"' \
+   && printf '%s\n' "$remote_code" | grep -Fq "trap 'rm -f \"\$LOG\"' EXIT" \
+   && ! printf '%s\n' "$remote_code" | grep -Fq '$$'; then
+  pass
+else
+  fail "mktemp テンプレート / EXIT トラップが無い、または \$\$ 由来の名前を使っている"
+fi
+
+it "acceptance-remote.sh は set -e を使わない代わりに失敗しうる代入をガードする"
+# set -e が無い分、失敗しうる代入は個別に止める必要がある。塞がないと:
+#   HERE  解決に失敗して空になると dirname が "." を返し、続く cd が成功してしまう
+#         （ルート外で検査が走る）
+#   LOG   作成に失敗して空になると run の >"$LOG" が必ず失敗し、実行できていない
+#         検査が「失敗した検査」として報告される
+if printf '%s\n' "$remote_code" | grep -Fq 'HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" || exit 1' \
+   && printf '%s\n' "$remote_code" | grep -Fq 'LOG="$(mktemp "${TMPDIR:-/tmp}/acceptance-remote.XXXXXX")" || exit 1'; then
+  pass
+else
+  fail "HERE / LOG の代入ガード（|| exit 1）が無い"
+fi
+
+it "acceptance-remote.sh は前提（認証済みであること）を明示する"
+# 未認証での失敗は「宣言と外部状態の乖離」ではない。読み分けの手掛かりを雛形に置く。
+if grep -q '認証済み' "$REMOTE"; then pass; else fail "前提の記述が無い"; fi
+
+it "acceptance-remote.sh は具体的な検査を持たない"
+# 何が外部状態かはプロジェクトごとに違う。特定のツールを決め打つと必ず外れる。
+if grep -qE '^[[:space:]]*run "' "$REMOTE"; then
+  fail "雛形が具体的な検査を持っている（骨格だけを配ること）"
+else
+  pass
+fi
+
+# 骨格へ検査を差し込んだ写しを作る。判定行の直前へ run 呼び出しを入れる。
+# アンカーが見つからなければ非 0 を返し、差し込めていないことを呼び出し側へ伝える
+# （差し込めないまま「検査未定義」で落ちたのを run の挙動と読み違えないため）。
+inject_remote_checks() {
+  local src="$1" dest="$2" ins="$3"
+  awk -v ins="$ins" '
+    !injected && $0 == "if [[ \"$ran_any\" -eq 0 ]]; then" { print ins; injected = 1 }
+    { print }
+    END { if (!injected) exit 1 }
+  ' "$src" > "$dest"
+}
+
+it "run ヘルパーは成功した検査の出力を出さない"
+work="$(new_workdir)/p"
+run_bootstrap "$work" --with-gcp >/dev/null 2>&1
+if inject_remote_checks "$work/scripts/acceptance-remote.sh" "$work/scripts/injected.sh" \
+     'run "quiet ok" bash -c "echo MUST_NOT_APPEAR"'; then
+  if out_txt="$(cd "$work" && VERIFY_ACCEPTANCE=scripts/injected.sh bash scripts/verify.sh 2>&1)"; then
+    if printf '%s' "$out_txt" | grep -q 'MUST_NOT_APPEAR'; then
+      fail "成功した検査の出力が漏れている: $out_txt"
+    else
+      assert_contains "$out_txt" "VERIFY_PASS" "verify 出力"
+    fi
+  else
+    fail "検査が成功しているのに通過しない: $out_txt"
+  fi
+else
+  fail "検査の差し込みに失敗した（雛形の判定行の書式が変わった可能性）"
+fi
+
+it "run ヘルパーは失敗した検査の出力と失敗件数を出し、非 0 で終わる"
+work="$(new_workdir)/p"
+run_bootstrap "$work" --with-gcp >/dev/null 2>&1
+if inject_remote_checks "$work/scripts/acceptance-remote.sh" "$work/scripts/injected.sh" \
+     'run "ok one" true\nrun "bad one" bash -c "echo BOOM >&2; exit 3"\nrun "bad two" false'; then
+  if out_txt="$(cd "$work" && VERIFY_ACCEPTANCE=scripts/injected.sh bash scripts/verify.sh 2>&1)"; then
+    fail "検査が失敗しているのに通過した: $out_txt"
+  else
+    # 1 件目の失敗で止めず全件を見てから落とす（失敗件数が 2 になる）。
+    if printf '%s' "$out_txt" | grep -q 'FAIL: bad one' \
+       && printf '%s' "$out_txt" | grep -q 'BOOM' \
+       && printf '%s' "$out_txt" | grep -q 'FAIL: bad two' \
+       && printf '%s' "$out_txt" | grep -q '2 件の検査が失敗'; then
+      pass
+    else
+      fail "失敗の出力・件数の集計が揃わない: $out_txt"
+    fi
+  fi
+else
+  fail "検査の差し込みに失敗した（雛形の判定行の書式が変わった可能性）"
+fi
+
+it "loop-gate は外部層を実行しない"
+# 外部認証の失効やオフラインでゲート全体が止まると、実装が正しいのにループが止まる。
+if grep -q 'acceptance-remote' "$out/scripts/loop-gate.sh"; then
+  fail "loop-gate.sh が外部層を参照している"
+else
+  pass
+fi
+
 # ── 配布層とプロジェクト層の一致 ──────────────────────────────────────────────
 
 it "生成される loop-gate.sh はこのリポジトリの scripts/loop-gate.sh と一致する"
