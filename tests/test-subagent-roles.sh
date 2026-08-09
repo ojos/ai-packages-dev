@@ -26,9 +26,12 @@ AGENTS_DIR="$REPO_ROOT/.claude/agents"
 # 変わると区切り行がデータ行として抽出され、`---=---` のような偽のペアが混入して
 # 定義側との照合が偽陽性で落ちる。パイプ・ハイフン・コロン・空白だけで構成される行を
 # 区切り行とみなす。
+# ヘッダー行の一致も空白ゆれに耐える形にする。区切り行だけを整形耐性にして
+# ヘッダーを固定幅のまま残すと、整形されたときに表を見つけられず「表が無い」と
+# 誤って赤にする。
 table_rows() {
   awk '
-    /^\| 役割 \| model \| tools \| 契約の正本 \|/ { inside = 1; next }
+    /^\|[[:space:]]*役割[[:space:]]*\|[[:space:]]*model[[:space:]]*\|[[:space:]]*tools[[:space:]]*\|/ { inside = 1; next }
     inside && /^\|/ { print }
     inside && !/^\|/ { exit }
   ' "$RULES" | grep -Ev '^\|[[:space:]:|-]+$'
