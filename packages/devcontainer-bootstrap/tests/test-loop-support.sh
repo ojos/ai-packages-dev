@@ -13,6 +13,25 @@ set -uo pipefail
 
 echo "test-loop-support"
 
+# 生成直後のプロジェクトを git 管理下へ置き、生成物を 1 コミットする。
+#
+# 生成される verify.sh は受け入れ条件の手前で scripts/check-no-secrets.sh を呼び、
+# あちらは「git の作業ツリーでない」「追跡ファイルが 1 件も無い」を検査が成立して
+# いない状態として落とす（機密が無いことと、検査していないことは別であるため）。
+# verify / loop-gate の通過を検証するケースは、まずこの前提を満たしてから回す。
+# 機密混入検査そのものの挙動は test-check-no-secrets.sh が検証する。
+make_tracked_repo() {
+  local repo="$1"
+  (
+    cd "$repo" || exit 1
+    git init -q
+    # 既定ブランチ名は git のバージョン・設定で変わるため明示する。
+    git symbolic-ref HEAD refs/heads/main
+    git add -A
+    git -c user.name=T -c user.email=t@example.com commit -q -m c1
+  ) >/dev/null 2>&1
+}
+
 # ── 生成物の存在（mode 非依存で常に生成） ─────────────────────────────────────
 
 it "verify / acceptance / loop-gate が生成される"
@@ -150,6 +169,7 @@ if [[ -z "$leak" ]]; then pass; else fail "規範の複製が混入:$leak"; fi
 it "acceptance 合格で verify は VERIFY_PASS / exit 0"
 out="$(new_workdir)/p"
 run_bootstrap "$out" >/dev/null 2>&1
+make_tracked_repo "$out"
 acc="$(new_workdir)/acc-pass.sh"; printf '#!/usr/bin/env bash\nexit 0\n' > "$acc"
 if out_txt="$(cd "$out" && VERIFY_ACCEPTANCE="$acc" bash scripts/verify.sh 2>&1)"; then
   assert_contains "$out_txt" "VERIFY_PASS" "verify 出力"
@@ -171,6 +191,7 @@ fi
 it "単体（第二意見なし）: acceptance 合格で GATE_PASS / exit 0、第二意見は SKIP"
 out="$(new_workdir)/p"
 run_bootstrap "$out" >/dev/null 2>&1
+make_tracked_repo "$out"
 acc="$(new_workdir)/acc-pass.sh"; printf '#!/usr/bin/env bash\nexit 0\n' > "$acc"
 if out_txt="$(cd "$out" && VERIFY_ACCEPTANCE="$acc" bash scripts/loop-gate.sh 2>&1)"; then
   if printf '%s' "$out_txt" | grep -q 'GATE_PASS' && printf '%s' "$out_txt" | grep -qi 'SKIP'; then
@@ -188,6 +209,7 @@ out="$(new_workdir)/p"
 run_bootstrap "$out" >/dev/null 2>&1
 # 既定パス（scripts/acceptance.sh）を通す stub に差し替え、VERIFY_ACCEPTANCE は使わない
 printf '#!/usr/bin/env bash\nexit 0\n' > "$out/scripts/acceptance.sh"
+make_tracked_repo "$out"
 foreign="$(new_workdir)/elsewhere"; mkdir -p "$foreign"
 if out_txt="$(cd "$foreign" && bash "$out/scripts/loop-gate.sh" 2>&1)"; then
   assert_contains "$out_txt" "GATE_PASS" "loop-gate 出力（異なる cwd から）"
@@ -208,6 +230,7 @@ fi
 it "第二意見（gemini-review.sh）が存在すれば直列化して通過する"
 out="$(new_workdir)/p"
 run_bootstrap "$out" >/dev/null 2>&1
+make_tracked_repo "$out"
 acc="$(new_workdir)/acc-pass.sh"; printf '#!/usr/bin/env bash\nexit 0\n' > "$acc"
 printf '#!/usr/bin/env bash\necho stub-lgtm\nexit 0\n' > "$out/scripts/gemini-review.sh"
 chmod +x "$out/scripts/gemini-review.sh"
@@ -236,6 +259,7 @@ fi
 it "LOOP_GATE_REVIEW_CMD='' で第二意見を明示スキップできる"
 out="$(new_workdir)/p"
 run_bootstrap "$out" >/dev/null 2>&1
+make_tracked_repo "$out"
 acc="$(new_workdir)/acc-pass.sh"; printf '#!/usr/bin/env bash\nexit 0\n' > "$acc"
 # reviewer が存在しても、空文字指定なら実行しない
 printf '#!/usr/bin/env bash\necho SHOULD_NOT_RUN\nexit 1\n' > "$out/scripts/gemini-review.sh"
@@ -300,22 +324,44 @@ else
   fail "全段合格なのに exit 非 0: $out_txt"
 fi
 
-it "git リポジトリでなければ従来どおり引数なしで呼ぶ"
-# 生成直後で git 管理下にないプロジェクトでもゲートが使えること。
+it "git 管理外のプロジェクトでは機密混入検査が成立せず GATE_FAIL"
+# 契約の変更を明示する。以前は「生成直後で git 管理下にないプロジェクトでも
+# ゲートが使える」ことを不変条件にしていたが、verify.sh が呼ぶ機密混入検査は
+# git の作業ツリーを前提とし、成立しない状態を合格にしない。したがって生成直後は
+# git init して追跡対象をコミットするまでゲートは通らない。ここで通過を期待すると、
+# 検査していない状態を緑として固定してしまう。
 out="$(new_workdir)/p"
 run_bootstrap "$out" >/dev/null 2>&1
 acc="$(new_workdir)/acc-pass.sh"; printf '#!/usr/bin/env bash\nexit 0\n' > "$acc"
 printf '#!/usr/bin/env bash\necho "REVIEW_ARGV:$*"\nexit 0\n' > "$out/scripts/gemini-review.sh"
 chmod +x "$out/scripts/gemini-review.sh"
 if out_txt="$(cd "$out" && VERIFY_ACCEPTANCE="$acc" bash scripts/loop-gate.sh 2>&1)"; then
-  if printf '%s' "$out_txt" | grep -q 'REVIEW_ARGV:$' && printf '%s' "$out_txt" | grep -q 'GATE_PASS'; then
-    pass
+  fail "git 管理外で通過してしまった: $out_txt"
+elif printf '%s' "$out_txt" | grep -q 'GATE_FAIL' \
+     && printf '%s' "$out_txt" | grep -q '作業ツリーではありません'; then
+  # 第二意見は verify で止まるため呼ばれない（呼ばれると、機密混入の疑いが
+  # 残る差分を外部のレビューへ送ることになる）。
+  if printf '%s' "$out_txt" | grep -q 'REVIEW_ARGV'; then
+    fail "verify で止まったのに第二意見が走っている: $out_txt"
   else
-    fail "git 外で範囲を渡している、または通過しない: $out_txt"
+    pass
   fi
 else
-  fail "git 外で exit 非 0: $out_txt"
+  fail "GATE_FAIL と理由が出ていない: $out_txt"
 fi
+
+it "git 管理外でも範囲解決そのものは引数なしになる（source して単体で呼ぶ）"
+# 上のケースがゲート全体を落とすようになったため、範囲解決の git 外挙動を
+# 直接検証する（ゲート経由では verify で止まって到達しない）。loop-gate.sh は
+# source ガードを持ち、読み込んだだけでは本体を実行しない。
+foreign="$(new_workdir)/no-git"; mkdir -p "$foreign"
+range_txt="$(bash -c '
+  cd "$1" || exit 1
+  . "$2"
+  resolve_review_range
+  printf "RANGE:%s\n" "$REVIEW_RANGE"
+' _ "$foreign" "$out/scripts/loop-gate.sh" 2>&1)"
+assert_eq "$(printf '%s\n' "$range_txt" | sed -n 's/^RANGE://p' | tail -1)" "" "git 外での解決範囲"
 
 # ── 範囲解決: push 済みブランチ（HEAD == 上流） ───────────────────────────────
 #
@@ -444,6 +490,10 @@ if [[ -z "$missing" ]]; then pass; else fail "配置されないフラグ:$missi
 
 out="$(new_workdir)/p"
 run_bootstrap "$out" --with-aws >/dev/null 2>&1
+# 外部層のケースも verify.sh を経由するため、機密混入検査の前提（git の作業ツリーで
+# あり追跡ファイルが 1 件以上ある）を満たしてから回す。満たさないと acceptance 段へ
+# 到達する前に SECRETS_FAIL で落ち、外部層の挙動を検証できない。
+make_tracked_repo "$out"
 REMOTE="$out/scripts/acceptance-remote.sh"
 
 it "acceptance-remote.sh は有効な bash 構文で実行可能（755）"
@@ -524,6 +574,8 @@ work="$(new_workdir)/p"
 run_bootstrap "$work" --with-gcp >/dev/null 2>&1
 if inject_remote_checks "$work/scripts/acceptance-remote.sh" "$work/scripts/injected.sh" \
      'run "quiet ok" bash -c "echo MUST_NOT_APPEAR"'; then
+  # 差し込んだ後に追跡させる（機密混入検査の前提。上の make_tracked_repo と同じ理由）。
+  make_tracked_repo "$work"
   if out_txt="$(cd "$work" && VERIFY_ACCEPTANCE=scripts/injected.sh bash scripts/verify.sh 2>&1)"; then
     if printf '%s' "$out_txt" | grep -q 'MUST_NOT_APPEAR'; then
       fail "成功した検査の出力が漏れている: $out_txt"
@@ -542,6 +594,8 @@ work="$(new_workdir)/p"
 run_bootstrap "$work" --with-gcp >/dev/null 2>&1
 if inject_remote_checks "$work/scripts/acceptance-remote.sh" "$work/scripts/injected.sh" \
      'run "ok one" true\nrun "bad one" bash -c "echo BOOM >&2; exit 3"\nrun "bad two" false'; then
+  # 差し込んだ後に追跡させる（機密混入検査の前提。上の make_tracked_repo と同じ理由）。
+  make_tracked_repo "$work"
   if out_txt="$(cd "$work" && VERIFY_ACCEPTANCE=scripts/injected.sh bash scripts/verify.sh 2>&1)"; then
     fail "検査が失敗しているのに通過した: $out_txt"
   else

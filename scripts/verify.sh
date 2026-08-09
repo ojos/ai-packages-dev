@@ -13,9 +13,15 @@
 # 受け入れ条件の定義:
 #   既定で scripts/acceptance.sh を実行する。VERIFY_ACCEPTANCE で差し替え可能。
 #
+# 規範由来の検査:
+#   受け入れ条件の手前で scripts/check-no-secrets.sh（機密混入検査）を実行する。
+#   acceptance.sh 側へ置かないのは、あちらがプロジェクトの所有物で、受け入れ条件を
+#   書き足すたびに触られるため。規範由来の検査をそこへ置くと消える経路ができる。
+#   不在なら失敗させる（検査が成立していないことを合格にしない）。
+#
 # 終了コード:
 #   0 = VERIFY_PASS（受け入れ条件を満たす）
-#   1 = VERIFY_FAIL（未達、または受け入れ条件が未定義）
+#   1 = VERIFY_FAIL（未達、受け入れ条件が未定義、または機密の混入）
 set -euo pipefail
 
 # 受け入れ検証とテストコマンド（package.json / go.mod / Cargo.toml 等の検出）は
@@ -29,6 +35,24 @@ ACCEPTANCE="${VERIFY_ACCEPTANCE:-scripts/acceptance.sh}"
 if [[ ! -f "$ACCEPTANCE" ]]; then
   echo "[verify] acceptance not found: $ACCEPTANCE" >&2
   echo "[verify] 受け入れ条件が未定義です。実行可能な検証を用意してください。" >&2
+  echo "VERIFY_FAIL"
+  exit 1
+fi
+
+# 機密混入検査。受け入れ条件より前に置く。機密が混入した状態で長い受け入れ検証を
+# 回しても直すべきことは変わらないため、安い検査から落として反復を短くする。
+SECRETS_CHECK="$HERE/check-no-secrets.sh"
+
+if [[ ! -f "$SECRETS_CHECK" ]]; then
+  echo "[verify] secret scan not found: $SECRETS_CHECK" >&2
+  echo "[verify] 機密混入検査が配置されていません。検査が成立しないため失敗させます。" >&2
+  echo "VERIFY_FAIL"
+  exit 1
+fi
+
+echo "[verify] running secret scan: scripts/check-no-secrets.sh"
+if ! bash "$SECRETS_CHECK"; then
+  echo "[verify] 機密混入検査に失敗しました" >&2
   echo "VERIFY_FAIL"
   exit 1
 fi
