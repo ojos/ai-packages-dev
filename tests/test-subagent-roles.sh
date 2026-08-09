@@ -50,8 +50,12 @@ DOC_PAIRS="$(printf '%s\n' "$ROWS" \
 
 # frontmatter から 1 キーの値を取る。定義は先頭行が --- で始まり、次の --- で閉じる。
 # 本文中に同名の記述があっても拾わないよう、閉じで打ち切る。
+# CRLF でチェックアウトされた場合、$0 の末尾に \r が残って境界行の一致判定が落ちる。
+# 落ちるとフロントマター全体が読まれず、name / model / tools がすべて空になり、
+# 「指定が無い」と誤って赤にする。行頭で正規化しておく。
 agent_field() {
   awk -v key="$2" '
+    { sub(/\r$/, "") }
     NR == 1 && $0 == "---" { inside = 1; next }
     inside && $0 == "---" { exit }
     inside {
@@ -116,9 +120,31 @@ if [[ -z "$inherit_model" ]]; then pass; else fail "model が inherit:$inherit_m
 it "frontmatter の name がファイル名と一致する"
 if [[ -z "$name_mismatch" ]]; then pass; else fail "不一致:$name_mismatch"; fi
 
-it ".claude/agents/ が追跡対象である"
-tracked="$(cd "$REPO_ROOT" && git ls-files .claude/agents | wc -l | tr -d ' ')"
-if [[ "$tracked" -gt 0 ]]; then pass; else fail ".gitignore で除外されている（!.claude/agents/ の再包含が必要）"; fi
+it ".gitignore が .claude/agents/ 配下の新規ファイルを除外しない"
+# .gitignore のルールそのものを、実在しないパスで検査する。
+#
+# 実在するファイルで git check-ignore を回すと、追跡済みのものは常に「無視されない」と
+# 返る（追跡済みファイルに ignore は適用されないため）。その形だと !.claude/agents/ を
+# 削っても既存 3 件が追跡済みである限り緑のままで、ルールの回帰を検出できない。
+# 実測: 追跡中は exit 1、git rm --cached した後に初めて exit 0 になる。
+#
+# 追跡もステージもされないプローブパスなら、判定はルールだけで決まる。
+probe=".claude/agents/__ignore_probe__.md"
+if (cd "$REPO_ROOT" && git check-ignore -q "$probe"); then
+  fail ".claude/agents/ 配下が除外される（!.claude/agents/ の再包含が必要）"
+else
+  pass
+fi
+
+it "すべての定義が追跡されている"
+# 「1 件以上追跡されている」では、後から足した定義を git add し忘れても緑になる。
+# 追跡されていない定義は配布されないため、1 件ずつ見る。
+untracked=""
+for f in $FILES; do
+  rel="${f#"$REPO_ROOT"/}"
+  if [[ -z "$(cd "$REPO_ROOT" && git ls-files -- "$rel")" ]]; then untracked="$untracked $rel"; fi
+done
+if [[ -z "$untracked" ]]; then pass; else fail "追跡されていない定義:$untracked"; fi
 
 # ── 照合 ──────────────────────────────────────────────────────────────────────
 
