@@ -309,7 +309,7 @@ it "ゲートを実行すると、分岐点起点にした理由が出力へ現�
 e2e="$(new_workdir)/p"
 run_bootstrap "$e2e" >/dev/null 2>&1
 acc="$(new_workdir)/acc-pass.sh"; printf '#!/usr/bin/env bash\nexit 0\n' > "$acc"
-cat > "$e2e/scripts/gemini-review.sh" <<'STUB'
+cat > "$e2e/scripts/second-opinion-review.sh" <<'STUB'
 #!/usr/bin/env bash
 echo "REVIEW_ARGV:$*"
 if [[ "${1-}" == "--range" ]]; then
@@ -317,7 +317,7 @@ if [[ "${1-}" == "--range" ]]; then
 fi
 exit 0
 STUB
-chmod +x "$e2e/scripts/gemini-review.sh"
+chmod +x "$e2e/scripts/second-opinion-review.sh"
 origin="$(new_workdir)/origin.git"
 git init -q --bare "$origin" >/dev/null 2>&1
 in_repo "$e2e" "git init -q && git symbolic-ref HEAD refs/heads/main && git add -A && git $GIT_AUTHOR commit -q -m c1 && git remote add origin '$origin' && git push -q -u origin main && git remote set-head origin main"

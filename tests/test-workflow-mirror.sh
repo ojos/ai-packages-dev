@@ -28,8 +28,8 @@
 #
 # 対象を .yml に限る理由: 規範パッケージの雛形のうち、採用側が編集しないまま完成品と
 # して使うのはこの 2 本だけである。他の雛形（entry.md / project-ai-rules.md /
-# claude-skill-intake.md / gemini-review.sh）は導入先が自分の事情で書き換える前提で、
-# 逐語一致は原理的に成立しない。実例として scripts/gemini-review.sh の写しは CLI の
+# claude-skill-intake.md / second-opinion-review.sh）は導入先が自分の事情で書き換える前提で、
+# 逐語一致は原理的に成立しない。実例として scripts/second-opinion-review.sh の写しは CLI の
 # 導入手段を案内する 1 行だけ雛形と異なる（雛形側は特定の導入手段を持たないため）。
 #
 # 末尾改行の差も許容しない。両側が独立したファイルなので、コマンド置換を経由せず

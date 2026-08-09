@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 第二意見レビュー（規範パッケージの templates/gemini-review.sh）の判定を検証する。
+# 第二意見レビュー（規範パッケージの templates/second-opinion-review.sh）の判定を検証する。
 #
 # 背景:
 #   このレビューは非決定的で、同じ差分でも実行のたびに結果が変わる。実際に同一
@@ -12,9 +12,9 @@
 set -uo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
-echo "test-gemini-review"
+echo "test-second-opinion-review"
 
-REVIEW="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)/.ai-playbook/templates/gemini-review.sh"
+REVIEW="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)/.ai-playbook/templates/second-opinion-review.sh"
 
 LOADER="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)/scripts/load-project-env.sh"
 
@@ -22,7 +22,7 @@ LOADER="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)/scripts/load-proj
 mk_review_repo() {
   local dir="$1"
   mkdir -p "$dir/scripts"
-  cp "$REVIEW" "$dir/scripts/gemini-review.sh"
+  cp "$REVIEW" "$dir/scripts/second-opinion-review.sh"
   (
     cd "$dir" && git init -q \
       && printf 'base\n' > a.txt && git add a.txt \
@@ -44,9 +44,16 @@ mk_review_repo() {
 # M / T は「通過を示す一意な出力」ではないが LGTM 行を含む形で、モデルが自然に
 # 取る出力。行の存在で判定すると重大な指摘ごと通過する。
 mk_gemini_stub() {
-  local bindir="$1" seq="$2"
+  mk_cli_stub "$1" gemini "$2"
+}
+
+# エンジンごとに CLI の名前が違うだけで、記録も応答も同じ形でよい。stub を 2 本
+# 書き分けると、片方だけ古くなって「片側のエンジンでしか検証していない」状態が
+# 見えなくなる。
+mk_cli_stub() {
+  local bindir="$1" cmd="$2" seq="$3"
   mkdir -p "$bindir"
-  cat > "$bindir/gemini" <<STUB
+  cat > "$bindir/$cmd" <<STUB
 #!/usr/bin/env bash
 # 受け取った引数と stdin を記録する。判定ロジックに加えて、差分をどう渡している
 # かを検証できるようにする（差分本文が CLI の引数や stdin に載っていると、CLI が
@@ -92,7 +99,7 @@ case "\$c" in
 esac
 exit 0
 STUB
-  chmod +x "$bindir/gemini"
+  chmod +x "$bindir/$cmd"
   rm -f "$bindir/.count" "$bindir/.argv" "$bindir/.stdin" "$bindir/.injected" "$bindir/.injected_path"
 }
 
@@ -112,7 +119,7 @@ stage_at_diff() {
 run_review() {
   local dir="$1" bindir="$2"
   shift 2
-  ( cd "$dir" && PATH="$bindir:$PATH" GEMINI_API_KEY=dummy bash scripts/gemini-review.sh "$@" 2>&1 )
+  ( cd "$dir" && PATH="$bindir:$PATH" GEMINI_API_KEY=dummy bash scripts/second-opinion-review.sh "$@" 2>&1 )
 }
 
 # ── 既定（1 回）は従来と同じ挙動 ──────────────────────────────────────────────
@@ -358,7 +365,7 @@ fi
 it "GEMINI_REVIEW_RUNS 環境変数でも回数を指定できる"
 d="$(new_workdir)/r"; b="$(new_workdir)/bin"
 mk_review_repo "$d"; mk_gemini_stub "$b" "LLL"
-( cd "$d" && PATH="$b:$PATH" GEMINI_API_KEY=dummy GEMINI_REVIEW_RUNS=3 bash scripts/gemini-review.sh ) >/dev/null 2>&1
+( cd "$d" && PATH="$b:$PATH" GEMINI_API_KEY=dummy GEMINI_REVIEW_RUNS=3 bash scripts/second-opinion-review.sh ) >/dev/null 2>&1
 assert_eq "$(cat "$b/.count")" "3" "環境変数での呼び出し回数"
 
 # ── 不正な回数は fail-closed ──────────────────────────────────────────────────
@@ -367,7 +374,7 @@ d="$(new_workdir)/r"; b="$(new_workdir)/bin"
 mk_review_repo "$d"; mk_gemini_stub "$b" "LLL"
 bad=0
 for v in 0 -1 abc 1.5; do
-  err="$( ( cd "$d" && PATH="$b:$PATH" GEMINI_API_KEY=dummy bash scripts/gemini-review.sh --runs "$v" ) 2>&1 >/dev/null )"
+  err="$( ( cd "$d" && PATH="$b:$PATH" GEMINI_API_KEY=dummy bash scripts/second-opinion-review.sh --runs "$v" ) 2>&1 >/dev/null )"
   rc=$?
   [[ "$rc" -eq 1 ]] || { echo "  runs=$v で停止しなかった (exit $rc)"; bad=1; }
   # 「--runs を知らないので unknown option で落ちた」を通過扱いにしない。
@@ -410,7 +417,7 @@ d="$(new_workdir)/r"; b="$(new_workdir)/bin"
 mk_review_repo "$d"; mk_gemini_stub "$b" "LLL"
 cp "$LOADER" "$d/scripts/load-project-env.sh"
 printf 'GEMINI_API_KEY=from-env\nGEMINI_REVIEW_RUNS=3\n' > "$d/.env"
-out="$( cd "$d" && PATH="$b:$PATH" bash scripts/gemini-review.sh 2>&1 )"; rc=$?
+out="$( cd "$d" && PATH="$b:$PATH" bash scripts/second-opinion-review.sh 2>&1 )"; rc=$?
 n="$(cat "$b/.count" 2>/dev/null || echo 0)"
 if [[ "$rc" -eq 0 && "$n" -eq 3 ]]; then
   assert_contains "$out" "runs=3" ".env からの解決"
@@ -423,7 +430,7 @@ d="$(new_workdir)/r"; b="$(new_workdir)/bin"
 mk_review_repo "$d"; mk_gemini_stub "$b" "LLL"
 cp "$LOADER" "$d/scripts/load-project-env.sh"
 printf 'GEMINI_API_KEY=from-env\nGEMINI_REVIEW_RUNS=3\n' > "$d/.env"
-( cd "$d" && PATH="$b:$PATH" bash scripts/gemini-review.sh --runs 1 ) >/dev/null 2>&1
+( cd "$d" && PATH="$b:$PATH" bash scripts/second-opinion-review.sh --runs 1 ) >/dev/null 2>&1
 assert_eq "$(cat "$b/.count" 2>/dev/null || echo 0)" "1" "CLI 引数の優先"
 
 it "値を伴わないオプションは unbound variable ではなく使い方を出して停止する"
@@ -431,8 +438,8 @@ it "値を伴わないオプションは unbound variable ではなく使い方�
 d="$(new_workdir)/r"; b="$(new_workdir)/bin"
 mk_review_repo "$d"; mk_gemini_stub "$b" "L"
 bad=0
-for opt in --runs --range --model; do
-  err="$( ( cd "$d" && PATH="$b:$PATH" GEMINI_API_KEY=dummy bash scripts/gemini-review.sh "$opt" ) 2>&1 >/dev/null )"
+for opt in --runs --range --model --engine; do
+  err="$( ( cd "$d" && PATH="$b:$PATH" GEMINI_API_KEY=dummy bash scripts/second-opinion-review.sh "$opt" ) 2>&1 >/dev/null )"
   rc=$?
   [[ "$rc" -eq 1 ]] || { echo "  $opt で exit 1 にならない (exit $rc)"; bad=1; }
   printf '%s' "$err" | grep -q 'には値が必要です' \
@@ -441,5 +448,109 @@ for opt in --runs --range --model; do
     && { echo "  $opt で unbound variable が出ている: $err"; bad=1; }
 done
 if [[ "$bad" -eq 0 ]]; then pass; else fail "値なしオプションの扱いが不十分"; fi
+
+# ── エンジンの選択 ────────────────────────────────────────────────────────────
+#
+# 認証手段の違う 2 つの CLI から選べる。判定ロジックは 1 か所に集約してあり、
+# エンジンごとに複製していない（複製すると判定の修正が片側にしか効かなくなる）。
+# ここで確かめるのは「どちらのエンジンでも同じ判定へ入ること」と、「エンジンの
+# 取り違え・不在が CLI を呼ぶ前に、取り違えだと分かる形で止まること」。
+#
+# PATH は stub と最小限のシステムパスだけにする。実行者の環境に本物の gemini /
+# agy が入っていると、「CLI が無いとき」の検証が本物を拾って成立しない。
+MIN_PATH="/usr/bin:/bin"
+
+it "既定のエンジンは gemini（gemini 不在なら gemini の導入案内で停止する）"
+# 既定が入れ替わっていないことを、CLI を実行せずに判別する。
+d="$(new_workdir)/r"; b="$(new_workdir)/bin"
+mk_review_repo "$d"; mkdir -p "$b"
+err="$( ( cd "$d" && PATH="$b:$MIN_PATH" GEMINI_API_KEY=dummy bash scripts/second-opinion-review.sh ) 2>&1 >/dev/null )"
+rc=$?
+if [[ "$rc" -eq 1 ]]; then
+  assert_contains "$err" "gemini CLI not found" "既定エンジンの不在メッセージ"
+else
+  fail "gemini 不在で停止しなかった (exit $rc): $err"
+fi
+
+it "--engine antigravity で agy 不在なら agy の導入案内で停止する"
+# gemini 側のメッセージに化けると、入れるべき CLI を取り違える。
+d="$(new_workdir)/r"; b="$(new_workdir)/bin"
+mk_review_repo "$d"; mk_gemini_stub "$b" "L"
+err="$( ( cd "$d" && PATH="$b:$MIN_PATH" bash scripts/second-opinion-review.sh --engine antigravity ) 2>&1 >/dev/null )"
+rc=$?
+bad=0
+[[ "$rc" -eq 1 ]] || { echo "  exit 1 にならない (exit $rc)"; bad=1; }
+printf '%s' "$err" | grep -q 'agy' || { echo "  agy の案内が出ていない: $err"; bad=1; }
+printf '%s' "$err" | grep -q 'gemini CLI not found' && { echo "  gemini 側のメッセージに化けている: $err"; bad=1; }
+[[ -f "$b/.count" ]] && { echo "  agy 不在なのに gemini を呼んだ"; bad=1; }
+if [[ "$bad" -eq 0 ]]; then pass; else fail "agy 不在の扱いが誤っている"; fi
+
+it "未知のエンジンは CLI を呼ぶ前に停止する"
+d="$(new_workdir)/r"; b="$(new_workdir)/bin"
+mk_review_repo "$d"; mk_gemini_stub "$b" "L"
+err="$( ( cd "$d" && PATH="$b:$MIN_PATH" GEMINI_API_KEY=dummy bash scripts/second-opinion-review.sh --engine gemni ) 2>&1 >/dev/null )"
+rc=$?
+bad=0
+[[ "$rc" -eq 1 ]] || { echo "  exit 1 にならない (exit $rc)"; bad=1; }
+printf '%s' "$err" | grep -q 'unknown engine' || { echo "  綴り間違いだと分かる形で落ちていない: $err"; bad=1; }
+[[ -f "$b/.count" ]] && { echo "  未知のエンジンなのに CLI を呼んだ"; bad=1; }
+if [[ "$bad" -eq 0 ]]; then pass; else fail "未知のエンジンが fail-closed になっていない"; fi
+
+it "--engine antigravity は agy を呼び、判定は共通ロジックを通る"
+d="$(new_workdir)/r"; b="$(new_workdir)/bin"
+mk_review_repo "$d"; mk_cli_stub "$b" agy "N"
+out="$( cd "$d" && PATH="$b:$MIN_PATH" bash scripts/second-opinion-review.sh --engine antigravity 2>&1 )"; rc=$?
+bad=0
+[[ "$rc" -eq 0 ]] || { echo "  判定トークン付きなのに落ちた (exit $rc): $out"; bad=1; }
+[[ "$(cat "$b/.count" 2>/dev/null || echo 0)" == "1" ]] || { echo "  agy を 1 回呼んでいない"; bad=1; }
+printf '%s' "$out" | grep -q 'engine=antigravity' || { echo "  どのエンジンで実行したかが出ていない: $out"; bad=1; }
+if [[ "$bad" -eq 0 ]]; then pass; else fail "antigravity 経路が成立していない"; fi
+
+it "--engine antigravity は API キーを要求しない"
+# agy は OAuth のみで API キーに対応しない。gemini 側の前提検査を流用すると、
+# 鍵を持たない利用者がこのエンジンを選べなくなる。
+d="$(new_workdir)/r"; b="$(new_workdir)/bin"
+mk_review_repo "$d"; mk_cli_stub "$b" agy "L"
+out="$( cd "$d" && PATH="$b:$MIN_PATH" bash scripts/second-opinion-review.sh --engine antigravity 2>&1 )"; rc=$?
+if [[ "$rc" -eq 0 ]]; then pass; else fail "API キー無しで落ちた (exit $rc): $out"; fi
+
+it "antigravity では差分をプロンプトへ直接載せる"
+# agy は @<パス> をファイル参照として展開せず、print モードで stdin も読まない
+# （実測）。gemini 側の「一時ファイル + @ 参照」を流用すると、モデルは差分を
+# 見ないまま「差分が空だ」と答える。
+d="$(new_workdir)/r"; b="$(new_workdir)/bin"
+mk_review_repo "$d"; mk_cli_stub "$b" agy "L"
+stage_at_diff "$d"
+( cd "$d" && PATH="$b:$MIN_PATH" bash scripts/second-opinion-review.sh --engine antigravity ) >/dev/null 2>&1
+argv="$(cat "$b/.argv" 2>/dev/null || true)"
+bad=0
+case "$argv" in *'noreply@github.com'*) ;; *) echo "  差分本文が引数に載っていない"; bad=1 ;; esac
+case "$argv" in *'@'*'/review.diff'*) echo "  agy へ @<パス> 参照を渡している"; bad=1 ;; esac
+if [[ "$bad" -eq 0 ]]; then pass; else fail "antigravity への差分の渡し方が誤っている: $argv"; fi
+
+it "SECOND_OPINION_ENGINE 環境変数でもエンジンを切り替えられる"
+d="$(new_workdir)/r"; b="$(new_workdir)/bin"
+mk_review_repo "$d"; mk_cli_stub "$b" agy "L"
+out="$( cd "$d" && PATH="$b:$MIN_PATH" SECOND_OPINION_ENGINE=antigravity bash scripts/second-opinion-review.sh 2>&1 )"; rc=$?
+if [[ "$rc" -eq 0 ]]; then
+  assert_contains "$out" "engine=antigravity" "環境変数でのエンジン指定"
+else
+  fail "環境変数でエンジンを切り替えられない (exit $rc): $out"
+fi
+
+# ── 環境変数の新旧 ────────────────────────────────────────────────────────────
+
+it "SECOND_OPINION_RUNS で回数を指定できる"
+d="$(new_workdir)/r"; b="$(new_workdir)/bin"
+mk_review_repo "$d"; mk_gemini_stub "$b" "LLL"
+( cd "$d" && PATH="$b:$PATH" GEMINI_API_KEY=dummy SECOND_OPINION_RUNS=3 bash scripts/second-opinion-review.sh ) >/dev/null 2>&1
+assert_eq "$(cat "$b/.count")" "3" "新名での呼び出し回数"
+
+it "新名が設定されていれば旧名より優先される"
+# 両方が残った .env で、どちらが効くかが読めないと移行の判断ができない。
+d="$(new_workdir)/r"; b="$(new_workdir)/bin"
+mk_review_repo "$d"; mk_gemini_stub "$b" "LLL"
+( cd "$d" && PATH="$b:$PATH" GEMINI_API_KEY=dummy GEMINI_REVIEW_RUNS=3 SECOND_OPINION_RUNS=2 bash scripts/second-opinion-review.sh ) >/dev/null 2>&1
+assert_eq "$(cat "$b/.count")" "2" "新名優先の呼び出し回数"
 
 exit_with_result

@@ -8,10 +8,15 @@
 # ここで回すのは「この開発リポジトリ自身の規律」の検査で、配布パッケージの検査
 # （packages/devcontainer-bootstrap/tests/run-tests.sh）とは層が違う。
 #
-# 依存はコアユーティリティ（awk / sed / grep / comm）だけに保つ。文書と実装の
-# テキスト照合しか行わないため、パッケージ層のような外部依存（python3 / tar /
-# curl / timeout）は要らない。所要時間も秒単位に収める。scripts/acceptance.sh は
-# これを DCB テスト（約 4 分）より前に置き、安い検査から落ちるようにしている。
+# 依存はコアユーティリティ（awk / sed / grep / comm）だけに保つ。大半が文書と実装の
+# テキスト照合で、パッケージ層のような外部依存（python3 / tar / curl / timeout）は
+# 要らない。所要時間も秒単位に収める。scripts/acceptance.sh はこれを DCB テスト
+# （約 4 分）より前に置き、安い検査から落ちるようにしている。
+#
+# 例外は test-agy-telemetry.sh で、こちらは scripts/install-ai-tools.sh を実行する
+# ため jq を要する。持ち込んでいるのは検査対象スクリプト自身の依存で、テスト側が
+# 増やした依存ではない（scripts/acceptance.sh も同じ理由で jq を前提にしている）。
+# ネットワークへは出ない（導入処理は PATH 上の stub で skip させる）。
 
 set -uo pipefail
 

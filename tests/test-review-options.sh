@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# project-ai-rules.md の第二意見オプション表が、gemini-review.sh の実装と一致して
+# project-ai-rules.md の第二意見オプション表が、second-opinion-review.sh の実装と一致して
 # いることを検査する。
 #
 # この表は規範側に置かれた実装の写しで、ローカル事前ゲートの第二意見をどう調整
@@ -14,7 +14,7 @@ set -uo pipefail
 echo "test-review-options"
 
 RULES="$REPO_ROOT/.github/project-ai-rules.md"
-REVIEW="$REPO_ROOT/scripts/gemini-review.sh"
+REVIEW="$REPO_ROOT/scripts/second-opinion-review.sh"
 
 # ── 規範側 ────────────────────────────────────────────────────────────────────
 
@@ -36,10 +36,20 @@ if [[ -n "$ROWS" ]]; then pass; else fail "第二意見オプション表を抽�
 DOC_OPTS="$(printf '%s\n' "$ROWS" | awk -F'|' '{print $2}' | grep -o '`--[a-z-]*' | tr -d '`' | sort -u)"
 
 # 環境変数列。対応する環境変数を持たないオプションの欄は — で、抽出結果は空になる。
-DOC_ENVS="$(printf '%s\n' "$ROWS" | awk -F'|' '{print $3}' | grep -oE 'GEMINI_REVIEW_[A-Z_]+' | sort -u)"
+DOC_ENVS="$(printf '%s\n' "$ROWS" | awk -F'|' '{print $3}' | grep -oE 'SECOND_OPINION_[A-Z_]+' | sort -u)"
+
+# 旧名（後方互換で受理する環境変数）は表ではなく本文の箇条書きが持つ。表に載せると
+# 「これも正の指定方法」に見えるが、実際は移行のための受け皿でしかない。ただし
+# 実装が受理する旧名と本文の記述がずれると、消えた互換が案内され続ける（逆も同じ）
+# ため、表とは別の集合として照合する。
+DOC_LEGACY_ENVS="$(grep -oE 'GEMINI_REVIEW_[A-Z_]+' "$RULES" | sort -u)"
 
 # --runs の既定値。表の既定列に書かれた値をそのまま取る。
 DOC_RUNS_DEFAULT="$(printf '%s\n' "$ROWS" | awk -F'|' '$2 ~ /--runs/ {print $4}' | grep -o '`[^`]*`' | tr -d '`' | head -n 1)"
+
+# --engine の既定値。エンジンの既定が変わると、どの CLI で第二意見を取っているかが
+# 黙って変わる。認証手段ごと変わるため、値まで見る。
+DOC_ENGINE_DEFAULT="$(printf '%s\n' "$ROWS" | awk -F'|' '$2 ~ /--engine/ {print $4}' | grep -o '`[^`]*`' | tr -d '`' | head -n 1)"
 
 # ── 実装側 ────────────────────────────────────────────────────────────────────
 
@@ -70,27 +80,52 @@ IMPL_OPTS="$(sed -n '/^while \[\[ \$# -gt 0 \]\]; do/,/^done$/p' "$REVIEW" \
 # でも指定できる」対応関係の一覧であって、実行前提そのものではない。前提は表の
 # 下の箇条書きが扱っている。
 IMPL_ENVS="$(grep -v '^[[:space:]]*#' "$REVIEW" \
+  | grep -oE '\$\{?SECOND_OPINION_[A-Z0-9_]+' \
+  | sed -E 's/^\$\{?//' \
+  | sort -u)"
+
+# 実装が後方互換で受理する旧名。
+IMPL_LEGACY_ENVS="$(grep -v '^[[:space:]]*#' "$REVIEW" \
   | grep -oE '\$\{?GEMINI_REVIEW_[A-Z0-9_]+' \
   | sed -E 's/^\$\{?//' \
   | sort -u)"
 
-# 実装の既定値。${GEMINI_REVIEW_RUNS:-N} の N を取る。
-IMPL_RUNS_DEFAULT="$(grep -oE 'RUNS="\$\{GEMINI_REVIEW_RUNS:-[0-9]+\}"' "$REVIEW" \
-  | grep -oE '[0-9]+' | head -n 1)"
+# 実装の既定値。RUNS の解決は新名 → 旧名 → 既定の入れ子なので、行中の最後の整数を取る。
+# 対象は代入行（RUNS="..."）に限る。基数固定の RUNS=$((10#$RUNS)) を含めると、
+# そちらの 10 を既定値として拾ってしまう。
+IMPL_RUNS_DEFAULT="$(grep -E '^RUNS="' "$REVIEW" | grep -oE '[0-9]+' | tail -n 1)"
+
+# 実装のエンジン既定。${SECOND_OPINION_ENGINE:-name} の name を取る。
+IMPL_ENGINE_DEFAULT="$(grep -oE 'ENGINE="\$\{SECOND_OPINION_ENGINE:-[a-z]+\}"' "$REVIEW" \
+  | sed -E 's/.*:-([a-z]+)\}"/\1/' | head -n 1)"
 
 # ── 照合 ──────────────────────────────────────────────────────────────────────
 
 it "オプションの一覧が規範と実装で一致する"
-assert_same_set "$DOC_OPTS" "$IMPL_OPTS" "project-ai-rules" "gemini-review.sh"
+assert_same_set "$DOC_OPTS" "$IMPL_OPTS" "project-ai-rules" "second-opinion-review.sh"
 
 it "環境変数の一覧が規範と実装で一致する"
-assert_same_set "$DOC_ENVS" "$IMPL_ENVS" "project-ai-rules" "gemini-review.sh"
+assert_same_set "$DOC_ENVS" "$IMPL_ENVS" "project-ai-rules" "second-opinion-review.sh"
+
+it "後方互換で受理する旧名の環境変数が規範と実装で一致する"
+# 旧名を実装から外したのに規範が案内し続ける（設定しても効かない）、逆に実装だけが
+# 受理して規範に無い（移行期限が読めない）、のどちらも起きうる。
+assert_same_set "$DOC_LEGACY_ENVS" "$IMPL_LEGACY_ENVS" "project-ai-rules" "second-opinion-review.sh"
+
+it "--engine の既定値が規範と実装で一致する"
+# 既定のエンジンが変わると、どの CLI で第二意見を取るかが黙って変わる。認証手段も
+# 一緒に変わるため、集合の照合では足りない。
+if [[ -z "$IMPL_ENGINE_DEFAULT" ]]; then
+  fail "second-opinion-review.sh から --engine の既定値を抽出できなかった"
+else
+  assert_eq "$DOC_ENGINE_DEFAULT" "$IMPL_ENGINE_DEFAULT" "--engine の既定値"
+fi
 
 it "--runs の既定値が規範と実装で一致する"
 # 既定値の乖離は集合の照合では捕まらない。「回数を増やしたつもりで既定のまま」
 # という誤解に直結するため、値まで見る。
 if [[ -z "$IMPL_RUNS_DEFAULT" ]]; then
-  fail "gemini-review.sh から --runs の既定値を抽出できなかった"
+  fail "second-opinion-review.sh から --runs の既定値を抽出できなかった"
 else
   assert_eq "$DOC_RUNS_DEFAULT" "$IMPL_RUNS_DEFAULT" "--runs の既定値"
 fi

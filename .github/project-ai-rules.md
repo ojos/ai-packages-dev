@@ -165,7 +165,7 @@ push / PR 作成の前に、次の 3 段を通します。
 
 1. **主レビュー**: Claude Code の `/code-review`（セキュリティに関わる差分は `/security-review` も）でステージ済み差分をレビューし、その場で修正します。
 2. **受け入れ検証**: `scripts/verify.sh` が受け入れ条件を機械判定します。
-3. **第二意見**: 別ベンダーのモデル（`scripts/gemini-review.sh`）でクロスチェックします。
+3. **第二意見**: 別ベンダーのモデル（`scripts/second-opinion-review.sh`）でクロスチェックします。
 
 2 と 3 は**単一入口** `scripts/loop-gate.sh` が直列化します。push / PR 作成の前にこれを通します。
 
@@ -174,7 +174,7 @@ bash scripts/loop-gate.sh
 ```
 
 - 終了コード 0 = `GATE_PASS`（push 可） / 1 = `GATE_FAIL`（いずれかの段が未通過、または実行不能）。
-- 第二意見コマンドは環境変数 `LOOP_GATE_REVIEW_CMD` で差し替え（任意のコマンド）・無効化（空文字）できます。未設定のときは `scripts/gemini-review.sh` があれば実行し、無ければスキップします。
+- 第二意見コマンドは環境変数 `LOOP_GATE_REVIEW_CMD` で差し替え（任意のコマンド）・無効化（空文字）できます。未設定のときは `scripts/second-opinion-review.sh` があれば実行し、無ければスキップします。
 - ステージ済み差分が空のときは、`loop-gate.sh` が第二意見の対象を commit 済み範囲へ自動で切り替えます。commit 後にゲートを回すと第二意見が実質スキップされ、偽の緑が出るためです。
 - 切り替え先は「解決できた範囲」ではなく**実際に差分がある範囲**を選びます（上流ブランチ → `origin/HEAD` / `origin/main` / `origin/master` との分岐点 → remote が無ければ空ツリー の順）。push 済みのブランチでは上流と HEAD が同じで範囲が空になり、同じ偽の緑が復活するためです。
 - 分岐点まで戻しても差分が無いときは、`no reviewable diff` を出力したうえで `GATE_PASS` とします。空を一律 `GATE_FAIL` にすると、差分の無い状態でのゲート実行が落ちるためです。
@@ -210,23 +210,28 @@ bash scripts/verify.sh
 ### 第二意見（クロスモデル）
 
 ```bash
-bash scripts/gemini-review.sh                      # ステージ済み差分
-bash scripts/gemini-review.sh --range main..HEAD   # 範囲指定
-bash scripts/gemini-review.sh --runs 3             # 実行回数
+bash scripts/second-opinion-review.sh                          # ステージ済み差分
+bash scripts/second-opinion-review.sh --range main..HEAD       # 範囲指定
+bash scripts/second-opinion-review.sh --runs 3                 # 実行回数
+bash scripts/second-opinion-review.sh --engine antigravity     # エンジン切り替え
 ```
 
 | オプション | 環境変数 | 既定 | 意味 |
 |---|---|---|---|
 | `--range <git-range>` | — | ステージ済み差分 | レビュー対象の差分範囲 |
-| `--model <name>` | `GEMINI_REVIEW_MODEL` | `gemini` CLI の既定 | 使用モデル |
-| `--runs <n>` | `GEMINI_REVIEW_RUNS` | `1` | 実行回数（1 以上の整数。不正値は実行前に停止） |
+| `--engine <name>` | `SECOND_OPINION_ENGINE` | `gemini` | レビューを実行する CLI（`gemini` / `antigravity`） |
+| `--model <name>` | `SECOND_OPINION_MODEL` | 各 CLI の既定 | 使用モデル |
+| `--runs <n>` | `SECOND_OPINION_RUNS` | `1` | 実行回数（1 以上の整数。不正値は実行前に停止） |
 
 - 優先順位は CLI 引数 > `.env` > 既定です。
+- 環境変数の旧名 `GEMINI_REVIEW_MODEL` / `GEMINI_REVIEW_RUNS` も後方互換で受理します。新名が設定されていればそちらが勝ちます。
 - 判定は多数決です。指摘を報告した run が**過半数**（`floor(N/2)+1`）に達したときだけ落とします。既定の `1` では閾値も 1 で、従来と同じ挙動になります。
 - 過半数に届かなかった指摘も出力に残ります。誤検出とは限らないため、内容を確認して採否を判断します。
 - 通過判定は、モデル出力の**最後の行**に置かれた判定トークン `VERDICT: LGTM` で行います（`.ai-playbook/review-workflow.md`「第二意見の非決定性」）。前置き（作業ナレーション）が付いても判定は変わりません。判定トークンが無い出力は指摘あり扱いとし、その旨を出力へ明示します。
 - 終了コード 0 = `LGTM`（指摘を報告した run が閾値未満） / 1 = 重大な指摘あり、または実行不能。
-- `GEMINI_API_KEY` が必要です（`scripts/load-project-env.sh` が `.env` から読み込みます）。`gemini` CLI は `scripts/install-ai-tools.sh` が導入します。
+- エンジンごとに認証手段が違います。`gemini` は `GEMINI_API_KEY` が必要です（`scripts/load-project-env.sh` が `.env` から読み込みます）。`antigravity`（`agy`）は **OAuth のみ**で API キーに対応せず、`.env` へ資格情報を書き写す経路を持ちません。ログイン状態は `~/.gemini` 配下（named volume `gemini-storage`）に残るため rebuild しても消えません。どちらの CLI も `scripts/install-ai-tools.sh` が導入します。
+- **`agy` のテレメトリはプロビジョニングで無効化します。** `scripts/install-ai-tools.sh` が `~/.gemini/antigravity-cli/settings.json` へ `"enableTelemetry": false` をマージするため、コンテナを作り直した直後からオプトアウト済みになります。環境変数によるオプトアウトは存在せず、この設定ファイルが唯一の手段です。**効くのは CLI だけです**（Antigravity IDE を使う場合は IDE 側に別途同等の設定があります）。既存コンテナへ後追いで適用する場合は `agy` を終了してから `bash scripts/install-ai-tools.sh` を実行してください（起動中の `agy` はセッション終了時に設定を書き戻すことがあります）。
+- **`antigravity` で `--model` に `claude` 系を選ばないでください。** このプロジェクトの実装モデルは Claude で、同じベンダーのモデルで第二意見を取ると「別ベンダーで独立にクロスチェックする」という前提が壊れます（`.ai-playbook/review-workflow.md`）。`agy models` には `claude-*` も並びます。
 - このレビューは非決定的です。1 回の `LGTM` は重大な指摘が無いことの証明ではなく、主レビューを省略してよい根拠にもなりません。
 
 ### リモート最終ゲート
@@ -353,7 +358,7 @@ push / PR 作成後の最終ゲートを、このリポジトリで具体化し�
 | orchestrator | 委譲判定と統合検証の主体そのものです |
 | closer | merge / close の最終判断は手動承認を既定とします |
 | consult-facilitator | 横断相談はユーザーとの対話で進行します |
-| reviewer | 第二意見は別ベンダーのモデルで取ります。`scripts/gemini-review.sh` が担います |
+| reviewer | 第二意見は別ベンダーのモデルで取ります。`scripts/second-opinion-review.sh` が担います |
 
 ### サブエージェントの戻り値
 

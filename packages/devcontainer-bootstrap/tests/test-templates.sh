@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # 雛形の所有関係を検証する。
 #
-# 以前は DCB が入口ファイルと gemini-review.sh の内容を埋め込んでいた。その結果、
-# 規範（review-workflow.md）と実装（gemini-review.sh のプロンプト）が別パッケージへ
+# 以前は DCB が入口ファイルと second-opinion-review.sh の内容を埋め込んでいた。その結果、
+# 規範（review-workflow.md）と実装（second-opinion-review.sh のプロンプト）が別パッケージへ
 # 複製され、正本が 2 つになっていた。また DCB が規範パッケージの内部構造
 # （role-contracts/ 等）をハードコードしていたため、規範側の再編で静かに壊れる
 # 状態だった。
@@ -26,7 +26,7 @@ it "規範パッケージがプロジェクト共通ルールの雛形を持つ"
 assert_file_exists "$TPL/project-ai-rules.md"
 
 it "規範パッケージが第二意見レビューの雛形を持つ"
-assert_file_exists "$TPL/gemini-review.sh"
+assert_file_exists "$TPL/second-opinion-review.sh"
 
 # ── DCB は内容を持たない ──────────────────────────────────────────────────────
 
@@ -71,8 +71,8 @@ if diff -q "$out/.github/copilot-instructions.md" "$TPL/entry.md" >/dev/null 2>&
 it "project-ai-rules.md は雛形と完全一致する"
 if diff -q "$out/.github/project-ai-rules.md" "$TPL/project-ai-rules.md" >/dev/null 2>&1; then pass; else fail "雛形と一致しない"; fi
 
-it "gemini-review.sh は雛形と完全一致する"
-if diff -q "$out/scripts/gemini-review.sh" "$TPL/gemini-review.sh" >/dev/null 2>&1; then pass; else fail "雛形と一致しない"; fi
+it "second-opinion-review.sh は雛形と完全一致する"
+if diff -q "$out/scripts/second-opinion-review.sh" "$TPL/second-opinion-review.sh" >/dev/null 2>&1; then pass; else fail "雛形と一致しない"; fi
 
 it "雛形が欠けている規範ソースは失敗する"
 broken="$(new_workdir)/broken"
