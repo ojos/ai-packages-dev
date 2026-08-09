@@ -335,9 +335,14 @@ push / PR 作成後の最終ゲートを、このリポジトリで具体化し�
 
 | 役割 | model | tools | 契約の正本 |
 |---|---|---|---|
-| `explorer` | `haiku` | 読み取り専用 | プロジェクト層で定義（共有層の契約は未整備） |
-| `planner` | `sonnet` | 読み取り専用 | `.ai-playbook/role-contracts/planner.md` |
+| `explorer` | `haiku` | 編集系を外す | プロジェクト層で定義（共有層の契約は未整備） |
+| `planner` | `sonnet` | 編集系を外す | `.ai-playbook/role-contracts/planner.md` |
 | `implementer` | `sonnet` | 編集系を含む | `.ai-playbook/role-contracts/implementer.md` |
+
+**機構で固定できるのは `model` と `tools` の一覧までです。** `Edit` / `Write` /
+`NotebookEdit` を外せば専用の編集経路は塞げますが、調査に必要な `Bash` を残す以上、
+`sed -i` やリダイレクトを経由した書き込みは塞げません。「編集系を外す」を「編集できない」
+と読まないでください。そこから先は指示による制約です（各定義に同じ断りを置いています）。
 
 次の役割は親セッションが担い、サブエージェントとして定義しません。
 
