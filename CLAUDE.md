@@ -21,5 +21,5 @@
 
 規範はここで再定義せず、対応する正本を指します。
 
-- `.claude/skills/intake/SKILL.md`: `@intake` の起動点です。推奨配線を採用済みで、`.gitignore` は `.claude/*` を除外しつつ `!.claude/skills/` で再包含するため追跡対象です。判定基準・票の項目定義は複製せず、`.github/project-ai-rules.md`「@intake コマンド」と `.ai-playbook/intake/` を参照します。
+- `.claude/skills/intake/SKILL.md`: `/intake` の起動点です。推奨配線を採用済みで、`.gitignore` は `.claude/*` を除外しつつ `!.claude/skills/` で再包含するため追跡対象です。判定基準・票の項目定義は複製せず、`.github/project-ai-rules.md`「intake フロー」と `.ai-playbook/intake/` を参照します。
 - `.claude/settings.json`: Claude Code のローカル設定（権限許可リスト等）です。`.gitignore` の対象で追跡せず、規範は定義しません。

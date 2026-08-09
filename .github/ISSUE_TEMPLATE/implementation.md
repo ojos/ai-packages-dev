@@ -23,7 +23,7 @@ about: レビューを伴う実装作業
 <!-- 「非対話で実行でき、合否が終了コードで判定できる」形で書く。
      「テストが通る」「動作確認する」等の自由記述ではなく、実行できるコマンドを記載すること。
      根拠: .ai-playbook/loop-workflow.md「前提: 完了条件は機械が検証できる形にする」、
-     .github/project-ai-rules.md「@intake コマンド」Step 6。 -->
+     .github/project-ai-rules.md「intake フロー」Step 6。 -->
 
 **検証コマンド**（最低 1 つ。空欄のまま実装へ渡さない）
 
