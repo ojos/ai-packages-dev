@@ -188,6 +188,7 @@ validate_markdown_links_in_tree() {
   python3 - "$base_dir" <<'PY'
 import re
 import sys
+import unicodedata
 from pathlib import Path
 
 base = Path(sys.argv[1]).resolve()
@@ -196,11 +197,49 @@ link_re = re.compile(r"\[[^\]]*\]\(([^)]+)\)")
 heading_re = re.compile(r"^#{1,6}\s+(.+?)\s*$", re.M)
 
 def slugify(text: str) -> str:
+    """見出しから GitHub のアンカー ID を再現する。
+
+    GitHub（github-slugger）の規則:
+      1. 小文字化する
+      2. 句読点・記号を落とす。ただし - と _ は残す
+      3. 空白を 1 文字ごとに - へ置き換える（**連続する - は畳まない**）
+
+    ASCII の句読点だけを列挙する実装にしてはいけない。全角括弧のような非 ASCII の
+    句読点が残り、GitHub 側では落ちているアンカーと食い違う。逆に _ を落としても
+    いけない（GitHub は残す）。どちらも実測で確認した:
+
+      ### `GITHUB_TOKEN` は設定しない
+        -> github_token-は設定しない            （_ は残る）
+      ### 利用側の設定手順（許可 author email）
+        -> 利用側の設定手順許可-author-email    （全角括弧は落ちる）
+
+    連続する - を畳んでもいけない。記号を挟んだ空白（`ローカル層 / 外部層`）は、
+    記号が落ちたあとに空白が 2 つ残り、GitHub 側では -- になる:
+
+      ## 受け入れ条件の二層（ローカル層 / 外部層）
+        -> 受け入れ条件の二層ローカル層--外部層
+      ## 装備オプション（--with-*）
+        -> 装備オプション--with-
+
+    実測は次で取れる（描画結果の id を見る）:
+      gh api repos/<owner>/<repo>/contents/<path> -H "Accept: application/vnd.github.html"
+
+    判定は Unicode カテゴリで行う。P*（句読点）と S*（記号）を落とせば、文字ごとの
+    列挙を持たずに両方を同時に満たせる。列挙は必ず取りこぼす（v0.9.1 の dry-run が
+    正しいリンク 4 件を誤検知して止まった）。
+    """
     s = text.strip().lower()
-    s = re.sub(r"[`*_~\[\](){}.!?,:;\"']", "", s)
-    s = re.sub(r"\s+", "-", s)
-    s = re.sub(r"-+", "-", s)
-    return s
+    kept = []
+    for ch in s:
+        if ch in "-_":
+            kept.append(ch)
+        elif ch.isspace():
+            kept.append("-")
+        elif unicodedata.category(ch)[0] in ("P", "S"):
+            continue
+        else:
+            kept.append(ch)
+    return "".join(kept)
 
 def heading_slugs(path: Path):
     txt = path.read_text(encoding="utf-8", errors="ignore")
