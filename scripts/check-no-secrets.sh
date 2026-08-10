@@ -12,15 +12,18 @@
 #
 # 検査は 4 つ:
 #
-#   1. 追跡前（git add --all --dry-run）
+#   1. 追跡前（git status --porcelain -z）
 #      追跡対象へ入る「前」に落とす。誤ってコミットしてからでは、削除コミットでは
 #      漏洩は解消しない（履歴からの除去と、当該資格情報の失効・再発行が必要になる）。
+#      列挙は NUL 区切り（#263）。パス名に改行を含むファイルも 1 レコードのまま
+#      崩れずに読める（後述）。
 #
-#   2. 追跡済み（git ls-files）
-#      CI で落とす。checkout 直後の作業ツリーはクリーンで dry-run の出力が空になる
-#      ため、追跡前の検査だけでは CI は「何も検査していない状態」で合格する。CI が
+#   2. 追跡済み（git ls-files -z）
+#      CI で落とす。checkout 直後の作業ツリーはクリーンで 1. の出力が空になるため、
+#      追跡前の検査だけでは CI は「何も検査していない状態」で合格する。CI が
 #      本来捕まえたいのは機密を含んだままの PR、すなわち追跡済みの状態である。
 #      両方あって初めて、どちらの経路でも機密が既定ブランチへ入らない。
+#      こちらも列挙は NUL 区切り（#263）。
 #
 #   3. .env.example に機密の値が入っていないこと
 #      機密でない設定既定値は共有する意味があるため、キー名で対象を絞る。
@@ -44,15 +47,14 @@ set -euo pipefail
 
 # ロケールを C に固定する。
 #
-# 理由 1（判定の解析）: 追跡前の検査は git add --dry-run の人間向け出力
-#   （add '<path>'）を解析する。この文字列が翻訳されるとパターンに一致せず、
-#   機密が混入していても「該当なし」として通る。失敗の仕方がサイレントな合格に
-#   なり、検知層として最悪の壊れ方をする。実測では git 2.53.0 の翻訳カタログに
-#   msgid "add '%s'" は含まれておらず（es/ko/fr/de を確認）、LANGUAGE を切り替えても
-#   出力は add '<path>' のままだった。つまり今は翻訳対象ではない。それでも固定
-#   するのは、人間向け出力に依存している事実は変わらず、ロケール依存を 1 行で
-#   切れるため。
-# 理由 2（並びの比較）: キー整合は sort / comm で集合差を取る。GNU sort の照合順は
+# #263 以前は「判定の解析」（追跡前が git add --dry-run の人間向け出力
+# add '<path>' を解析していたため、翻訳されるとパターンに一致しなくなる）も
+# 固定の理由だった。追跡前・追跡済みとも git status --porcelain -z /
+# git ls-files -z の機械可読出力（ステータス文字とパスのみで、翻訳される
+# メッセージ文字列を含まない）へ置き換えたため、この理由は無くなった
+# （依存を外したのでここに書く）。
+#
+# 残る理由（並びの比較）: キー整合は sort / comm で集合差を取る。GNU sort の照合順は
 #   ロケールで変わり（実測: C では MYVAR < MY_VAR、en_US.utf8 では MY_VAR < MYVAR）、
 #   両辺が別の照合順で並ぶと comm は "not in sorted order" を警告しつつ終了コード 0 を
 #   返し、誤った差集合をそのまま使わせる（実測: 存在しないキー AB が片側だけに
@@ -84,16 +86,46 @@ fatal() {
 # 検査の主題は「検査が成立していないことを合格にしない」ことであり、成立しなかった
 # 理由（index の破損・権限・パスの問題など）が読めないと主題と噛み合わない。
 #
-# 一方で --dry-run は成功時にも警告（embedded git repository・改行コード等）を
-# 出しうるため、常時 stderr をそのまま出すと通常運用で毎回ノイズが出る。それは
+# 一方でこれらの git コマンドは成功時にも警告（embedded git repository・改行コード
+# 等）を出しうるため、常時 stderr をそのまま出すと通常運用で毎回ノイズが出る。それは
 # 「赤を無視する習慣」を作る経路であり、出力そのものが読まれなくなる。そのため
 # 一時ファイルへ落とし、失敗したときだけ見せる。
 #
 # mktemp はテンプレート付きで呼ぶ。$$ 由来の予測可能な名前は使わない（同名を先に
 # 置かれると書き込み先を乗っ取られる）。後始末は EXIT トラップで行う（この
 # スクリプトはここより前で trap を張っていない）。
+#
+# GIT_STDERR に加え、追跡前 / 追跡済みそれぞれの列挙（NUL 区切り）も一時ファイルへ
+# 落とす。bash の変数（"$(...)" によるコマンド置換）は NUL バイトを保持できず、
+# 埋め込まれた NUL がそのまま消えてしまう（末尾の改行除去とは別の、bash 自体の
+# 制約）。NUL 区切りのまま `while IFS= read -r -d '' ...` で読むには、変数ではなく
+# ファイルとして経由させる必要がある。
+#
+# trap は 3 つの mktemp より「前」に張る。あとから張ると、2 つ目・3 つ目の mktemp が
+# 失敗して fatal で抜けたときに、先に作られたファイルが消えずに残る（一時領域の
+# 容量やファイル数の上限に当たった環境で起きる）。変数は空で先に宣言する。
+#
+# 削除は関数に置き、パスを必ず二重引用符で囲む。${VAR:+"$VAR"} を rm の引数へ
+# 直接展開する形でも bash では引用が保たれる（実測: TMPDIR にスペースと * を
+# 含めても巻き添え削除は起きなかった）が、展開結果が引用されるかどうかはシェルの
+# 版ごとに確かめないと読み取れない。この雛形は任意の環境へ配布され、macOS の
+# bash 3.2 でも動く必要があるため、確かめなくても読める形にする。
+# -- を付けて、パスが rm のオプションとして解釈される経路も閉じる。
+GIT_STDERR=""
+PENDING_RAW=""
+TRACKED_RAW=""
+# trap から呼ぶため、静的解析からは呼び出しが見えない。
+# shellcheck disable=SC2329
+cleanup_temp_files() {
+  [[ -n "$GIT_STDERR" ]] && rm -f -- "$GIT_STDERR"
+  [[ -n "$PENDING_RAW" ]] && rm -f -- "$PENDING_RAW"
+  [[ -n "$TRACKED_RAW" ]] && rm -f -- "$TRACKED_RAW"
+  return 0
+}
+trap cleanup_temp_files EXIT
 GIT_STDERR="$(mktemp "${TMPDIR:-/tmp}/check-no-secrets.XXXXXX")" || fatal "一時ファイルを作成できませんでした。stderr の退避が成立しません。"
-trap 'rm -f "$GIT_STDERR"' EXIT
+PENDING_RAW="$(mktemp "${TMPDIR:-/tmp}/check-no-secrets-pending.XXXXXX")" || fatal "一時ファイルを作成できませんでした。追跡前の一覧が保存できません。"
+TRACKED_RAW="$(mktemp "${TMPDIR:-/tmp}/check-no-secrets-tracked.XXXXXX")" || fatal "一時ファイルを作成できませんでした。追跡済みの一覧が保存できません。"
 
 # 失敗したときだけ、退避しておいた git の stderr を見せる。正常時は無音のまま。
 show_git_stderr_if_any() {
@@ -137,33 +169,21 @@ SECRET_PATH_RE='(^|/)(\.env|\.netrc|\.pgpass|\.git-credentials|id_(rsa|dsa|ecdsa
 # .env.example については下の「機密の値」検査を第 2 層として持つ。
 SECRET_EXEMPT_RE='\.(example|sample|template|dist|pub)$'
 
-# 相対パスの一覧（改行区切り）から、機密とみなすものだけを返す。
+# 1 パスが機密とみなす対象かどうかを判定する。
 #
 # grep へ渡さず bash の =~ で判定するのは、grep の終了コード（1 = 該当なし /
 # 2 = エラー）をパイプライン越しに読み分けようとすると、エラーを「該当なし」と
 # 取り違える経路ができるため。ここでは外部プロセスを一切挟まない。
-scan_paths() {
-  local list="$1" path base found=""
-  while IFS= read -r path; do
-    [[ -n "$path" ]] || continue
-    if [[ ! "$path" =~ $SECRET_PATH_RE ]]; then
-      continue
-    fi
-    base="${path##*/}"
-    if [[ "$base" =~ $SECRET_EXEMPT_RE ]]; then
-      continue
-    fi
-    found="${found}${path}"$'\n'
-  done <<<"$list"
-  printf '%s' "$found"
-}
-
-report_hits() {
-  local label="$1" hits="$2" path
-  while IFS= read -r path; do
-    [[ -n "$path" ]] || continue
-    ng "$label: $path"
-  done <<<"$hits"
+is_secret_path() {
+  local path="$1" base
+  if [[ ! "$path" =~ $SECRET_PATH_RE ]]; then
+    return 1
+  fi
+  base="${path##*/}"
+  if [[ "$base" =~ $SECRET_EXEMPT_RE ]]; then
+    return 1
+  fi
+  return 0
 }
 
 # ── 0. 検査が成立する状態か ──────────────────────────────────────────────────
@@ -177,64 +197,85 @@ fi
 
 # ── 1. 追跡前（追跡対象へ入る前に落とす） ────────────────────────────────────
 #
-# --dry-run は index を変更しない。パス指定を `.` にしてルート配下へ限り、
-# 下の git ls-files と同じ広さにそろえる（プロジェクトルートがリポジトリの
-# サブディレクトリである構成でも、2 経路の対象が食い違わないようにする）。
+# #263 より前は git add --all --dry-run の人間向け出力（add '<path>'）を行単位で
+# 解析していた。パス名に改行が含まれると、git はその改行をそのまま出力するため
+# 1 パスが 2 行へ割れ、`add '<path>'` の行末アンカー一致が成立せず検知できな
+# かった（実測: git 2.53.0 で追跡前・追跡済みとも SECRETS_PASS まで通過）。
 #
-# core.quotePath=false を渡す理由は下の追跡済み検査に書く。dry-run 側は実測では
-# 引用しないが（git 2.53.0）、同じ一覧を作る 2 経路で git の設定依存を片方だけ
-# 残すと、将来どちらかが黙って別の書式になる。
-pending_raw=""
-if ! pending_raw="$(git -c core.quotePath=false add --all --dry-run -- . 2>"$GIT_STDERR")"; then
+# 塞ぎ方: 列挙そのものを NUL 区切りへ変える。git add --dry-run に -z は無いため、
+# 同じ「index へまだ入っていない変更」を機械可読で返す git status --porcelain -z
+# へ置き換える（出力書式の解析そのものが変わる。追跡済み側の ls-files -z と対で
+# 読むこと）。
+#
+# --untracked-files=all: 既定（normal）は未追跡ディレクトリを "?? dir/" と 1 行に
+# 畳んでしまい、配下の credentials.json が見えなくなる（実測）。add --dry-run は
+# 元々ファイル単位で列挙していたため、同じ広さに戻す。
+# --no-renames: 既定では index 側（ステージ済み）の改名が 1 レコード 2 パス
+# （新パス\0旧パス\0）になり、NUL 区切りのままでは「次のレコード」との境界が
+# 曖昧になる。無効化すると改名は旧パスの削除・新パスの追加という 2 レコードに
+# 分かれ、1 レコード = 1 パスの前提が常に成り立つ（実測: 作業ツリー側の改名は
+# 既定のままでも常にこの 2 レコード形であり、影響を受けない）。
+# パス指定を `.` にしてルート配下へ限るのは、下の git ls-files と同じ広さに
+# そろえるため（プロジェクトルートがリポジトリのサブディレクトリである構成でも、
+# 2 経路の対象が食い違わないようにする）。
+if ! git status --porcelain -z --untracked-files=all --no-renames -- . \
+      >"$PENDING_RAW" 2>"$GIT_STDERR"; then
   show_git_stderr_if_any
-  fatal "git add --dry-run に失敗しました。追跡前の検査が成立しません。"
+  fatal "git status --porcelain -z に失敗しました。追跡前の検査が成立しません。"
 fi
 
-# add '<path>' の形だけを拾う（-A は削除を remove '<path>' として出すが、削除は
-# 追跡対象へ入る変更ではない）。パスの取り出しは貪欲一致 + 行末アンカーなので、
-# パスに ' を含む場合も最初と最後の ' の間が正しく取れる。
+# 各レコードは "XY<space><path>" で、X が index 側・Y が作業ツリー側の 1 文字
+# ステータス。数えるのは「これから git add --all で追跡対象へ入る変更」のみ:
 #
-# 既知の限界: パス名に改行が含まれると、この経路も下の追跡済み経路も検知できない。
-# git はどちらの出力でも改行をそのまま出すため、行単位の解析が 2 行へ割れて
-# `add '<path>'` にも一致しなくなる（実測: git 2.53.0 で追跡済み・追跡前とも
-# すり抜けて SECRETS_PASS）。塞ぐには両経路の列挙を NUL 区切りへ変える必要があり
-# （ls-files には -z があるが add --dry-run には無く、別コマンドへの設計変更になる）、
-# 本スクリプトの範囲を超えるため別票で扱う。
-#
-# なお " や \ を含むパスは引用形式が変わらないため、この限界に当たらない（実測:
-# my"credentials.json / weird\credentials.json はいずれも 'add ...' 形で拾える）。
-pending="$(printf '%s\n' "$pending_raw" | sed -n "s/^add '\(.*\)'\$/\1/p")"
-
-pending_hits="$(scan_paths "$pending")"
-if [[ -n "$pending_hits" ]]; then
-  report_hits "追跡対象へ入ろうとしています" "$pending_hits"
-fi
+#   Y が空白 … 作業ツリーに変更が無い（index 側だけの状態）。既に追跡済みなので
+#              下の git ls-files -z が拾う。ここで重複計上しない。
+#   Y = D    … 作業ツリーでの削除。git add --all は remove として扱い、削除は
+#              追跡対象へ「入る」変更ではない（#263 以前の add --dry-run 版も
+#              remove '<path>' 行を対象外にしていたのと同じ扱い）。
+#   Y = !    … 無視対象。--ignored を渡していないため通常は現れないが、将来
+#              オプションを増やしたときに備えて明示的に除外する。
+#   それ以外（?? の未追跡や M・A・T・C 等の未ステージ変更）は対象に含める。
+pending_count=0
+while IFS= read -r -d '' pending_rec; do
+  [[ -n "$pending_rec" ]] || continue
+  pending_y="${pending_rec:1:1}"
+  if [[ "$pending_y" == ' ' || "$pending_y" == 'D' || "$pending_y" == '!' ]]; then
+    continue
+  fi
+  pending_path="${pending_rec:3}"
+  pending_count=$((pending_count + 1))
+  if is_secret_path "$pending_path"; then
+    ng "追跡対象へ入ろうとしています: $pending_path"
+  fi
+done <"$PENDING_RAW"
 
 # ── 2. 追跡済み（CI で落とす層） ─────────────────────────────────────────────
 #
-# core.quotePath=false を必ず渡す。既定（true）では非 ASCII やスペースを含むパスが
-# "..." で囲まれ、非 ASCII 部分は \NNN の 8 進エスケープへ置き換わる。閉じ引用符が
-# 付くことで名前の末尾を見る判定が阻まれ、追跡済みの「非 ASCII ディレクトリ/.env」が
-# すり抜ける。また .env.example の除外判定も末尾が example" になって成立せず、
-# 逆に誤検知する。1 行で両方を塞げる。
-tracked=""
-if ! tracked="$(git -c core.quotePath=false ls-files -- . 2>"$GIT_STDERR")"; then
+# -z で列挙する（#263）。ls-files -z / status --porcelain -z は core.quotePath の
+# 設定に関わらずパスを一切引用・エスケープせず生バイト列のまま NUL 区切りで返す
+# （実測: git 2.53.0、非 ASCII パスも 8 進エスケープされない）。#263 より前は
+# newline 区切りの ls-files に -c core.quotePath=false を渡すことで同じ効果を
+# 得ていたが、-z へ移ったことでその依存が外れたため、ここでは渡していない
+# （依存を外したのでここに書く）。
+if ! git ls-files -z -- . >"$TRACKED_RAW" 2>"$GIT_STDERR"; then
   show_git_stderr_if_any
   fatal "git ls-files に失敗しました。追跡済みの検査が成立しません。"
 fi
 
-if [[ -z "$tracked" ]]; then
+if [[ ! -s "$TRACKED_RAW" ]]; then
   printf '[secrets] 追跡ファイルが 1 件もありません。\n' >&2
   printf '[secrets] 出力が空なのは「機密が無い」ではなく「検査していない」状態です。\n' >&2
   fatal "検査が成立しないため失敗させます。"
 fi
 
-tracked_count="$(printf '%s\n' "$tracked" | grep -c '' || true)"
-
-tracked_hits="$(scan_paths "$tracked")"
-if [[ -n "$tracked_hits" ]]; then
-  report_hits "追跡対象に含まれています" "$tracked_hits"
-fi
+tracked_count=0
+while IFS= read -r -d '' tracked_path; do
+  [[ -n "$tracked_path" ]] || continue
+  tracked_count=$((tracked_count + 1))
+  if is_secret_path "$tracked_path"; then
+    ng "追跡対象に含まれています: $tracked_path"
+  fi
+done <"$TRACKED_RAW"
 
 # ── .env / .env.example のキー抽出 ───────────────────────────────────────────
 #
@@ -441,7 +482,7 @@ fi
 # ── 結果 ─────────────────────────────────────────────────────────────────────
 
 printf '[secrets] 検査したパス: 追跡済み %s 件 / 追跡前 %s 件\n' \
-  "$tracked_count" "$(printf '%s\n' "$pending" | grep -c '[^[:space:]]' || true)"
+  "$tracked_count" "$pending_count"
 
 if [[ "$VIOLATIONS" -gt 0 ]]; then
   printf '[secrets] 機密の混入を %s 件検出しました。\n' "$VIOLATIONS" >&2
