@@ -32,11 +32,20 @@ install_agy_if_missing() {
   echo "[install-ai-tools] installing agy (Antigravity CLI) ..."
   curl -fsSL https://antigravity.google/cli/install.sh | bash
   # インストーラは ~/.local/bin へ置く。PATH に無ければ、導入直後の同一シェルからは
-  # 見えない。ここで失敗として扱わず、次に何をすればよいかを言う。
+  # 見えない。これは失敗ではないので、次に何をすればよいかを言うに留める。
+  #
+  # ただし「PATH に無いだけ」と「そもそも置かれていない」を取り違えない。実体の
+  # 有無で分ける。curl 自体の失敗は set -e + pipefail が捕まえるが、インストーラが
+  # 0 で終わりながらバイナリを置かない経路はそれをすり抜ける。取り違えると、導入に
+  # 失敗しているのに成功として先へ進む。
   if command -v agy >/dev/null 2>&1; then
     echo "[install-ai-tools] agy installed: $(command -v agy)"
-  else
+  elif [[ -x "$HOME/.local/bin/agy" ]]; then
     echo "[install-ai-tools] agy installed to ~/.local/bin (PATH に無いため現シェルからは見えません)"
+  else
+    echo "[install-ai-tools] error: インストーラは完了しましたが agy が見つかりません" >&2
+    echo "                   ~/.local/bin/agy が存在しません。導入は失敗しています。" >&2
+    return 1
   fi
   echo "[install-ai-tools] agy は OAuth のみです。初回は対話で 'agy' を起動してログインしてください。"
 }
@@ -96,7 +105,14 @@ disable_agy_telemetry() {
   # （/tmp は別ファイルシステムのことがあり、その場合 mv が原子的にならない）。
   # テンプレートを明示するのは BSD 系の mktemp が必須とするため。
   tmp="$(mktemp "$dir/.settings.json.XXXXXX")"
-  jq '.enableTelemetry = false' "$AGY_SETTINGS" > "$tmp"
+  # jq が落ちたら一時ファイルを残さない。作成先が設定ディレクトリ直下なので、
+  # 失敗のたびに .settings.json.XXXXXX が積み上がり、利用者の設定ディレクトリを
+  # 汚し続ける（set -e で即座に抜けるため、後始末の機会もここしかない）。
+  if ! jq '.enableTelemetry = false' "$AGY_SETTINGS" > "$tmp"; then
+    rm -f "$tmp"
+    echo "[install-ai-tools] error: settings.json の書き換えに失敗しました: $AGY_SETTINGS" >&2
+    return 1
+  fi
   chmod 600 "$tmp"
   mv "$tmp" "$AGY_SETTINGS"
   echo "[install-ai-tools] agy telemetry disabled (enableTelemetry=false)"
