@@ -58,7 +58,18 @@ ran_any=1
 
 require_cmd shellcheck "install it with: sudo apt-get update && sudo apt-get install -y shellcheck"
 echo "[acceptance] (shell) shellcheck"
-shellcheck -x packages/devcontainer-bootstrap/bootstrap.sh packages/devcontainer-bootstrap/doctor.sh
+# 出力書式を -f gcc に固定する理由: 既定の tty 書式は指摘箇所のソース行をそのまま
+# 出力する。bootstrap.sh / doctor.sh は日本語コメントが密で、ロケールが POSIX の
+# この環境では shellcheck がその行をエンコードできず commitBuffer エラー
+# （終了コード 2）で落ち、指摘本文が読めなくなる（#252）。すり抜けは起きない
+# （非ゼロ終了で本スクリプトは set -e により落ちる）が、赤の理由が読めないまま
+# 止まるのはゲートへの信頼を削る。ソース行を出さない書式に固定すれば、日本語
+# コメントの近くで指摘が出たかどうかに関わらず本文が読める。
+#
+# LC_ALL は立てない: 可搬なロケール名が環境ごとに違う（C.UTF-8 / en_US.UTF-8）ため、
+# どちらを書いても環境依存が残る。#236 の tests/test-generated-shellcheck.sh も
+# 同じ理由で -f gcc を選んでいる。指摘の所在は file:line:col で足りる。
+shellcheck -x -f gcc packages/devcontainer-bootstrap/bootstrap.sh packages/devcontainer-bootstrap/doctor.sh
 
 # ── CI: Self devcontainer credential isolation ───────────────────────────────
 # このリポジトリ自身の devcontainer も、生成物と同じ「資格情報をホストから
