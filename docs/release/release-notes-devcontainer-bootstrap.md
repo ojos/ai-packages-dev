@@ -6,6 +6,30 @@
 >
 > 同じ理由で、issue 参照は `ojos/ai-packages-dev#NNN` の形で書いてください。裸の `#NNN` は GitHub のオートリンクが**配布先リポジトリの issue** として解決するため、配布後は存在しない issue や無関係な issue を指します。
 
+## v0.10.0
+
+### Summary
+- **Antigravity CLI（`agy`）を選べるようにした**（ojos/ai-packages-dev#271）。`--with-antigravity` を新設し、CLI の導入・永続化・テレメトリ無効化を配線する。ai-playbook v0.2.0 が配布した `scripts/second-opinion-review.sh --engine antigravity` は、これまで生成物では選んでも動かなかった。**機能追加のみで、既存の生成物と既存フラグの挙動は変わらない。**
+- **`--with-gemini` には束ねていない**（ojos/ai-packages-dev#271）。認証手段が違う（API キー / OAuth）ため、片方だけ使う構成を機構で表現できるようにする。束ねると使わない CLI が必ず入る。
+- **永続 volume は `gemini` と共有する**（ojos/ai-packages-dev#271）。`agy` は資格情報を `~/.gemini/antigravity-cli/` に置くため、`--with-gemini` / `--with-antigravity` の**どちらか一方でも指定すれば `/home/vscode/.gemini` の named volume が 1 つだけ**作られる。両方指定しても重複しない。
+- **テレメトリを既定で無効化する**（ojos/ai-packages-dev#271）。`~/.gemini/antigravity-cli/settings.json` の `enableTelemetry` を `false` へマージする。冪等で非破壊、`jq` 不在と壊れた JSON では非 0 で停止する。**無効化されるのは CLI のみで、Antigravity IDE は別設定。**
+- `--with-antigravity` 指定時のみ、`.env.example` へ第二意見のエンジン選択欄（`SECOND_OPINION_ENGINE`）が入る。
+
+### Highlights
+
+- **volume は名前まで共有する（ojos/ai-packages-dev#271）**: ディレクトリだけ共有して名前を分けると、`--with-antigravity` 単独で作った `antigravity-storage` に対し、あとから `--with-gemini` を足した構成が `gemini-storage` を見に行く。同じ場所を指しているのに別 volume へ切り替わり、**ログイン状態が消えたように見える**。名前も `gemini-storage` に寄せた。
+- **重複は機構で潰す（ojos/ai-packages-dev#271）**: volume 生成の条件が「単一フラグ → 単一ディレクトリ」から外れる唯一の例外。重複したまま流すと定義・マウント・所有権修復・実マウント検査がすべて 2 行ずつになり、**compose は同じ名前の volume を 2 回定義した時点で落ちる**。併用構成で各行が 1 本であることを回帰テストで固定した。
+- **`agy` は npm 配布ではない（ojos/ai-packages-dev#271。実測）**: `install_if_missing <cmd> <npm-pkg>` の同型に乗らず、配布元のインストーラを取得して `~/.local/bin/agy` へ置く。インストーラが 0 で終わりながらバイナリを置かない経路があるため、実体の有無で「PATH に無いだけ」と「置かれていない」を分け、後者は非 0 で止める。
+- **テレメトリのオプトアウトは設定ファイルしか手段が無い（ojos/ai-packages-dev#271。実測）**: `AGY_*` にテレメトリ系の環境変数は無く、`DO_NOT_TRACK` も非対応（agy 1.1.11 のバイナリを実測）。`settings.json` は `agy` 自身も書く（`colorScheme` / `trustedWorkspaces` 等）ため、上書きではなくマージする。
+- **`jq` の `//` は false も代替側へ落とす（ojos/ai-packages-dev#271）**: `.enableTelemetry // empty` で判定すると「既に false」を「未設定」と誤り、毎回書き込みが起きる。値を直読みする。
+- **雛形の地の文へ装備名を列挙しない（ojos/ai-packages-dev#271）**: ヒアドキュメント内は構成によらず生成物へ入るため、フラグ名を列挙すると選ばれていない装備の名前が残る。「そのフラグを指定しなければ関連する記述が 1 行も入らない」を、生成物ツリー全体の検査で担保している。
+
+### 移行
+
+- **既存の生成物は、再生成しない限り影響を受けない。** 追加されたのはフラグ 1 つで、既存フラグの挙動は変わらない。
+- `--with-antigravity` を使う場合、**`agy` は OAuth のみ**で API キーに対応しない。導入だけでは使えず、コンテナ内で対話的に `agy` を起動して初回ログインを済ませる必要がある。
+- 既に `--with-gemini` で生成済みのプロジェクトへ `--with-antigravity` を足して再生成しても、**volume 名は `gemini-storage` のままなので既存のログイン状態は保持される。**
+
 ## v0.9.1
 
 ### Summary
