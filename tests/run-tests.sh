@@ -13,10 +13,15 @@
 # 要らない。所要時間も秒単位に収める。scripts/acceptance.sh はこれを DCB テスト
 # （約 4 分）より前に置き、安い検査から落ちるようにしている。
 #
-# 例外は test-agy-telemetry.sh で、こちらは scripts/install-ai-tools.sh を実行する
-# ため jq を要する。持ち込んでいるのは検査対象スクリプト自身の依存で、テスト側が
-# 増やした依存ではない（scripts/acceptance.sh も同じ理由で jq を前提にしている）。
-# ネットワークへは出ない（導入処理は PATH 上の stub で skip させる）。
+# 例外が 2 つある。いずれも持ち込んでいるのは検査対象スクリプト自身の依存で、
+# テスト側が増やした依存ではない。どちらもネットワークへは出ない。
+#
+#   test-agy-telemetry.sh      scripts/install-ai-tools.sh を実行するため jq を要する
+#                              （scripts/acceptance.sh も同じ理由で jq を前提にしている）。
+#                              導入処理は PATH 上の stub で skip させる。
+#   test-release-anchor-slug.sh
+#                              scripts/release-packages.sh のアンカー検証が python3 で
+#                              書かれているため python3 を要する。
 
 set -uo pipefail
 
