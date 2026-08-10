@@ -121,6 +121,40 @@ printf 'x\n' > "$repo/id_rsa"
 run_check "$repo"
 assert_fail "追跡前の報告" "追跡対象へ入ろうとしています"
 
+# ── 改行を含むパス名（#263） ────────────────────────────────────────────────
+#
+# 行単位の解析では 1 パスが 2 行へ割れ、追跡前・追跡済みの両経路とも検知できな
+# かった（#263 で実測、git 2.53.0）。列挙を NUL 区切りへ変えたことで、両経路とも
+# 1 レコードのまま扱えることを確認する。needle は改行をまたがない末尾側
+# （credentials.json）で照合する（先頭側は ng() の出力自体が改行を含むため、
+# 単純な行単位の grep とは相性が悪い）。
+#
+# ディレクトリ名の側に改行を仕込む（nl<改行>dir/credentials.json）。SECRET_PATH_RE の
+# 判定は `/` 区切りの前で発火する設計であり、改行そのものを区切りとはみなさない。
+# 改行がファイル名側にしか無い形（nl<改行>credentials.json、`/` を挟まない）は
+# レガシー実装でも SECRET_PATH_RE が一致しない対象で、#263 の主題（行単位の解析が
+# 1 パスを 2 行へ割ってしまい、パスの取り出しそのものが失敗すること）を確認する
+# には向かない。実測（下の対照）: レガシー実装の `sed -n "s/^add '\(.*\)'\$/\1/p"` は
+# この形でも改行の位置に関わらず 1 件も取り出せない（空文字列）。
+NEWLINE_SECRET_NAME=$'nl\ndir/credentials.json'
+
+it "追跡前: 改行を含むパス名の credentials.json を検知する（陽性、#263）"
+repo="$(new_repo)"
+mkdir -p "$repo/${NEWLINE_SECRET_NAME%/*}"
+printf '{}\n' > "$repo/$NEWLINE_SECRET_NAME"
+run_check "$repo"
+if [[ "$CHECK_RC" -eq 0 ]]; then
+  fail "落ちるべきところで通過した: $CHECK_OUT"
+elif ! printf '%s' "$CHECK_OUT" | grep -q 'SECRETS_FAIL'; then
+  fail "SECRETS_FAIL が出ていない: $CHECK_OUT"
+elif ! printf '%s' "$CHECK_OUT" | grep -q '追跡対象へ入ろうとしています'; then
+  fail "追跡前の報告ラベルが無い: $CHECK_OUT"
+elif ! printf '%s' "$CHECK_OUT" | grep -qF 'credentials.json'; then
+  fail "パス名が報告に出ていない: $CHECK_OUT"
+else
+  pass
+fi
+
 # ── 追跡済みの経路（CI で落とす層） ───────────────────────────────────────────
 
 it "追跡済み: コミット済みの .env を検知する（陽性）"
@@ -145,6 +179,26 @@ else
   assert_fail "クリーンな作業ツリー" ".env"
 fi
 
+it "追跡済み: 改行を含むパス名の credentials.json を検知する（陽性、#263）"
+# 追跡前の検査が空になる状況（作業ツリーがクリーン）でも、追跡済み経路が拾うこと
+# まで確認する（上の「作業ツリーがクリーンでも検知する」と同じ狙い）。
+repo="$(new_repo)"
+mkdir -p "$repo/${NEWLINE_SECRET_NAME%/*}"
+printf '{}\n' > "$repo/$NEWLINE_SECRET_NAME"
+( cd "$repo" && git add -f -- "$NEWLINE_SECRET_NAME" && $GIT_AS commit -q -m add-newline-path ) >/dev/null 2>&1
+run_check "$repo"
+if [[ "$CHECK_RC" -eq 0 ]]; then
+  fail "落ちるべきところで通過した: $CHECK_OUT"
+elif ! printf '%s' "$CHECK_OUT" | grep -q 'SECRETS_FAIL'; then
+  fail "SECRETS_FAIL が出ていない: $CHECK_OUT"
+elif ! printf '%s' "$CHECK_OUT" | grep -q '追跡対象に含まれています'; then
+  fail "追跡済みの報告ラベルが無い: $CHECK_OUT"
+elif ! printf '%s' "$CHECK_OUT" | grep -qF 'credentials.json'; then
+  fail "パス名が報告に出ていない: $CHECK_OUT"
+else
+  pass
+fi
+
 # ── 非 ASCII パス（core.quotePath による検知漏れ） ─────────────────────────────
 
 it "非 ASCII を含むパス配下の追跡済み .env を検知する"
@@ -166,11 +220,11 @@ else
   pass
 fi
 
-it "非 ASCII を含むパスの報告がエスケープされていない生パスである（quotePath 固定の回帰）"
+it "非 ASCII を含むパスの報告がエスケープされていない生パスである（-z 列挙の回帰）"
 # 報告が "\346\227\245..." の形で出るなら、判定側も同じエスケープ済み文字列を見て
-# いる。上の 2 件検知と対にして、`git -c core.quotePath=false` が外れたことを
-# 検知できるようにする（外れると 1 件が漏れ、もう 1 件は .env.example の除外が
-# 崩れて誤検知へ化ける）。
+# いる。上の 2 件検知と対にして、`git ls-files -z` が非 -z（core.quotePath 既定の
+# true）へ戻ったことを検知できるようにする（戻ると 1 件が漏れ、もう 1 件は
+# .env.example の除外が崩れて誤検知へ化ける）。
 if printf '%s' "$CHECK_OUT" | grep -qF "$NON_ASCII_DIR/.env"; then
   if printf '%s' "$CHECK_OUT" | grep -q '\\346'; then
     fail "報告に 8 進エスケープが混じっている: $CHECK_OUT"
@@ -394,11 +448,11 @@ assert_fail ".env.example 不在" ".env.example がありません"
 #
 # 検査が成立しなかった理由（index の破損・権限・パスの問題など）が読めないと、
 # 「検査が成立していないことを合格にしない」という主題と噛み合わない。一方で
-# 正常時は無音のままであること（--dry-run が出しうる警告を毎回見せるとノイズになる）
-# も対で確認する。
+# 正常時は無音のままであること（git status / ls-files が出しうる警告を毎回見せると
+# ノイズになる）も対で確認する。
 
-it "追跡前（git add --dry-run）が失敗すると、git の出力が stderr へ出る"
-# index を壊して git add --dry-run 自体を失敗させる（実測: fatal: index file ...）。
+it "追跡前（git status --porcelain -z）が失敗すると、git の出力が stderr へ出る"
+# index を壊して git status --porcelain -z 自体を失敗させる（実測: fatal: index file ...）。
 repo="$(new_repo)"
 printf 'garbage' > "$repo/.git/index"
 run_check "$repo"
@@ -406,7 +460,7 @@ if [[ "$CHECK_RC" -eq 0 ]]; then
   fail "落ちるべきところで通過した: $CHECK_OUT"
 elif ! printf '%s' "$CHECK_OUT" | grep -q 'SECRETS_FAIL'; then
   fail "SECRETS_FAIL が出ていない: $CHECK_OUT"
-elif ! printf '%s' "$CHECK_OUT" | grep -qF 'git add --dry-run に失敗しました'; then
+elif ! printf '%s' "$CHECK_OUT" | grep -qF 'git status --porcelain -z に失敗しました'; then
   fail "既存の fatal 文言が無い: $CHECK_OUT"
 elif ! printf '%s' "$CHECK_OUT" | grep -qi 'index'; then
   fail "git 側の出力（index に関する内容）が出ていない: $CHECK_OUT"
@@ -415,15 +469,15 @@ else
 fi
 
 it "追跡済み（git ls-files）が失敗すると、git の出力が stderr へ出る"
-# git add --dry-run は成功させ、ls-files だけを失敗させるため、その呼び出しだけを
-# 横取りする git スタブを PATH の先頭へ置く。
+# git status --porcelain -z は成功させ、ls-files だけを失敗させるため、その呼び出し
+# だけを横取りする git スタブを PATH の先頭へ置く。
 repo="$(new_repo)"
 fake_git_dir="$(new_workdir)/fakebin"
 mkdir -p "$fake_git_dir"
 real_git="$(command -v git)"
 cat > "$fake_git_dir/git" <<STUB
 #!/usr/bin/env bash
-if [[ "\${1:-}" == "-c" && "\${2:-}" == "core.quotePath=false" && "\${3:-}" == "ls-files" ]]; then
+if [[ "\${1:-}" == "ls-files" && "\${2:-}" == "-z" ]]; then
   echo "stub: ls-files が失敗しました（permission denied を模す）" >&2
   exit 128
 fi
