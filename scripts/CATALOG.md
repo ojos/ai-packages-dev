@@ -27,4 +27,5 @@
 | `scripts/loop-gate.sh` | push / PR 前のローカル事前ゲート。`verify.sh` と第二意見を直列化する単一入口（`GATE_PASS`）。 |
 | `scripts/verify-commit-identity.sh` | コミット履歴の identity 検証（email のみで判定）。CI（identity-guard）と手元で共用。 |
 | `scripts/update-release-status.sh` | README のリリース状況更新。 |
+| `scripts/measure-agent-usage.sh` | サブエージェントの役割別トークン使用量を集計するレポート（合否判定はしない）。親セッションとサブエージェントの両方の記録を読み、全体内とサブエージェント内の 2 つの分母で比率を出す。 |
 | `scripts/CATALOG.md` | `scripts/` 配下の索引（本ファイル）。 |
