@@ -21,6 +21,10 @@
 # ため代表 1 件で足りるが、装備フラグは変える（--with-gemini + 規範配置で
 # scripts/second-opinion-review.sh が増える）。素の構成と全部入りの構成の 2 件を見る。
 #
+# 全部入りには --with-antigravity も含める。このフラグは install-ai-tools.sh へ
+# 関数 2 つ分（agy の導入とテレメトリ無効化）を丸ごと足す唯一のフラグで、外すと
+# その本体が静的解析を一度も通らないまま配布される。
+#
 # 空振りさせない: 生成に失敗した、あるいは対象が 0 件だった場合を合格にしない。
 # 検証していないことを合格として報告するのが最悪であり、この不変条件は
 # scripts/acceptance.sh が ran_any で採っている考え方と同じ。
@@ -94,7 +98,7 @@ check_generated_scripts "$out" "素の構成"
 outf="$(new_workdir)/full"
 bash "$BOOTSTRAP" \
   --project-name test --languages node,go,python,php,rust,ruby \
-  --with-aws --with-gcp --with-claude --with-gemini --with-copilot \
+  --with-aws --with-gcp --with-claude --with-gemini --with-antigravity --with-copilot \
   --playbook-from "$PLAYBOOK_SRC" \
   --output-dir "$outf" >/dev/null 2>&1
 check_generated_scripts "$outf" "全部入りの構成"
