@@ -334,7 +334,7 @@ push / PR 作成後の最終ゲートを、このリポジトリで具体化し�
 
 委譲先のモデルとツールは、運用ルールの文言ではなく `.claude/agents/` の frontmatter で
 固定します。指示文による呼びかけは迂回できますが、frontmatter は実行環境が読む機構
-なので迂回できません（`.ai-playbook/shared-ai-rules.md` の「機構で保証する」）。
+なので迂回できません（`.ai-playbook/shared-ai-rules.md` の「機構化の判断基準」）。
 
 この表は `.claude/agents/` の定義の写しです。`tests/test-subagent-roles.sh` が両者の
 一致を機械照合するため、片方だけを変更すると赤になります。
