@@ -27,7 +27,9 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y shellcheck
 
       - name: Shellcheck
-        run: shellcheck -x packages/devcontainer-bootstrap/bootstrap.sh packages/devcontainer-bootstrap/doctor.sh
+        # -f gcc の理由は scripts/acceptance.sh の同じ呼び出しに置いたコメントを参照
+        # （#252）。ここは CI 側のミラーで、書式を必ず追随させる。
+        run: shellcheck -x -f gcc packages/devcontainer-bootstrap/bootstrap.sh packages/devcontainer-bootstrap/doctor.sh
 
   self-devcontainer:
     name: Self devcontainer credential isolation
