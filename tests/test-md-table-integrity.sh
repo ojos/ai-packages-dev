@@ -83,12 +83,22 @@ outside_fences() {
 #   NO_SEPARATOR  区切り行を持たないブロック。分断で取り残された行がこれになる
 #   NO_HEADER     区切り行で始まるブロック。ヘッダー行が失われた形
 #
-# 出力: KIND<TAB>ブロック先頭の行番号<TAB>ブロック先頭の行内容
+# 出力: KIND<TAB>ファイル<TAB>ブロック先頭の行番号<TAB>ブロック先頭の行内容
+#
+# ファイル名は呼び出し元が sed で差し込まず、ここで awk へ渡して出力させる。
+# sed で `\t` を書くと BSD sed（macOS）がタブとして解釈せずリテラルの `t` として
+# 扱い、差し込みが黙って失敗する。Linux でだけ緑になる差分を持ち込まない（#285）。
+#
+# 渡し方は -v ではなく環境変数経由（ENVIRON）にする。-v は代入値のエスケープ
+# シーケンスを解釈するため、`\` を含むパス名が変形して報告される（`a\test.md` の
+# `\t` がタブになる）。パス名は表示だけでなく指摘を追う手掛かりなので、変形させない。
+# 改行を含むパス名を扱う判断は #273 で済んでいる。同じ基準を当てる。
 #
 # 行頭の空白を 3 つまで許すのは CommonMark に合わせるため。4 つ以上の字下げは
 # コードブロックであって表ではない。
 table_blocks() {
-  awk '
+  md_file="$1" awk '
+    BEGIN { file = ENVIRON["md_file"] }
     # 字下げの上限は 3 つ。4 つ以上はコードブロックであって表ではない（CommonMark）。
     # 間隔指定 {0,3} を使わず 4 通りを並べる。interval expression は awk 実装ごとに
     # 対応が分かれ（POSIX 以前の awk と一部の設定では無効）、無効な環境では
@@ -107,7 +117,7 @@ table_blocks() {
       if (sep1) kind = "NO_HEADER"
       else if (n >= 2 && sep2) kind = "OK"
       else kind = "NO_SEPARATOR"
-      printf "%s\t%d\t%s\n", kind, ln1, txt1
+      printf "%s\t%s\t%d\t%s\n", kind, file, ln1, txt1
       n = 0
     }
     {
@@ -129,9 +139,7 @@ scan_files() {
   local base="$1" files="$2" f
   while IFS= read -r f; do
     [[ -z "$f" ]] && continue
-    outside_fences < "$base/$f" | table_blocks \
-      | grep -v '^OK	' \
-      | sed "s|^\([A-Z_]*\)\t|\1\t$f\t|"
+    outside_fences < "$base/$f" | table_blocks "$f" | grep -v '^OK	'
   done <<FILEEOF
 $files
 FILEEOF
@@ -142,7 +150,7 @@ count_ok_blocks() {
   local base="$1" files="$2" f total=0 n
   while IFS= read -r f; do
     [[ -z "$f" ]] && continue
-    n="$(outside_fences < "$base/$f" | table_blocks | grep -c '^OK	' || true)"
+    n="$(outside_fences < "$base/$f" | table_blocks "$f" | grep -c '^OK	' || true)"
     total=$((total + n))
   done <<FILEEOF
 $files
