@@ -51,8 +51,11 @@ echo "test-pipefail-sigpipe"
 SAFE_PRODUCER='^[[:space:]]*(if[[:space:]]+!?[[:space:]]*)?(printf|echo)[[:space:]]'
 
 # 早期終了する消費側。
-#   grep の -q / -s は最初のマッチで終了する（-q を含む短縮形 -qi / -qx 等も拾う）
+#   grep -q は最初のマッチで終了する（-qi / -qx のように他のフラグと束ねた形も拾う）
 #   head は指定行数を読んだ時点で終了する
+#
+# `-s` は早期終了しない（エラーメッセージの抑制であって、読み切る点は変わらない）。
+# 検出パターンも `q` を含む形しか拾わない。
 EARLY_EXIT_CONSUMER='\|[[:space:]]*(grep[[:space:]]+(-[a-zA-Z]*q[a-zA-Z]*)|head([[:space:]]|$))'
 
 # 検査対象: pipefail を有効にしている追跡対象のシェルスクリプト。
