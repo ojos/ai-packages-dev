@@ -18,8 +18,10 @@
 #   message.usage       input / cache_creation / cache_read / output のトークン数
 #   attributionAgent    どの役割が消費したかの正本。親ループのレコードは持たない
 #
-# 役割の判定に message.model は使わない。モデルは役割から一意に決まるが逆は決まらず
-# （planner と implementer はどちらも sonnet）、配分を変えた瞬間に対応が崩れる。
+# 役割の判定に message.model は使わない。モデルは役割から一意に決まるが逆は決まらない。
+# general-purpose は親のモデルを継承するため親ループと区別がつかず、役割を増やせば
+# 同じモデルを共有する組（かつての planner と implementer はどちらも sonnet だった）が
+# できる。配分を変えた瞬間に対応が崩れる形へ依存しない。
 #
 # ## 分母を 2 つ出す理由
 #
