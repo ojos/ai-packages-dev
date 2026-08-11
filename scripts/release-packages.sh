@@ -285,6 +285,34 @@ REQUIRED_RELEASE_ASSETS=("RELEASE-MANIFEST.json" "SHA256SUMS" "PACKAGE_ARCHIVE.t
 
 # ソースを公開リポジトリへ反映し、タグを push する。GitHub Release は作らない。
 # 文書パッケージ（ai-playbook）向け。消費者は git タグを固定して取り込むため、
+# リモートに指定タグが存在するか。0 = 存在する / 1 = 存在しない。
+#
+# `git ls-remote --tags origin | grep …` にはしない。理由が 2 つある。
+#
+# 1. パイプを残すと SIGPIPE の余地が残る。`grep -q` は最初のマッチで終了して
+#    パイプを閉じ、まだ書き込み中の git が死ぬ。pipefail 下ではパイプライン全体が
+#    非 0 になり、**タグが実在するのに「無い」と判定される**（#285 と同じ形）。
+#    ref を直接指定すればパイプ自体が要らない。全タグを転送して読み切る無駄も減る。
+# 2. **「存在しない」と「git が失敗した」を区別できない。** 従来の形は、ネットワーク
+#    障害や認証失敗でも「タグが無い」に倒れ、push へ進んでいた。検査が成立して
+#    いないことを合格にしない（check-no-secrets.sh と同じ考え方）。
+#
+# --exit-code は「一致する ref があれば 0 / 無ければ 2」を返す。それ以外の非 0 は
+# git 自体の失敗なので、黙って握らず停止する。
+remote_tag_exists() {
+  local tag="$1" rc=0
+  git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1 || rc=$?
+  case "$rc" in
+    0) return 0 ;;
+    2) return 1 ;;
+    *)
+      echo "error: failed to query remote tags (git ls-remote exit $rc)" >&2
+      echo "       タグの有無を確認できないため中止します。ネットワークと認証を確認してください。" >&2
+      exit 1
+      ;;
+  esac
+}
+
 # タグそのものが配布物になる。
 push_source_and_tag() {
   local dir="$1" repo="$2" tag="$3"
@@ -294,7 +322,7 @@ push_source_and_tag() {
   pushd "$dir" >/dev/null
   # 既存タグは動かさない。公開済みのタグが別の内容を指すと、固定した利用者の
   # 取り込み結果が変わる。unpublished 検査は preflight 済みだが、ここでも守る。
-  if git ls-remote --tags origin | grep -q "refs/tags/$tag\$"; then
+  if remote_tag_exists "$tag"; then
     echo "error: $repo already has tag $tag; refusing to move it" >&2
     popd >/dev/null
     exit 1
@@ -506,7 +534,7 @@ tag_and_release() {
   if ! git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
     git tag "$tag"
   fi
-  if ! git ls-remote --tags origin | grep -q "refs/tags/$tag$"; then
+  if ! remote_tag_exists "$tag"; then
     git push origin "$tag"
   fi
   popd >/dev/null
