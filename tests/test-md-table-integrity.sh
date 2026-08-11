@@ -89,10 +89,18 @@ outside_fences() {
 # コードブロックであって表ではない。
 table_blocks() {
   awk '
-    function is_table(s) { return s ~ /^[[:space:]]{0,3}\|/ }
+    # 字下げの上限は 3 つ。4 つ以上はコードブロックであって表ではない（CommonMark）。
+    # 間隔指定 {0,3} を使わず 4 通りを並べる。interval expression は awk 実装ごとに
+    # 対応が分かれ（POSIX 以前の awk と一部の設定では無効）、無効な環境では
+    # `{0,3}` が literal として扱われて表行を 1 つも検出できなくなる。macOS 実機で
+    # 走らせる前提のリポジトリでこの差分を残さない（#285 と同じ形の欠陥になる）。
+    # 行頭のタブは表行としない。タブ 1 つは 4 桁扱いでコードブロックになるため。
+    function is_table(s) {
+      return s ~ /^\|/ || s ~ /^ \|/ || s ~ /^  \|/ || s ~ /^   \|/
+    }
     # 区切り行は `|` と `-` `:` 空白だけで構成され、`-` を最低 1 つ含む。
     function is_sep(s) {
-      return s ~ /^[[:space:]]{0,3}\|[[:space:]:|-]+$/ && s ~ /-/
+      return is_table(s) && s ~ /^[[:space:]]*\|[[:space:]:|-]+$/ && s ~ /-/
     }
     function flush(   kind) {
       if (n == 0) return
