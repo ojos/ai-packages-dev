@@ -294,7 +294,11 @@ push_source_and_tag() {
   pushd "$dir" >/dev/null
   # 既存タグは動かさない。公開済みのタグが別の内容を指すと、固定した利用者の
   # 取り込み結果が変わる。unpublished 検査は preflight 済みだが、ここでも守る。
-  if git ls-remote --tags origin | grep -q "refs/tags/$tag\$"; then
+  # grep へ -q を渡さない。-q は最初のマッチで終了してパイプを閉じ、まだ書き込み中の
+  # git ls-remote が SIGPIPE で死ぬ。pipefail 下ではパイプライン全体が非 0 になり、
+  # **タグが実在するのに「無い」と判定される**（タグが増えるほど踏みやすい）。
+  # -q を外せば grep が EOF まで読むので早期クローズが起きない。判定の意味は同じ。
+  if git ls-remote --tags origin | grep "refs/tags/$tag\$" >/dev/null; then
     echo "error: $repo already has tag $tag; refusing to move it" >&2
     popd >/dev/null
     exit 1
@@ -506,7 +510,9 @@ tag_and_release() {
   if ! git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
     git tag "$tag"
   fi
-  if ! git ls-remote --tags origin | grep -q "refs/tags/$tag$"; then
+  # 上と同じ理由で -q を使わない。ここで誤判定すると、既に push 済みのタグへ
+  # 二重に push するか、未 push のタグを push しないまま先へ進む。
+  if ! git ls-remote --tags origin | grep "refs/tags/$tag$" >/dev/null; then
     git push origin "$tag"
   fi
   popd >/dev/null

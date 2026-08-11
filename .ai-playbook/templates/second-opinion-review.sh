@@ -292,17 +292,20 @@ is_lgtm() {
   if [[ "$(normalize_verdict "$1")" == "" ]]; then
     return 1
   fi
-  if printf '%s\n' "$(normalize_verdict "$1")" | grep -qix 'LGTM'; then
+  # grep へ -q を渡さない。-q は最初のマッチで終了してパイプを閉じ、まだ書き込み中の
+  # printf が SIGPIPE で死ぬ。pipefail 下ではパイプライン全体が非 0 になり、**LGTM の
+  # ときに限って**判定が反転する（偽の指摘あり）。モデル出力はパイプバッファを超えうる。
+  if printf '%s\n' "$(normalize_verdict "$1")" | grep -ix 'LGTM' >/dev/null; then
     return 0
   fi
-  printf '%s\n' "$(normalize_verdict "$(last_nonempty_line "$1")")" | grep -qix 'VERDICT:LGTM'
+  printf '%s\n' "$(normalize_verdict "$(last_nonempty_line "$1")")" | grep -ix 'VERDICT:LGTM' >/dev/null
 }
 
 # 判定トークンが「無い」のか「FINDINGS だった」のかを区別して診断へ出す。無い場合、
 # モデルが出力形式に従っていない可能性があり、指摘本文を読んでも原因が分からない。
 has_verdict_token() {
   printf '%s\n' "$(normalize_verdict "$(last_nonempty_line "$1")")" \
-    | grep -qiE '^VERDICT:(LGTM|FINDINGS)$'
+    | grep -iE '^VERDICT:(LGTM|FINDINGS)$' >/dev/null
 }
 
 findings=0
