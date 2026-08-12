@@ -80,10 +80,16 @@ portability_defects() {
       return substr(prefix, cut + 1)
     }
 
-    # sed のプログラム text の中に、s/// の置換側の `\n` があるか。
+    # sed のプログラム text の中に、s/// の置換側の `\n`（改行のエスケープ）があるか。
     # 区切り文字は s の直後の 1 文字（英数字・空白・バックスラッシュ以外）。
     # `\` は次の 1 文字をエスケープする。
-    function sed_repl_newline(t,   n, i, c, d, j, k, repl) {
+    #
+    # 「直前がバックスラッシュで、それが n をエスケープしている」ときだけ拾う。
+    # 置換側の文字列を組み立てて `\n` を含むかで見ると、`s/x/\\n/`（エスケープされた
+    # バックスラッシュ + リテラルの n。BSD でも GNU でも `\n` の 2 文字を出力する
+    # 可搬な書き方）を誤検知する。1 つ目の `\` が 2 つ目の `\` をエスケープしており、
+    # 残った n は改行のエスケープではない。
+    function sed_repl_newline(t,   n, i, c, d, j, k, found) {
       n = length(t)
       i = 1
       while (i <= n) {
@@ -99,14 +105,17 @@ portability_defects() {
             }
             if (j > n) { i++; continue }
             k = j + 1
-            repl = ""
+            found = 0
             while (k <= n) {
-              if (substr(t, k, 1) == "\\") { repl = repl substr(t, k, 2); k += 2; continue }
+              if (substr(t, k, 1) == "\\") {
+                if (substr(t, k + 1, 1) == "n") found = 1
+                k += 2
+                continue
+              }
               if (substr(t, k, 1) == d) break
-              repl = repl substr(t, k, 1)
               k++
             }
-            if (repl ~ /\\n/) return 1
+            if (found) return 1
             i = k + 1
             continue
           }
@@ -321,6 +330,16 @@ if [[ -z "$OUT" ]]; then pass; else fail "可搬な記述を報告した: $OUT";
 # このファイル自身が悪い例を literal で持っていないことを固定する。持っていると
 # 「現行ツリーの検査」が自分自身を拾って赤になる。組み立てを literal へ戻す変更を
 # ここで止める。
+# エスケープされたバックスラッシュ + n。BSD でも GNU でも `\n` の 2 文字を出力する
+# 可搬な書き方で、改行のエスケープではない。
+cat > "$FIXTURE_DIR/sed-escaped-backslash.sh" <<EOF
+sed 's/x/${BS}${BS}n/' f
+EOF
+
+it 'sed の置換側の `\\n`（エスケープされたバックスラッシュ + n）は報告しない（対照）'
+OUT="$(portability_defects < "$FIXTURE_DIR/sed-escaped-backslash.sh")"
+if [[ -z "$OUT" ]]; then pass; else fail "可搬な \\n を報告した: $OUT"; fi
+
 # 同一行に別コマンドが連なる形。持ち主は最後のコマンド区切りより後ろで決める。
 cat > "$FIXTURE_DIR/pipeline.sh" <<EOF
 sed 's/a/b/' | grep 'x${TAB_ESC}y'
