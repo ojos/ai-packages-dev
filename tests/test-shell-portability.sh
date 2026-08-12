@@ -1,42 +1,35 @@
 #!/usr/bin/env bash
-# BSD 系（macOS）で黙って壊れる sed / awk の書き方が追跡対象のシェルスクリプトに
-# 無いことを検査する。
+# ブラケット式の中の `\t` が追跡対象のシェルスクリプトに無いことを検査する。
 #
-# CI は Linux でしか走らないため、このクラスの欠陥は原理的に CI をすり抜ける。
-# #291 の実装 1 本だけで 3 件出た（うち 2 件は「#285 の再発防止を名乗る検査」自身に
-# 入っていた）。3 件とも人の目でしか止まっていない。
+# BSD 系（macOS）の sed は、**ブラケット式の中では** `\t` をタブとして解釈しない。
+# `[ \t]` は「空白・バックスラッシュ・t」の集合になり、タブ字下げの行を取りこぼす。
+# POSIX の規定どおり（ブラケット式の中でバックスラッシュは特殊な意味を失う）。
+# CI は Linux でしか走らないため、この差分は原理的にすり抜ける。
 #
 # 先例は tests/test-mktemp-template.sh（BSD mktemp のテンプレート必須・#218）と
 # tests/test-pipefail-sigpipe.sh（GNU/BSD find の EPIPE 差・#285）。本検査はその 3 つ目。
 #
-# ## 検出する 2 クラス（#294）
+# ## 実測（#296）
 #
-#   SED_TAB          sed のプログラム中の `\t`。BSD sed はタブとして解釈せず
-#                    `\` と `t` の 2 文字として扱う。ブラケット式の中でも同じで、
-#                    `[ \t]` は「空白・バックスラッシュ・t」の集合になる
-#   SED_REPL_NEWLINE s/// の**置換側**の `\n`。BSD sed は改行として出力しない
-#   AWK_INTERVAL     awk の正規表現の間隔指定 `{n,m}`。対応が実装ごとに分かれ、
-#                    非対応の環境では literal 扱いになって照合が全滅する
+# macOS 26.5.2 / /usr/bin/sed / /usr/bin/awk version 20200816 で測定した。
 #
-# s/// の**パターン側**の `\n` は対象外とする。`/^$/N;/^\n$/D`（連続する空行の圧縮）は
-# 広く使われる idiom で、パターン空間内の改行照合として動く。
-# **この除外は実測に基づかない。** 手元に BSD sed が無く確認できていない。macOS で
-# 確認できる機会があれば確認し、動かないと分かった場合はパターン側も対象へ入れる。
+#   ブラケット内の \t   sed 's/[ \t]/X/'
+#                        a<TAB>b -> 一致しない / atb -> aXb（literal の t に一致）
+#                        => タブとして効かない。**本検査が拾うのはこれだけ**
 #
-# `awk -v` のエスケープ解釈（代入値の `\t` がタブへ変わる）は検出対象に入れない。
-# 追跡対象に 10 箇所あり大半が無害で、「任意の文字列を渡しているか」は機械判定でき
-# ない。一律に落とすと動いているコードの書き換えを迫る。偽陽性は「正しい記述を直そう
-# として戻す」方向の修正を招くため、検出漏れと同じくらい避ける（#294 スコープ外）。
+# 次の 3 つは #294 で検出対象にしていたが、測定で否定されたので外した。実際の対象
+# プラットフォーム（macOS の BWK awk / devcontainer の mawk）のどちらでも動く。
+# **実測に合っていない検査は、動くコードの書き換えを迫るぶん、検査が無いより悪い。**
 #
-# ## 判定の仕組み
+#   ブラケット外の \t   sed 's/\t/TAB/'      -> aTABb（タブとして効く）
+#   置換側の \n         sed 's/x/a\nb/'      -> 2 行（改行になる）
+#   awk の間隔指定       awk '/^x{2,3}$/'     -> xx に一致。対照: リテラルの
+#                        x{2,3} には一致しない（間隔指定として機能している）
 #
-# 対象の文字列がどのコマンドへ渡るかは、行単位の grep では決められない。awk / sed の
-# プログラムは複数行にまたがる引用符の中に書かれ、コマンド名は先頭行にしか無いため。
-# #291 の `{0,3}` も awk の呼び出しから 8 行下にあった。行単位の検査では捕まらない。
+# パターン側の `\n`（`/^$/N;/^\n$/D` の形）も効くことを確認済み。
 #
-# そこでシェルの引用状態を追跡する。引用領域が開いた行のうち、引用符より前に awk /
-# sed のトークンがあれば、その領域はそのコマンドのプログラムとみなす。領域は閉じ
-# 引用符まで続き、途中の行もすべて同じ持ち主として扱う。
+# 測定を残すのは、検出対象を広げたくなったときに同じ手順で確かめられるようにするため。
+# 手順は #296 の本文にある。
 #
 # bash 3.2 互換を維持する（連想配列・mapfile を使わない）。
 set -uo pipefail
@@ -80,46 +73,45 @@ portability_defects() {
       return substr(prefix, cut + 1)
     }
 
-    # sed のプログラム text の中に、s/// の置換側の `\n`（改行のエスケープ）があるか。
-    # 区切り文字は s の直後の 1 文字（英数字・空白・バックスラッシュ以外）。
-    # `\` は次の 1 文字をエスケープする。
+    # sed のプログラム text の中に、ブラケット式の中の `\t` があるか。
     #
-    # 「直前がバックスラッシュで、それが n をエスケープしている」ときだけ拾う。
-    # 置換側の文字列を組み立てて `\n` を含むかで見ると、`s/x/\\n/`（エスケープされた
-    # バックスラッシュ + リテラルの n。BSD でも GNU でも `\n` の 2 文字を出力する
-    # 可搬な書き方）を誤検知する。1 つ目の `\` が 2 つ目の `\` をエスケープしており、
-    # 残った n は改行のエスケープではない。
-    function sed_repl_newline(t,   n, i, c, d, j, k, found) {
+    # POSIX ではブラケット式の中でバックスラッシュが特殊な意味を失うため、`[ \t]` は
+    # 「空白・バックスラッシュ・t」の集合になる。ブラケットの外の `\t` は macOS 26 の
+    # sed でもタブとして効くので拾わない（#296 の測定）。
+    #
+    # 文字クラス（`[:space:]` など）はブラケット式の中に `[` と `]` を持つ。素朴に
+    # 数えると閉じを取り違え、`[[:space:]\t]` の `\t` を外側と誤認して見落とす。
+    # `[:` を見つけたら `:]` まで飛ばす。
+    #
+    # 制限: 置換側の `[` も開きとして数える。`s/x/[\t]/` のような、置換文字列に
+    # ブラケットを含む形は誤検知になる。s/// の構造まで解析していないため。この形は
+    # 追跡対象に無く、出たときに構造解析を足す方が安い。
+    function sed_bracket_tab(t,   n, i, c, inb, j) {
       n = length(t)
       i = 1
+      inb = 0
       while (i <= n) {
         c = substr(t, i, 1)
-        if (c == "s" && (i == 1 || substr(t, i - 1, 1) ~ /[^[:alnum:]_]/)) {
-          d = substr(t, i + 1, 1)
-          if (d != "" && d !~ /[[:alnum:][:space:]\\]/) {
-            j = i + 2
-            while (j <= n) {
-              if (substr(t, j, 1) == "\\") { j += 2; continue }
-              if (substr(t, j, 1) == d) break
-              j++
-            }
-            if (j > n) { i++; continue }
-            k = j + 1
-            found = 0
-            while (k <= n) {
-              if (substr(t, k, 1) == "\\") {
-                if (substr(t, k + 1, 1) == "n") found = 1
-                k += 2
-                continue
-              }
-              if (substr(t, k, 1) == d) break
-              k++
-            }
-            if (found) return 1
-            i = k + 1
+        if (!inb) {
+          if (c == "\\") { i += 2; continue }
+          if (c == "[") {
+            inb = 1
+            i++
+            # `[^` の ^ と、その直後の ] はリテラルで、閉じではない。
+            if (substr(t, i, 1) == "^") i++
+            if (substr(t, i, 1) == "]") i++
             continue
           }
+          i++
+          continue
         }
+        # ブラケットの中。ここでは \ はリテラルなので、次の 1 文字を飛ばさない。
+        if (c == "[" && substr(t, i + 1, 1) == ":") {
+          j = index(substr(t, i), ":]")
+          if (j > 0) { i = i + j + 1; continue }
+        }
+        if (c == "]") { inb = 0; i++; continue }
+        if (c == "\\" && substr(t, i + 1, 1) == "t") return 1
         i++
       }
       return 0
@@ -129,7 +121,6 @@ portability_defects() {
     {
       line = $0
       n = length(line)
-      awk_text = ""
       sed_text = ""
       i = 1
       while (i <= n) {
@@ -141,6 +132,8 @@ portability_defects() {
           if (c == "\\") { i += 2; continue }
           if (c == "'"'"'" || c == "\"") {
             prefix = last_segment(substr(line, 1, i - 1))
+            # awk のプログラムは検査対象が無いが、持ち主として区別しておく。
+            # 空にすると sed の直後に awk が続く行で領域を sed とみなしうる。
             if (has_cmd(prefix, "awk")) owner = "awk"
             else if (has_cmd(prefix, "sed")) owner = "sed"
             else owner = ""
@@ -152,30 +145,25 @@ portability_defects() {
         if (state == "SQ") {
           # シングルクォートの中にエスケープは無い。次の '"'"' が必ず閉じ。
           if (c == "'"'"'") { state = "OUT"; owner = ""; i++; continue }
-          if (owner == "awk") awk_text = awk_text c
-          else if (owner == "sed") sed_text = sed_text c
+          if (owner == "sed") sed_text = sed_text c
           i++
           continue
         }
         # DQ
         if (c == "\\") {
-          if (owner == "awk") awk_text = awk_text substr(line, i, 2)
-          else if (owner == "sed") sed_text = sed_text substr(line, i, 2)
+          if (owner == "sed") sed_text = sed_text substr(line, i, 2)
           i += 2
           continue
         }
         if (c == "\"") { state = "OUT"; owner = ""; i++; continue }
-        if (owner == "awk") awk_text = awk_text c
-        else if (owner == "sed") sed_text = sed_text c
+        if (owner == "sed") sed_text = sed_text c
         i++
       }
 
       # プログラム中のコメント行は対象外。行全体がコメントの場合だけ外す。
       if (is_comment(line)) next
 
-      if (awk_text ~ /\{[0-9]+,[0-9]*\}/) printf "AWK_INTERVAL\t%d\t%s\n", NR, line
-      if (sed_text ~ /\\t/)               printf "SED_TAB\t%d\t%s\n", NR, line
-      if (sed_repl_newline(sed_text))     printf "SED_REPL_NEWLINE\t%d\t%s\n", NR, line
+      if (sed_bracket_tab(sed_text)) printf "SED_BRACKET_TAB\t%d\t%s\n", NR, line
     }
   '
 }
@@ -192,7 +180,7 @@ else
   fail "git ls-files が 0 件を返した"
 fi
 
-it "現行ツリーの .sh に BSD で壊れる sed / awk の記述が無い"
+it "現行ツリーの .sh にブラケット式の中の \`\\t\` が無い"
 FOUND=""
 while IFS= read -r f; do
   [[ -z "$f" ]] && continue
@@ -206,7 +194,7 @@ FILEEOF
 if [[ -z "$FOUND" ]]; then
   pass
 else
-  fail "移植性の欠陥がある:
+  fail "ブラケット式の中の \`\\t\` がある:
 $FOUND"
 fi
 
@@ -234,40 +222,43 @@ trap 'rm -rf "$FIXTURE_DIR"' EXIT
 # 引用符を閉じないヒアドキュメントで書く。${TAB_ESC} や $(iv ...) を展開させるため。
 # リテラルの $ は \$、リテラルのバックスラッシュは \\ と書く。
 
-cat > "$FIXTURE_DIR/sed-tab.sh" <<EOF
+# 検出したい形。ブラケット式の中の \t。#294 が現行ツリーから掘り出した実欠陥と同じ形。
+cat > "$FIXTURE_DIR/bracket-tab.sh" <<EOF
 sed -n 's/^[ ${TAB_ESC}]*x//p' f
-sed 's/x/${TAB_ESC}/' f
 EOF
 
-cat > "$FIXTURE_DIR/sed-repl-newline.sh" <<EOF
+# 文字クラスを挟んだブラケット式。素朴に ] を数えると閉じを取り違えて見落とす。
+cat > "$FIXTURE_DIR/bracket-tab-class.sh" <<EOF
+sed -n 's/^[[:space:]${TAB_ESC}]*x//p' f
+EOF
+
+# 否定つきブラケットと、直後の ] がリテラルになる形。
+cat > "$FIXTURE_DIR/bracket-tab-negated.sh" <<EOF
+sed 's/[^]${TAB_ESC}]/X/' f
+EOF
+
+# ── 測定で否定された 3 形。いずれも報告しない（#296）──────────────────────────
+
+cat > "$FIXTURE_DIR/outside-tab.sh" <<EOF
+sed 's/${TAB_ESC}/X/' f
+EOF
+
+cat > "$FIXTURE_DIR/repl-newline.sh" <<EOF
 sed 's/x/a${NL_ESC}b/' f
 EOF
 
-cat > "$FIXTURE_DIR/sed-pattern-newline.sh" <<EOF
-sed '/^\$/N;/^${NL_ESC}\$/D' f
-EOF
-
-cat > "$FIXTURE_DIR/awk-inline.sh" <<EOF
+cat > "$FIXTURE_DIR/awk-interval.sh" <<EOF
 awk '/^x$(iv 2,3)\$/ { print }' f
-EOF
-
-# #291 で実際に混入した形。awk の呼び出しから数行下に間隔指定がある。
-cat > "$FIXTURE_DIR/awk-multiline.sh" <<EOF
 awk -v file="\$1" '
   function is_table(s) { return s ~ /^[[:space:]]$(iv 0,3)\\|/ }
   { if (is_table(\$0)) print }
 '
 EOF
 
-# awk -v q="'" の形。引用符の数え上げだけでは領域の内外がずれる。
-cat > "$FIXTURE_DIR/awk-dq-quote.sh" <<EOF
-awk -v q="'" '
-  /x$(iv 1,2)/ { print }
-'
-EOF
+# ── その他の対照 ────────────────────────────────────────────────────────────
 
 cat > "$FIXTURE_DIR/comments.sh" <<EOF
-# sed 's/x/${TAB_ESC}/' は BSD で壊れる
+# sed 's/[ ${TAB_ESC}]/X/' は BSD で壊れる
 awk '
   # 間隔指定 $(iv 0,3) は使わない
   { print }
@@ -277,13 +268,19 @@ EOF
 # 引用の外のコメント中のアポストロフィ。領域の開きと数えると以降がずれる。
 cat > "$FIXTURE_DIR/apostrophe.sh" <<EOF
 # don't do this
-echo "x$(iv 0,3)y"
+sed 's/[ ${TAB_ESC}]/X/' f
+EOF
+
+# 同一行に別コマンドが連なる形。持ち主は最後のコマンド区切りより後ろで決める。
+cat > "$FIXTURE_DIR/pipeline.sh" <<EOF
+awk '/^a\$/ { print }' | grep '[ ${TAB_ESC}]'
+awk '/^a\$/ { print }' | sed 's/[ ${TAB_ESC}]/X/'
 EOF
 
 cat > "$FIXTURE_DIR/portable.sh" <<EOF
 sed -n 's/^[[:space:]]*x//p' f
 awk '/^x\$/ { print }' f
-grep -c "$(iv 2,3)" f
+grep -c "[ ${TAB_ESC}]" f
 EOF
 
 # 指定した種別の報告行番号を空白区切りで返す。
@@ -291,65 +288,50 @@ detect() {
   portability_defects < "$FIXTURE_DIR/$1" | grep "^$2	" | cut -f2 | tr '\n' ' ' || true
 }
 
-it 'sed の `\t` をパターン側・置換側とも報告する'
-LINES="$(detect sed-tab.sh SED_TAB)"
-assert_eq "${LINES% }" "1 2" "SED_TAB の行番号"
+# 報告が無いことを確かめる。
+expect_silent() {
+  local out
+  out="$(portability_defects < "$FIXTURE_DIR/$1")"
+  if [[ -z "$out" ]]; then pass; else fail "報告された: $out"; fi
+}
 
-it 'sed の s/// の置換側の `\n` を報告する'
-LINES="$(detect sed-repl-newline.sh SED_REPL_NEWLINE)"
-assert_eq "${LINES% }" "1" "SED_REPL_NEWLINE の行番号"
+it 'ブラケット式の中の `\t` を報告する'
+assert_eq "$(detect bracket-tab.sh SED_BRACKET_TAB)" "1 " "SED_BRACKET_TAB の行番号"
 
-it 'sed の s/// のパターン側の `\n` は報告しない（対照）'
-OUT="$(portability_defects < "$FIXTURE_DIR/sed-pattern-newline.sh")"
-if [[ -z "$OUT" ]]; then pass; else fail "パターン側を報告した: $OUT"; fi
+it '文字クラスを挟んだブラケット式の中の `\t` も報告する'
+assert_eq "$(detect bracket-tab-class.sh SED_BRACKET_TAB)" "1 " "SED_BRACKET_TAB の行番号"
 
-it 'awk の間隔指定を報告する（呼び出しと同一行）'
-LINES="$(detect awk-inline.sh AWK_INTERVAL)"
-assert_eq "${LINES% }" "1" "AWK_INTERVAL の行番号"
+it '否定つきブラケット式の中の `\t` も報告する'
+assert_eq "$(detect bracket-tab-negated.sh SED_BRACKET_TAB)" "1 " "SED_BRACKET_TAB の行番号"
 
-it 'awk の呼び出しから離れた行の間隔指定も報告する（#291 の形）'
-LINES="$(detect awk-multiline.sh AWK_INTERVAL)"
-assert_eq "${LINES% }" "2" "AWK_INTERVAL の行番号"
+# ── 測定で否定された形は報告しない（#296 の実測 D / C / F・G）────────────────
 
-it '二重引用符を挟んで開く awk プログラムでも領域を見失わない'
-LINES="$(detect awk-dq-quote.sh AWK_INTERVAL)"
-assert_eq "${LINES% }" "2" "AWK_INTERVAL の行番号"
+it 'ブラケット式の外の `\t` は報告しない（対照・測定 D）'
+expect_silent outside-tab.sh
+
+it 's/// の置換側の `\n` は報告しない（対照・測定 C）'
+expect_silent repl-newline.sh
+
+it 'awk の間隔指定は報告しない（対照・測定 F / G）'
+expect_silent awk-interval.sh
+
+# ── 領域の追跡に関する対照 ──────────────────────────────────────────────────
 
 it 'コメント行の記述は報告しない（対照）'
-OUT="$(portability_defects < "$FIXTURE_DIR/comments.sh")"
-if [[ -z "$OUT" ]]; then pass; else fail "コメント行を報告した: $OUT"; fi
+expect_silent comments.sh
 
 it '引用の外のコメントにアポストロフィがあっても以降がずれない（対照）'
-OUT="$(portability_defects < "$FIXTURE_DIR/apostrophe.sh")"
-if [[ -z "$OUT" ]]; then pass; else fail "領域がずれた: $OUT"; fi
+assert_eq "$(detect apostrophe.sh SED_BRACKET_TAB)" "2 " "SED_BRACKET_TAB の行番号"
+
+it 'パイプで連なる別コマンドの引数を sed のプログラムとみなさない（対照）'
+assert_eq "$(detect pipeline.sh SED_BRACKET_TAB)" "2 " "SED_BRACKET_TAB の行番号（1 行目の grep は対象外）"
 
 it '可搬な書き方だけなら報告しない（対照）'
-OUT="$(portability_defects < "$FIXTURE_DIR/portable.sh")"
-if [[ -z "$OUT" ]]; then pass; else fail "可搬な記述を報告した: $OUT"; fi
+expect_silent portable.sh
 
 # このファイル自身が悪い例を literal で持っていないことを固定する。持っていると
 # 「現行ツリーの検査」が自分自身を拾って赤になる。組み立てを literal へ戻す変更を
 # ここで止める。
-# エスケープされたバックスラッシュ + n。BSD でも GNU でも `\n` の 2 文字を出力する
-# 可搬な書き方で、改行のエスケープではない。
-cat > "$FIXTURE_DIR/sed-escaped-backslash.sh" <<EOF
-sed 's/x/${BS}${BS}n/' f
-EOF
-
-it 'sed の置換側の `\\n`（エスケープされたバックスラッシュ + n）は報告しない（対照）'
-OUT="$(portability_defects < "$FIXTURE_DIR/sed-escaped-backslash.sh")"
-if [[ -z "$OUT" ]]; then pass; else fail "可搬な \\n を報告した: $OUT"; fi
-
-# 同一行に別コマンドが連なる形。持ち主は最後のコマンド区切りより後ろで決める。
-cat > "$FIXTURE_DIR/pipeline.sh" <<EOF
-sed 's/a/b/' | grep 'x${TAB_ESC}y'
-awk '/^a\$/ { print }' | sed 's/x/${TAB_ESC}/'
-EOF
-
-it 'パイプで連なる別コマンドの引数を sed のプログラムとみなさない（対照）'
-LINES="$(detect pipeline.sh SED_TAB)"
-assert_eq "${LINES% }" "2" "SED_TAB の行番号（1 行目の grep は対象外、2 行目の sed のみ）"
-
 it '検査ファイル自身が悪い例を literal で持たない'
 SELF="$(portability_defects < "$REPO_ROOT/tests/test-shell-portability.sh")"
 if [[ -z "$SELF" ]]; then pass; else fail "自分自身が報告された: $SELF"; fi
