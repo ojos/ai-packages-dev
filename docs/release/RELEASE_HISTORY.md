@@ -9,13 +9,15 @@
 
 | パッケージ | リポジトリ | 現行バージョン | 配布形態 |
 |---|---|---|---|
-| devcontainer-bootstrap | `ojos/devcontainer-bootstrap` | v0.10.1 | GitHub Release + 資産 5 点（配布スクリプト 2: `bootstrap.sh` / `doctor.sh`、生成物 3: `SHA256SUMS` / `RELEASE-MANIFEST.json` / `PACKAGE_ARCHIVE.tar.gz`） |
-| ai-playbook | `ojos/ai-playbook` | v0.2.1 | git タグのみ |
+| devcontainer-bootstrap | `ojos/devcontainer-bootstrap` | v0.11.0 | GitHub Release + 資産 5 点（配布スクリプト 2: `bootstrap.sh` / `doctor.sh`、生成物 3: `SHA256SUMS` / `RELEASE-MANIFEST.json` / `PACKAGE_ARCHIVE.tar.gz`） |
+| ai-playbook | `ojos/ai-playbook` | v0.3.0 | git タグのみ |
 
 ### 新世代の版更新
 
 | パッケージ | 版 | 公開日 | 要点 |
 |---|---|---|---|
+| devcontainer-bootstrap | v0.11.0 | 2026-08-13 | **委譲先エージェント定義を生成物へ配布するようにした**（#259）。`--with-claude` 指定時だけ `.claude/agents/explorer.md` と `implementer.md` を置く。雛形は規範パッケージが持ち、DCB は置き先だけを決める（intake 起点スキルと同じ経路）。目的は**モデルとツールを実行環境が読む機構で固定すること**で、指示文による呼びかけは迂回できるが frontmatter は迂回できない。読み取り専用ロールからは編集系ツールを外す（ただし調査に要るコマンド実行を残す以上、リダイレクト経由の書き込みは塞げない。境目は各定義に明記）。**この版は ai-playbook v0.3.0 以降を要求する**（雛形と、判定の導線を定めた 13 章が必要）。生成物のテストは**規範側に導線が実在すること**まで検査する（定義だけでは役割が選ばれないため）。衝突ポリシーは既定 `skip` で既存の生成先は上書きしない。機能追加のみで既存フラグの挙動は変わらない |
+| ai-playbook | v0.3.0 | 2026-08-13 | **委譲判定を共有層へ置いた**（#259）。`shared-ai-rules.md` に 13 章「実装委譲パターン」を新設し、委譲の判定・「調査を委譲する条件」の 3 条件・「委譲の閾値」・「サブエージェントの戻り値」・「規範を読む範囲」・「並列実行時の作業分離」を定義。**これまで共有層に委譲の規範は 1 行も無く**、定義だけを配ると配布先で「判定から到達できない役割」を量産する状態だった。あわせて雛形 `claude-agent-explorer.md` / `claude-agent-implementer.md`（`model` / `tools` を frontmatter で固定）と `role-contracts/explorer.md` を追加。雛形は 6 種 → **8 種**。**目的はコスト削減ではない**: 当初のモデル配分による削減という前提は実測で否定され（利得の上限が数 %、親の文脈の約 9 割は散文と推論）、「迂回できない形で `model` / `tools` を固定すること」へ書き換えた。追加のみで後方互換だが、**13 章の挿入で「構成」が 14 章、「非目標」が 15 章へずれる**ため、章番号を数字で参照している利用側は追随が必要 |
 | devcontainer-bootstrap | v0.10.1 | 2026-08-11 | **macOS で規範を配置する構成が使えなかった不具合を修正**（#285）。`--with-playbook` / `--playbook-version` / `--playbook-from` のいずれでも `no rule files found in playbook source` で停止していた。取得も展開も成功しており、壊れていたのは最終の存在検査だけ。`set -o pipefail` 下の `find … | grep -q .` で、`grep -q` が最初のマッチでパイプを閉じ、まだ書き込み中の `find` が SIGPIPE で死んでパイプライン全体が非 0 になっていた（**grep は実際にはマッチしている**。`PIPESTATUS=141 0` を実測）。GNU find は EPIPE を握って 0 で終わるため **Linux では再現せず**、CI もローカル事前ゲートも緑のまま通っていた。`find … -print -quit` でパイプ自体を除去（`-quit` が BSD find でも使えることは macOS 実機で検証）。生成物には影響しない |
 | ai-playbook | v0.2.1 | 2026-08-11 | **第二意見レビューの雛形が LGTM のときに限って偽の「指摘あり」を返す経路を塞いだ**（#285）。`grep -q` は**マッチしたときだけ**早期終了するため、指摘ありのときは正常に動き、通過すべき出力だけが反転していた。`-q` を外して `>/dev/null` へ回す（EOF まで読むので早期クローズが起きない）。**判定の意味論は変えていない**（#214 / #267 で二度直している箇所のため）。Linux では元から踏まないため実害なし。取り込み済みの利用側は雛形の再取得のみ必要 |
 | devcontainer-bootstrap | v0.10.0 | 2026-08-10 | **Antigravity CLI（`agy`）を選べるようにした**（#271）。`--with-antigravity` を新設し、CLI の導入・永続化・テレメトリ無効化を配線する。ai-playbook v0.2.0 が配布した `second-opinion-review.sh --engine antigravity` は、生成器が `agy` を導入も永続化もしないため生成物では動かなかった。認証手段が違う（API キー / OAuth）ため `--with-gemini` には束ねず独立フラグにしている。**永続 volume は gemini と共有**し、どちらか一方でも指定すれば `/home/vscode/.gemini` の named volume が 1 つだけ作られる（両方指定でも重複しない）。volume 名も `gemini-storage` に寄せてあり、あとからフラグを足しても別 volume へ切り替わらない。テレメトリは環境変数によるオプトアウトが存在しない（`AGY_*` に該当なし・`DO_NOT_TRACK` 非対応。バイナリ実測）ため `settings.json` の `enableTelemetry` をマージで `false` にする（冪等・非破壊、jq 不在と壊れた JSON では非 0 で停止）。**無効化されるのは CLI のみで Antigravity IDE は別設定。** 機能追加のみで既存の生成物と既存フラグの挙動は変わらない |
