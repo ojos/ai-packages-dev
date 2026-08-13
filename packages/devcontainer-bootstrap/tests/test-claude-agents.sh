@@ -81,25 +81,69 @@ for f in "$explorer" "$implementer"; do
 done
 if [[ -z "$bad" ]]; then pass; else fail "model が未指定または inherit:$bad"; fi
 
+# tools は "Read, Grep, Glob, Bash" のカンマ区切り。区切り以外を落として両端を区切りで
+# 挟み、`,名前,` の完全一致で判定する。
+#
+# 正規表現の単語境界（`\b`）を使わない。POSIX の ERE に定義が無く、対応は実装依存で
+# ある。効かない環境では「編集系を含まないこと」の検査が**一致しないまま通る**ため、
+# ツールが増えても緑のまま気づけない。区切りの正規化なら実装に依存しない。
+#
+# 空白だけでなく引用符とブラケットも落とす。YAML のフロー表記（`tools: [Read, Edit]`）
+# や引用符つきの表記でも、正規化後が `,[Read,Edit],` のようになると**末尾の要素が
+# `,Edit,` に一致せず、編集系ツールを見逃して緑になる。** 見逃しの向きなので、書式が
+# 変わった日に誰も気づけない。
+has_tool() {
+  local norm="$1"
+  norm="${norm//[[:space:]]/}"
+  norm="${norm//\"/}"
+  norm="${norm//\'/}"
+  norm="${norm//\[/}"
+  norm="${norm//\]/}"
+  case ",$norm," in
+    *",$2,"*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# 判定そのものの検証。書式が変わったときに見逃す形になっていないことを、実物の
+# フロントマターを読む前に固定する。
+it "tools の判定が書式（素・引用符・ブラケット）に依存しない"
+probe_fail=""
+check_has()  { has_tool "$1" "$2" || probe_fail="$probe_fail [$1]に$2が見つからない"; }
+check_lacks(){ has_tool "$1" "$2" && probe_fail="$probe_fail [$1]の$2を誤検出"; }
+for fmt in "Read, Grep, Bash" "[Read, Grep, Bash]" '"Read, Grep, Bash"'; do
+  check_has "$fmt" Read
+  check_has "$fmt" Bash      # 末尾要素。ブラケット表記で最も見逃しやすい
+  check_lacks "$fmt" Edit
+done
+# 部分名を取り違えない（NotebookEdit を Edit と読まない）。
+check_lacks "Read, NotebookEdit" Edit
+check_has   "Read, NotebookEdit" NotebookEdit
+if [[ -z "$probe_fail" ]]; then pass; else fail "判定の不備:$probe_fail"; fi
+
 it "explorer の tools から編集系が外れている"
 tools="$(frontmatter_value "$explorer" tools)"
-if printf '%s' "$tools" | grep -qE '\b(Edit|Write|NotebookEdit)\b'; then
-  fail "読み取り専用ロールに編集系ツールが含まれる: $tools"
-else
+found=""
+for t in Edit Write NotebookEdit; do
+  has_tool "$tools" "$t" && found="$found $t"
+done
+if [[ -z "$found" ]]; then
   pass
+else
+  fail "読み取り専用ロールに編集系ツールが含まれる:$found（tools=$tools）"
 fi
 
 it "explorer の tools に調査へ必要な読み取り系が残っている"
 # 編集系を外しすぎて調査が成立しない形にしない（Bash は所在の特定に要る）。
 missing=""
 for t in Read Grep Glob Bash; do
-  printf '%s' "$tools" | grep -qE "\\b$t\\b" || missing="$missing $t"
+  has_tool "$tools" "$t" || missing="$missing $t"
 done
 if [[ -z "$missing" ]]; then pass; else fail "不足:$missing（tools=$tools）"; fi
 
 it "implementer の tools には編集系が含まれる"
 itools="$(frontmatter_value "$implementer" tools)"
-if printf '%s' "$itools" | grep -qE '\bEdit\b' && printf '%s' "$itools" | grep -qE '\bWrite\b'; then
+if has_tool "$itools" Edit && has_tool "$itools" Write; then
   pass
 else
   fail "実装ロールに編集系が無い: $itools"
