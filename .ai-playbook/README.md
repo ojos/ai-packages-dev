@@ -36,8 +36,8 @@
 | `loop-workflow.md` | ループコーディング運用の規範（受け入れ検証の機械ゲート化・verify ランナー契約・収束） |
 | `loop-coding-guide.md` | ループコーディングの解説ガイド（従来ワークフローとの違い・考え方。`loop-workflow.md` の解説版） |
 | `intake/` | intake テンプレート、相談テンプレート、判定 reason code |
-| `templates/` | 導入用の雛形 6 種（`entry.md` 実行環境の入口ファイル / `project-ai-rules.md` プロジェクト共通ルール / `second-opinion-review.sh` 第二意見レビューの実装例 / `copilot-review.yml` リモート最終ゲートの要求側の実装例 / `review-gate.yml` リモート最終ゲートの確認側の実装例 / `claude-skill-intake.md` Claude Code の intake 起点スキル） |
-| `.gitignore` | このパッケージを開発するときの追跡除外設定。規範ではないため配布・取り込みの対象外（`shared-ai-rules.md` 13 章） |
+| `templates/` | 導入用の雛形 8 種（`entry.md` 実行環境の入口ファイル / `project-ai-rules.md` プロジェクト共通ルール / `second-opinion-review.sh` 第二意見レビューの実装例 / `copilot-review.yml` リモート最終ゲートの要求側の実装例 / `review-gate.yml` リモート最終ゲートの確認側の実装例 / `claude-skill-intake.md` Claude Code の intake 起点スキル / `claude-agent-explorer.md`・`claude-agent-implementer.md` Claude Code の委譲先エージェント定義） |
+| `.gitignore` | このパッケージを開発するときの追跡除外設定。規範ではないため配布・取り込みの対象外（`shared-ai-rules.md` 14 章） |
 
 共通ルールの補足として、AI からの質問は一問ずつ行い、各質問には意図を添え、回答は選択肢優先で提示します。
 
@@ -121,7 +121,7 @@ source=https://.../v0.1.4.tar.gz
 | `source` | 解決したソース（タグの tarball URL、任意 URL、ローカルパスのいずれか） |
 
 - 形式は機械可読な `key=value`（`#` で始まる行はコメント）です。
-- このファイルはこのパッケージの構成要素ではなく、取り込み側が生成する記録です（`shared-ai-rules.md` 13 章）。
+- このファイルはこのパッケージの構成要素ではなく、取り込み側が生成する記録です（`shared-ai-rules.md` 14 章）。
 - 生成された環境では、このファイルが「どの版を取り込んだか」の証跡になります。`version` が `(unspecified)` の場合はタグが記録されていないため、`source` とコミット SHA を別途記録してください。
 
 ## インストールスクリプト方針
@@ -196,6 +196,18 @@ cp .ai-playbook/templates/claude-skill-intake.md .claude/skills/intake/SKILL.md
 ```
 
 このスキルは判定基準・`reason_code` 一覧・intake 票の項目定義を複製せず、`.ai-playbook/intake/` と `.ai-playbook/role-contracts/intake-manager.md` を参照するだけです。Copilot 等 skill 機構を持たない実行環境は、同じ規範を各環境の機構で参照する形になります。
+
+あわせて、委譲先のエージェント定義を置きます。`model` と `tools` を frontmatter で固定するのが目的で、**指示文による呼びかけは迂回できますが、実行環境が読む機構は迂回できません**（`shared-ai-rules.md` 12 章）。
+
+```bash
+mkdir -p .claude/agents
+cp .ai-playbook/templates/claude-agent-explorer.md .claude/agents/explorer.md
+cp .ai-playbook/templates/claude-agent-implementer.md .claude/agents/implementer.md
+```
+
+**定義だけを置いても役割は使われません。** 判定の導線は `shared-ai-rules.md` 13 章「実装委譲パターン」が持ちます。プロジェクト層には、置いた定義と対応する役割・モデルの一覧を書き、実体と機械照合できる形にしてください（同 12 章「一覧の複製は機械照合で担保する」）。
+
+`tools` から編集系を外しても、調査に必要なコマンド実行を残す限り書き込みは完全には塞げません。境目は各定義に書いてあります。
 
 ### 6. リモート最終ゲートを配線する（GitHub を使う場合・任意）
 
