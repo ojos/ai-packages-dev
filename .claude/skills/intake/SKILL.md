@@ -10,14 +10,14 @@ description: 実装・修正・issue 起票を求められたときに、intake 
 ## 手順
 
 1. **要求を分類する。** 実装依頼か、質問・説明・調査のみか。
-2. **`.ai-playbook/intake/REASON_CODES.md` を読む。** 該当する `reason_code` を 1 つ選ぶ。軽微修正として免除する場合は、同文書「軽微修正の免除条件」を満たすことを確認する（条件はそちらに定義されている）。
+2. **`.ai-playbook/intake/REASON_CODES.md` を読む。** 該当する `reason_code` を 1 つ選ぶ。軽微修正として免除する場合は、`.ai-playbook/intake/REASON_CODES.md` の「軽微修正の免除条件」を満たすことを確認する（条件はそちらに定義されている）。
 3. **免除なら** `reason_code` を 1 行で示して、そのまま作業へ進む。
 4. **必須なら** `.ai-playbook/intake/intake-template.md` に従って intake 票を起票する。必須項目・任意項目の定義は同テンプレートに従う。不足項目は `.ai-playbook/shared-ai-rules.md` 9 章に従い、**一問ずつ・意図を添えて・選択肢形式で**確認する。
 5. **ユーザー承認を得るまで issue を作成しない。** 承認後に起票し、実装フローへ引き渡す。
 
 ## 判定に迷った場合
 
-intake 必須側へ倒します。免除の誤りは要件未確定のまま実装が進む形で表面化し、発見が遅れるためです（`REASON_CODES.md`「安全側の既定」）。
+intake 必須側へ倒します。免除の誤りは要件未確定のまま実装が進む形で表面化し、発見が遅れるためです（`.ai-playbook/intake/REASON_CODES.md` の「安全側の既定」）。
 
 ## 参照
 
