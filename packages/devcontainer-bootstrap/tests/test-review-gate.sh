@@ -262,6 +262,87 @@ else
   fail "scripts/review-usable.sh を呼んでいない"
 fi
 
+# ── 導入初回フォールバック ────────────────────────────────────────────────────
+#
+# 判定コードを既定ブランチから取る設計にしたため、review-gate.yml と
+# scripts/review-usable.sh を初めて導入する PR の時点では、既定ブランチにまだ
+# 判定コードが無い。resolve_usable_script はこのときだけ PR 自身の写しへ
+# フォールバックする（規範 review-workflow.md「要求された ≠ 読まれた」の例外）。
+#
+# **ここで検査できるのはワークフローの「形」だけである。** 実際の checkout・
+# 実際の `gh api` 呼び出し・実際に既定ブランチへ scripts/review-usable.sh が
+# 無い状態は、このテストスイート（bootstrap の生成結果を静的に見る）では再現
+# できない。以下は「フォールバックの分岐が生成物に存在するか」「既定ブランチを
+# 無条件に優先しているか」「フォールバックしたことを黙らせていないか」を文字列と
+# 構造で確かめるに留まる。**PR が実際に既定ブランチ側へ再フォールバックせず、
+# 既定ブランチにある版を上書きできないことまでは検証していない**（実地の GitHub
+# Actions 環境でしか確かめられない）。
+
+it "既定ブランチに判定コードが無いときへの分岐（resolve_usable_script）を持つ"
+if grep -qF 'resolve_usable_script()' "$wf"; then
+  pass
+else
+  fail "resolve_usable_script が無い（導入初回フォールバックが実装されていない）"
+fi
+
+it "既定ブランチの有無を先に確かめてから分岐している（HAS_MAIN_USABLE）"
+# 「既定ブランチにある場合は絶対にフォールバックしない」という制約を、変数 1 つの
+# 真偽で判定していることを確かめる。判定条件が PR 側の内容に依存していないことが
+# 大事で、それをコード上で表しているのがこの変数の存在である。
+if grep -qF 'HAS_MAIN_USABLE=1' "$wf" && grep -qF 'HAS_MAIN_USABLE=0' "$wf"; then
+  pass
+else
+  fail "HAS_MAIN_USABLE の設定が無い（既定ブランチの有無を判定していない）"
+fi
+
+it "resolve_usable_script は既定ブランチ優先を先頭で判定している（フォールバックが先に来ない）"
+# resolve_usable_script() の**定義そのもの**（呼び出しや、定義に言及するコメントでは
+# ない）から、対応する閉じ括弧までの本体だけを、字下げの対応で切り出す。本体の中で
+# HAS_MAIN_USABLE の判定が gh api 呼び出し（フォールバック側）より先に現れることを
+# 確かめる。順序が逆だと、既定ブランチに判定コードがあってもフォールバックを試みる
+# 余地が生まれる。
+body="$(awk '
+  /^[[:space:]]*resolve_usable_script\(\) \{[[:space:]]*$/ {
+    match($0, /^[[:space:]]*/); indent = RLENGTH
+    watching = 1; next
+  }
+  watching && $0 ~ ("^" sprintf("%" indent "s", "") "\\}[[:space:]]*$") { exit }
+  watching { print }
+' "$wf")"
+main_line="$(printf '%s\n' "$body" | grep -n 'HAS_MAIN_USABLE' | head -n1 | cut -d: -f1)"
+api_line="$(printf '%s\n' "$body" | grep -n 'gh api' | head -n1 | cut -d: -f1)"
+if [ -n "$body" ] && [ -n "$main_line" ] && [ -n "$api_line" ] && [ "$main_line" -lt "$api_line" ]; then
+  pass
+else
+  fail "既定ブランチの判定（HAS_MAIN_USABLE）が gh api 呼び出しより先に来ていない（本体を抽出できなかった可能性もある）"
+fi
+
+it "PR 側の写しを取得する API 呼び出しが sha（PR の head）を参照している"
+# 既定ブランチ全体を checkout し直すのではなく、判定対象の PR の head から
+# scripts/review-usable.sh 1 本だけを取る。掃き寄せ（複数 PR）でも、判定される
+# PR ごとに正しい版を引けるようにするため。
+if grep -qF 'contents/scripts/review-usable.sh?ref=${sha}' "$wf"; then
+  pass
+else
+  fail "PR の head sha を参照した取得になっていない"
+fi
+
+it "フォールバックしたことを ::notice:: で明示している"
+if grep -q '::notice::.*review-usable\.sh' "$wf"; then
+  pass
+else
+  fail "フォールバック時の ::notice:: が無い（黙って PR 側のコードで判定してしまう）"
+fi
+
+it "フォールバックしたことを commit status の description にも残す"
+# ::notice:: はジョブのログにしか残らない。PR の checks 欄だけを見た人にも
+# 分かるように、report() へ渡す description にも印を付ける。
+if grep -qF 'usable_desc=' "$wf" && grep -q 'report "\$sha" success "Copilot code review is requested or posted\${usable_desc}"' "$wf"; then
+  pass
+else
+  fail "description にフォールバックの印（usable_desc）が乗っていない"
+fi
+
 it "定型文の一致判定（1 行も読めなかったレビューの検出）が YAML に書き写されていない"
 # review-usable.sh が持つべき判定。YAML に埋め戻すと、手元と CI から機械的に
 # 確かめる手段が無くなる（この文字列は review-usable.sh 側の case パターンにだけ
@@ -310,9 +391,21 @@ it "\$? を \`if !\` の否定越しに拾っていない（2 段目の判定が
 # コメント行（\`#\` で始まる行）は先に読み飛ばす。このアンチパターンを説明する
 # コメント自体が \`if ! ... then rc=\$?\` を例として書くため、読み飛ばさないと
 # 説明文を実装だと誤認して自分自身に落ちる（実際にこの検査を書く過程で踏んだ）。
+#
+# **\`if ! \` にマッチした行そのものは、マッチした直後に \`next\` していたため
+# \`=\$?\` の検査にかからなかった。** \`if ! out=\"\$(cmd)\"; then rc=\$?; fi\` の
+# ように 1 行に収めた形（複数行に分けた形と意味は同じ）がこの穴を素通りする
+# ことを実測した（このバグを含む検査自体を最初に書いたときに実際に踏んだ）。
+# **1 行の中で先に \`=\$?\` を見てから\`next\`する**よう直し、同一行・複数行の
+# 両方で検出できることを確かめてある。あわせて、1 行内で \`; fi\` まで閉じている
+# 形（監視すべき後続行が無い）では \`watching\` を立てない——立てたままにすると、
+# 対応する \`fi\` が見つからず監視状態が漏れ、無関係な後続の正しい \`|| var=\$?\`
+# まで誤検出しうる。
 if awk '
   /^[[:space:]]*#/ { next }
   /if ! / {
+    if ($0 ~ /=\$\?/) { hit = 1 }
+    if ($0 ~ /;[[:space:]]*fi[[:space:]]*$/) { next }
     match($0, /^[[:space:]]*/)
     indent = RLENGTH
     watching = 1

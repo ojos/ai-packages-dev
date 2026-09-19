@@ -33,6 +33,14 @@ name: review-gate
 # あるため。ここで止めたいのは「効いていないことに気づかないまま通ること」だけ
 # である。
 #
+# **既知の限界: この確認側の run: ブロック自体は、同じリポジトリの PR から書き換え
+# られる。** `pull_request` イベントで GitHub が実行するのは PR 側の版のワークフロー
+# 定義であり、下記の checkout（既定ブランチ固定）が守るのは scripts/review-usable.sh
+# だけである（詳細は checkout ステップのコメント）。この PR より前から存在する性質
+# で、判定がまるごと YAML にあった頃から同じ大きさで開いていたため、本ファイルの
+# 変更で後退はしていないが、閉じてもいない。塞ぐには信頼境界の設計変更が要り、
+# 本ファイルのスコープを超える。
+#
 # ── 2 段目: 「要求されたか」と「読まれたか」は別である ──────────────────────────
 #
 # GitHub は 1 ファイルの差分が大きすぎると `patch` フィールドを落とす（実測:
@@ -48,6 +56,16 @@ name: review-gate
 # 上でしか実行できないため、判定をここへ埋めると受け入れ条件を機械的に確かめる
 # 手段が無くなる。ここでは GitHub API から一覧を集めてあのスクリプトへ渡し、結果を
 # commit status へ書くだけにしてある（詳細と入出力契約はスクリプト冒頭）。
+#
+# **既知の制約: 導入初回の PR では、既定ブランチではなく PR 自身の判定コードで
+# 判定される。** 判定コードは既定ブランチから取る設計だが（下記 checkout ステップ）、
+# `review-gate.yml` と `scripts/review-usable.sh` をまだ配置していないプロジェクトが
+# `--with-copilot-review` を初めて採用する PR の時点では、その判定コード自身が
+# 既定ブランチにまだ無い。この状態を検出したときだけ PR 側の写しへフォールバックする
+# （resolve_usable_script）。フォールバックした旨は commit status の description と
+# `::notice::` へ明示するため、黙って別の版で判定されたことにはならない。同じ理由で、
+# **判定コードそのものを変更する PR も、その変更を PR 上では検証できない**
+# （マージ後、次の実行から既定ブランチの新しい版で判定される）。
 
 on:
   pull_request:
@@ -94,6 +112,18 @@ jobs:
           # 常に緑にできてしまう。schedule / workflow_dispatch は元々既定ブランチを
           # 見るが、契機によって判定コードの出所が変わる状態を残さないため、
           # 3 つの契機すべてで明示的に固定する。
+          #
+          # **この checkout が守るのは scripts/review-usable.sh だけであり、この
+          # ワークフロー定義（本ファイルの run: ブロック自体）ではない。**
+          # `pull_request` イベントでは、同じリポジトリ内の PR に対して GitHub が
+          # 実行するのは PR 側の版の workflow 定義である（既定ブランチの checkout
+          # とは無関係に、GitHub 側がどのワークフロー定義を動かすかを決める）。
+          # したがって、この PR の投稿者は `gather_files` / `gather_reviews` /
+          # `report` / `case` などこの run: ブロックそのものを書き換えて、
+          # `statuses: write` の権限のまま成功を捏造できる。**判定コードの出所を
+          # 固定しても、この信頼境界は閉じていない。** 塞ぐには別の設計変更
+          # （再利用可能ワークフローを既定ブランチ参照で呼ぶ、判定を schedule 実行
+          # だけに限る等）が要り、本ファイルのスコープを超える。
           ref: ${{ github.event.repository.default_branch }}
 
       - name: Check that the remote final gate was actually requested and usable
@@ -125,6 +155,72 @@ jobs:
 
           # status の名前。**変えると過去の PR に付いた status と別物になる。**
           CONTEXT="review-gate"
+
+          # 既定ブランチ（このジョブが checkout 済みの木）に判定スクリプトが
+          # あるか。ジョブの間じゅう不変なので、PR ごとではなくここで 1 度だけ見る。
+          #
+          # **無いことがある。** `review-gate.yml` は判定コードを既定ブランチから
+          # 取る設計にしてあるが（このファイル冒頭の「2 段目」参照）、その判定コード
+          # 自身（`scripts/review-usable.sh`）を配布物へ初めて足す PR の時点では、
+          # 既定ブランチにまだ存在しない。**`--with-copilot-review` を新規に採用する
+          # プロジェクトは、review-gate.yml と review-usable.sh を足す最初の PR で
+          # 必ずこの状態を踏む。** 実際に、ある利用プロジェクトの導入直後の PR で
+          # `bash: scripts/review-usable.sh: No such file or directory`（exit 127）が
+          # 実測されている。
+          #
+          # このときだけ resolve_usable_script() が PR 側の写しへフォールバックする
+          # （下記）。フォールバックしない場合、導入初回の PR は「確かめられなかった」
+          # （status を付けない）扱いになり、外形的には fail-closed で安全だが、
+          # **この機構自身を導入する PR がこの機構自身のゲートを一度も通せない**
+          # という体験になる。
+          if [ -f scripts/review-usable.sh ]; then
+            HAS_MAIN_USABLE=1
+          else
+            HAS_MAIN_USABLE=0
+          fi
+
+          # scripts/review-usable.sh の実行元を決める。既定ブランチにあればそれを
+          # そのまま返し（0 を返す）、無ければ PR 自身の写しを GitHub API から取得して
+          # 一時ファイルへ書き、そのパスを返す。取得できなければ何も出力せず 1 を返す。
+          #
+          # **フォールバックしても「PR が自分の判定コードを書き換えてゲートを常に
+          # 緑にする」問題は起きない。** 守りたいのは、判定コードが既定ブランチに
+          # 存在するときにそれを差し替えられないことである。既定ブランチに判定コードが
+          # まだ無い状態では、そもそも守るべき判定コードが存在しない。しかもこの状態は
+          # PR からは作れない——既定ブランチから判定コードを消すには、その削除自体が
+          # 別のレビューを通って既定ブランチへ入る必要がある。したがってフォールバックは
+          # 「判定が一切走らず status も付かない」より厳密に良く、守りたい性質も壊さない。
+          #
+          # **既定ブランチにある場合は、絶対にフォールバックしない。** 条件は
+          # `HAS_MAIN_USABLE` の 1 点だけで、PR 側の内容がどうであっても既定ブランチ
+          # 側を優先する。これが崩れると、PR が既定ブランチにある判定コードを
+          # 自分の写しで上書きできてしまう。
+          #
+          # **API 呼び出しが失敗しても、gather_files / gather_reviews のパイプへは
+          # 進まない。** 呼び出し側は本関数の戻り値を確かめてから
+          # `{ gather_files ...; gather_reviews ...; } | bash "$usable_script"` を
+          # 組み立てるため、ここで 1 を返せばパイプ自体が作られない。判定スクリプトが
+          # 見つからないまま起動を試みて SIGPIPE で落ちる経路（実測: `printf: write
+          # error: Broken pipe`）は、この順序により再現しない。
+          resolve_usable_script() {
+            local sha="$1"
+            if [ "$HAS_MAIN_USABLE" = "1" ]; then
+              printf '%s' "scripts/review-usable.sh"
+              return 0
+            fi
+            local tmp b64
+            tmp="$(mktemp "${TMPDIR:-/tmp}/review-usable.XXXXXX")"
+            if ! b64="$(gh api "repos/${REPO}/contents/scripts/review-usable.sh?ref=${sha}" \
+                 --jq .content 2>/dev/null)" || [ -z "$b64" ]; then
+              rm -f "$tmp"
+              return 1
+            fi
+            if ! printf '%s' "$b64" | base64 -d > "$tmp" 2>/dev/null; then
+              rm -f "$tmp"
+              return 1
+            fi
+            printf '%s' "$tmp"
+          }
 
           # レビューが要求されているか、あるいは既に付いているかを見る。
           #
@@ -315,27 +411,48 @@ jobs:
                 # 入った時点の `$?` は `! ...` 自体の評価結果（常に 0）であり、
                 # コマンド側が返した値ではない（実測: `f(){ return 3; }; if ! out="$(f)";
                 # then rc=$?; fi` は rc=0 になる）。`|| var=$?` の形で拾う。
-                local usable_out usable_rc=0
+                #
+                # 実行するスクリプトの場所は resolve_usable_script が決める（既定
+                # ブランチ優先、無ければ PR 自身の写しへフォールバック。定義は本ファイル
+                # 冒頭）。**解決できないうちは gather_files / gather_reviews のパイプを
+                # 組み立てない。** 存在しないスクリプトへ向けてパイプを開くと、読み手が
+                # 即死して書き手側が SIGPIPE で落ちる（実測: `printf: write error:
+                # Broken pipe`）。順序を「解決 → 失敗ならここで return」にすることで、
+                # この経路そのものを作らない。
+                local usable_out usable_rc=0 usable_script usable_desc=""
+                if ! usable_script="$(resolve_usable_script "$sha")"; then
+                  echo "::error::PR #${pr}: scripts/review-usable.sh が既定ブランチにも PR 自身にも見つかりませんでした（読めなかった、または存在しません）。status は付けていません。次の定期実行で再判定します。"
+                  return 1
+                fi
+                if [ "$HAS_MAIN_USABLE" != "1" ]; then
+                  # **フォールバックしたことを明示する。** 黙って PR 側のコードで
+                  # 判定すると、「既定ブランチの版で判定した」と読み違える。
+                  usable_desc=" [fallback: judged with the PR's own review-usable.sh, not main]"
+                  echo "::notice::PR #${pr}: 既定ブランチに scripts/review-usable.sh がまだ無いため、この PR 自身の写しで判定しました。review-gate.yml と review-usable.sh をこの PR で初めて導入する場合に必ず起きます。判定コードそのものの変更はこの PR 上では検証できていません（次に判定コードを変える PR も同様です）。"
+                fi
                 usable_out="$(
                   { gather_files "$pr"; gather_reviews "$pr"; } \
-                    | bash scripts/review-usable.sh
+                    | bash "$usable_script"
                 )" || usable_rc=$?
-                echo "  review-usable: ${usable_out:-(no output)} (rc=${usable_rc})"
+                # フォールバック時の一時ファイルだけ消す。既定ブランチの写し
+                # （"scripts/review-usable.sh"）は checkout の一部なので消さない。
+                [ "$HAS_MAIN_USABLE" = "1" ] || rm -f "$usable_script"
+                echo "  review-usable: ${usable_out:-(no output)} (rc=${usable_rc})${usable_desc}"
 
                 case "$usable_rc" in
                   0)
                     # report の失敗をそのまま返す。**書けたことまで含めて「通った」で
                     # ある。**
-                    report "$sha" success "Copilot code review is requested or posted" || return 1
+                    report "$sha" success "Copilot code review is requested or posted${usable_desc}" || return 1
                     return 0
                     ;;
                   1)
-                    report "$sha" failure "No file patch available; Copilot cannot read this PR" || return 1
+                    report "$sha" failure "No file patch available; Copilot cannot read this PR${usable_desc}" || return 1
                     echo "::error::PR #${pr}: 変更したどのファイルにも差分（patch）が付いていないため、Copilot は 1 行も読めません。GitHub は 1 ファイルの差分が大きすぎると patch を落とします（実測では 5 万バイト台は返り、10 万バイト台は落ちました）。確かめる: gh api repos/${REPO}/pulls/${pr}/files --jq '[.[] | select(.changes > 0 and .patch == null) | .filename]'。直す: 巨大な 1 行を分ける（その行を書き換えると旧＋新が差分に乗ります）、あるいは変更を複数の PR へ分ける。"
                     return 1
                     ;;
                   3)
-                    report "$sha" failure "Copilot reviewed nothing (it could not read any file)" || return 1
+                    report "$sha" failure "Copilot reviewed nothing (it could not read any file)${usable_desc}" || return 1
                     echo "::error::PR #${pr}: Copilot が「1 行も読めなかった」という定型文だけを返しました。要求も投稿もされていますが、中身がありません。上の patch の検査は通っているので、GitHub 側の挙動が変わったか、Copilot 側の事情です。マージする前に、別の手段（第二意見レビュー等）で代替するか、利用者に判断を仰いでください。"
                     return 1
                     ;;
