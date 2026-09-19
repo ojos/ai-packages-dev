@@ -13,6 +13,13 @@
 # 要求が 2 か所から出ると規範の「1 回だけ」が壊れるため、後者は届かないイベントを
 # 同じ契機から見ても起動しないため（規範 review-workflow.md「要求されたことを別の
 # 契機で確認する」）。どちらも生成された YAML の内容として検査する。
+#
+# 確認側はもう 1 つ、「読まれたか」も見る（規範 review-workflow.md「要求された ≠
+# 読まれた」）。この判定は review-gate.yml へ書き写さず scripts/review-usable.sh へ
+# 切り出してあるため、配置される本数は 2 本から 4 本へ増える。判定を書き写していない
+# ことは、生成された YAML に判定文字列（定型文の一致パターンや判定関数）が現れない
+# ことで確かめる。判定そのものの正しさ（表駆動の受け入れ条件）は
+# check-review-usable.sh が別に持つ。
 
 set -uo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
@@ -21,11 +28,17 @@ echo "test-review-gate"
 
 TPL="$PLAYBOOK_SRC/templates"
 WF_REL=".github/workflows/review-gate.yml"
+USABLE_REL="scripts/review-usable.sh"
+CHECK_USABLE_REL="scripts/check-review-usable.sh"
 
 # ── 規範パッケージ側に雛形が揃っているか ─────────────────────────────────────
 
 it "規範パッケージがリモート最終ゲート（確認側）の雛形を持つ"
 assert_file_exists "$TPL/review-gate.yml"
+
+it "規範パッケージが確認側の判定スクリプト 2 本を持つ"
+assert_file_exists "$TPL/review-usable.sh"
+assert_file_exists "$TPL/check-review-usable.sh"
 
 # ── 選択時のみ配置する ────────────────────────────────────────────────────────
 
@@ -41,17 +54,34 @@ it "要求側と確認側は 2 本そろって配置される"
 # 片方だけの配置は、この機構が塞ごうとしている穴（要求されないまま通る）を残す。
 assert_file_exists "$out/.github/workflows/copilot-review.yml"
 
+it "--with-copilot-review --with-playbook で確認側の判定スクリプト 2 本（scripts/review-usable.sh / scripts/check-review-usable.sh）が配置される"
+# review-gate.yml が判定を委ねる先。片方だけ欠けると確認側が起動時に読めず、
+# 「確かめられなかった」側へ倒れて status が付かないまま止まる。
+assert_file_exists "$out/$USABLE_REL"
+assert_file_exists "$out/$CHECK_USABLE_REL"
+
+it "配置された scripts/review-usable.sh は雛形と完全一致する（コピーであって再生成でない）"
+if diff -q "$out/$USABLE_REL" "$TPL/review-usable.sh" >/dev/null 2>&1; then pass; else fail "雛形と一致しない"; fi
+
+it "配置された scripts/check-review-usable.sh は雛形と完全一致する（コピーであって再生成でない）"
+if diff -q "$out/$CHECK_USABLE_REL" "$TPL/check-review-usable.sh" >/dev/null 2>&1; then pass; else fail "雛形と一致しない"; fi
+
 it "--with-copilot-review なし（--with-playbook のみ）では配置しない"
 out="$(new_workdir)/p"
 run_bootstrap "$out" --with-playbook >/dev/null 2>&1
 assert_file_absent "$out/$WF_REL"
+assert_file_absent "$out/$USABLE_REL"
+assert_file_absent "$out/$CHECK_USABLE_REL"
 
 it "--with-copilot 単独（+規範）では配置しない"
 # 確認側も要求側と同じ契機で配置する。ローカル装備のフラグでリモート機構が付いて
-# くる形へ戻っていないことを、2 本ともで見る（issue #230）。
+# くる形へ戻っていないことを、2 本ともで見る（issue #230）。判定スクリプトも
+# 同じ契機に従うことを 4 本まとめて見る。
 out="$(new_workdir)/p"
 run_bootstrap "$out" --with-copilot --with-playbook >/dev/null 2>&1
 assert_file_absent "$out/$WF_REL"
+assert_file_absent "$out/$USABLE_REL"
+assert_file_absent "$out/$CHECK_USABLE_REL"
 
 it "--with-copilot-review でも規範を配置しない構成ではエラー終了する"
 # 雛形は規範パッケージが持つ。playbook を配置しないなら参照元が無いため、生成物を
@@ -64,16 +94,30 @@ if [[ "$rc" -ne 0 ]]; then pass; else fail "規範なしなのに成功した（
 it "その構成では review-gate.yml も置かれない"
 assert_file_absent "$out/$WF_REL"
 
+it "その構成では判定スクリプト 2 本も置かれない"
+assert_file_absent "$out/$USABLE_REL"
+assert_file_absent "$out/$CHECK_USABLE_REL"
+
 it "dry-run は copilot-review 選択時に review-gate.yml を計画へ含める"
 out="$(new_workdir)/p"
 output="$(run_bootstrap "$out" --with-copilot-review --with-playbook --dry-run 2>&1)"
 assert_contains "$output" "$WF_REL" "dry-run 計画"
+
+it "dry-run は copilot-review 選択時に判定スクリプト 2 本も計画へ含める"
+assert_contains "$output" "$USABLE_REL" "dry-run 計画"
+assert_contains "$output" "$CHECK_USABLE_REL" "dry-run 計画"
 
 it "dry-run は copilot-review 未選択なら review-gate.yml を計画へ含めない"
 out="$(new_workdir)/p"
 output="$(run_bootstrap "$out" --with-copilot --with-playbook --dry-run 2>&1)"
 case "$output" in
   *"$WF_REL"*) fail "未選択なのに計画へ現れた" ;;
+  *) pass ;;
+esac
+
+it "dry-run は copilot-review 未選択なら判定スクリプト 2 本も計画へ含めない"
+case "$output" in
+  *"$USABLE_REL"*|*"$CHECK_USABLE_REL"*) fail "未選択なのに計画へ現れた" ;;
   *) pass ;;
 esac
 
@@ -197,6 +241,52 @@ if grep -qF 'copilot|"copilot-pull-request-reviewer[bot]") return 0' "$wf"; then
   pass
 else
   fail "レビュアー名の完全一致判定が無い"
+fi
+
+# ── 2 段目: 「読まれたか」の判定はスクリプトへ委ねている ─────────────────────────
+
+it "既定ブランチから判定コードを取得する（PR のブランチではない）"
+# ref を指定しない checkout は pull_request イベントで PR のマージ結果を取得する。
+# 判定コードを被検査対象と同じ木から取ると、PR の投稿者が判定スクリプトを書き換える
+# だけでゲートを常に緑にできてしまう。
+if grep -qF 'ref: ${{ github.event.repository.default_branch }}' "$wf"; then
+  pass
+else
+  fail "checkout が既定ブランチへ固定されていない"
+fi
+
+it "判定は scripts/review-usable.sh へ委ねている"
+if grep -qF 'scripts/review-usable.sh' "$wf"; then
+  pass
+else
+  fail "scripts/review-usable.sh を呼んでいない"
+fi
+
+it "定型文の一致判定（1 行も読めなかったレビューの検出）が YAML に書き写されていない"
+# review-usable.sh が持つべき判定。YAML に埋め戻すと、手元と CI から機械的に
+# 確かめる手段が無くなる（この文字列は review-usable.sh 側の case パターンにだけ
+# あるべきで、YAML には無い）。
+if grep -qF 't able to review any files"*' "$wf"; then
+  fail "定型文の一致判定が YAML に埋め込まれている（review-usable.sh へ委ねるべき）"
+else
+  pass
+fi
+
+it "判定関数（reviewable_patches / posted_review_is_empty）を YAML 内に持たない"
+if grep -Eq '(reviewable_patches|posted_review_is_empty)\(\)' "$wf"; then
+  fail "判定ロジックが YAML 内の関数として残っている"
+else
+  pass
+fi
+
+it "変更ファイルとレビュー本文の一覧を集めて渡すだけである（判定はしない）"
+# gather_files / gather_reviews は「一覧を集めて渡す」役に徹し、patch の有無や
+# 定型文かどうかを判定しない。中で is_copilot（発言者の絞り込み）だけを使うのは、
+# 「誰の発言か」を狭めるのが呼び出し側の役割だからで、「読めるか」の判定ではない。
+if grep -qF 'gather_files()' "$wf" && grep -qF 'gather_reviews()' "$wf"; then
+  pass
+else
+  fail "gather_files / gather_reviews が無い（一覧を集める役割が確認できない）"
 fi
 
 # ── YAML として妥当である ─────────────────────────────────────────────────────

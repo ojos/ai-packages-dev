@@ -4014,11 +4014,29 @@ install_playbook_rules() {
   # ことを別の契機（PR 更新・定期実行）から確認する。要求側の契機は届かないことが
   # あり、届かなければ最終ゲートが黙って抜けるため、確認側だけを落として配置する
   # 選択肢は持たせない（規範 review-workflow.md「要求されたことを別の契機で確認する」）。
+  #
+  # 確認側は「要求されたか」に加え「読まれたか」も見る。判定は review-gate.yml へ
+  # 書き写さず、scripts/review-usable.sh に持たせてある。あわせて配置する
+  # scripts/check-review-usable.sh は、その判定を手元と CI の両方で機械的に確かめる
+  # ための表駆動の自己検査で、判定と同じ理由（GitHub 上でしか動かない .yml へ埋めると
+  # 受け入れ条件を確かめる手段が無くなる）で分けて置く。
   if has_with copilot-review; then
     tpl="$(require_playbook_template copilot-review.yml)"
     apply_file_with_policy "$tpl" "$OUTPUT_DIR/.github/workflows/copilot-review.yml"
     tpl="$(require_playbook_template review-gate.yml)"
     apply_file_with_policy "$tpl" "$OUTPUT_DIR/.github/workflows/review-gate.yml"
+
+    tpl="$(require_playbook_template review-usable.sh)"
+    apply_file_with_policy "$tpl" "$OUTPUT_DIR/scripts/review-usable.sh"
+    if [[ -f "$OUTPUT_DIR/scripts/review-usable.sh" ]]; then
+      chmod +x "$OUTPUT_DIR/scripts/review-usable.sh"
+    fi
+
+    tpl="$(require_playbook_template check-review-usable.sh)"
+    apply_file_with_policy "$tpl" "$OUTPUT_DIR/scripts/check-review-usable.sh"
+    if [[ -f "$OUTPUT_DIR/scripts/check-review-usable.sh" ]]; then
+      chmod +x "$OUTPUT_DIR/scripts/check-review-usable.sh"
+    fi
   fi
 
   # Claude Code 向け intake 起点スキル。--with-claude を選んだときだけ配置する
@@ -4158,6 +4176,8 @@ EOF
     if has_with copilot-review; then
       echo "plan: $OUTPUT_DIR/.github/workflows/copilot-review.yml"
       echo "plan: $OUTPUT_DIR/.github/workflows/review-gate.yml"
+      echo "plan: $OUTPUT_DIR/scripts/review-usable.sh"
+      echo "plan: $OUTPUT_DIR/scripts/check-review-usable.sh"
     fi
     if has_with claude; then
       echo "plan: $OUTPUT_DIR/.claude/skills/intake/SKILL.md"

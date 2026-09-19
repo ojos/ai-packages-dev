@@ -98,7 +98,7 @@ check_generated_scripts "$out" "素の構成"
 outf="$(new_workdir)/full"
 bash "$BOOTSTRAP" \
   --project-name test --languages node,go,python,php,rust,ruby \
-  --with-aws --with-gcp --with-claude --with-gemini --with-antigravity --with-copilot \
+  --with-aws --with-gcp --with-claude --with-gemini --with-antigravity --with-copilot --with-copilot-review \
   --playbook-from "$PLAYBOOK_SRC" \
   --output-dir "$outf" >/dev/null 2>&1
 check_generated_scripts "$outf" "全部入りの構成"
@@ -107,6 +107,13 @@ it "全部入りの構成で第二意見スクリプトまで生成されてい�
 # 規範パッケージ由来の scripts/second-opinion-review.sh は、装備フラグを付けたときだけ
 # 現れる。素の構成しか見ていないと、この 1 本が検査から抜けたまま緑になる。
 assert_file_exists "$outf/scripts/second-opinion-review.sh"
+
+it "全部入りの構成でリモート最終ゲートの判定スクリプトまで生成されている"
+# 規範パッケージ由来の scripts/review-usable.sh / scripts/check-review-usable.sh は
+# --with-copilot-review を付けたときだけ現れる。上と同じ理由で、名指しで確かめる
+# （素の構成しか見ていないと、この 2 本が検査から抜けたまま緑になる）。
+assert_file_exists "$outf/scripts/review-usable.sh"
+assert_file_exists "$outf/scripts/check-review-usable.sh"
 
 # ── 空振り防止 ────────────────────────────────────────────────────────────────
 
