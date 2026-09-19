@@ -269,9 +269,15 @@ case "$ENGINE" in
     # 固定上限。カーネル定数: PAGE_SIZE * 32）。diff 全体を 1 つの -p 引数へ
     # 載せる以上、ここが実際のボトルネックになる。ページサイズを動的に取り、
     # 取得できない環境では Linux の既定値 4096 を仮定する。
+    #
+    # MAX_ARG_STRLEN は終端 NUL を含めて評価される（カーネル fs/exec.c の
+    # strnlen_user(str, MAX_ARG_STRLEN)）。渡せる実文字数はその 1 バイト少ない。
+    # 実測（Linux 6.10）: 131,070 / 131,071 バイトは通り、131,072 バイトから
+    # Argument list too long になった。131,072 をそのまま「渡せる最大」として
+    # 使うと、チャンクがちょうど境界に達したときに E2BIG で落ちる。
     CLI="agy"
     page_size="$(getconf PAGE_SIZE 2>/dev/null || getconf PAGESIZE 2>/dev/null || echo 4096)"
-    max_arg_bytes=$((page_size * 32))
+    max_arg_bytes=$((page_size * 32 - 1))
 
     # 文字数（${#var}）ではなくバイト数で測る。${#var} はロケール依存で、日本語を
     # 含む差分では 1 文字が複数バイトになり、上限判定が実際より甘くなる
