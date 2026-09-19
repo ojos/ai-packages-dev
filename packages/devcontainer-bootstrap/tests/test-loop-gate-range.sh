@@ -306,8 +306,15 @@ if out_txt="$(cd "$GEN" && ALLOWED_AUTHOR_EMAILS="t@example.com" VERIFY_ACCEPTAN
 else
   # identity（step 1）は許可 email を渡しているので通過しており、不合格の原因が
   # acceptance（step 2）であることを確かめる。
+  #
+  # 「identity で落ちていない」だけでは足りない。verify.sh は acceptance の手前で
+  # check-no-secrets.sh も実行するため、それだけで GATE_FAIL になっても同じ形の
+  # 出力になり得る。acceptance（$acc_fail）が実際に起動されたことまで固定する
+  # （verify.sh が acceptance の起動直前に出す "[verify] running acceptance:" を見る）。
   if printf '%s' "$out_txt" | grep -q 'commit identity not passed'; then
     fail "acceptance 不合格を検証する前に identity で落ちている: $out_txt"
+  elif ! printf '%s' "$out_txt" | grep -q '\[verify\] running acceptance:'; then
+    fail "acceptance が起動された痕跡が無い（identity 以外の別段で落ちている疑い）: $out_txt"
   else
     assert_contains "$out_txt" "GATE_FAIL" "不合格時の出力"
   fi

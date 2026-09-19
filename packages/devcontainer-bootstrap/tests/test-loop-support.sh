@@ -282,8 +282,15 @@ else
   # identity（step 1）は許可 email を渡しているので通過し、verify（step 2）で
   # 落ちることを確かめる。単に GATE_FAIL が出るだけでは、原因が acceptance の
   # 不合格ではなく identity 側にずれていても気づけない。
+  #
+  # 「identity で落ちていない」だけでは足りない。verify.sh は acceptance の
+  # 手前で check-no-secrets.sh も実行するため、それだけで GATE_FAIL になっても
+  # 同じ形の出力になり得る。acceptance（$acc）が実際に起動されたことまで固定する
+  # （verify.sh が acceptance の起動直前に出す "[verify] running acceptance:" を見る）。
   if printf '%s' "$out_txt" | grep -q 'commit identity not passed'; then
     fail "acceptance 不合格を検証する前に identity で落ちている: $out_txt"
+  elif ! printf '%s' "$out_txt" | grep -q '\[verify\] running acceptance:'; then
+    fail "acceptance が起動された痕跡が無い（identity 以外の別段で落ちている疑い）: $out_txt"
   else
     assert_contains "$out_txt" "GATE_FAIL" "loop-gate 出力"
   fi
