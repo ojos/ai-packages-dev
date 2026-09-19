@@ -50,6 +50,22 @@ jobs:
           # 出て二重要求になることで、成功するまでを 1 回の要求として扱うことは
           # 禁じていない。外から見た要求はこの 1 ジョブのみで最大 1 件のまま。
           #
+          # **ただしこれは「再送が重複を生まない」場合にだけ成り立つ。** `gh` が
+          # 失敗を返しても、それは応答の解析に失敗しただけで、POST 自体は
+          # サーバ側に届いて成立している可能性がある（空レスポンスはこの区別を
+          # 付けない）。その状態で無条件に再送すると、1 回のつもりの要求が
+          # 実際には複数回記録され、レビューが重複して起動しうる。**再送する前に、
+          # 直前の要求が実は成立していないかを確かめる。**
+          #
+          # **requested_reviewers では確かめられない。** Copilot は要求が成立した
+          # 直後から、レビューを開始する前でもこのフィールドから消えることが実測
+          # されている（要求 201 Created の直後に確認しても空配列が返った）。
+          # 「空だから要求されていない」と読むと必ず再送することになり、この確認は
+          # 存在しても一度も効かない。確かめるのは `issues/{pr}/timeline` に残る
+          # `review_requested` イベントで、これは「起きたこと」の記録なので進行
+          # 状態に左右されない（review-gate.yml が確認側で同じ理由から採っている
+          # 方式と同じ）。
+          #
           # 試行回数・間隔: 間欠故障を意図的に起こせず再現条件も無いため、狙って
           # 越えられる待ち時間は決められない。ここでは「同一プロセス内の瞬間的な
           # 不調なら数十秒あれば別の試行で通る」という見立てで、5→10→20 秒の
@@ -57,6 +73,18 @@ jobs:
           # 頻繁に発火するイベントではないため、失敗時にこの程度待つことの費用は
           # 小さい。この回数・間隔が実際の間欠故障を越えられるかは検証できていない
           # （本票が保証しないこと）。
+
+          # 名前が Copilot のものか。**部分一致で見ない。** 綴りは 2 通りある
+          # （実測）。要求 API は `Copilot`、投稿側は
+          # `copilot-pull-request-reviewer[bot]`。review-gate.yml の is_copilot と
+          # 同じ表記ゆれを吸収する（将来 GitHub が綴りを変えたら両方直す）。
+          is_copilot() {
+            case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in
+              copilot|"copilot-pull-request-reviewer[bot]") return 0 ;;
+              *) return 1 ;;
+            esac
+          }
+
           attempt=1
           max_attempts=4
           delay=5
@@ -69,6 +97,37 @@ jobs:
             fi
 
             echo "$out"
+
+            # 再送する前に timeline を見る。直前の失敗が応答の解析エラーに
+            # すぎず、要求そのものは既に成立していないかを確かめる。
+            if timeline="$(gh api --paginate \
+                 "repos/${REPO}/issues/${PR_NUMBER}/timeline?per_page=100" \
+                 --jq '.[] | select(.event == "review_requested" or .event == "review_request_removed")
+                           | select(.requested_reviewer != null)
+                           | "\(.event) \(.requested_reviewer.login)"' 2>&1)"; then
+              # 取り消しを勘定に入れる: 同じ相手について最後の 1 件が
+              # review_requested のときだけ、要求が生きているとみなす
+              # （review-gate.yml の has_review と同じ考え方）。
+              last=""
+              while read -r ev login; do
+                [ -n "${ev:-}" ] || continue
+                is_copilot "$login" || continue
+                last="$ev"
+              done <<< "$timeline"
+              if [ "$last" = "review_requested" ]; then
+                echo "timeline に review_requested が記録済みです。直前の失敗は応答が壊れただけで、要求自体は既に成立しているとみなし、再送せずに終了します。"
+                exit 0
+              fi
+            else
+              # **読めなかったことを「要求されていない」と同じに扱わない。**
+              # 直前の要求が実際には成立していた可能性を timeline でも否定
+              # できない以上、ここで再送すると多重要求になりうる。可用性より
+              # 「1 回だけ」を優先し、安全側（再送しない）に倒して終了する。
+              echo "$timeline"
+              echo "::error::直前の要求が失敗したように見えますが、timeline を確認できず、実際には成立していたかを判別できませんでした。多重要求を避けるため、ここでは再送しません。手動で確認してください: gh api repos/${REPO}/issues/${PR_NUMBER}/timeline --jq '[.[] | select(.event==\"review_requested\") | .requested_reviewer.login]'。要求が無ければ 1 回だけ手で要求してください: gh api --method POST repos/${REPO}/pulls/${PR_NUMBER}/requested_reviewers -f 'reviewers[]=copilot-pull-request-reviewer[bot]'"
+              exit 1
+            fi
+
             if [[ "$attempt" -ge "$max_attempts" ]]; then
               break
             fi
@@ -79,8 +138,9 @@ jobs:
           done
 
           # **失敗を握り潰してスキップにはしない。** 再試行を尽くしてもなお失敗した
-          # 場合、リモート最終ゲートが実行されていないのに緑を出すと、偽の緑と通過の
-          # 区別が付かなくなる。それは review-gate.yml が塞ごうとしている状態と
-          # 同じものを、こちら側で作ることにあたる。
-          echo "::error::Copilot code review の要求に ${max_attempts} 回試行しても失敗しました。次の順に切り分けてください: (1) 直前の出力が空、または 'unexpected end of JSON input' の場合は間欠的な障害の可能性が高く、常設のトークン設定を疑う前に、時間を置いた手動要求または再実行を試してください。(2) 出力に 422 が含まれる場合は、リポジトリ所有者側で Copilot code review が有効か確認してください（無効だと 422 になります）。(3) 出力に 401 / 403 が含まれる場合は、リポジトリ Secrets に COPILOT_REVIEW_TOKEN（pull-requests 書き込み権限を持つ PAT）を設定してください。(4) リモート最終ゲートを機構で要求しない方針へ変えるなら、プロジェクト層の規範（リモート最終ゲート）を先に更新してください。"
+          # 場合（timeline でも要求の成立を確認できなかった場合）、リモート最終
+          # ゲートが実行されていないのに緑を出すと、偽の緑と通過の区別が付かなく
+          # なる。それは review-gate.yml が塞ごうとしている状態と同じものを、
+          # こちら側で作ることにあたる。
+          echo "::error::Copilot code review の要求に ${max_attempts} 回試行しても失敗しました（timeline でも要求の成立を確認できていません）。次の順に切り分けてください: (1) 直前の出力が空、または 'unexpected end of JSON input' の場合は間欠的な障害の可能性が高く、常設のトークン設定を疑う前に、時間を置いた手動要求または再実行を試してください。(2) 出力に 422 が含まれる場合は、リポジトリ所有者側で Copilot code review が有効か確認してください（無効だと 422 になります）。(3) 出力に 401 / 403 が含まれる場合は、リポジトリ Secrets に COPILOT_REVIEW_TOKEN（pull-requests 書き込み権限を持つ PAT）を設定してください。(4) リモート最終ゲートを機構で要求しない方針へ変えるなら、プロジェクト層の規範（リモート最終ゲート）を先に更新してください。"
           exit 1

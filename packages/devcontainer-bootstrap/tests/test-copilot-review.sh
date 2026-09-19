@@ -208,28 +208,126 @@ else
 fi
 
 it "生成ワークフローは再試行を尽くしても失敗したら非 0 で終える（黙って緑にしない）"
-# ループを抜けた後（done の後）に exit 1 があることを見る。ループの中だけに
+# ループを抜けた後（done の後）に exit 1 があることを見る。ループの中にも
+# 別の exit 1（timeline を確認できなかったときの安全側停止）があるため、
+# 「最初の exit 1」ではなく「done より後にある exit 1」を探す。ループの中だけに
 # あると、尽きる前の 1 回の失敗で即座に終わってしまい「再試行」の体をなさない。
 # ループの外にあって初めて「尽きたら」の判定になる。
-exit1_line="$(grep -n 'exit 1' "$wf" | head -n 1 | cut -d: -f1)"
-if [[ -n "$done_line" && -n "$exit1_line" && "$done_line" -lt "$exit1_line" ]]; then
+exit1_after_loop=""
+if [[ -n "$done_line" ]]; then
+  exit1_lines="$(grep -n 'exit 1' "$wf" | cut -d: -f1)"
+  for n in $exit1_lines; do
+    if [[ "$n" -gt "$done_line" ]]; then
+      exit1_after_loop="$n"
+      break
+    fi
+  done
+fi
+if [[ -n "$exit1_after_loop" ]]; then
   pass
 else
-  fail "再試行ループの後に exit 1 が無い（done 行 $done_line / exit 1 行 $exit1_line）"
+  fail "再試行ループの後（done 行 $done_line より後）に exit 1 が無い"
 fi
 
 it "::error:: の切り分け手順は空レスポンスの実測（unexpected end of JSON input）を 422 より先に挙げる"
 # 現行の書き方の逆転を検出する: 従来は 422（所有者側で無効）を第一候補に挙げて
-# いたが、実際に踏んだのは空のレスポンスだった（ojos/ai-packages-dev#306）。
-# 順序まで見ないと、両方の語が入っているだけの状態（切り分け手順が実測と
-# 逆順のまま）を見逃す。
-error_line="$(grep -F '::error::' "$wf" | head -n 1)"
+# いたが、実際に踏んだのは空のレスポンスだった。順序まで見ないと、両方の語が
+# 入っているだけの状態（切り分け手順が実測と逆順のまま）を見逃す。
+#
+# 目印は固有の文言（「次の順に切り分けてください」）で取る。単に「::error::」の
+# 最初の行を拾うと、再試行の途中にある別の ::error::（timeline 確認不可時の
+# 安全停止）を誤って掴む。
+error_line="$(grep -F '次の順に切り分けてください' "$wf" | head -n 1)"
 pos_empty="$(awk -v s="$error_line" 'BEGIN{print index(s, "unexpected end of JSON input")}')"
 pos_422="$(awk -v s="$error_line" 'BEGIN{print index(s, "422")}')"
-if [[ "$pos_empty" -gt 0 && "$pos_422" -gt 0 && "$pos_empty" -lt "$pos_422" ]]; then
+if [[ -n "$error_line" && "$pos_empty" -gt 0 && "$pos_422" -gt 0 && "$pos_empty" -lt "$pos_422" ]]; then
   pass
 else
   fail "空レスポンスの言及が無いか、422 より後になっている（empty=$pos_empty 422=$pos_422）"
+fi
+
+# ── 再送前の成立確認（PR #310 の Copilot 指摘: 空レスポンス ≠ 要求未成立）─────────
+#
+# `gh` が失敗を返しても、それは応答の解析に失敗しただけで、POST 自体はサーバ側に
+# 届いて成立している可能性がある。その状態で無条件に再送すると、1 回のつもりの
+# 要求が複数回記録され、「1 回だけ要求する」を再試行自身が壊しうる
+# （.ai-playbook/review-workflow.md「リモート最終ゲート」の追記を参照）。
+#
+# **requested_reviewers の GET 応答（.users[]）は使えない。** 要求が成立した
+# 直後からこのフィールドが空になることが実測されている。空だから未成立と読むと、
+# この確認は存在しても一度も効かない最悪の形になる。判定には timeline の
+# review_requested イベントを使う。
+
+it "生成ワークフローは再送する前に timeline を確認する（POST 失敗 → timeline 確認 → sleep の順）"
+# 要求呼び出し・timeline 確認・待機（sleep）の 3 つが、この順でループ内に
+# 現れることを見る。timeline 確認が sleep より後ろにあると、確かめる前に
+# 再送してしまう構造になる。
+gh_post_line="$(grep -n 'gh api --method POST' "$wf" | head -n 1 | cut -d: -f1)"
+# 'issues/${PR_NUMBER}/timeline' は生成物の中に現れるリテラル文字列を探しており、
+# ここでの $ は展開させない意図的な単一引用符。
+# shellcheck disable=SC2016
+timeline_line="$(grep -nF 'issues/${PR_NUMBER}/timeline' "$wf" | head -n 1 | cut -d: -f1)"
+if [[ -n "$while_line" && -n "$gh_post_line" && -n "$timeline_line" && -n "$sleep_line" && -n "$done_line" \
+      && "$while_line" -lt "$gh_post_line" \
+      && "$gh_post_line" -lt "$timeline_line" \
+      && "$timeline_line" -lt "$sleep_line" \
+      && "$sleep_line" -lt "$done_line" ]]; then
+  pass
+else
+  fail "順序が崩れている（while=$while_line post=$gh_post_line timeline=$timeline_line sleep=$sleep_line done=$done_line）"
+fi
+
+it "生成ワークフローは判定に requested_reviewers の GET 応答（.users[]）を使わない"
+# 要求済みかどうかの判定を requested_reviewers の読み取りへ書き換えると、成立
+# 直後から空を返す実測のとおり必ず「未成立」と誤読し、再送し続ける（=この確認が
+# 一度も効かない）。書き換えを静かに通さないよう、GET 応答特有のアクセサ
+# （.users[]）が現れないことを固定する。POST 呼び出し自体（write 側）の URL に
+# requested_reviewers という語が出ることは許容する（判定には使っていないため）。
+case "$(cat "$wf")" in
+  *".users["*) fail "requested_reviewers の GET 応答（.users[]）で判定している" ;;
+  *) pass ;;
+esac
+
+it "生成ワークフローの timeline 確認は review-gate.yml と同じ表記ゆれ吸収（is_copilot）を使う"
+if grep -qF 'copilot|"copilot-pull-request-reviewer[bot]") return 0 ;;' "$wf"; then
+  pass
+else
+  fail "is_copilot の判定（Copilot / copilot-pull-request-reviewer[bot] の両対応）が見つからない"
+fi
+
+it "生成ワークフローは timeline で review_requested の成立を確認できたら再送せず抜ける"
+# timeline 確認の「成功」分岐（if [ \"\$last\" = \"review_requested\" ]）の直後に
+# exit 0 があることを見る。無いと、成立を確認できても再送してしまう。
+# 同じく生成物中のリテラル文字列探索。$ を展開させない意図的な単一引用符。
+# shellcheck disable=SC2016
+last_check_line="$(grep -nF '"$last" = "review_requested"' "$wf" | head -n 1 | cut -d: -f1)"
+ctx=""
+if [[ -n "$last_check_line" ]]; then
+  ctx="$(sed -n "${last_check_line},$((last_check_line + 3))p" "$wf")"
+fi
+case "$ctx" in
+  *"exit 0"*) pass ;;
+  *) fail "review_requested 確認済みの分岐に exit 0 が無い（行 $last_check_line 付近）" ;;
+esac
+
+it "生成ワークフローは timeline を確認できなかった場合、再送せずに終了する（読めなかった ≠ 要求されていない）"
+# 「timeline を確認できず」という趣旨の分岐（else 側）を目印に取り、その直後の
+# 数行に exit 1 があり、sleep が無いことを見る。sleep が混ざっていると、
+# 確かめられないまま再送する経路が残っていることになる。
+unreadable_line="$(grep -nF 'timeline を確認できず' "$wf" | head -n 1 | cut -d: -f1)"
+ctx=""
+if [[ -n "$unreadable_line" ]]; then
+  ctx="$(sed -n "${unreadable_line},$((unreadable_line + 3))p" "$wf")"
+fi
+has_exit1=0; has_sleep=0
+case "$ctx" in *"exit 1"*) has_exit1=1 ;; esac
+case "$ctx" in *"sleep "*) has_sleep=1 ;; esac
+ctx_status="found"
+[[ -n "$ctx" ]] || ctx_status="missing"
+if [[ -n "$ctx" && "$has_exit1" -eq 1 && "$has_sleep" -eq 0 ]]; then
+  pass
+else
+  fail "timeline 未確認時の分岐が期待の形でない（ctx=$ctx_status exit1=$has_exit1 sleep=$has_sleep）"
 fi
 
 # ── YAML として妥当である ─────────────────────────────────────────────────────
