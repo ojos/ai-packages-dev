@@ -46,10 +46,15 @@
 #       2 か所にあることによる追随漏れ」で、これらは構造が異なる。
 #
 #   .claude/*（.gitignore / settings.json）
-#       このリポジトリは .claude/* を .gitignore で除外しており（再包含するのは
-#       skills/ と agents/ だけ）、写しを追跡していない。比べる相手が作業ツリーに
-#       存在しないので、上の「写し無し」の分類ではなく抽出対象そのものから外れる
-#       （網羅性検査の左辺は scripts/ に限っている）。
+#       .claude/settings.json は case ラベル + cat <<'TMPL' の対象ではあるが、パスが
+#       scripts/ 配下ではないため、本テストの網羅性検査の左辺（`grep '^scripts/'` で
+#       絞っている）に含まれない。#312 でこのリポジトリ自身が settings.json を追跡・
+#       配線するようになった（フックの配線のみを持ち、許可リストは追跡しない
+#       settings.local.json 側）が、この 1 ファイルのためだけに scripts/ 限定の
+#       網羅性検査を広げる変更はしていない。「フックの配線のみで permissions を
+#       持たない」ことは tests/test-claude-mirror.sh が別に担保する。
+#       .gitignore は build_gitignore_block() が動的に組み立てる生成物で、そもそも
+#       case ラベル + ヒアドキュメントの対象ではなく、この抽出経路に乗らない。
 #
 #   second-opinion-review.sh / copilot-review.yml / review-gate.yml
 #       正本が規範パッケージ（.ai-playbook/templates/）側にある。bootstrap.sh は
@@ -87,7 +92,14 @@ BOOTSTRAP="$REPO_ROOT/packages/devcontainer-bootstrap/bootstrap.sh"
 #   .env 系の検査）は生成条件に依らず全構成で同一であり、置換プレースホルダを
 #   1 つも持たない。加えて、このリポジトリ自身の verify.sh がこの写しを呼ぶため、
 #   正本と写しがずれると「配布物では落ちるが手元では通る」機密が生まれる。
+#
+#   confirm-merge-hook.sh を MIRRORED に入れる理由（#312）: このリポジトリは
+#   .claude/settings.json を追跡し、PreToolUse フックとして配線した（下記
+#   EXCLUDED_NO_COPY_RELS のコメントが要求していた「配線を入れる判断をしたときは
+#   MIRRORED_RELS へ移す」を実施した）。判定ロジックはプレースホルダを 1 つも
+#   持たず、生成条件に依らず全構成で同一である。
 MIRRORED_RELS='scripts/check-no-secrets.sh
+scripts/confirm-merge-hook.sh
 scripts/load-project-env.sh
 scripts/loop-gate.sh
 scripts/on-attach.sh
@@ -131,17 +143,7 @@ scripts/post-rebuild-check.sh'
 #                         scripts/ とその索引（scripts/CATALOG.md）へ増える。
 #                         写しが無いので追随漏れは起き得ず、MIRRORED にはできない
 #                         （一致相手が無い）。
-#
-#   confirm-merge-hook.sh --with-claude でのみ配る PreToolUse フック。このリポジトリは
-#                         .claude/settings.json を追跡しない（.gitignore が .claude/* を
-#                         除外し、!.claude/skills/ と !.claude/agents/ だけ再包含する）
-#                         ため、フックを配線できない。配線しないまま写しだけを置くと、
-#                         誰も起動しないスクリプトが scripts/ と scripts/CATALOG.md に
-#                         並ぶ。配線を入れる判断をしたときは、写しを置いて
-#                         MIRRORED_RELS へ移すこと（下の「写しが実在しない」検査が
-#                         要求する）。
-EXCLUDED_NO_COPY_RELS='scripts/acceptance-remote.sh
-scripts/confirm-merge-hook.sh'
+EXCLUDED_NO_COPY_RELS='scripts/acceptance-remote.sh'
 
 # get_template_content() の case ラベルから、指定パスのヒアドキュメント本文を取り出す。
 # シングルクォートは awk へ変数で渡す（awk のプログラム自体をシングルクォートで

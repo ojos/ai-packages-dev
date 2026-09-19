@@ -209,23 +209,24 @@ GETTING_STARTED.md
 # ディレクトリごと除外すると配下を再包含できないため、直下の要素を個別に除外する。
 .claude/*
 # intake 起点スキルはローカル設定ではなく規範の配布物で、DCB の生成先でも追跡される。
-# ここだけ再包含し、settings.json / settings.local.json / worktrees は除外を保つ。
+# ここだけ再包含し、settings.local.json / worktrees は除外を保つ。
 !.claude/skills/
 # サブエージェント定義も同じ理由で追跡する。委譲先の model / tools をここで固定する
 # ことがこの仕組みの本体で、追跡されないと機構として成立しない（規範は
 # .github/project-ai-rules.md「委譲可能な役割とモデル配分」）。
 !.claude/agents/
+# settings.json も同じ理由で追跡する（#312）。ただし中身は PreToolUse フックの配線
+# だけに保つ。対話中に許可した操作の一覧（許可リスト）は settings.local.json 側へ
+# 分離しており、そちらは下の除外がそのまま効く。この分離が崩れて許可リストが
+# settings.json へ混入すると、clone した全員へ配られる形に戻るため、追跡対象へ
+# 許可リストを持ち込まないことを tests/test-claude-mirror.sh が機械検査する。
+!.claude/settings.json
 #
 # このリポジトリは .claude/.gitignore を持たない（issue #241 で決着）。DCB は
 # --with-claude で .claude/.gitignore（settings.local.json の除外）を配るが、こちらは
-# 上の .claude/* が settings.local.json も settings.json も含めて既に除外している。
-# 同じ除外を 2 か所に持つと、片方だけ直したときにどちらが効いているのか読めなくなる
-# ため、除外先はこの 1 か所へ寄せる。
+# 上の .claude/* が settings.local.json を既に除外している。同じ除外を 2 か所に持つと、
+# 片方だけ直したときにどちらが効いているのか読めなくなるため、除外先はこの 1 か所へ
+# 寄せる。
 #
 # 配布側が .claude/ の中で閉じるのは、生成先の管理セクション（自動再生成される区間）へ
 # .claude/ 固有の行を書かないためで、方針が違うわけではない。
-#
-# 併せて、このリポジトリは配布物のマージ確認フックを配線しない。フックの配線先は
-# .claude/settings.json で、ここでは追跡対象外だからである。追跡へ切り替えると、
-# 各環境のローカルな許可リストを持つ既存ファイルと衝突し、対話中に許可した操作が
-# clone した全員へ配られる形になる（除外している理由そのもの）。
