@@ -141,7 +141,13 @@ fi
 it "確認側は reviewers を POST しない"
 # 読み取り（GET）は正当なので、エンドポイント名の出現だけでは落とさない。
 # 手で要求する手順を案内する echo 行も除く（あれは実行ではなく文言）。
-if grep -- '--method POST' "$wf" | grep -v 'echo' | grep -q 'requested_reviewers'; then
+#
+# **最終段は `-q` を外し `>/dev/null` で EOF まで読ませる。** 3 段のパイプで
+# 最終段が早期終了（`grep -q`）すると、途中の `grep -v` を経由して先頭の
+# `grep` まで SIGPIPE が伝播しうる（`set -uo pipefail` の下ではパイプライン
+# 全体が非 0 になる）。EOF まで読ませれば、途中の各段が最後まで生産側の
+# 出力を受け取り切り、この経路が起きない。
+if grep -- '--method POST' "$wf" | grep -v 'echo' | grep 'requested_reviewers' >/dev/null; then
   fail "確認側が requested_reviewers へ POST している（要求してしまっている）"
 else
   pass
@@ -153,6 +159,40 @@ if grep -Eq '^[[:space:]]*schedule:' "$wf" && grep -q 'cron:' "$wf"; then
   pass
 else
   fail "schedule / cron の契機が無い"
+fi
+
+it "schedule 契機は、起動した PR だけでなく open な PR を全件判定し直す"
+# schedule が「起動した 1 本だけ」を見る構造だと、この機構が信頼できる根拠
+# （規範 review-workflow.md「この機構が保証すること／しないこと」）が崩れる。
+# pull_request 契機で捏造された status を上書きできるのは、schedule が
+# 「既定ブランチの版で、開いている PR を全件、見落としなく判定し直す」ときだけ
+# である。1 本しか見ない、または件数で打ち切る構造では、捏造された緑が次の
+# schedule でも上書きされない PR が残りうる。
+#
+# 「全件」を件数上限の欠如として検査する: open な PR 一覧を取得する**その同じ
+# 行**が `gh api --paginate ... pulls?state=open` の形であることを見る
+# （`--paginate` と `pulls?state=open` を別々の行に存在すればよいと判定すると、
+# たとえば timeline 側の別の `--paginate` 呼び出しにつられて、一覧取得側だけが
+# ページングを落としても検出できない）。取得した一覧を `while read` でループ
+# しながら 1 本ずつ判定している構造もあわせて見る。
+#
+# コメント行（`#` で始まる行）は先に除く。このワークフローは「`gh pr list
+# --limit N` ではなく `gh api --paginate` を使う」という設計判断を、まさにその
+# 語をコメントへ書いて説明している。除かずに検査すると、説明コメントの存在
+# そのものに誤って落ちる。
+# **`printf ... | grep -q` にしない。** `set -uo pipefail` の下で、$executable_lines
+# がパイプバッファに収まりきらない場合、grep が一致直後に読み終えてパイプを閉じ、
+# printf が SIGPIPE（141）で落ちて `if` 全体が失敗しうる（同型: #285）。ここでは
+# パイプそのものを使わず、herestring（`<<<`）で渡す。herestring は bash が一時
+# ファイル経由で読ませる実装のため、消費側の早期終了が生産側の SIGPIPE を引き起こす
+# 経路が無い。
+executable_lines="$(grep -v '^[[:space:]]*#' "$wf")"
+if grep -qE -- '--paginate.*pulls\?state=open' <<< "$executable_lines" \
+   && grep -qF 'while read -r pr sha created' "$wf" \
+   && ! grep -qF 'gh pr list --limit' <<< "$executable_lines"; then
+  pass
+else
+  fail "schedule 側が open な PR を全件（打ち切りなしで）判定し直す構造になっていない"
 fi
 
 it "確認側は PR 更新の契機も持つ（synchronize / reopened / ready_for_review）"
@@ -423,6 +463,60 @@ if awk '
   fail "\`if !\` の否定越しに \$? を拾っている箇所がある（\`|| var=\$?\` の形へ直す）"
 else
   pass
+fi
+
+# ── 文書が書く再判定の間隔と cron の一致 ──────────────────────────────────────
+#
+# 規範 review-workflow.md「この機構が保証すること／しないこと: run: ブロック
+# そのものの書き換え」は、「捏造された status は次の schedule で上書きされる」
+# 「ただし上書きまで最大 20 分は捏造された緑が見える」という、schedule の間隔に
+# 依存した記述を持つ。この間隔は review-gate.yml の cron が決めており、文書は
+# それを書き写した数値である。片方だけを変えると、記述と実装が黙ってずれる
+# ——このテストはそれを機械で照合する。
+#
+# ここに置く理由: この照合は .ai-playbook 配布物の内部（雛形のコメントと規範
+# 文書）だけで完結し、bootstrap.sh の生成結果や tests/test-workflow-mirror.sh が
+# 見ている「開発リポジトリの写しとの一致」とは対象が異なる。tests/ 配下の
+# 各テストは repo 内の写し（.github/workflows/ 等）と .ai-playbook の一致を見る
+# 役割で揃っており、そこへ足すと「雛形と写しの一致」と「雛形と文書の一致」という
+# 別種の照合が 1 ファイルへ混ざる。本ファイル（test-review-gate.sh）は既に
+# $TPL/review-gate.yml（雛形そのもの）を対象に構造を検査しているため、同じ
+# 雛形を対象にする以上の照合はここへ集める方が、落ちたときに直す先が
+# 「review-gate.yml 周りの雛形」で一貫する。
+#
+# 照合の方法: 文書と雛形の双方から `cron: '*/N * * * *'` の形をそのまま抜き出し、
+# 文字列として比較する。分の数値だけを Japanese の「N 分ごと」表現から抜き出す
+# より、cron の記法そのものを文書に引用させて突き合わせるほうが、表現の揺れ
+# （「20 分ごと」「20分間隔」等）に頼らず機械的に一致を強制できる。
+#
+# **雛形側は、実際の `on.schedule` の YAML sequence entry（`- cron: '...'` の形で
+# 行頭からその形に始まる行）だけを対象にする。** 雛形はコメント中でも同じ cron 値を
+# 引用しており（信頼境界の説明）、その部分文字列も無条件に拾うと、`on.schedule` の
+# `- cron:` 行そのものを消してもコメント側の言及が残っているだけで一致してしまい、
+# schedule が消えたことを検出できない。行頭アンカー（`^[[:space:]]*- cron: `）で
+# 実際の定義行だけに絞ってから値を取り出す。
+#
+# 文書側（review-workflow.md）は Markdown の地の文への引用であり、YAML の
+# sequence entry という構造を持たない。そのため文書側は従来どおり、値の部分文字列
+# が現れる行であれば拾う（＝コメント相当の扱いで構わない、という判断は指摘のとおり）。
+it "文書（review-workflow.md）が書く schedule の cron と、雛形（review-gate.yml）の cron が一致する"
+DOC_CRON="$(grep -oE "cron: '\*/[0-9]+ \* \* \* \*'" "$PLAYBOOK_SRC/review-workflow.md" | sort -u)"
+TPL_CRON="$(grep -E "^[[:space:]]*- cron: '\*/[0-9]+ \* \* \* \*'" "$TPL/review-gate.yml" \
+  | grep -oE "cron: '\*/[0-9]+ \* \* \* \*'" | sort -u)"
+doc_count="$(printf '%s\n' "$DOC_CRON" | grep -c .)"
+tpl_count="$(printf '%s\n' "$TPL_CRON" | grep -c .)"
+if [[ "$doc_count" -eq 0 ]]; then
+  fail "review-workflow.md に cron: '*/N * * * *' の形の記述が無い（文書が具体的な間隔を引用していない）"
+elif [[ "$tpl_count" -eq 0 ]]; then
+  fail "$TPL/review-gate.yml に cron: '*/N * * * *' の形の記述が無い"
+elif [[ "$doc_count" -ne 1 ]]; then
+  fail "review-workflow.md に cron 表記が複数の異なる値で現れる（1 つに揃っていない）: $(printf '%s' "$DOC_CRON" | tr '\n' ' ')"
+elif [[ "$tpl_count" -ne 1 ]]; then
+  fail "$TPL/review-gate.yml に cron 表記が複数ある（on: の cron と一致しているか確認）: $(printf '%s' "$TPL_CRON" | tr '\n' ' ')"
+elif [[ "$DOC_CRON" == "$TPL_CRON" ]]; then
+  pass
+else
+  fail "文書と雛形で cron の値がずれている（文書: ${DOC_CRON} / 雛形: ${TPL_CRON}）"
 fi
 
 # ── YAML として妥当である ─────────────────────────────────────────────────────
