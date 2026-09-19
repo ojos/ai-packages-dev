@@ -149,6 +149,89 @@ fi
 it "生成ワークフローは前提（422 の条件）をコメントで明記する"
 if grep -q '422' "$wf"; then pass; else fail "前提の明記（422）が無い"; fi
 
+# ── 再試行の機構（要求は間欠的に失敗する。ojos/ai-packages-dev#306）────────────
+#
+# 規範（review-workflow.md）の「1 回だけ要求する」が禁じるのは要求が別のイベント
+# から重ねて出て二重要求になることで、同じジョブの中で成功するまで試すことは
+# 対象外である（外から見える要求はこのワークフロー 1 本のまま）。ここではその
+# 再試行が実際に置かれていること、成功したら即座に抜けること、尽きたら黙って
+# 緑にしないことを、生成された YAML のテキストで固定する。
+#
+# 「間欠故障が実際に救われるか」はここでは検証できない（再現条件が分かっていない
+# ため）。検査できるのは機構が置かれていることと、失敗を握り潰さないことまで。
+
+while_line="$(grep -nE '^[[:space:]]*while ' "$wf" | head -n 1 | cut -d: -f1)"
+done_line="$(grep -n '^[[:space:]]*done$' "$wf" | head -n 1 | cut -d: -f1)"
+
+it "生成ワークフローは要求の失敗時に再試行するループを持つ"
+if [[ -n "$while_line" && -n "$done_line" && "$while_line" -lt "$done_line" ]]; then
+  pass
+else
+  fail "while ... done の再試行ループが見つからない"
+fi
+
+# ループ本体を切り出す。以降の判定はループ内で完結しているかまで見るため、
+# ファイル全体への grep ではなく本体だけを対象にする。
+loop_body=""
+if [[ -n "$while_line" && -n "$done_line" ]]; then
+  loop_body="$(sed -n "${while_line},${done_line}p" "$wf")"
+fi
+
+it "再試行ループは要求呼び出しと試行回数の上限判定を両方含む"
+has_gh=0; has_limit=0
+case "$loop_body" in *"gh api --method POST"*) has_gh=1 ;; esac
+case "$loop_body" in *"max_attempts"*) has_limit=1 ;; esac
+if [[ "$has_gh" -eq 1 && "$has_limit" -eq 1 ]]; then
+  pass
+else
+  fail "ループ本体に要求呼び出し(has_gh=$has_gh)または上限判定(has_limit=$has_limit)が無い"
+fi
+
+it "再試行は間隔を空ける（sleep がループ内にある）"
+case "$loop_body" in
+  *"sleep "*) pass ;;
+  *) fail "ループ内に sleep が無い（間隔を空けない再試行になっている）" ;;
+esac
+
+it "生成ワークフローは成功したらその場で抜ける（成功後に再試行しない）"
+# 成功時の exit 0 がループ本体の中にあり、かつループ内で最初に現れる sleep より
+# 前にあることを見る。逆順や不在だと、成功してもなお待機・再試行のコードを
+# 通ってしまう構造になっている。
+exit0_line="$(grep -n 'exit 0' "$wf" | head -n 1 | cut -d: -f1)"
+sleep_line="$(grep -nE '^[[:space:]]*sleep ' "$wf" | head -n 1 | cut -d: -f1)"
+if [[ -n "$exit0_line" && -n "$sleep_line" && -n "$while_line" && -n "$done_line" \
+      && "$while_line" -lt "$exit0_line" && "$exit0_line" -lt "$done_line" \
+      && "$exit0_line" -lt "$sleep_line" ]]; then
+  pass
+else
+  fail "成功時の exit 0 がループ内・sleep より前にない（exit0=$exit0_line sleep=$sleep_line while=$while_line done=$done_line）"
+fi
+
+it "生成ワークフローは再試行を尽くしても失敗したら非 0 で終える（黙って緑にしない）"
+# ループを抜けた後（done の後）に exit 1 があることを見る。ループの中だけに
+# あると、尽きる前の 1 回の失敗で即座に終わってしまい「再試行」の体をなさない。
+# ループの外にあって初めて「尽きたら」の判定になる。
+exit1_line="$(grep -n 'exit 1' "$wf" | head -n 1 | cut -d: -f1)"
+if [[ -n "$done_line" && -n "$exit1_line" && "$done_line" -lt "$exit1_line" ]]; then
+  pass
+else
+  fail "再試行ループの後に exit 1 が無い（done 行 $done_line / exit 1 行 $exit1_line）"
+fi
+
+it "::error:: の切り分け手順は空レスポンスの実測（unexpected end of JSON input）を 422 より先に挙げる"
+# 現行の書き方の逆転を検出する: 従来は 422（所有者側で無効）を第一候補に挙げて
+# いたが、実際に踏んだのは空のレスポンスだった（ojos/ai-packages-dev#306）。
+# 順序まで見ないと、両方の語が入っているだけの状態（切り分け手順が実測と
+# 逆順のまま）を見逃す。
+error_line="$(grep -F '::error::' "$wf" | head -n 1)"
+pos_empty="$(awk -v s="$error_line" 'BEGIN{print index(s, "unexpected end of JSON input")}')"
+pos_422="$(awk -v s="$error_line" 'BEGIN{print index(s, "422")}')"
+if [[ "$pos_empty" -gt 0 && "$pos_422" -gt 0 && "$pos_empty" -lt "$pos_422" ]]; then
+  pass
+else
+  fail "空レスポンスの言及が無いか、422 より後になっている（empty=$pos_empty 422=$pos_422）"
+fi
+
 # ── YAML として妥当である ─────────────────────────────────────────────────────
 # actionlint があれば通す。無ければ PyYAML、それも無ければ最低限の構造検査で代替する
 # （沈黙スキップはしない）。
