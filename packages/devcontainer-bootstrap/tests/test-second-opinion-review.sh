@@ -103,6 +103,86 @@ STUB
   rm -f "$bindir/.count" "$bindir/.argv" "$bindir/.stdin" "$bindir/.injected" "$bindir/.injected_path"
 }
 
+# ── #303: バイト単位のチャンク分割 ────────────────────────────────────────────
+#
+# antigravity は差分を 1 つの -p 引数へ直接載せるため、Linux の MAX_ARG_STRLEN
+# （1 引数あたりの固定上限。カーネル定数: PAGE_SIZE * 32）を超えられない。この
+# 節のフィクスチャは、実装がスクリプト自身と同じ式で求めた上限を使って合成した
+# 差分で、分割・失敗・バイト計測の実際の挙動を検証する。
+#
+# 上の mk_cli_stub は最新の呼び出ししか記録を残さないため（.argv を毎回上書き）、
+# 複数チャンクをまたいだ検証には使えない。ここでは呼び出しごとに argv を
+# 連番ファイル（.argv.<n>）へ残す専用の stub を使う。
+MAX_ARG_BYTES=$(( $(getconf PAGE_SIZE 2>/dev/null || getconf PAGESIZE 2>/dev/null || echo 4096) * 32 ))
+
+mk_agy_history_stub() {
+  local bindir="$1" verdict="${2:-LGTM}"
+  mkdir -p "$bindir"
+  cat > "$bindir/agy" <<STUB
+#!/usr/bin/env bash
+n=\$(cat "$bindir/.count" 2>/dev/null || echo 0)
+n=\$((n + 1))
+echo "\$n" > "$bindir/.count"
+printf '%s\n' "\$@" > "$bindir/.argv.\$n"
+echo "$verdict"
+exit 0
+STUB
+  chmod +x "$bindir/agy"
+  rm -f "$bindir/.count" "$bindir"/.argv.*
+}
+
+# git diff の出力そのものを差し替える stub。実在の git では作れない入力
+# （1 ファイルの diff がハンクを 1 つも持たないのに単体で上限を超える、等）を、
+# second-opinion-review.sh 自体には手を入れずに再現するために使う。
+# git diff 以外の呼び出しはすべて本物の git へ渡す（リポジトリの初期化・
+# ステージ操作は mk_review_repo 相当の下ごしらえを本物の git で行うため）。
+mk_git_diff_stub() {
+  local bindir="$1" diff_file="$2" real_git
+  real_git="$(command -v git)"
+  mkdir -p "$bindir"
+  cat > "$bindir/git" <<STUBGIT
+#!/usr/bin/env bash
+if [[ "\$1" == "diff" ]]; then
+  cat "$diff_file"
+  exit 0
+fi
+exec "$real_git" "\$@"
+STUBGIT
+  chmod +x "$bindir/git"
+}
+
+# 幅 100 バイト（改行込み 101 バイト）の ASCII 行を、およそ target_bytes バイト
+# になるまで積む。固定のバイト数を書き下ろすと環境（PAGE_SIZE）が変わったときに
+# 意図がずれるため、MAX_ARG_BYTES からの相対値で呼び出す。
+append_ascii_padding() {
+  local file="$1" target_bytes="$2" unit n i
+  unit="0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF"
+  n=$(( target_bytes / 100 ))
+  [[ "$n" -lt 1 ]] && n=1
+  i=0
+  while [[ "$i" -lt "$n" ]]; do
+    printf '%s\n' "$unit" >> "$file"
+    i=$((i + 1))
+  done
+}
+
+# antigravity へ渡る 1 チャンク分の引数（.argv.<n>）から、実際に -p へ渡された
+# 「差分本文 + プロンプト」を取り出し、差分本文だけを返す。
+#
+# プロンプト文字列の先頭部分（"上記は git の差分です"）を境界にする。読みやすさを
+# 優先した固定アンカーであり、プロンプトの文面を変えたときはここも追随させる
+# 必要がある（本ファイルは second-opinion-review.sh と対で保守する）。
+#
+# 境界の直前の改行 1 個は "$chunk_text\n$PROMPT" の区切り文字であり、差分本文には
+# 含めない。区切り文字の手前までが、分割器が生成したチャンクの中身そのもの。
+extract_chunk_diff() {
+  local argv_file="$1" content marker
+  content="$(cat "$argv_file")"
+  content="${content#-p$'\n'}"
+  marker=$'\n上記は git の差分です'
+  printf '%s' "${content%%"$marker"*}"
+}
+
 # @ を含む差分をステージする。メールアドレス・シェルの配列展開・パターンの 3 形。
 # いずれも CLI がファイル参照として展開しうる形で、実際のコードに日常的に現れる。
 stage_at_diff() {
@@ -552,5 +632,202 @@ d="$(new_workdir)/r"; b="$(new_workdir)/bin"
 mk_review_repo "$d"; mk_gemini_stub "$b" "LLL"
 ( cd "$d" && PATH="$b:$PATH" GEMINI_API_KEY=dummy GEMINI_REVIEW_RUNS=3 SECOND_OPINION_RUNS=2 bash scripts/second-opinion-review.sh ) >/dev/null 2>&1
 assert_eq "$(cat "$b/.count")" "2" "新名優先の呼び出し回数"
+
+# ── #303: バイト単位のチャンク分割 ────────────────────────────────────────────
+#
+# antigravity は差分を 1 つの -p 引数へ直接載せるため、Linux の MAX_ARG_STRLEN
+# （1 引数あたりの固定上限）を超えられない。ここでは実装が実際に踏む分割・
+# 失敗・バイト計測の経路を、MAX_ARG_BYTES を基準に合成した入力で検証する。
+
+it "対照群: 上限以下の差分は antigravity でも分割が起きず、ログ表示が従来どおりである"
+d="$(new_workdir)/r"; b="$(new_workdir)/bin"
+mk_review_repo "$d"; mk_agy_history_stub "$b" "LGTM"
+out="$( cd "$d" && PATH="$b:/usr/bin:/bin" bash scripts/second-opinion-review.sh --engine antigravity --runs 1 2>&1 )"; rc=$?
+bad=0
+[[ "$rc" -eq 0 ]] || { echo "  exit $rc: $out"; bad=1; }
+[[ "$(cat "$b/.count" 2>/dev/null || echo 0)" == "1" ]] || { echo "  呼び出し回数が 1 でない"; bad=1; }
+case "$out" in *"chunk "*) echo "  分割が起きていないのに chunk 表記が出ている: $out"; bad=1 ;; esac
+printf '%s' "$out" | grep -q 'run 1/1: LGTM' || { echo "  従来の判定表記が無い: $out"; bad=1; }
+if [[ "$bad" -eq 0 ]]; then pass; else fail "対照群の表示が分割導入前と変わっている"; fi
+
+it "上限を大きく超える合成差分: 各チャンクが上限以下に収まり、連結すると元の差分と一致する"
+d="$(new_workdir)/r"; b="$(new_workdir)/bin"
+mk_review_repo "$d"
+# どのファイルも単体では上限に収まる大きさに抑える。ファイル単位の詰め合わせ
+# だけで分割される（ハンク単位へは落ちない）ことを保証するため。
+n_files=10
+per_file_bytes=$(( MAX_ARG_BYTES * 3 / 10 ))
+i=1
+while [[ "$i" -le "$n_files" ]]; do
+  : > "$d/f$i.txt"
+  append_ascii_padding "$d/f$i.txt" "$per_file_bytes"
+  i=$((i + 1))
+done
+( cd "$d" && git add f*.txt )
+expected="$(cd "$d" && git diff --cached)"
+mk_agy_history_stub "$b" "LGTM"
+out="$( cd "$d" && PATH="$b:/usr/bin:/bin" bash scripts/second-opinion-review.sh --engine antigravity --runs 1 2>&1 )"; rc=$?
+bad=0
+[[ "$rc" -eq 0 ]] || { echo "  exit $rc: $out"; bad=1; }
+chunk_count="$(cat "$b/.count" 2>/dev/null || echo 0)"
+[[ "$chunk_count" -gt 1 ]] || { echo "  分割が起きていない（chunk_count=$chunk_count）"; bad=1; }
+recon_file="$(new_workdir)/recon.diff"
+: > "$recon_file"
+i=1
+while [[ "$i" -le "$chunk_count" ]]; do
+  # argv ファイルは "-p\n<本文>\n" の形。本文の実バイト数は、記録ファイルの
+  # バイト数から "-p\n"（3 バイト）と printf が末尾へ足す改行（1 バイト）を
+  # 引いたもの。これが実際に CLI へ渡る 1 引数のバイト数そのもの。
+  argv_bytes="$(wc -c < "$b/.argv.$i")"
+  combined_bytes=$((argv_bytes - 4))
+  if [[ "$combined_bytes" -gt "$MAX_ARG_BYTES" ]]; then
+    echo "  chunk $i の引数が上限を超えている: $combined_bytes > $MAX_ARG_BYTES"
+    bad=1
+  fi
+  # ファイルへ追記する。コマンド置換 $(...) で文字列連結すると、チャンクごとの
+  # 末尾改行がそのたびに落ちてチャンク境界が消える（実測）。
+  extract_chunk_diff "$b/.argv.$i" >> "$recon_file"
+  i=$((i + 1))
+done
+reconstructed="$(cat "$recon_file")"
+if [[ "$reconstructed" != "$expected" ]]; then
+  echo "  全チャンクを連結しても元の差分と一致しない（欠落または重複がある）"
+  bad=1
+fi
+if [[ "$bad" -eq 0 ]]; then pass; else fail "合成差分のチャンク分割が壊れている"; fi
+
+it "1 ファイルの差分だけで上限を超える入力は、ハンク単位へ落ち、各チャンクがファイルヘッダを持つ"
+d="$(new_workdir)/r"; b="$(new_workdir)/bin"
+mk_review_repo "$d"
+# 変更点を離れた場所へ散らし、それぞれが独立したハンクになるようにする。
+# 1 ハンクは単体で上限に収まる大きさに抑え、ハンク数×サイズで合計だけが
+# 上限を超えるようにする（「1 ハンクで上限超過」の別ケースと区別するため）。
+blocks=30
+lines_per_block=20
+hunk_pad_bytes=$(( MAX_ARG_BYTES / 20 ))
+: > "$d/big.txt"
+b_i=1
+while [[ "$b_i" -le "$blocks" ]]; do
+  l_i=1
+  while [[ "$l_i" -le "$lines_per_block" ]]; do
+    printf 'block %s line %s context text\n' "$b_i" "$l_i" >> "$d/big.txt"
+    l_i=$((l_i + 1))
+  done
+  b_i=$((b_i + 1))
+done
+( cd "$d" && git add big.txt && git -c user.name=T -c user.email=t@example.com commit -q -m "base big.txt" )
+pad="$(head -c "$hunk_pad_bytes" /dev/zero | tr '\0' 'X')"
+b_i=1
+while [[ "$b_i" -le "$blocks" ]]; do
+  target_line=$(( (b_i - 1) * lines_per_block + lines_per_block / 2 ))
+  sed -i "${target_line}s/\$/ MODIFIED $pad/" "$d/big.txt"
+  b_i=$((b_i + 1))
+done
+( cd "$d" && git add big.txt )
+mk_agy_history_stub "$b" "LGTM"
+out="$( cd "$d" && PATH="$b:/usr/bin:/bin" bash scripts/second-opinion-review.sh --engine antigravity --runs 1 2>&1 )"; rc=$?
+bad=0
+[[ "$rc" -eq 0 ]] || { echo "  exit $rc: $out"; bad=1; }
+chunk_count="$(cat "$b/.count" 2>/dev/null || echo 0)"
+[[ "$chunk_count" -gt 1 ]] || { echo "  ハンク単位への分割が起きていない（chunk_count=$chunk_count）"; bad=1; }
+i=1
+while [[ "$i" -le "$chunk_count" ]]; do
+  header_count="$(extract_chunk_diff "$b/.argv.$i" | grep -c '^diff --git ')"
+  if [[ "$header_count" -ne 1 ]]; then
+    echo "  chunk $i のファイルヘッダ数が想定と違う: $header_count"
+    bad=1
+  fi
+  i=$((i + 1))
+done
+if [[ "$bad" -eq 0 ]]; then pass; else fail "ハンク単位分割でファイルヘッダの付け直しが壊れている"; fi
+
+it "1 ハンクで上限を超える差分は分割できず、該当ファイル名を添えて失敗する"
+d="$(new_workdir)/r"; b="$(new_workdir)/bin"
+mk_review_repo "$d"
+: > "$d/huge.txt"
+append_ascii_padding "$d/huge.txt" $(( MAX_ARG_BYTES * 2 ))
+( cd "$d" && git add huge.txt )
+mk_agy_history_stub "$b" "LGTM"
+err="$( cd "$d" && PATH="$b:/usr/bin:/bin" bash scripts/second-opinion-review.sh --engine antigravity --runs 1 2>&1 >/dev/null )"; rc=$?
+bad=0
+[[ "$rc" -ne 0 ]] || { echo "  exit 0 になっている（黙って通している）"; bad=1; }
+printf '%s' "$err" | grep -q 'huge.txt' || { echo "  該当ファイル名が stderr に出ていない: $err"; bad=1; }
+[[ -f "$b/.count" ]] && { echo "  分割に失敗したのに CLI を呼んでいる"; bad=1; }
+if [[ "$bad" -eq 0 ]]; then pass; else fail "1 ハンク超過の失敗処理が誤っている"; fi
+
+it "ハンクを持たない差分（二値・モード変更のみ）が単体で上限を超えると失敗する"
+# 実在の git は二値ファイルの差分を「Binary files ... differ」の 1 行に圧縮し、
+# 実サイズによらず小さい。上限超過を実測で再現できないため、git diff の出力を
+# 丸ごと差し替える stub で「ハンクを 1 つも持たないのに単体で上限を超える差分」
+# を合成する。
+d="$(new_workdir)/r"; b="$(new_workdir)/bin"; g="$(new_workdir)/gitstub"
+mk_review_repo "$d"
+crafted="$(new_workdir)/crafted.diff"
+{
+  echo "diff --git a/blob.bin b/blob.bin"
+  echo "index 0000000..1111111 100644"
+  echo "Binary files a/blob.bin and b/blob.bin differ"
+} > "$crafted"
+append_ascii_padding "$crafted" $(( MAX_ARG_BYTES * 2 ))
+mk_git_diff_stub "$g" "$crafted"
+mk_agy_history_stub "$b" "LGTM"
+err="$( cd "$d" && PATH="$g:$b:/usr/bin:/bin" bash scripts/second-opinion-review.sh --engine antigravity --runs 1 2>&1 >/dev/null )"; rc=$?
+bad=0
+[[ "$rc" -ne 0 ]] || { echo "  exit 0 になっている（黙って通している）"; bad=1; }
+printf '%s' "$err" | grep -q 'blob.bin' || { echo "  該当ファイル名が stderr に出ていない: $err"; bad=1; }
+[[ -f "$b/.count" ]] && { echo "  分割に失敗したのに CLI を呼んでいる"; bad=1; }
+if [[ "$bad" -eq 0 ]]; then pass; else fail "ハンクなし超過の失敗処理が誤っている"; fi
+
+it "日本語を含む差分は文字数ではなくバイト数を基準に分割される"
+# 1 文字 3 バイトの日本語だけで差分を構成すると、文字数はバイト数のおよそ 1/3 に
+# なる。文字数（${#var} や多バイト対応の wc -m）で測れば上限に収まって見える
+# 大きさに、バイト数では上限を超えるように仕込む。呼び出し側の locale を
+# 明示的に UTF-8（C.utf8）にしてもなお、バイト数で正しく分割されることを見る。
+if locale -a 2>/dev/null | grep -qi '^C\.utf8$\|^C\.UTF-8$'; then
+  d="$(new_workdir)/r"; b="$(new_workdir)/bin"
+  mk_review_repo "$d"
+  n_files=4
+  per_file_bytes=$(( MAX_ARG_BYTES * 5 / 10 ))
+  line='これは日本語のみで構成した検証用の行です。'
+  line_bytes="$(LC_ALL=C printf '%s' "$line" | wc -c)"
+  lines_needed=$(( per_file_bytes / line_bytes ))
+  i=1
+  while [[ "$i" -le "$n_files" ]]; do
+    : > "$d/j$i.txt"
+    yes "$line" 2>/dev/null | head -n "$lines_needed" >> "$d/j$i.txt"
+    i=$((i + 1))
+  done
+  ( cd "$d" && git add j*.txt )
+  total_bytes="$(cd "$d" && git diff --cached | wc -c)"
+  total_chars="$(cd "$d" && LC_ALL=C.utf8 git diff --cached | LC_ALL=C.utf8 wc -m)"
+  bad=0
+  if [[ "$total_chars" -ge "$MAX_ARG_BYTES" || "$total_bytes" -le "$MAX_ARG_BYTES" ]]; then
+    echo "  フィクスチャが前提を満たしていない（文字数 $total_chars / バイト数 $total_bytes / 上限 $MAX_ARG_BYTES）"
+    bad=1
+  fi
+  mk_agy_history_stub "$b" "LGTM"
+  out="$( cd "$d" && env LC_ALL=C.utf8 LANG=C.utf8 PATH="$b:/usr/bin:/bin" bash scripts/second-opinion-review.sh --engine antigravity --runs 1 2>&1 )"; rc=$?
+  [[ "$rc" -eq 0 ]] || { echo "  exit $rc: $out"; bad=1; }
+  chunk_count="$(cat "$b/.count" 2>/dev/null || echo 0)"
+  if [[ "$chunk_count" -le 1 ]]; then
+    echo "  文字数基準なら 1 チャンクで収まるはずの差分が分割されていない（バイト基準になっていない疑い）"
+    bad=1
+  fi
+  i=1
+  while [[ "$i" -le "$chunk_count" ]]; do
+    combined_bytes=$(( $(wc -c < "$b/.argv.$i") - 4 ))
+    if [[ "$combined_bytes" -gt "$MAX_ARG_BYTES" ]]; then
+      echo "  chunk $i の引数が上限を超えている: $combined_bytes > $MAX_ARG_BYTES"
+      bad=1
+    fi
+    i=$((i + 1))
+  done
+  if [[ "$bad" -eq 0 ]]; then pass; else fail "日本語差分のバイト基準分割が壊れている"; fi
+else
+  # C.utf8 を生成していない環境では多バイト前提のフィクスチャが成立しない。
+  # 検査そのものを消すのではなく、成立しなかった旨を残して通す。
+  echo "  skip: C.utf8 locale が無いため文字数との対比を検証できません"
+  pass
+fi
 
 exit_with_result
