@@ -32,6 +32,13 @@ make_tracked_repo() {
   ) >/dev/null 2>&1
 }
 
+# make_tracked_repo / make_pushed_repo が固定するコミット author。loop-gate.sh の
+# step 1（verify-commit-identity.sh）は fail-closed のため、この email を許可 email
+# として渡さないと、identity 検査で必ず落ちて後続の段（verify / 第二意見）まで
+# 進まない。GATE_PASS を期待するケースでは ALLOWED_AUTHOR_EMAILS="$ALLOWED_EMAIL" を
+# 起動時に渡すこと。
+ALLOWED_EMAIL="t@example.com"
+
 # ── 生成物の存在（mode 非依存で常に生成） ─────────────────────────────────────
 
 it "verify / acceptance / loop-gate が生成される"
@@ -193,7 +200,7 @@ out="$(new_workdir)/p"
 run_bootstrap "$out" >/dev/null 2>&1
 make_tracked_repo "$out"
 acc="$(new_workdir)/acc-pass.sh"; printf '#!/usr/bin/env bash\nexit 0\n' > "$acc"
-if out_txt="$(cd "$out" && VERIFY_ACCEPTANCE="$acc" bash scripts/loop-gate.sh 2>&1)"; then
+if out_txt="$(cd "$out" && ALLOWED_AUTHOR_EMAILS="$ALLOWED_EMAIL" VERIFY_ACCEPTANCE="$acc" bash scripts/loop-gate.sh 2>&1)"; then
   if printf '%s' "$out_txt" | grep -q 'GATE_PASS' && printf '%s' "$out_txt" | grep -qi 'SKIP'; then
     pass
   else
@@ -211,20 +218,75 @@ run_bootstrap "$out" >/dev/null 2>&1
 printf '#!/usr/bin/env bash\nexit 0\n' > "$out/scripts/acceptance.sh"
 make_tracked_repo "$out"
 foreign="$(new_workdir)/elsewhere"; mkdir -p "$foreign"
-if out_txt="$(cd "$foreign" && bash "$out/scripts/loop-gate.sh" 2>&1)"; then
+if out_txt="$(cd "$foreign" && ALLOWED_AUTHOR_EMAILS="$ALLOWED_EMAIL" bash "$out/scripts/loop-gate.sh" 2>&1)"; then
   assert_contains "$out_txt" "GATE_PASS" "loop-gate 出力（異なる cwd から）"
 else
   fail "異なる cwd から起動すると既定 acceptance を解決できない: $out_txt"
 fi
 
+# ── commit identity（loop-gate の step 1、#302） ───────────────────────────────
+#
+# 判定ロジックそのもの（許可 email の解決順序・ドメイン許可・co-author の検査など）
+# の網羅的な検証は test-git-identity.sh が担う。ここで見るのは「loop-gate.sh が
+# verify-commit-identity.sh を verify より前に呼ぶこと」「許可外 identity では
+# 早く落ち、後続の段（verify / 第二意見）まで進まないこと」だけ。
+
+it "許可外 identity のコミットは step 1 で GATE_FAIL になり、後続の段まで進まない"
+out="$(new_workdir)/p"
+run_bootstrap "$out" >/dev/null 2>&1
+acc="$(new_workdir)/acc-pass.sh"; printf '#!/usr/bin/env bash\nexit 0\n' > "$acc"
+printf '#!/usr/bin/env bash\necho REVIEW_INVOKED\nexit 0\n' > "$out/scripts/second-opinion-review.sh"
+chmod +x "$out/scripts/second-opinion-review.sh"
+make_tracked_repo "$out"
+if out_txt="$(cd "$out" && ALLOWED_AUTHOR_EMAILS="other@example.com" VERIFY_ACCEPTANCE="$acc" bash scripts/loop-gate.sh 2>&1)"; then
+  fail "許可外 identity なのに通過してしまった: $out_txt"
+else
+  if printf '%s' "$out_txt" | grep -q '\[loop-gate\] step 1' \
+     && printf '%s' "$out_txt" | grep -q 'commit identity not passed' \
+     && printf '%s' "$out_txt" | grep -q 'GATE_FAIL'; then
+    # 第二意見が誤って呼ばれていないこと（stub の出力 REVIEW_INVOKED も、
+    # verify を示す step 2 のログも現れないこと）を両方で確かめる。
+    if printf '%s' "$out_txt" | grep -q 'REVIEW_INVOKED' \
+       || printf '%s' "$out_txt" | grep -q '\[loop-gate\] step 2'; then
+      fail "identity で落ちたのに後続の段まで進んでいる: $out_txt"
+    else
+      pass
+    fi
+  else
+    fail "identity 由来の GATE_FAIL が出ていない: $out_txt"
+  fi
+fi
+
+it "許可内 identity のコミットだけなら、従来どおり後続の段が実行される（対照群）"
+# 同じプロジェクト・同じコミットのまま、許可 email だけを一致させる。上のケースが
+# 「たまたま acceptance / 第二意見の設定不備で落ちた」のではなく、identity の
+# 許可・不許可だけで結果が変わることを確かめる。
+if out_txt="$(cd "$out" && ALLOWED_AUTHOR_EMAILS="$ALLOWED_EMAIL" VERIFY_ACCEPTANCE="$acc" bash scripts/loop-gate.sh 2>&1)"; then
+  if printf '%s' "$out_txt" | grep -q 'GATE_PASS' && printf '%s' "$out_txt" | grep -q 'REVIEW_INVOKED'; then
+    pass
+  else
+    fail "許可内 identity なのに後続の段が実行されていない: $out_txt"
+  fi
+else
+  fail "許可内 identity なのに通過しない: $out_txt"
+fi
+
 it "acceptance 不合格で GATE_FAIL / exit 1"
 out="$(new_workdir)/p"
 run_bootstrap "$out" >/dev/null 2>&1
+make_tracked_repo "$out"
 acc="$(new_workdir)/acc-fail.sh"; printf '#!/usr/bin/env bash\nexit 1\n' > "$acc"
-if out_txt="$(cd "$out" && VERIFY_ACCEPTANCE="$acc" bash scripts/loop-gate.sh 2>&1)"; then
+if out_txt="$(cd "$out" && ALLOWED_AUTHOR_EMAILS="$ALLOWED_EMAIL" VERIFY_ACCEPTANCE="$acc" bash scripts/loop-gate.sh 2>&1)"; then
   fail "不合格なのに通過してしまった: $out_txt"
 else
-  assert_contains "$out_txt" "GATE_FAIL" "loop-gate 出力"
+  # identity（step 1）は許可 email を渡しているので通過し、verify（step 2）で
+  # 落ちることを確かめる。単に GATE_FAIL が出るだけでは、原因が acceptance の
+  # 不合格ではなく identity 側にずれていても気づけない。
+  if printf '%s' "$out_txt" | grep -q 'commit identity not passed'; then
+    fail "acceptance 不合格を検証する前に identity で落ちている: $out_txt"
+  else
+    assert_contains "$out_txt" "GATE_FAIL" "loop-gate 出力"
+  fi
 fi
 
 it "第二意見（second-opinion-review.sh）が存在すれば直列化して通過する"
@@ -234,7 +296,7 @@ make_tracked_repo "$out"
 acc="$(new_workdir)/acc-pass.sh"; printf '#!/usr/bin/env bash\nexit 0\n' > "$acc"
 printf '#!/usr/bin/env bash\necho stub-lgtm\nexit 0\n' > "$out/scripts/second-opinion-review.sh"
 chmod +x "$out/scripts/second-opinion-review.sh"
-if out_txt="$(cd "$out" && VERIFY_ACCEPTANCE="$acc" bash scripts/loop-gate.sh 2>&1)"; then
+if out_txt="$(cd "$out" && ALLOWED_AUTHOR_EMAILS="$ALLOWED_EMAIL" VERIFY_ACCEPTANCE="$acc" bash scripts/loop-gate.sh 2>&1)"; then
   if printf '%s' "$out_txt" | grep -q 'stub-lgtm' && printf '%s' "$out_txt" | grep -q 'GATE_PASS'; then
     pass
   else
@@ -247,13 +309,21 @@ fi
 it "第二意見が指摘を返すと GATE_FAIL"
 out="$(new_workdir)/p"
 run_bootstrap "$out" >/dev/null 2>&1
+make_tracked_repo "$out"
 acc="$(new_workdir)/acc-pass.sh"; printf '#!/usr/bin/env bash\nexit 0\n' > "$acc"
 printf '#!/usr/bin/env bash\necho stub-findings\nexit 1\n' > "$out/scripts/second-opinion-review.sh"
 chmod +x "$out/scripts/second-opinion-review.sh"
-if out_txt="$(cd "$out" && VERIFY_ACCEPTANCE="$acc" bash scripts/loop-gate.sh 2>&1)"; then
+if out_txt="$(cd "$out" && ALLOWED_AUTHOR_EMAILS="$ALLOWED_EMAIL" VERIFY_ACCEPTANCE="$acc" bash scripts/loop-gate.sh 2>&1)"; then
   fail "第二意見が指摘したのに通過: $out_txt"
 else
-  assert_contains "$out_txt" "GATE_FAIL" "loop-gate 出力"
+  # identity / verify（step 1・2）は通過しており、第二意見（step 3）が原因で
+  # 落ちていることを確かめる。
+  if printf '%s' "$out_txt" | grep -q 'commit identity not passed' \
+     || printf '%s' "$out_txt" | grep -q 'verify not passed'; then
+    fail "第二意見の不合格を検証する前に別の段で落ちている: $out_txt"
+  else
+    assert_contains "$out_txt" "GATE_FAIL" "loop-gate 出力"
+  fi
 fi
 
 it "LOOP_GATE_REVIEW_CMD='' で第二意見を明示スキップできる"
@@ -264,7 +334,7 @@ acc="$(new_workdir)/acc-pass.sh"; printf '#!/usr/bin/env bash\nexit 0\n' > "$acc
 # reviewer が存在しても、空文字指定なら実行しない
 printf '#!/usr/bin/env bash\necho SHOULD_NOT_RUN\nexit 1\n' > "$out/scripts/second-opinion-review.sh"
 chmod +x "$out/scripts/second-opinion-review.sh"
-if out_txt="$(cd "$out" && LOOP_GATE_REVIEW_CMD='' VERIFY_ACCEPTANCE="$acc" bash scripts/loop-gate.sh 2>&1)"; then
+if out_txt="$(cd "$out" && ALLOWED_AUTHOR_EMAILS="$ALLOWED_EMAIL" LOOP_GATE_REVIEW_CMD='' VERIFY_ACCEPTANCE="$acc" bash scripts/loop-gate.sh 2>&1)"; then
   if printf '%s' "$out_txt" | grep -q 'GATE_PASS' && ! printf '%s' "$out_txt" | grep -q 'SHOULD_NOT_RUN'; then
     pass
   else
@@ -297,7 +367,7 @@ chmod +x "$out/scripts/second-opinion-review.sh"
   cd "$out" && git init -q && git add -A \
     && git -c user.name=T -c user.email=t@example.com commit -q -m c1
 ) >/dev/null 2>&1
-if out_txt="$(cd "$out" && VERIFY_ACCEPTANCE="$acc" bash scripts/loop-gate.sh 2>&1)"; then
+if out_txt="$(cd "$out" && ALLOWED_AUTHOR_EMAILS="$ALLOWED_EMAIL" VERIFY_ACCEPTANCE="$acc" bash scripts/loop-gate.sh 2>&1)"; then
   lines="$(printf '%s' "$out_txt" | sed -n 's/^REVIEW_DIFF_LINES://p')"
   if printf '%s' "$out_txt" | grep -q 'REVIEW_ARGV:--range ' \
      && [[ -n "$lines" && "$lines" -gt 0 ]] \
@@ -314,7 +384,7 @@ it "ステージ済み差分があるときは範囲を渡さない（reviewer �
 # 既定の対象を上書きしてしまうと、レビュー範囲が意図せず広がる。
 printf 'change\n' > "$out/STAGED.txt"
 ( cd "$out" && git add STAGED.txt ) >/dev/null 2>&1
-if out_txt="$(cd "$out" && VERIFY_ACCEPTANCE="$acc" bash scripts/loop-gate.sh 2>&1)"; then
+if out_txt="$(cd "$out" && ALLOWED_AUTHOR_EMAILS="$ALLOWED_EMAIL" VERIFY_ACCEPTANCE="$acc" bash scripts/loop-gate.sh 2>&1)"; then
   if printf '%s' "$out_txt" | grep -q 'REVIEW_ARGV:$' && printf '%s' "$out_txt" | grep -q 'GATE_PASS'; then
     pass
   else
@@ -324,10 +394,13 @@ else
   fail "全段合格なのに exit 非 0: $out_txt"
 fi
 
-it "git 管理外のプロジェクトでは機密混入検査が成立せず GATE_FAIL"
-# 契約の変更を明示する。以前は「生成直後で git 管理下にないプロジェクトでも
-# ゲートが使える」ことを不変条件にしていたが、verify.sh が呼ぶ機密混入検査は
-# git の作業ツリーを前提とし、成立しない状態を合格にしない。したがって生成直後は
+it "git 管理外かつ許可 email 未設定のプロジェクトでは commit identity 検査が成立せず GATE_FAIL"
+# 契約の変更を明示する（#302）。以前は「生成直後で git 管理下にないプロジェクトでも
+# ゲートが使える」ことを不変条件にしていたが、step 1 の commit identity 検査
+# （verify-commit-identity.sh）が最初に走るようになった。許可 email
+# （ALLOWED_AUTHOR_EMAILS / .env の GIT_IDENTITY_EMAIL）を解決できなければ
+# fail-closed で落ち、verify.sh が呼ぶ機密混入検査（git の作業ツリーを前提とする）
+# へはそもそも到達しない。したがって生成直後は、許可 email を用意したうえで
 # git init して追跡対象をコミットするまでゲートは通らない。ここで通過を期待すると、
 # 検査していない状態を緑として固定してしまう。
 out="$(new_workdir)/p"
@@ -338,11 +411,12 @@ chmod +x "$out/scripts/second-opinion-review.sh"
 if out_txt="$(cd "$out" && VERIFY_ACCEPTANCE="$acc" bash scripts/loop-gate.sh 2>&1)"; then
   fail "git 管理外で通過してしまった: $out_txt"
 elif printf '%s' "$out_txt" | grep -q 'GATE_FAIL' \
-     && printf '%s' "$out_txt" | grep -q '作業ツリーではありません'; then
-  # 第二意見は verify で止まるため呼ばれない（呼ばれると、機密混入の疑いが
-  # 残る差分を外部のレビューへ送ることになる）。
-  if printf '%s' "$out_txt" | grep -q 'REVIEW_ARGV'; then
-    fail "verify で止まったのに第二意見が走っている: $out_txt"
+     && printf '%s' "$out_txt" | grep -q 'commit identity not passed'; then
+  # verify（step 2）・第二意見（step 3）のどちらも走らないことを確かめる。
+  # 走ってしまうと、identity 未検証のまま先の段へ進めることになる。
+  if printf '%s' "$out_txt" | grep -q 'REVIEW_ARGV' \
+     || printf '%s' "$out_txt" | grep -q '\[loop-gate\] step 2'; then
+    fail "identity で止まったのに後続の段が走っている: $out_txt"
   else
     pass
   fi
@@ -417,7 +491,7 @@ exit 0
 STUB
 chmod +x "$out/scripts/second-opinion-review.sh"
 make_pushed_repo "$out" feature
-if out_txt="$(cd "$out" && VERIFY_ACCEPTANCE="$acc" bash scripts/loop-gate.sh 2>&1)"; then
+if out_txt="$(cd "$out" && ALLOWED_AUTHOR_EMAILS="$ALLOWED_EMAIL" VERIFY_ACCEPTANCE="$acc" bash scripts/loop-gate.sh 2>&1)"; then
   lines="$(printf '%s' "$out_txt" | sed -n 's/^REVIEW_DIFF_LINES://p')"
   names="$(printf '%s' "$out_txt" | sed -n 's/^REVIEW_DIFF_NAMES://p')"
   if [[ -n "$lines" && "$lines" -gt 0 ]] \
@@ -447,7 +521,7 @@ acc="$(new_workdir)/acc-pass.sh"; printf '#!/usr/bin/env bash\nexit 0\n' > "$acc
 printf '#!/usr/bin/env bash\necho REVIEW_INVOKED\nexit 0\n' > "$out/scripts/second-opinion-review.sh"
 chmod +x "$out/scripts/second-opinion-review.sh"
 make_pushed_repo "$out" main
-if out_txt="$(cd "$out" && VERIFY_ACCEPTANCE="$acc" bash scripts/loop-gate.sh 2>&1)"; then
+if out_txt="$(cd "$out" && ALLOWED_AUTHOR_EMAILS="$ALLOWED_EMAIL" VERIFY_ACCEPTANCE="$acc" bash scripts/loop-gate.sh 2>&1)"; then
   if printf '%s' "$out_txt" | grep -q 'no reviewable diff' \
      && printf '%s' "$out_txt" | grep -q 'GATE_PASS' \
      && ! printf '%s' "$out_txt" | grep -q 'REVIEW_INVOKED'; then
