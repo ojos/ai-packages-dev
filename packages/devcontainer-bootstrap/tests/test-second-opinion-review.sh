@@ -863,7 +863,14 @@ it "日本語を含む差分は文字数ではなくバイト数を基準に分�
 # なる。文字数（${#var} や多バイト対応の wc -m）で測れば上限に収まって見える
 # 大きさに、バイト数では上限を超えるように仕込む。呼び出し側の locale を
 # 明示的に UTF-8（C.utf8）にしてもなお、バイト数で正しく分割されることを見る。
-if locale -a 2>/dev/null | grep -qi '^C\.utf8$\|^C\.UTF-8$'; then
+# grep へ -q を渡さない。-q は最初のマッチでパイプを閉じ、まだ書き込み中の
+# producer が SIGPIPE で死ぬ。このファイルは set -o pipefail なので、その回は
+# 条件が偽になり、**C.utf8 があるのに検査が黙って skip される**（#285 と同型）。
+# 実測ではこの環境の locale -a は 26 バイトでパイプバッファに収まりきるため
+# 発火しないが、producer が外部コマンドで出力量が環境依存であるここだけは、
+# 偶然に頼らない。同ファイルの他の grep -q は producer が printf で、
+# 出力量をこのテスト自身が握っているため区別する。
+if locale -a 2>/dev/null | grep -i '^C\.utf8$\|^C\.UTF-8$' >/dev/null; then
   d="$(new_workdir)/r"; b="$(new_workdir)/bin"
   mk_review_repo "$d"
   n_files=4
