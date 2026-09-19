@@ -2464,9 +2464,18 @@ TMPL
 #!/usr/bin/env bash
 # loop-gate.sh — ローカル事前ゲート（ループコーディングの収束点）
 #
-# push / PR 作成の前に、機械判定の受け入れ検証（verify.sh）と、任意の第二意見
-# レビューを直列で通す単一入口。verify が通り、第二意見があればそれも通ったときだけ
-# 通過する。
+# push / PR 作成の前に、コミット identity の検証（verify-commit-identity.sh）、
+# 機械判定の受け入れ検証（verify.sh）、任意の第二意見レビューを直列で通す単一入口。
+# 全段が通ったときだけ通過する。
+#
+# 段の順序（安く・早く落ちる検査を先に置く）:
+#   1. commit identity（verify-commit-identity.sh） — 判定は数 ms で終わる。許可外の
+#      identity が混じったコミットは、他の段の結果を待たずにここで検知する。許可
+#      email（ALLOWED_AUTHOR_EMAILS / .env の GIT_IDENTITY_EMAIL）を解決できない
+#      場合もここで fail-closed に落ちる。判定ロジックはこのスクリプトへ書き写さず
+#      verify-commit-identity.sh 側に置く（判定を二重管理しない）。
+#   2. verify（受け入れ検証。手前で機密混入検査も走る）
+#   3. 第二意見レビュー（存在すれば）
 #
 # このスクリプトは単体で動作する。第二意見レビューは存在すれば直列化し、
 # 無ければ優雅にスキップする（外部パッケージの導入を前提にしない）。
@@ -2507,10 +2516,11 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # 解決できない場合は、従来どおり引数なしで呼ぶ。範囲を解決できないことは
 # reviewer を呼べない理由にならないため、ここでは落とさない。
 #
-# なお、git 管理外ではこの関数へ到達する前に step 1（verify.sh）が落ちる。
-# verify.sh が呼ぶ機密混入検査（check-no-secrets.sh）が git の作業ツリーを前提に
-# しており、検査が成立しない状態を合格にしないため。この関数が git 外の経路を
-# 持つのは、範囲解決を単体で使えるようにしておくためである。
+# なお、git 管理外ではこの関数へ到達する前に、先行する段で必ず落ちる。commit
+# identity 検査（step 1）は git log を、verify.sh が呼ぶ機密混入検査（step 2 の中、
+# check-no-secrets.sh）は git の作業ツリーを前提にしており、検査が成立しない状態を
+# 合格にしないため。この関数が git 外の経路を持つのは、範囲解決を単体で使える
+# ようにしておくためである。
 REVIEW_RANGE=""
 # 範囲は解決できたが差分が空だった（= レビューできる対象が無い）状態を表す。
 # REVIEW_RANGE="" とは区別する。この状態を reviewer の既定へ流すと、空の
@@ -2665,14 +2675,21 @@ main() {
   # resolve_review_range を呼ぶ。
   cd "$(dirname "$HERE")"
 
-  echo "[loop-gate] step 1: verify (acceptance)"
+  echo "[loop-gate] step 1: commit identity"
+  if ! bash "$HERE/verify-commit-identity.sh"; then
+    echo "[loop-gate] commit identity not passed" >&2
+    echo "GATE_FAIL"
+    exit 1
+  fi
+
+  echo "[loop-gate] step 2: verify (acceptance)"
   if ! bash "$HERE/verify.sh"; then
     echo "[loop-gate] verify not passed" >&2
     echo "GATE_FAIL"
     exit 1
   fi
 
-  echo "[loop-gate] step 2: second opinion"
+  echo "[loop-gate] step 3: second opinion"
   if [[ "${LOOP_GATE_REVIEW_CMD-__UNSET__}" == "__UNSET__" ]]; then
     if [[ -f "$HERE/second-opinion-review.sh" ]]; then
       resolve_review_range

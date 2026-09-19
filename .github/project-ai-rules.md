@@ -173,6 +173,7 @@ push / PR 作成の前に、次の 3 段を通します。
 bash scripts/loop-gate.sh
 ```
 
+- **`loop-gate.sh` は、上の 3 段の手前で commit identity の検証（`scripts/verify-commit-identity.sh`）を挟みます。** 許可外の identity が混じったコミットを、他のどの段よりも安く・早く（判定は数 ms）検知するためです。ここでいう「3 段」は規範が定める段（主レビュー / 受け入れ検証 / 第二意見）を指し、`loop-gate.sh` 内部の実行順（commit identity → verify → 第二意見という実装上の step 1/2/3）とは別の軸です。両者を混同しないでください。
 - 終了コード 0 = `GATE_PASS`（push 可） / 1 = `GATE_FAIL`（いずれかの段が未通過、または実行不能）。
 - 第二意見コマンドは環境変数 `LOOP_GATE_REVIEW_CMD` で差し替え（任意のコマンド）・無効化（空文字）できます。未設定のときは `scripts/second-opinion-review.sh` があれば実行し、無ければスキップします。
 - ステージ済み差分が空のときは、`loop-gate.sh` が第二意見の対象を commit 済み範囲へ自動で切り替えます。commit 後にゲートを回すと第二意見が実質スキップされ、偽の緑が出るためです。

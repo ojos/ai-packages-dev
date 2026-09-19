@@ -267,11 +267,16 @@ assert_contains "$fn_txt" "DEFINED" "関数定義"
 # まま終了コード 0 になる。「出力が無く exit 0」は緑と見分けが付かないため、
 # 実行時に合否がそのまま現れることを両方向で確認する。
 
-# ゲート本体を実行する前に、生成物を git 管理下へ置く。verify.sh が受け入れ条件の
-# 手前で呼ぶ機密混入検査（check-no-secrets.sh）は、git の作業ツリーでない場合と
-# 追跡ファイルが 1 件も無い場合を「検査が成立していない」として落とすため、
-# 生成したままでは step 1 で止まる。ここで見たいのは source ガードが効きすぎて
-# いないこと（実行すればゲート本体が走ること）なので、前提だけ整える。
+# ゲート本体を実行する前に、生成物を git 管理下へ置く。step 1 の commit identity
+# 検査（verify-commit-identity.sh）は git log を、続く step 2 の verify.sh が呼ぶ
+# 機密混入検査（check-no-secrets.sh）は git の作業ツリーであることと追跡ファイルが
+# 1 件以上あることを前提にしており、いずれも「検査が成立していない」場合は落とす
+# ため、生成したままでは step 1 で止まる。ここで見たいのは source ガードが効き
+# すぎていないこと（実行すればゲート本体が走ること）なので、前提だけ整える。
+#
+# 許可 author email（ALLOWED_AUTHOR_EMAILS）は個々の呼び出しで渡す。step 1 は
+# fail-closed のため、渡し忘れると常に identity で止まり、以降の段（verify /
+# 第二意見）の検証が成立しない。$GIT_AUTHOR が固定する committer と一致させる。
 (
   cd "$GEN" || exit 1
   git init -q
@@ -283,7 +288,7 @@ assert_contains "$fn_txt" "DEFINED" "関数定義"
 
 it "実行するとゲート本体が走り、合格なら GATE_PASS を出して 0 で終わる"
 acc_pass="$(new_workdir)/acc-pass.sh"; printf '#!/usr/bin/env bash\nexit 0\n' > "$acc_pass"
-if out_txt="$(cd "$GEN" && VERIFY_ACCEPTANCE="$acc_pass" LOOP_GATE_REVIEW_CMD='' bash scripts/loop-gate.sh 2>&1)"; then
+if out_txt="$(cd "$GEN" && ALLOWED_AUTHOR_EMAILS="t@example.com" VERIFY_ACCEPTANCE="$acc_pass" LOOP_GATE_REVIEW_CMD='' bash scripts/loop-gate.sh 2>&1)"; then
   if printf '%s' "$out_txt" | grep -q '\[loop-gate\] step 1' \
      && printf '%s' "$out_txt" | grep -q 'GATE_PASS'; then
     pass
@@ -296,10 +301,23 @@ fi
 
 it "実行して不合格なら GATE_FAIL を出して非 0 で終わる"
 acc_fail="$(new_workdir)/acc-fail.sh"; printf '#!/usr/bin/env bash\nexit 1\n' > "$acc_fail"
-if out_txt="$(cd "$GEN" && VERIFY_ACCEPTANCE="$acc_fail" LOOP_GATE_REVIEW_CMD='' bash scripts/loop-gate.sh 2>&1)"; then
+if out_txt="$(cd "$GEN" && ALLOWED_AUTHOR_EMAILS="t@example.com" VERIFY_ACCEPTANCE="$acc_fail" LOOP_GATE_REVIEW_CMD='' bash scripts/loop-gate.sh 2>&1)"; then
   fail "不合格なのに exit 0（偽の緑）: $out_txt"
 else
-  assert_contains "$out_txt" "GATE_FAIL" "不合格時の出力"
+  # identity（step 1）は許可 email を渡しているので通過しており、不合格の原因が
+  # acceptance（step 2）であることを確かめる。
+  #
+  # 「identity で落ちていない」だけでは足りない。verify.sh は acceptance の手前で
+  # check-no-secrets.sh も実行するため、それだけで GATE_FAIL になっても同じ形の
+  # 出力になり得る。acceptance（$acc_fail）が実際に起動されたことまで固定する
+  # （verify.sh が acceptance の起動直前に出す "[verify] running acceptance:" を見る）。
+  if printf '%s' "$out_txt" | grep -q 'commit identity not passed'; then
+    fail "acceptance 不合格を検証する前に identity で落ちている: $out_txt"
+  elif ! printf '%s' "$out_txt" | grep -q '\[verify\] running acceptance:'; then
+    fail "acceptance が起動された痕跡が無い（identity 以外の別段で落ちている疑い）: $out_txt"
+  else
+    assert_contains "$out_txt" "GATE_FAIL" "不合格時の出力"
+  fi
 fi
 
 # ── 理由がゲートの出力へ実際に現れること ──────────────────────────────────────
@@ -324,7 +342,7 @@ in_repo "$e2e" "git init -q && git symbolic-ref HEAD refs/heads/main && git add 
 in_repo "$e2e" "git checkout -q -b feat && printf 'feature\n' > FEATURE.txt && git add FEATURE.txt && git $GIT_AUTHOR commit -q -m c2 && git push -q -u origin feat"
 in_repo "$e2e" "git checkout -q main && printf 'other\n' > OTHER.txt && git add OTHER.txt && git $GIT_AUTHOR commit -q -m c3 && git push -q origin main"
 in_repo "$e2e" "git checkout -q feat && git $GIT_AUTHOR merge -q --no-edit origin/main"
-if out_txt="$(cd "$e2e" && VERIFY_ACCEPTANCE="$acc" bash scripts/loop-gate.sh 2>&1)"; then
+if out_txt="$(cd "$e2e" && ALLOWED_AUTHOR_EMAILS="t@example.com" VERIFY_ACCEPTANCE="$acc" bash scripts/loop-gate.sh 2>&1)"; then
   names="$(printf '%s' "$out_txt" | sed -n 's/^REVIEW_DIFF_NAMES://p')"
   if ! printf '%s' "$out_txt" | grep -q '\[loop-gate\].*already reachable from'; then
     fail "範囲を変えた理由が出力されない: $out_txt"
