@@ -13,6 +13,13 @@
 # 要求が 2 か所から出ると規範の「1 回だけ」が壊れるため、後者は届かないイベントを
 # 同じ契機から見ても起動しないため（規範 review-workflow.md「要求されたことを別の
 # 契機で確認する」）。どちらも生成された YAML の内容として検査する。
+#
+# 確認側はもう 1 つ、「読まれたか」も見る（規範 review-workflow.md「要求された ≠
+# 読まれた」）。この判定は review-gate.yml へ書き写さず scripts/review-usable.sh へ
+# 切り出してあるため、配置される本数は 2 本から 4 本へ増える。判定を書き写していない
+# ことは、生成された YAML に判定文字列（定型文の一致パターンや判定関数）が現れない
+# ことで確かめる。判定そのものの正しさ（表駆動の受け入れ条件）は
+# check-review-usable.sh が別に持つ。
 
 set -uo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
@@ -21,11 +28,17 @@ echo "test-review-gate"
 
 TPL="$PLAYBOOK_SRC/templates"
 WF_REL=".github/workflows/review-gate.yml"
+USABLE_REL="scripts/review-usable.sh"
+CHECK_USABLE_REL="scripts/check-review-usable.sh"
 
 # ── 規範パッケージ側に雛形が揃っているか ─────────────────────────────────────
 
 it "規範パッケージがリモート最終ゲート（確認側）の雛形を持つ"
 assert_file_exists "$TPL/review-gate.yml"
+
+it "規範パッケージが確認側の判定スクリプト 2 本を持つ"
+assert_file_exists "$TPL/review-usable.sh"
+assert_file_exists "$TPL/check-review-usable.sh"
 
 # ── 選択時のみ配置する ────────────────────────────────────────────────────────
 
@@ -41,17 +54,34 @@ it "要求側と確認側は 2 本そろって配置される"
 # 片方だけの配置は、この機構が塞ごうとしている穴（要求されないまま通る）を残す。
 assert_file_exists "$out/.github/workflows/copilot-review.yml"
 
+it "--with-copilot-review --with-playbook で確認側の判定スクリプト 2 本（scripts/review-usable.sh / scripts/check-review-usable.sh）が配置される"
+# review-gate.yml が判定を委ねる先。片方だけ欠けると確認側が起動時に読めず、
+# 「確かめられなかった」側へ倒れて status が付かないまま止まる。
+assert_file_exists "$out/$USABLE_REL"
+assert_file_exists "$out/$CHECK_USABLE_REL"
+
+it "配置された scripts/review-usable.sh は雛形と完全一致する（コピーであって再生成でない）"
+if diff -q "$out/$USABLE_REL" "$TPL/review-usable.sh" >/dev/null 2>&1; then pass; else fail "雛形と一致しない"; fi
+
+it "配置された scripts/check-review-usable.sh は雛形と完全一致する（コピーであって再生成でない）"
+if diff -q "$out/$CHECK_USABLE_REL" "$TPL/check-review-usable.sh" >/dev/null 2>&1; then pass; else fail "雛形と一致しない"; fi
+
 it "--with-copilot-review なし（--with-playbook のみ）では配置しない"
 out="$(new_workdir)/p"
 run_bootstrap "$out" --with-playbook >/dev/null 2>&1
 assert_file_absent "$out/$WF_REL"
+assert_file_absent "$out/$USABLE_REL"
+assert_file_absent "$out/$CHECK_USABLE_REL"
 
 it "--with-copilot 単独（+規範）では配置しない"
 # 確認側も要求側と同じ契機で配置する。ローカル装備のフラグでリモート機構が付いて
-# くる形へ戻っていないことを、2 本ともで見る（issue #230）。
+# くる形へ戻っていないことを、2 本ともで見る（issue #230）。判定スクリプトも
+# 同じ契機に従うことを 4 本まとめて見る。
 out="$(new_workdir)/p"
 run_bootstrap "$out" --with-copilot --with-playbook >/dev/null 2>&1
 assert_file_absent "$out/$WF_REL"
+assert_file_absent "$out/$USABLE_REL"
+assert_file_absent "$out/$CHECK_USABLE_REL"
 
 it "--with-copilot-review でも規範を配置しない構成ではエラー終了する"
 # 雛形は規範パッケージが持つ。playbook を配置しないなら参照元が無いため、生成物を
@@ -64,16 +94,30 @@ if [[ "$rc" -ne 0 ]]; then pass; else fail "規範なしなのに成功した（
 it "その構成では review-gate.yml も置かれない"
 assert_file_absent "$out/$WF_REL"
 
+it "その構成では判定スクリプト 2 本も置かれない"
+assert_file_absent "$out/$USABLE_REL"
+assert_file_absent "$out/$CHECK_USABLE_REL"
+
 it "dry-run は copilot-review 選択時に review-gate.yml を計画へ含める"
 out="$(new_workdir)/p"
 output="$(run_bootstrap "$out" --with-copilot-review --with-playbook --dry-run 2>&1)"
 assert_contains "$output" "$WF_REL" "dry-run 計画"
+
+it "dry-run は copilot-review 選択時に判定スクリプト 2 本も計画へ含める"
+assert_contains "$output" "$USABLE_REL" "dry-run 計画"
+assert_contains "$output" "$CHECK_USABLE_REL" "dry-run 計画"
 
 it "dry-run は copilot-review 未選択なら review-gate.yml を計画へ含めない"
 out="$(new_workdir)/p"
 output="$(run_bootstrap "$out" --with-copilot --with-playbook --dry-run 2>&1)"
 case "$output" in
   *"$WF_REL"*) fail "未選択なのに計画へ現れた" ;;
+  *) pass ;;
+esac
+
+it "dry-run は copilot-review 未選択なら判定スクリプト 2 本も計画へ含めない"
+case "$output" in
+  *"$USABLE_REL"*|*"$CHECK_USABLE_REL"*) fail "未選択なのに計画へ現れた" ;;
   *) pass ;;
 esac
 
@@ -197,6 +241,188 @@ if grep -qF 'copilot|"copilot-pull-request-reviewer[bot]") return 0' "$wf"; then
   pass
 else
   fail "レビュアー名の完全一致判定が無い"
+fi
+
+# ── 2 段目: 「読まれたか」の判定はスクリプトへ委ねている ─────────────────────────
+
+it "既定ブランチから判定コードを取得する（PR のブランチではない）"
+# ref を指定しない checkout は pull_request イベントで PR のマージ結果を取得する。
+# 判定コードを被検査対象と同じ木から取ると、PR の投稿者が判定スクリプトを書き換える
+# だけでゲートを常に緑にできてしまう。
+if grep -qF 'ref: ${{ github.event.repository.default_branch }}' "$wf"; then
+  pass
+else
+  fail "checkout が既定ブランチへ固定されていない"
+fi
+
+it "判定は scripts/review-usable.sh へ委ねている"
+if grep -qF 'scripts/review-usable.sh' "$wf"; then
+  pass
+else
+  fail "scripts/review-usable.sh を呼んでいない"
+fi
+
+# ── 導入初回フォールバック ────────────────────────────────────────────────────
+#
+# 判定コードを既定ブランチから取る設計にしたため、review-gate.yml と
+# scripts/review-usable.sh を初めて導入する PR の時点では、既定ブランチにまだ
+# 判定コードが無い。resolve_usable_script はこのときだけ PR 自身の写しへ
+# フォールバックする（規範 review-workflow.md「要求された ≠ 読まれた」の例外）。
+#
+# **ここで検査できるのはワークフローの「形」だけである。** 実際の checkout・
+# 実際の `gh api` 呼び出し・実際に既定ブランチへ scripts/review-usable.sh が
+# 無い状態は、このテストスイート（bootstrap の生成結果を静的に見る）では再現
+# できない。以下は「フォールバックの分岐が生成物に存在するか」「既定ブランチを
+# 無条件に優先しているか」「フォールバックしたことを黙らせていないか」を文字列と
+# 構造で確かめるに留まる。**PR が実際に既定ブランチ側へ再フォールバックせず、
+# 既定ブランチにある版を上書きできないことまでは検証していない**（実地の GitHub
+# Actions 環境でしか確かめられない）。
+
+it "既定ブランチに判定コードが無いときへの分岐（resolve_usable_script）を持つ"
+if grep -qF 'resolve_usable_script()' "$wf"; then
+  pass
+else
+  fail "resolve_usable_script が無い（導入初回フォールバックが実装されていない）"
+fi
+
+it "既定ブランチの有無を先に確かめてから分岐している（HAS_MAIN_USABLE）"
+# 「既定ブランチにある場合は絶対にフォールバックしない」という制約を、変数 1 つの
+# 真偽で判定していることを確かめる。判定条件が PR 側の内容に依存していないことが
+# 大事で、それをコード上で表しているのがこの変数の存在である。
+if grep -qF 'HAS_MAIN_USABLE=1' "$wf" && grep -qF 'HAS_MAIN_USABLE=0' "$wf"; then
+  pass
+else
+  fail "HAS_MAIN_USABLE の設定が無い（既定ブランチの有無を判定していない）"
+fi
+
+it "resolve_usable_script は既定ブランチ優先を先頭で判定している（フォールバックが先に来ない）"
+# resolve_usable_script() の**定義そのもの**（呼び出しや、定義に言及するコメントでは
+# ない）から、対応する閉じ括弧までの本体だけを、字下げの対応で切り出す。本体の中で
+# HAS_MAIN_USABLE の判定が gh api 呼び出し（フォールバック側）より先に現れることを
+# 確かめる。順序が逆だと、既定ブランチに判定コードがあってもフォールバックを試みる
+# 余地が生まれる。
+body="$(awk '
+  /^[[:space:]]*resolve_usable_script\(\) \{[[:space:]]*$/ {
+    match($0, /^[[:space:]]*/); indent = RLENGTH
+    watching = 1; next
+  }
+  watching && $0 ~ ("^" sprintf("%" indent "s", "") "\\}[[:space:]]*$") { exit }
+  watching { print }
+' "$wf")"
+main_line="$(printf '%s\n' "$body" | grep -n 'HAS_MAIN_USABLE' | head -n1 | cut -d: -f1)"
+api_line="$(printf '%s\n' "$body" | grep -n 'gh api' | head -n1 | cut -d: -f1)"
+if [ -n "$body" ] && [ -n "$main_line" ] && [ -n "$api_line" ] && [ "$main_line" -lt "$api_line" ]; then
+  pass
+else
+  fail "既定ブランチの判定（HAS_MAIN_USABLE）が gh api 呼び出しより先に来ていない（本体を抽出できなかった可能性もある）"
+fi
+
+it "PR 側の写しを取得する API 呼び出しが sha（PR の head）を参照している"
+# 既定ブランチ全体を checkout し直すのではなく、判定対象の PR の head から
+# scripts/review-usable.sh 1 本だけを取る。掃き寄せ（複数 PR）でも、判定される
+# PR ごとに正しい版を引けるようにするため。
+if grep -qF 'contents/scripts/review-usable.sh?ref=${sha}' "$wf"; then
+  pass
+else
+  fail "PR の head sha を参照した取得になっていない"
+fi
+
+it "フォールバックしたことを ::notice:: で明示している"
+if grep -q '::notice::.*review-usable\.sh' "$wf"; then
+  pass
+else
+  fail "フォールバック時の ::notice:: が無い（黙って PR 側のコードで判定してしまう）"
+fi
+
+it "フォールバックしたことを commit status の description にも残す"
+# ::notice:: はジョブのログにしか残らない。PR の checks 欄だけを見た人にも
+# 分かるように、report() へ渡す description にも印を付ける。
+if grep -qF 'usable_desc=' "$wf" && grep -q 'report "\$sha" success "Copilot code review is requested or posted\${usable_desc}"' "$wf"; then
+  pass
+else
+  fail "description にフォールバックの印（usable_desc）が乗っていない"
+fi
+
+it "定型文の一致判定（1 行も読めなかったレビューの検出）が YAML に書き写されていない"
+# review-usable.sh が持つべき判定。YAML に埋め戻すと、手元と CI から機械的に
+# 確かめる手段が無くなる（この文字列は review-usable.sh 側の case パターンにだけ
+# あるべきで、YAML には無い）。
+if grep -qF 't able to review any files"*' "$wf"; then
+  fail "定型文の一致判定が YAML に埋め込まれている（review-usable.sh へ委ねるべき）"
+else
+  pass
+fi
+
+it "判定関数（reviewable_patches / posted_review_is_empty）を YAML 内に持たない"
+if grep -Eq '(reviewable_patches|posted_review_is_empty)\(\)' "$wf"; then
+  fail "判定ロジックが YAML 内の関数として残っている"
+else
+  pass
+fi
+
+it "変更ファイルとレビュー本文の一覧を集めて渡すだけである（判定はしない）"
+# gather_files / gather_reviews は「一覧を集めて渡す」役に徹し、patch の有無や
+# 定型文かどうかを判定しない。中で is_copilot（発言者の絞り込み）だけを使うのは、
+# 「誰の発言か」を狭めるのが呼び出し側の役割だからで、「読めるか」の判定ではない。
+if grep -qF 'gather_files()' "$wf" && grep -qF 'gather_reviews()' "$wf"; then
+  pass
+else
+  fail "gather_files / gather_reviews が無い（一覧を集める役割が確認できない）"
+fi
+
+it "\$? を \`if !\` の否定越しに拾っていない（2 段目の判定が黙って常に成功する形になっていない）"
+# `if ! var=\"\$(cmd)\"; then` の then に入った時点の \$? は `! ...` 自体の評価結果
+# （常に 0）で、cmd が返した値ではない（実測: bash で
+# `f(){ return 3; }; if ! out=\"\$(f)\"; then rc=\$?; fi` は rc=0 になる）。
+#
+# **shellcheck（この検査を書いた時点で手元にあった 0.11.0）はこの形を検出しない**
+# ことを、既知の誤検出パターンと修正後の形の両方に対して実行して確かめた。SC2319
+# （\"This \$? refers to a condition, not a command.\"）が謳い文句どおりに働くなら
+# 検出できてよいはずの形だが、この版では複数のバリエーション（単純コマンド／
+# コマンド置換代入／while／case、いずれも試した）のどれでも指摘が出なかった。
+# この静的解析ツールに頼ると「検査を足したのに検出できない」を積むことになるため、
+# ここで直接パターンを検査する。
+#
+# 判定は「`if ! ` を含む行から、同じ字下げの \`fi\` が現れるまでの範囲に \`=\$?\` が
+# あるか」。この形の bash はこのリポジトリの流儀で `if` と対応する `fi` が同じ字下げに
+# 揃う（本ファイル・review-usable.sh とも一貫している）ため、字下げの対応で block を
+# 区切れば足りる。汎用の bash パーサではないため、字下げが崩れた入力までは保証しない。
+#
+# コメント行（\`#\` で始まる行）は先に読み飛ばす。このアンチパターンを説明する
+# コメント自体が \`if ! ... then rc=\$?\` を例として書くため、読み飛ばさないと
+# 説明文を実装だと誤認して自分自身に落ちる（実際にこの検査を書く過程で踏んだ）。
+#
+# **\`if ! \` にマッチした行そのものは、マッチした直後に \`next\` していたため
+# \`=\$?\` の検査にかからなかった。** \`if ! out=\"\$(cmd)\"; then rc=\$?; fi\` の
+# ように 1 行に収めた形（複数行に分けた形と意味は同じ）がこの穴を素通りする
+# ことを実測した（このバグを含む検査自体を最初に書いたときに実際に踏んだ）。
+# **1 行の中で先に \`=\$?\` を見てから\`next\`する**よう直し、同一行・複数行の
+# 両方で検出できることを確かめてある。あわせて、1 行内で \`; fi\` まで閉じている
+# 形（監視すべき後続行が無い）では \`watching\` を立てない——立てたままにすると、
+# 対応する \`fi\` が見つからず監視状態が漏れ、無関係な後続の正しい \`|| var=\$?\`
+# まで誤検出しうる。
+if awk '
+  /^[[:space:]]*#/ { next }
+  /if ! / {
+    if ($0 ~ /=\$\?/) { hit = 1 }
+    if ($0 ~ /;[[:space:]]*fi[[:space:]]*$/) { next }
+    match($0, /^[[:space:]]*/)
+    indent = RLENGTH
+    watching = 1
+    next
+  }
+  watching && $0 ~ ("^" sprintf("%" indent "s", "") "fi[[:space:]]*$") {
+    watching = 0
+    next
+  }
+  watching && /=\$\?/ {
+    hit = 1
+  }
+  END { exit !hit }
+' "$wf"; then
+  fail "\`if !\` の否定越しに \$? を拾っている箇所がある（\`|| var=\$?\` の形へ直す）"
+else
+  pass
 fi
 
 # ── YAML として妥当である ─────────────────────────────────────────────────────

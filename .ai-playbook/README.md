@@ -36,7 +36,7 @@
 | `loop-workflow.md` | ループコーディング運用の規範（受け入れ検証の機械ゲート化・verify ランナー契約・収束） |
 | `loop-coding-guide.md` | ループコーディングの解説ガイド（従来ワークフローとの違い・考え方。`loop-workflow.md` の解説版） |
 | `intake/` | intake テンプレート、相談テンプレート、判定 reason code |
-| `templates/` | 導入用の雛形 8 種（`entry.md` 実行環境の入口ファイル / `project-ai-rules.md` プロジェクト共通ルール / `second-opinion-review.sh` 第二意見レビューの実装例 / `copilot-review.yml` リモート最終ゲートの要求側の実装例 / `review-gate.yml` リモート最終ゲートの確認側の実装例 / `claude-skill-intake.md` Claude Code の intake 起点スキル / `claude-agent-explorer.md`・`claude-agent-implementer.md` Claude Code の委譲先エージェント定義） |
+| `templates/` | 導入用の雛形 10 種（`entry.md` 実行環境の入口ファイル / `project-ai-rules.md` プロジェクト共通ルール / `second-opinion-review.sh` 第二意見レビューの実装例 / `copilot-review.yml` リモート最終ゲートの要求側の実装例 / `review-gate.yml` リモート最終ゲートの確認側の実装例 / `review-usable.sh` 確認側が使う「読まれたか」の判定本体 / `check-review-usable.sh` 上記の表駆動の自己検査 / `claude-skill-intake.md` Claude Code の intake 起点スキル / `claude-agent-explorer.md`・`claude-agent-implementer.md` Claude Code の委譲先エージェント定義） |
 | `.gitignore` | このパッケージを開発するときの追跡除外設定。規範ではないため配布・取り込みの対象外（`shared-ai-rules.md` 14 章） |
 
 共通ルールの補足として、AI からの質問は一問ずつ行い、各質問には意図を添え、回答は選択肢優先で提示します。
@@ -211,15 +211,18 @@ cp .ai-playbook/templates/claude-agent-implementer.md .claude/agents/implementer
 
 ### 6. リモート最終ゲートを配線する（GitHub を使う場合・任意）
 
-`review-workflow.md` のリモート最終ゲートを機構で自動要求する場合、要求が 1 回に限定される雛形と、要求されたことを確認する雛形を配置します。
+`review-workflow.md` のリモート最終ゲートを機構で自動要求する場合、要求が 1 回に限定される雛形と、要求されたことを確認する雛形、確認側が使う判定スクリプト 2 本を配置します。
 
 ```bash
-mkdir -p .github/workflows
+mkdir -p .github/workflows scripts
 cp .ai-playbook/templates/copilot-review.yml .github/workflows/copilot-review.yml
 cp .ai-playbook/templates/review-gate.yml .github/workflows/review-gate.yml
+cp .ai-playbook/templates/review-usable.sh scripts/review-usable.sh
+cp .ai-playbook/templates/check-review-usable.sh scripts/check-review-usable.sh
+chmod +x scripts/review-usable.sh scripts/check-review-usable.sh
 ```
 
-**2 本で 1 組です。** `copilot-review.yml` が要求し、`review-gate.yml` が要求されたことを別の契機（PR 更新・定期実行）から確認します（規範「要求されたことを別の契機で確認する」）。要求側の契機が届かないと最終ゲートが黙って抜けるため、確認側だけを省くと、この節で塞ごうとしている穴がそのまま残ります。確認側は要求しません。
+**4 本で 1 組です。** `copilot-review.yml` が要求し、`review-gate.yml` が要求されたこと、および要求・投稿されたレビューが実際に読まれたことを、別の契機（PR 更新・定期実行）から確認します（規範「要求されたことを別の契機で確認する」「要求された ≠ 読まれた」）。要求側の契機が届かないと最終ゲートが黙って抜けるため、確認側だけを省くと、この節で塞ごうとしている穴がそのまま残ります。確認側は要求しません。「読まれたか」の判定は `review-usable.sh` が持ち、`review-gate.yml` は一覧を集めて渡すだけです。`check-review-usable.sh` はその判定を表で確かめる自己検査で、GitHub 上でしか動かない `review-gate.yml` に判定を埋めないことで、手元と CI の両方から機械的に確かめられるようにしています。
 
 雛形は 1 つの実装例です。規範が要求するのは「要求回数を 1 回に限定すること」と「別の契機で確認すること」で、同じ性質を満たせば別の手段でかまいません。前提条件（レビュー機構の有効化・トークン）は雛形の冒頭コメントに記載しています。`review-gate.yml` は required check にしません（理由は規範側）。
 
