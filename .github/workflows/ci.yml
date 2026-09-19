@@ -4,6 +4,12 @@ on:
   push:
     branches: [main]
   pull_request:
+  # 契機のイベントが届かなかったときに、手で起動できるようにしておく。
+  # 2026-09-19、pull_request の synchronize が実行を 1 件も作らない状態が数時間続き、
+  # そのあいだ CI を回す手段が無かった（schedule と workflow_dispatch を持つ
+  # review-gate.yml だけは動いていた）。原因は特定できていないが、**契機が届かない
+  # ことは起こりうる**という事実は残る。手動の口が無いと、そのとき打つ手が無くなる。
+  workflow_dispatch:
 
 permissions:
   contents: read
