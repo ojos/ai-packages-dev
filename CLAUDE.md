@@ -22,4 +22,5 @@
 規範はここで再定義せず、対応する正本を指します。
 
 - `.claude/skills/intake/SKILL.md`: `/intake` の起動点です。推奨配線を採用済みで、`.gitignore` は `.claude/*` を除外しつつ `!.claude/skills/` で再包含するため追跡対象です。判定基準・票の項目定義は複製せず、`.github/project-ai-rules.md`「intake フロー」と `.ai-playbook/intake/` を参照します。
+- `.claude/skills/land/SKILL.md`: `/land` の起動点です。この会話で PR を作ったら、指示を待たずに使います。判定基準は複製せず、`.ai-playbook/review-workflow.md` と `.ai-playbook/task-playbooks/pr-review.md` を参照します。マージ直前の承認を機構で保証する PreToolUse フックは、このリポジトリではまだ配線していません（`.ai-playbook/role-contracts/closer.md`「手動承認は機構で保証する」）。配線するまでは、マージ実行の承認は利用者の手動判断に留まります。
 - `.claude/settings.json`: Claude Code のローカル設定（権限許可リスト等）です。`.gitignore` の対象で追跡せず、規範は定義しません。

@@ -4064,6 +4064,13 @@ install_playbook_rules() {
     tpl="$(require_playbook_template claude-skill-intake.md)"
     apply_file_with_policy "$tpl" "$OUTPUT_DIR/.claude/skills/intake/SKILL.md"
 
+    # land（PR 確認・マージ）起点スキル。intake と同じ経路（require_playbook_template
+    # → apply_file_with_policy）で配る。マージ直前の確認そのものは
+    # scripts/confirm-merge-hook.sh（conditional_template_rel_paths 側で配線済み）が
+    # 機構として保証し、このスキルは判定手順を持つだけである。
+    tpl="$(require_playbook_template claude-skill-land.md)"
+    apply_file_with_policy "$tpl" "$OUTPUT_DIR/.claude/skills/land/SKILL.md"
+
     # 委譲先の model / tools を frontmatter で固定するエージェント定義。同じく
     # --with-claude のときだけ置く。指示文で「haiku を使う」と書いても迂回できるが、
     # frontmatter は実行環境が読む機構なので迂回できない（規範 12 章）。
@@ -4198,6 +4205,7 @@ EOF
     fi
     if has_with claude; then
       echo "plan: $OUTPUT_DIR/.claude/skills/intake/SKILL.md"
+      echo "plan: $OUTPUT_DIR/.claude/skills/land/SKILL.md"
       echo "plan: $OUTPUT_DIR/.claude/agents/explorer.md"
       echo "plan: $OUTPUT_DIR/.claude/agents/implementer.md"
     fi
