@@ -141,7 +141,13 @@ fi
 it "確認側は reviewers を POST しない"
 # 読み取り（GET）は正当なので、エンドポイント名の出現だけでは落とさない。
 # 手で要求する手順を案内する echo 行も除く（あれは実行ではなく文言）。
-if grep -- '--method POST' "$wf" | grep -v 'echo' | grep -q 'requested_reviewers'; then
+#
+# **最終段は `-q` を外し `>/dev/null` で EOF まで読ませる。** 3 段のパイプで
+# 最終段が早期終了（`grep -q`）すると、途中の `grep -v` を経由して先頭の
+# `grep` まで SIGPIPE が伝播しうる（`set -uo pipefail` の下ではパイプライン
+# 全体が非 0 になる）。EOF まで読ませれば、途中の各段が最後まで生産側の
+# 出力を受け取り切り、この経路が起きない。
+if grep -- '--method POST' "$wf" | grep -v 'echo' | grep 'requested_reviewers' >/dev/null; then
   fail "確認側が requested_reviewers へ POST している（要求してしまっている）"
 else
   pass
@@ -174,10 +180,16 @@ it "schedule 契機は、起動した PR だけでなく open な PR を全件�
 # --limit N` ではなく `gh api --paginate` を使う」という設計判断を、まさにその
 # 語をコメントへ書いて説明している。除かずに検査すると、説明コメントの存在
 # そのものに誤って落ちる。
+# **`printf ... | grep -q` にしない。** `set -uo pipefail` の下で、$executable_lines
+# がパイプバッファに収まりきらない場合、grep が一致直後に読み終えてパイプを閉じ、
+# printf が SIGPIPE（141）で落ちて `if` 全体が失敗しうる（同型: #285）。ここでは
+# パイプそのものを使わず、herestring（`<<<`）で渡す。herestring は bash が一時
+# ファイル経由で読ませる実装のため、消費側の早期終了が生産側の SIGPIPE を引き起こす
+# 経路が無い。
 executable_lines="$(grep -v '^[[:space:]]*#' "$wf")"
-if printf '%s' "$executable_lines" | grep -qE -- '--paginate.*pulls\?state=open' \
+if grep -qE -- '--paginate.*pulls\?state=open' <<< "$executable_lines" \
    && grep -qF 'while read -r pr sha created' "$wf" \
-   && ! printf '%s' "$executable_lines" | grep -qF 'gh pr list --limit'; then
+   && ! grep -qF 'gh pr list --limit' <<< "$executable_lines"; then
   pass
 else
   fail "schedule 側が open な PR を全件（打ち切りなしで）判定し直す構造になっていない"
@@ -476,10 +488,21 @@ fi
 # 文字列として比較する。分の数値だけを Japanese の「N 分ごと」表現から抜き出す
 # より、cron の記法そのものを文書に引用させて突き合わせるほうが、表現の揺れ
 # （「20 分ごと」「20分間隔」等）に頼らず機械的に一致を強制できる。
-
+#
+# **雛形側は、実際の `on.schedule` の YAML sequence entry（`- cron: '...'` の形で
+# 行頭からその形に始まる行）だけを対象にする。** 雛形はコメント中でも同じ cron 値を
+# 引用しており（信頼境界の説明）、その部分文字列も無条件に拾うと、`on.schedule` の
+# `- cron:` 行そのものを消してもコメント側の言及が残っているだけで一致してしまい、
+# schedule が消えたことを検出できない。行頭アンカー（`^[[:space:]]*- cron: `）で
+# 実際の定義行だけに絞ってから値を取り出す。
+#
+# 文書側（review-workflow.md）は Markdown の地の文への引用であり、YAML の
+# sequence entry という構造を持たない。そのため文書側は従来どおり、値の部分文字列
+# が現れる行であれば拾う（＝コメント相当の扱いで構わない、という判断は指摘のとおり）。
 it "文書（review-workflow.md）が書く schedule の cron と、雛形（review-gate.yml）の cron が一致する"
 DOC_CRON="$(grep -oE "cron: '\*/[0-9]+ \* \* \* \*'" "$PLAYBOOK_SRC/review-workflow.md" | sort -u)"
-TPL_CRON="$(grep -oE "cron: '\*/[0-9]+ \* \* \* \*'" "$TPL/review-gate.yml" | sort -u)"
+TPL_CRON="$(grep -E "^[[:space:]]*- cron: '\*/[0-9]+ \* \* \* \*'" "$TPL/review-gate.yml" \
+  | grep -oE "cron: '\*/[0-9]+ \* \* \* \*'" | sort -u)"
 doc_count="$(printf '%s\n' "$DOC_CRON" | grep -c .)"
 tpl_count="$(printf '%s\n' "$TPL_CRON" | grep -c .)"
 if [[ "$doc_count" -eq 0 ]]; then
