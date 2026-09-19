@@ -310,13 +310,16 @@ jobs:
                 #
                 # 判定そのものは scripts/review-usable.sh へ委ねる。ここでは
                 # GitHub API から一覧を集めて渡し、結果を status へ書くだけにする。
+                #
+                # **`if ! var="$(...)"; then` の中で `$?` を拾わない。** `then` に
+                # 入った時点の `$?` は `! ...` 自体の評価結果（常に 0）であり、
+                # コマンド側が返した値ではない（実測: `f(){ return 3; }; if ! out="$(f)";
+                # then rc=$?; fi` は rc=0 になる）。`|| var=$?` の形で拾う。
                 local usable_out usable_rc=0
-                if ! usable_out="$(
+                usable_out="$(
                   { gather_files "$pr"; gather_reviews "$pr"; } \
                     | bash scripts/review-usable.sh
-                )"; then
-                  usable_rc=$?
-                fi
+                )" || usable_rc=$?
                 echo "  review-usable: ${usable_out:-(no output)} (rc=${usable_rc})"
 
                 case "$usable_rc" in
