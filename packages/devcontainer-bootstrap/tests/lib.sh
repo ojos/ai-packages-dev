@@ -281,6 +281,24 @@ dcb_version_of() {
   awk -F'"' '/^DCB_VERSION="/ { print $2; exit }' "$1"
 }
 
+# テストの期待値として sha256 を計算する。本番の実装（bootstrap.sh / doctor.sh の
+# dcb_file_sha256）と同じフォールバック順（sha256sum → shasum → openssl）を持つ。
+# ここを sha256sum / shasum だけに絞ると、その 2 つが無く openssl だけがある環境で
+# 「正しく動いている実装」をテストの側が誤って落とす（PR #324 レビュー指摘）。
+dcb_file_sha256_for_test() {
+  local f="$1"
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$f" | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$f" | awk '{print $1}'
+  elif command -v openssl >/dev/null 2>&1; then
+    openssl dgst -sha256 "$f" | awk '{print $NF}'
+  else
+    echo "error: テスト実行環境に sha256 計算コマンドが無い（sha256sum / shasum / openssl のいずれも無い）" >&2
+    return 1
+  fi
+}
+
 # ── 終了 ──────────────────────────────────────────────────────────────────────
 
 exit_with_result() {

@@ -30,14 +30,7 @@ assert_eq "$(sed -n 's/^flags=//p' "$origin")" "aws" "flags="
 
 it "記録は各生成物のハッシュを持つ（scripts/verify.sh を例に、実ハッシュと一致する）"
 recorded="$(sed -n 's|^hash:scripts/verify\.sh=||p' "$origin")"
-if command -v sha256sum >/dev/null 2>&1; then
-  actual="$(sha256sum "$out/scripts/verify.sh" | awk '{print $1}')"
-elif command -v shasum >/dev/null 2>&1; then
-  actual="$(shasum -a 256 "$out/scripts/verify.sh" | awk '{print $1}')"
-else
-  fail "テスト実行環境に sha256 計算コマンドが無い"
-  actual=""
-fi
+actual="$(dcb_file_sha256_for_test "$out/scripts/verify.sh")"
 assert_eq "$recorded" "$actual" "scripts/verify.sh のハッシュ"
 
 it "記録は .ai-playbook/** のハッシュを持たない（あちらは VERSION が別に担う）"
@@ -46,6 +39,46 @@ if grep -q '^hash:\.ai-playbook/' "$origin"; then
 else
   pass
 fi
+
+# ── 規範経由の非 .ai-playbook 出力も記録対象に入る ────────────────────────────
+#
+# 以前は sorted_rels（DCB 自身のテンプレート）しか記録しておらず、
+# install_playbook_rules が配置する second-opinion-review.sh / review-gate.yml /
+# intake スキル等が記録に無かった。この票の動機だった「review-gate.yml が旧版」
+# 「second-opinion-review.sh に上流のバグ修正が未反映」は、まさにこの一覧が
+# 挙げるファイル群で、記録に無いため doctor.sh が診断できなかった
+# （実測: PR #324 レビュー指摘）。
+
+it "記録は規範経由で配置される非 .ai-playbook 出力のハッシュも持つ"
+pb_out="$(new_workdir)/p"
+run_bootstrap "$pb_out" --with-claude --with-copilot-review --playbook-from "$PLAYBOOK_SRC" >/dev/null 2>&1
+pb_origin="$pb_out$ORIGIN_REL"
+missing=""
+for rel in \
+  scripts/second-opinion-review.sh \
+  scripts/review-usable.sh \
+  scripts/check-review-usable.sh \
+  .github/workflows/copilot-review.yml \
+  .github/workflows/review-gate.yml \
+  .claude/skills/intake/SKILL.md \
+  .claude/skills/land/SKILL.md \
+  .claude/agents/explorer.md \
+  .claude/agents/implementer.md \
+  .github/project-ai-rules.md \
+  CLAUDE.md \
+  .github/copilot-instructions.md; do
+  grep -qF -- "hash:$rel=" "$pb_origin" || missing="$missing $rel"
+done
+if [[ -z "$missing" ]]; then
+  pass
+else
+  fail "記録に無い規範経由の出力:$missing"
+fi
+
+it "上記の記録は実ハッシュと一致する（second-opinion-review.sh を例に）"
+recorded_pb="$(sed -n 's|^hash:scripts/second-opinion-review\.sh=||p' "$pb_origin")"
+actual_pb="$(dcb_file_sha256_for_test "$pb_out/scripts/second-opinion-review.sh")"
+assert_eq "$recorded_pb" "$actual_pb" "second-opinion-review.sh のハッシュ"
 
 it "--dry-run の計画に .devcontainer/ORIGIN が含まれる（生成物一覧との整合）"
 dry_out="$(new_workdir)/p"
@@ -119,6 +152,48 @@ if printf '%s' "$output" | grep -q 'changed since generation.*acceptance-remote'
   fail "記録に無いファイルを誤って変化したと報告した"
 else
   pass
+fi
+
+# ── 記録の無い既存生成先への遡及を禁じる ──────────────────────────────────────
+#
+# write_file / apply_file_with_policy が既存ファイルを skip しても、write_origin_record
+# はその現物をハッシュして「今回の実行が生成した」記録として書いてはならない。
+# 記録だけを消し、生成物を 1 つ改造した状態で --force なしで再実行すると、
+# 以前の実装は改造後の内容を「生成時から変化なし」として記録してしまい、
+# README の「記録の無い生成先への遡及はできない」という契約を破っていた
+# （実測: PR #324 レビュー指摘）。
+
+it "記録が無い状態で再実行しても、既存ファイルが 1 つでも skip されれば記録を作らない（遡及の禁止）"
+retro_out="$(new_workdir)/p"
+run_bootstrap "$retro_out" >/dev/null 2>&1
+rm -f "$retro_out$ORIGIN_REL"
+printf '\n# tampered\n' >> "$retro_out/scripts/on-attach.sh"
+run_bootstrap "$retro_out" >/dev/null 2>&1
+assert_file_absent "$retro_out$ORIGIN_REL"
+
+it "対照群: 改造が無くても、1 つでも skip があれば同様に記録を作らない（内容の同一性までは見ない設計）"
+# 上のケースとの違いは「改造の有無」だけ。改造していなければ skip されたファイルの
+# 内容は生成直後と変わらないが、現行の実装は「skip されたファイルの内容が生成直後と
+# 同一か」までは見ておらず、skip が 1 件でもあれば一律に記録を作らない（コメントに
+# 書いた「対象のどれか 1 つでも skip されていたら作らない」という設計どおり）。
+# 過大な約束をしない側（同一性の判定を持たない）を選んだことを、ここで対照として
+# 固定する。
+noop_out="$(new_workdir)/p"
+run_bootstrap "$noop_out" >/dev/null 2>&1
+rm -f "$noop_out$ORIGIN_REL"
+run_bootstrap "$noop_out" >/dev/null 2>&1
+assert_file_absent "$noop_out$ORIGIN_REL"
+
+it "遡及禁止のあとも doctor.sh は改造を「変化なし」と誤診断しない（記録が無いので診断できないと言う）"
+output_retro="$(bash "$DOCTOR" --target-dir "$retro_out" 2>&1)"
+if printf '%s' "$output_retro" | grep -q 'unchanged since generation'; then
+  fail "記録が無いのに unchanged と報告した:
+$output_retro"
+elif printf '%s' "$output_retro" | grep -q 'origin record missing'; then
+  pass
+else
+  fail "想定外の出力:
+$output_retro"
 fi
 
 # ── bootstrap.sh と doctor.sh の DCB_VERSION が一致する ──────────────────────

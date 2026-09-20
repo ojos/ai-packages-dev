@@ -123,6 +123,14 @@ check_origin_record() {
     ng "origin record malformed ($ORIGIN_REL_PATH): version= 行を読み取れません。乖離を診断できません"
     return 0
   fi
+  # 値が vX.Y.Z 形式であることを比較の前に検証する。dcb_version_lt は数値化できない
+  # 区分を 0 として扱うため、検証せずに渡すと "v0.11.0garbage" のような壊れた値でも
+  # 版番号の一部（0.11.0）だけを読んで比較が成立してしまい、壊れた記録を合格にする
+  # （実測）。
+  if ! [[ "$origin_version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    ng "origin record malformed ($ORIGIN_REL_PATH): version の値が vX.Y.Z 形式ではありません（recorded=$origin_version）。乖離を診断できません"
+    return 0
+  fi
 
   if dcb_version_lt "$origin_version" "$DCB_VERSION"; then
     warn "origin version is older than doctor.sh: recorded=$origin_version self=$DCB_VERSION（上流が更新されています。この判定は doctor.sh 自身の版が基準なので、取得し直した最新の doctor.sh でなければ検知できません）"

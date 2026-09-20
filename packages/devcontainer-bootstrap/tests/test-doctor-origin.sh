@@ -157,6 +157,26 @@ else
 $output"
 fi
 
+it "version の値が vX.Y.Z 形式でなければ FAIL で報告する（壊れた記録を合格にしない）"
+# 実測: "v0.11.0garbage" のように数字部分の前方一致だけで dcb_version_lt を
+# 通すと、末尾のゴミを無視して「版が新しい/一致」側へ倒れ、壊れた記録を
+# [OK] にしてしまっていた（PR #324 レビュー指摘）。
+out="$(base_out)"
+tmp_origin="$(mktemp "$TEST_TMP_ROOT/origin.XXXXXX")"
+{
+  echo "version=v0.11.0garbage"
+  grep -v '^version=' "$out$ORIGIN_REL"
+} > "$tmp_origin"
+mv "$tmp_origin" "$out$ORIGIN_REL"
+output="$(bash "$DOCTOR" --target-dir "$out" 2>&1)"
+code=$?
+if [[ $code -ne 0 ]] && printf '%s' "$output" | grep -q '\[FAIL\] origin record malformed.*v0\.11\.0garbage'; then
+  pass
+else
+  fail "壊れた版文字列を合格にしてしまった（exit=$code）:
+$output"
+fi
+
 it "版が一致すれば「上流が更新されている」と報告しない（対照群）"
 out="$(base_out)"
 output="$(bash "$DOCTOR" --target-dir "$out" 2>&1)"
