@@ -319,6 +319,44 @@ else
   fail "$SHORT_FAILS"
 fi
 
+# #322: 13 章「実装委譲パターン」は委譲する側（何を渡すか）までしか書いておらず、
+# 統合する側（複数レーンを束ねる側）の実務が無かった。足した節が見出しごと
+# 消えても検査が気づかない状態を避けるため、節の見出しと配下 6 項目の見出しを
+# 個別に確認する。文面の正しさではなく、見出しの存在だけを見る（本文の妥当性は
+# 機械判定できない）。
+CHAPTER13_FILE="$REPO_ROOT/.ai-playbook/shared-ai-rules.md"
+CHAPTER13_BODY="$(awk '/^## 13\./{flag=1} flag{print} /^## 14\./{exit}' "$CHAPTER13_FILE")"
+
+it "shared-ai-rules.md 13 章に「統合する側の実務」の節がある"
+if printf '%s\n' "$CHAPTER13_BODY" | grep -qxF '### 統合する側の実務'; then
+  pass
+else
+  fail "13 章に「### 統合する側の実務」の見出しが見つからない"
+fi
+
+it "「統合する側の実務」節に 6 項目の見出しが揃っている"
+REQUIRED_HEADINGS="#### 所有一覧の機械照合
+#### 所有の定義
+#### 波及先の洗い出し
+#### 正本文書の扱い
+#### 相乗りの防止
+#### 報告を鵜呑みにしない"
+MISSING_HEADINGS=""
+while IFS= read -r h; do
+  [[ -z "$h" ]] && continue
+  if ! printf '%s\n' "$CHAPTER13_BODY" | grep -qxF "$h"; then
+    MISSING_HEADINGS="${MISSING_HEADINGS}${h}
+"
+  fi
+done <<HEADINGSEOF
+$REQUIRED_HEADINGS
+HEADINGSEOF
+if [[ -z "$MISSING_HEADINGS" ]]; then
+  pass
+else
+  fail "見出しが欠けている: $MISSING_HEADINGS"
+fi
+
 # ── フィクスチャでの負例検査（リポジトリの実ファイルは書き換えない） ────────
 
 FIXTURE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/test-doc-section-refs.XXXXXX")"
