@@ -123,6 +123,52 @@ assert_ask   'gh api --method PUT repos/o/r/pulls/1/merge'
 assert_silent 'gh api repos/o/r/pulls/1/merge'
 assert_silent "grep -rn 'mergePullRequest' ."
 
+# ── 制御語の直後もコマンド位置として扱う（実測で判明した迂回）───────────────
+#
+# 区切り文字（; && || | (）の直後という条件だけでは、シェルの制御語を 1 つ
+# 前置くだけで「コマンド位置」の条件から外れて素通りしていた。
+assert_ask 'if gh pr merge 1; then :; fi' 'if の直後'
+assert_ask '! gh pr merge 1' '! の直後'
+assert_ask 'while gh pr merge 1; do :; done' 'while の直後'
+assert_ask 'until gh pr merge 1; do :; done' 'until の直後'
+assert_ask 'if false; then gh pr merge 1; fi' 'then の直後'
+assert_ask 'if false; then :; elif gh pr merge 1; then :; fi' 'elif の直後'
+assert_ask 'while false; do gh pr merge 1; done' 'do の直後'
+assert_ask 'if false; then :; else gh pr merge 1; fi' 'else の直後（第二意見の指摘で判明。列挙に無かった）'
+# 迂回対処の対照群: 制御語の後ろに素直に別コマンドが続くだけの形は、
+# 引き続き無関係なコマンドとして通す（制御語の追加が誤検知を増やしていない）。
+assert_silent 'if true; then echo hi; fi' 'if 直後の無関係なコマンド'
+assert_silent 'while true; do echo hi; done' 'while 直後の無関係なコマンド'
+assert_silent 'if true; then echo hi; else echo bye; fi' 'else 直後の無関係なコマンド'
+
+# ── コマンド境界の解析でのみ拾える形（列挙の正規表現は ) を境界に含まない）──
+#
+# ) は case 文の分岐区切りとして現れる。列挙（cmd_pos）の前置きには ) を含めて
+# いない（) を境界に加えると副作用が読みにくくなるため）が、コマンド境界の解析
+# （command_position_has）は ( と同じく ) も境界として扱うため、こちらは拾う。
+# 列挙だけでは素通りする実例であり、解析を足したことの効果を示す回帰でもある。
+assert_ask 'case x in a) gh pr merge 1;; esac' 'case 分岐の ) 直後（解析でのみ拾える）'
+
+# ── グループコマンド { ... }（解析でのみ拾える。列挙には意図的に加えていない）──
+#
+# { gh pr merge 1; } は実際にマージを実行するが、列挙（正規表現）へ { を境界と
+# して単純に加えると、echo hi { gh pr merge 1 のような「{ 以降も直前のコマンドの
+# 引数でしかなく、実際には実行されない」文字列まで拾ってしまう（実測）。
+# コマンド境界の解析は「その節でまだ語を 1 つも集めていない」ことを条件にできる
+# ため、真にコマンド位置にある { だけを区別できる。
+assert_ask '{ gh pr merge 1; }' '{ グループコマンドの開始（解析でのみ拾える）'
+# 対照群: { が他のコマンドの引数の途中に現れるだけの形（実際には gh pr merge を
+# 実行しない）までは拾わない。入れすぎて誤検知を増やさないことの確認。
+assert_silent 'echo hi { gh pr merge 1' '{ が引数の途中（実行されない形、対照群）'
+assert_silent 'echo hi { echo b' '{ が引数の途中の無関係なコマンド（対照群）'
+
+# ── in の直後は対象にしない（for のワードリストは実行されるコマンドではない）──
+#
+# for x in gh pr merge 1; do ...; done の「gh pr merge 1」は for が x へ順に
+# 代入する値であって、実行されるコマンドではない。in の直後をコマンド位置として
+# 扱うとここが誤検知になるため、意図的に対象外にしている。
+assert_silent 'for x in gh pr merge 1; do :; done' 'for の in 直後（ワードリスト、対照群）'
+
 # REST 経由の綴りの揺れ。--method=PUT（= 連結）・-XPUT（連結形）・--method put（小文字）は
 # いずれも意図的な迂回ではなく普通の綴りで、gh が実際に受理する（第二意見の指摘）。
 assert_ask   'gh api --method=PUT repos/o/r/pulls/1/merge'
@@ -133,6 +179,37 @@ assert_silent 'gh api --method=GET repos/o/r/pulls/1/merge'
 assert_silent 'gh api -XGET repos/o/r/pulls/1/merge'
 # merge エンドポイントを含まない行での PUT は対象にしない（同一行の条件を維持）。
 assert_silent 'gh api --method PUT repos/o/r/issues/1/labels'
+
+# ── 誤検知: 同一行の別コマンド（実測で判明した誤検知）───────────────────────
+#
+# merge エンドポイントと PUT が「同じ物理行」にあることだけを条件にすると、
+# ; & | で連結された無関係な 2 つのコマンドまで同じコマンドとして誤って
+# 一致する。判定の単位を「行」ではなく「コマンド節」にすることで区別する。
+assert_silent 'echo repos/o/r/pulls/1/merge; gh api --method PUT repos/o/r/issues/1/labels' \
+  '; で連結された無関係な 2 コマンド'
+assert_silent 'echo repos/o/r/pulls/1/merge && gh api --method PUT repos/o/r/issues/1/labels' \
+  '&& で連結された無関係な 2 コマンド'
+assert_silent 'gh api --method PUT repos/o/r/issues/1/labels | cat repos/o/r/pulls/1/merge' \
+  '| で連結された無関係な 2 コマンド'
+# 対照群: 同じコマンド節の中に両方があれば、引き続き検知する（区切り文字を
+# 導入したことで正しい検知まで壊していないことの確認）。
+assert_ask 'echo hi; gh api --method PUT repos/o/r/pulls/1/merge' \
+  '; の後ろの同一コマンド節に両方がある'
+
+# ── 節の切り出しはクォートを認識する（第二意見の指摘で判明。重い方の欠陥）───
+#
+# 誤検知を直すために ; & | を区切りとして扱う処理を入れたが、当初はクォートの
+# 中身や URL のクエリ文字列に現れる ; & | まで区切りとして扱っており、PUT の
+# 指定と merge エンドポイントが別々の節へ分断されて検知漏れになっていた
+# （実測）。誤検知を直すために入れた処理そのものが新しい迂回を作っていた形。
+# クォート認識の走査（for_each_clause）を PUT / merge エンドポイント判定と
+# コマンド位置判定の両方で共有し、二度と食い違わない構造にしている。
+assert_ask "gh api 'repos/o/r/pulls/1/merge?commit_title=foo&commit_message=bar' -X PUT" \
+  '単一引用符内の URL クエリの & で分断されない'
+assert_ask 'gh api repos/o/r/pulls/1/merge -f commit_message="fix bug & test" -X PUT' \
+  '二重引用符内の & で分断されない'
+assert_ask 'gh api -X PUT -f message="fix; test" repos/o/r/pulls/1/merge' \
+  '二重引用符内の ; で分断されない'
 
 it "壊れた JSON でも確認を求める（fail-open にしない）"
 # jq がコマンドを取り出せない場合はペイロード全体を検査対象にする。「取れなければ
