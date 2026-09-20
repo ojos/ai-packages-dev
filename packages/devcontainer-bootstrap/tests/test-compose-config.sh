@@ -183,10 +183,18 @@ it "生成された post-rebuild-check.sh が bash -n を通る"
 if bash -n "$PRC" 2>/dev/null; then pass; else fail "syntax error"; fi
 
 # ── doctor.sh の compose 配線検査 ─────────────────────────────────────────────
+#
+# 以下は compose 配線の構造検査だけを対象にするため、生成直後の
+# .devcontainer/ORIGIN（由来の記録）を取り除いてから devcontainer.json /
+# compose.yaml を直接書き換える。取り除かないと、この検査群が意図的に加える
+# 変更そのものを「生成物の由来」診断（issue #321）が検出してしまい、compose
+# 配線とは無関係な理由で doctor.sh の終了コードが変わる。由来の診断そのものは
+# test-doctor-origin.sh / test-origin-record.sh が別に検証する。
 
 DOCTOR="$PKG_DIR/doctor.sh"
 out="$(new_workdir)/p"
 run_bootstrap "$out" >/dev/null 2>&1
+rm -f "$out/.devcontainer/ORIGIN"
 dc="$out/.devcontainer/devcontainer.json"
 
 it "doctor: compose 配線が検査に通る"

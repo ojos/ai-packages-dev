@@ -110,21 +110,47 @@ extract_semver() {
   fi
 }
 
+# DCB の版の正本は、公開するタグ（$dcb_tag）そのもの。次の 5 箇所はそれぞれ独立した
+# 写しで、docs/release/RELEASE_EXECUTION_RUNBOOK.md「バージョンの正本」節が挙げる
+# 一覧と 1 対 1 に対応する。一覧を増減したら、ここの検査も同数に揃えること
+# （tests/test-dcb-version-anchors.sh が両者の件数を機械照合する）。
+#
+# bootstrap.sh / doctor.sh の DCB_VERSION は、生成物の由来記録
+# （.devcontainer/ORIGIN）と doctor.sh の自己診断が使う版で、README のバージョンとは
+# 別の場所に複製されている（2 ファイルは互いを参照できず、bootstrap.sh は curl で
+# 単体取得されうる）。README だけを更新して 2 ファイルを揃え忘れると、doctor.sh が
+# 自分自身の版を誤って報告するため、ここで一緒に照合する。
 validate_dcb_docs() {
   local dcb_tag="$1"
   local en="packages/devcontainer-bootstrap/README.md"
+  local bootstrap="packages/devcontainer-bootstrap/bootstrap.sh"
+  local doctor="packages/devcontainer-bootstrap/doctor.sh"
   local pinned="- \`$dcb_tag\`"
+  local dcb_version_line="DCB_VERSION=\"$dcb_tag\""
 
+  # 1. 見出し行が存在すること
   grep -q "Latest stable release:\|最新安定リリース:" "$en" || {
     echo "error: missing release section header in $en" >&2
     exit 1
   }
+  # 2. 固定行が一致すること
   grep -Fq -- "$pinned" "$en" || {
     echo "error: DCB README.md latest release does not match $dcb_tag" >&2
     exit 1
   }
+  # 3. 取得手順の TAG= が一致すること
   grep -q "TAG=$dcb_tag" "$en" || {
     echo "error: DCB README.md TAG does not match $dcb_tag" >&2
+    exit 1
+  }
+  # 4. bootstrap.sh の DCB_VERSION が一致すること
+  grep -Fq -- "$dcb_version_line" "$bootstrap" || {
+    echo "error: $bootstrap DCB_VERSION does not match $dcb_tag" >&2
+    exit 1
+  }
+  # 5. doctor.sh の DCB_VERSION が一致すること
+  grep -Fq -- "$dcb_version_line" "$doctor" || {
+    echo "error: $doctor DCB_VERSION does not match $dcb_tag" >&2
     exit 1
   }
 }

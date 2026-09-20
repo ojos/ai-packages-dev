@@ -36,6 +36,34 @@ PLAYBOOK_REL_ROOT=".ai-playbook"
 PLAYBOOK_DIR=""
 PLAYBOOK_TMP_ROOT=""
 
+# DCB 自身の版。生成物の由来記録（下記 ORIGIN_REL_PATH の `version=`）へ書き出す。
+#
+# バージョンの正本は公開するタグそのもので、正本の写しは計 5 箇所ある
+# （README.md の 3 箇所 + bootstrap.sh と doctor.sh のこの行。
+# docs/release/RELEASE_EXECUTION_RUNBOOK.md「バージョンの正本」節を参照）。
+# リリース準備のたびに 5 箇所すべてを同時に更新すること。doctor.sh 側にも
+# 同じリテラルを持つ（doctor.sh は curl で単体取得されうるため、bootstrap.sh を
+# 参照できない）。両者が食い違うと doctor.sh の「上流が更新されている」判定が
+# 自分自身の版を誤って報告するため、tests/test-origin-record.sh が bootstrap.sh /
+# doctor.sh の 2 箇所間の一致を、tests/test-dcb-version-anchors.sh が
+# RUNBOOK の記載件数と scripts/release-packages.sh の照合件数の一致を、
+# それぞれ機械照合する。
+DCB_VERSION="v0.11.0"
+
+# 生成物の由来記録の置き場。.ai-playbook/VERSION と同じ「取り込み側が生成する
+# 機械可読 key=value の記録」の流儀に揃える。.ai-playbook/
+# 配下に置かないのは、あちらは規範専用の記録（VERSION）が既に機能しており、
+# 二重に記録すると片方だけ更新されたときにどちらが正本か読めなくなるため。
+# .devcontainer/ は常に生成される唯一のディレクトリなので、常時生成物の置き場に選ぶ。
+ORIGIN_REL_PATH=".devcontainer/ORIGIN"
+
+# 既存ファイルを温存（skip）した絶対パスの一覧（改行区切り）。write_file /
+# apply_file_with_policy の両方が書き込みをせず温存したときに積む。
+# write_origin_record が「今回の実行で確実に生成されたか」を判定するために使う
+# （記録を消して 1 ファイルだけ改造し --force なしで再実行すると、
+# 改造後の内容がそのまま「変化なし」として記録されていた）。
+SKIPPED_DESTS=""
+
 usage() {
   # 1 行目は呼び出しに使われたパスをそのまま示す。開発リポジトリでは
   # packages/devcontainer-bootstrap/bootstrap.sh、公開配布物ではリポジトリ直下と
@@ -4187,6 +4215,7 @@ apply_file_with_policy() {
   case "$PLAYBOOK_CONFLICT_POLICY" in
     skip)
       echo "skip (exists): $dest"
+      SKIPPED_DESTS="${SKIPPED_DESTS}${dest}"$'\n'
       ;;
     overwrite)
       cp "$src" "$dest"
@@ -4201,6 +4230,7 @@ apply_file_with_policy() {
         echo "write: $dest (overwrite)"
       else
         echo "skip (declined): $dest"
+        SKIPPED_DESTS="${SKIPPED_DESTS}${dest}"$'\n'
       fi
       ;;
   esac
@@ -4249,6 +4279,44 @@ resolve_playbook_source_or_die() {
   if [[ -z "$(find "$PLAYBOOK_DIR" -type f -name '*.md' -print -quit 2>/dev/null)" ]]; then
     echo "error: no rule files found in playbook source: ${PLAYBOOK_FROM:-<adjacent checkout>}" >&2
     exit 1
+  fi
+}
+
+# install_playbook_rules が .ai-playbook/** 以外に配置する相対パスの一覧
+# （規範を配置する構成でのみ意味を持つ）。dry-run の計画表示（下記メイン処理）と
+# write_origin_record の由来記録が、この一覧を共通の抽出元として使う。
+#
+# 以前は由来記録がこの一覧を持たず、template_rel_paths /
+# conditional_template_rel_paths（DCB 自身のテンプレート）しか記録していなかった。
+# この票の動機だったファイル（利用プロジェクトで見つかった「review-gate.yml が
+# 旧版」「second-opinion-review.sh に上流のバグ修正が未反映」）は、まさにこの
+# 一覧が挙げる規範経由の出力であり、記録に無いため doctor.sh が診断できなかった
+# （実測）。
+#
+# .ai-playbook/** 配下（規範ファイル本体・VERSION）は対象外のまま。あちらは
+# --playbook-conflict-policy と .ai-playbook/VERSION が別に担っており、二重に
+# 記録すると片方だけ更新されたときにどちらが正本か読めなくなる。
+playbook_installed_rel_paths() {
+  if should_install_playbook; then
+    printf '%s\n' \
+      '.github/project-ai-rules.md' \
+      'CLAUDE.md' \
+      '.github/copilot-instructions.md' \
+      'scripts/second-opinion-review.sh'
+    if has_with copilot-review; then
+      printf '%s\n' \
+        '.github/workflows/copilot-review.yml' \
+        '.github/workflows/review-gate.yml' \
+        'scripts/review-usable.sh' \
+        'scripts/check-review-usable.sh'
+    fi
+    if has_with claude; then
+      printf '%s\n' \
+        '.claude/skills/intake/SKILL.md' \
+        '.claude/skills/land/SKILL.md' \
+        '.claude/agents/explorer.md' \
+        '.claude/agents/implementer.md'
+    fi
   fi
 }
 
@@ -4391,6 +4459,7 @@ write_file() {
   out="$OUTPUT_DIR/$rel"
   if [[ -e "$out" && "$FORCE" != "true" ]]; then
     echo "skip (exists): $out"
+    SKIPPED_DESTS="${SKIPPED_DESTS}${out}"$'\n'
     return 0
   fi
   mkdir -p "$(dirname "$out")"
@@ -4407,6 +4476,110 @@ write_file() {
   chmod 644 "$out"
   [[ "$out" == *.sh ]] && chmod +x "$out"
   echo "write: $out"
+}
+
+# ── 生成物の由来の記録 ──────────────────────────────────────────────────────
+
+# ファイルの sha256 を計算する。sha256sum は GNU coreutils 前提で macOS 既定には無い
+# （shasum -a 256 を使う）。両方無い環境向けに openssl も試す。いずれも無ければ、
+# 生成そのものは終わっているのに由来だけ記録できない中途半端な状態を隠さず落とす。
+dcb_file_sha256() {
+  local f="$1"
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$f" | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$f" | awk '{print $1}'
+  elif command -v openssl >/dev/null 2>&1; then
+    openssl dgst -sha256 "$f" | awk '{print $NF}'
+  else
+    echo "error: sha256 を計算できるコマンドが見つかりません（sha256sum / shasum / openssl のいずれかが必要です）" >&2
+    exit 1
+  fi
+}
+
+# 選択された --with-* フラグを、重複を除いた昇順カンマ区切りへ整形する。
+# 順序を固定するのは、フラグの指定順が違っても同じ集合なら記録が一致するようにする
+# ため（受け入れ条件「同じ版・同じフラグで生成し直すと記録が一致する」）。
+with_flags_csv() {
+  local sorted line out="" w
+  sorted="$(for w in ${WITH_SET[@]+"${WITH_SET[@]}"}; do printf '%s\n' "$w"; done | sort -u)"
+  while IFS= read -r line; do
+    [[ -n "$line" ]] || continue
+    if [[ -z "$out" ]]; then out="$line"; else out="$out,$line"; fi
+  done <<EOF
+$sorted
+EOF
+  printf '%s' "$out"
+}
+
+# .devcontainer/ORIGIN を生成する。DCB の版・使った --with-* フラグ・各生成物の
+# ハッシュを記録し、doctor.sh が生成後の乖離（生成時からの変更・上流の更新）を
+# 診断するために使う。.ai-playbook/VERSION と同じ、機械可読な
+# key=value 形式にする。
+#
+# ハッシュの対象は sorted_rels（DCB 自身のテンプレート）と
+# playbook_installed_rel_paths（規範経由の非 .ai-playbook 出力）の和集合。
+# .ai-playbook/** 本体と .ai-playbook/VERSION は対象外（あちらは
+# --playbook-conflict-policy と .ai-playbook/VERSION が別に担う。二重に記録すると
+# 片方だけ更新されたときにどちらが正本か読めなくなる）。
+#
+# 記録は「今回の実行で確実に生成された」ことが分かる場合にだけ作る。対象のうち
+# 1 つでも skip（既存を温存）されていれば、その現物の由来を今回の実行は保証
+# できない。それでも作ってしまうと、改造済み・古いファイルが「いま生成した」
+# 記録として残り、README の「記録の無い生成先への遡及はできない」という契約を
+# 実装が破る（実測: 記録だけ消して 1 ファイルを改造 → --force なしで再実行 →
+# 改造後の内容が「変化なし」として記録された）。
+#
+# --force は DCB 自身のテンプレート（write_file）にしか効かない。規範経由の出力
+# （install_playbook_rules）は独立した --playbook-conflict-policy に従うため、
+# 「--force が付いていれば必ず記録する」という設計にはできない（--force を付けても
+# 既定の --playbook-conflict-policy=skip のままなら、規範経由の出力はやはり
+# skip されうる）。そのため「対象のどれか 1 つでも skip されていたら作らない」を
+# 採用する（--force の有無を問わず一律に適用する）。作り直したい場合は、既存の
+# 生成物を直したときと同じく --force（および必要なら
+# --playbook-conflict-policy overwrite）で明示的に再生成すること。
+write_origin_record() {
+  local dest="$OUTPUT_DIR/$ORIGIN_REL_PATH" tmp rel h flags_csv origin_rels skipped_rel=""
+  if [[ -e "$dest" && "$FORCE" != "true" ]]; then
+    echo "skip (exists): $dest"
+    return 0
+  fi
+
+  origin_rels="$( { printf '%s\n' "$sorted_rels"; playbook_installed_rel_paths; } | sort -u)"
+
+  while IFS= read -r rel; do
+    [[ -n "$rel" ]] || continue
+    if printf '%s' "$SKIPPED_DESTS" | grep -Fxq -- "$OUTPUT_DIR/$rel"; then
+      skipped_rel="$rel"
+      break
+    fi
+  done <<EOF
+$origin_rels
+EOF
+  if [[ -n "$skipped_rel" ]]; then
+    echo "skip (origin not recorded): $dest — $skipped_rel already existed and was not (re)written this run; cannot vouch for its origin" >&2
+    return 0
+  fi
+
+  mkdir -p "$(dirname "$dest")"
+  tmp="$(mktemp "${TMPDIR:-/tmp}/dcb-origin.XXXXXX")"
+  flags_csv="$(with_flags_csv)"
+  {
+    echo "# devcontainer-bootstrap が記録した生成物の由来。"
+    echo "# doctor.sh はこの記録と現物を突き合わせて乖離を診断する。手で編集しないこと。"
+    echo "version=$DCB_VERSION"
+    echo "flags=$flags_csv"
+    while IFS= read -r rel; do
+      [[ -n "$rel" ]] || continue
+      h="$(dcb_file_sha256 "$OUTPUT_DIR/$rel")"
+      echo "hash:$rel=$h"
+    done <<EOF
+$origin_rels
+EOF
+  } > "$tmp"
+  mv "$tmp" "$dest"
+  chmod 644 "$dest"
+  echo "write: $dest"
 }
 
 # ── メイン処理 ──────────────────────────────────────────────────────────────────────
@@ -4453,6 +4626,9 @@ if [[ "$DRY_RUN" == "true" ]]; then
 $sorted_rels
 EOF
 
+  # 由来の記録は装備の選択によらず常に生成する（--with-playbook の有無にも依らない）。
+  echo "plan: $OUTPUT_DIR/$ORIGIN_REL_PATH"
+
   if [[ "$MANAGE_GITIGNORE" == "true" ]]; then
     echo "plan: $OUTPUT_DIR/.gitignore (managed section update)"
     if [[ -n "$GITIGNORE_TARGETS" ]]; then
@@ -4470,22 +4646,12 @@ EOF
       [[ "$rel" == "README.md" || "$rel" == "CHANGELOG.md" ]] && continue
       echo "plan: $OUTPUT_DIR/$PLAYBOOK_REL_ROOT/$rel"
     done < <(find "$PLAYBOOK_DIR" -type f -name '*.md' | sort)
-    echo "plan: $OUTPUT_DIR/.github/project-ai-rules.md"
-    echo "plan: $OUTPUT_DIR/CLAUDE.md"
-    echo "plan: $OUTPUT_DIR/.github/copilot-instructions.md"
-    echo "plan: $OUTPUT_DIR/scripts/second-opinion-review.sh"
-    if has_with copilot-review; then
-      echo "plan: $OUTPUT_DIR/.github/workflows/copilot-review.yml"
-      echo "plan: $OUTPUT_DIR/.github/workflows/review-gate.yml"
-      echo "plan: $OUTPUT_DIR/scripts/review-usable.sh"
-      echo "plan: $OUTPUT_DIR/scripts/check-review-usable.sh"
-    fi
-    if has_with claude; then
-      echo "plan: $OUTPUT_DIR/.claude/skills/intake/SKILL.md"
-      echo "plan: $OUTPUT_DIR/.claude/skills/land/SKILL.md"
-      echo "plan: $OUTPUT_DIR/.claude/agents/explorer.md"
-      echo "plan: $OUTPUT_DIR/.claude/agents/implementer.md"
-    fi
+    # install_playbook_rules が .ai-playbook/** 以外に配置する一覧は
+    # playbook_installed_rel_paths が単一の抽出元（write_origin_record と共有）。
+    while IFS= read -r rel; do
+      [[ -n "$rel" ]] || continue
+      echo "plan: $OUTPUT_DIR/$rel"
+    done < <(playbook_installed_rel_paths)
     echo "plan: $OUTPUT_DIR/$PLAYBOOK_REL_ROOT/VERSION"
   fi
   exit 0
@@ -4505,5 +4671,11 @@ fi
 if should_install_playbook; then
   install_playbook_rules
 fi
+
+# 由来の記録は、DCB 自身のテンプレートと、規範経由で配置される非 .ai-playbook
+# 出力（install_playbook_rules）の両方が揃ってから書く。install_playbook_rules
+# より先に書くと、この票の動機だったファイル（review-gate.yml /
+# second-opinion-review.sh 等）が記録に載らない（実測）。
+write_origin_record
 
 echo "[bootstrap] completed"
