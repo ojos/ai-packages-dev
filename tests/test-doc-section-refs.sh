@@ -193,7 +193,10 @@ BODY_QUOTE_ALLOWLIST="packages/devcontainer-bootstrap/README.md	.ai-playbook/rol
 
 is_allowed_body_quote() {
   local src="$1" target="$2" section="$3"
-  printf '%s\n' "$BODY_QUOTE_ALLOWLIST" | grep -qxF -- "$src	$target	$section"
+  # -q を外し >/dev/null で EOF まで読ませる。BODY_QUOTE_ALLOWLIST は増える前提の
+  # 許可リストで（上記コメント「件数が黙って増えない形にしておく」）、行数が
+  # 増えたときに同じ SIGPIPE のリスクを持ち込まないため、他の箇所と書き方を揃える。
+  printf '%s\n' "$BODY_QUOTE_ALLOWLIST" | grep -xF -- "$src	$target	$section" >/dev/null
 }
 
 # validate_ref <base_dir> <参照元ファイル> <行> <パス断片> <節名> <改行区切りの全 .md 一覧>
@@ -270,7 +273,11 @@ it "マルチバイト節名（intake フロー）を取りこぼさない"
 # 壊れていないのに赤を出す（tests/test-template-mirror.sh が抽出のアンカーに
 # 行番号を使わないのと同じ理由）。見たいのは「この参照を抽出できたか」であって
 # 「何行目にあるか」ではない。
-if printf '%s\n' "$REFS" | grep -qE "$(printf '^CLAUDE\\.md\t[0-9]+\t\\.github/project-ai-rules\\.md\tintake フロー$')"; then
+# $REFS はリポジトリ全体から抽出した参照一覧で、リポジトリが育つほど伸びる。
+# -q は最初の一致でパイプを閉じるため、producer（printf）が書き込み中に閉じられ
+# SIGPIPE で死にうる。set -uo pipefail 下では判定が反転しかねないため、-q を外し
+# >/dev/null で EOF まで読ませる。
+if printf '%s\n' "$REFS" | grep -E "$(printf '^CLAUDE\\.md\t[0-9]+\t\\.github/project-ai-rules\\.md\tintake フロー$')" >/dev/null; then
   pass
 else
   fail "CLAUDE.md の「intake フロー」参照を抽出できなかった"
@@ -324,17 +331,38 @@ fi
 # 消えても検査が気づかない状態を避けるため、節の見出しと配下 6 項目の見出しを
 # 個別に確認する。文面の正しさではなく、見出しの存在だけを見る（本文の妥当性は
 # 機械判定できない）。
+#
+# grep -q は producer の書き込み中にパイプを閉じうる。set -uo pipefail 下では
+# producer が SIGPIPE で死に、判定が反転しかねない（tests/test-pipefail-sigpipe.sh
+# が検出する形と同じ）。producer はこのファイルの外にあり将来も伸びるため、
+# 現時点でパイプバッファに収まっていることを理由に据え置かない。-q を外し、
+# >/dev/null で EOF まで読ませる（同ファイルの書き方に合わせる）。
 CHAPTER13_FILE="$REPO_ROOT/.ai-playbook/shared-ai-rules.md"
 CHAPTER13_BODY="$(awk '/^## 13\./{flag=1} flag{print} /^## 14\./{exit}' "$CHAPTER13_FILE")"
 
 it "shared-ai-rules.md 13 章に「統合する側の実務」の節がある"
-if printf '%s\n' "$CHAPTER13_BODY" | grep -qxF '### 統合する側の実務'; then
+if printf '%s\n' "$CHAPTER13_BODY" | grep -xF '### 統合する側の実務' >/dev/null; then
   pass
 else
   fail "13 章に「### 統合する側の実務」の見出しが見つからない"
 fi
 
-it "「統合する側の実務」節に 6 項目の見出しが揃っている"
+# 「統合する側の実務」の**配下**だけを取り出す。13 章の本文全体を検索すると、6 項目の
+# 見出しがどこにあっても（親節の外へ移されていても）一致してしまい、テスト名が
+# 保証しているはずの親子関係を検査していないことになる（Copilot レビューの指摘）。
+#
+# 打ち切りは「次の見出しで、かつ #### ではないもの」で行う。見出しレベルの判定に
+# 区間指定（`{1,3}`）を使わないのは、区間指定が awk 実装間で移植性が無いため
+# （tests/test-shell-portability.sh の実測）。`#+` は使えるが「1〜3 個」を直接は
+# 表せないので、「#### 」（4 個ちょうど）だけを除外する形で組む。配下の 6 項目は
+# すべて #### のため、これで打ち切らずに拾い続けられる。
+SECTION_BODY="$(printf '%s\n' "$CHAPTER13_BODY" | awk '
+  found && /^#+[ \t]/ && !/^####[ \t]/ { exit }
+  /^### 統合する側の実務$/ { found = 1; next }
+  found { print }
+')"
+
+it "「統合する側の実務」節の配下に 6 項目の見出しが揃っている（節の外は数えない）"
 REQUIRED_HEADINGS="#### 所有一覧の機械照合
 #### 所有の定義
 #### 波及先の洗い出し
@@ -344,7 +372,7 @@ REQUIRED_HEADINGS="#### 所有一覧の機械照合
 MISSING_HEADINGS=""
 while IFS= read -r h; do
   [[ -z "$h" ]] && continue
-  if ! printf '%s\n' "$CHAPTER13_BODY" | grep -qxF "$h"; then
+  if ! printf '%s\n' "$SECTION_BODY" | grep -xF "$h" >/dev/null; then
     MISSING_HEADINGS="${MISSING_HEADINGS}${h}
 "
   fi
@@ -354,7 +382,7 @@ HEADINGSEOF
 if [[ -z "$MISSING_HEADINGS" ]]; then
   pass
 else
-  fail "見出しが欠けている: $MISSING_HEADINGS"
+  fail "見出しが節の配下に無い（消えたか、親節の外にある）: $MISSING_HEADINGS"
 fi
 
 # ── フィクスチャでの負例検査（リポジトリの実ファイルは書き換えない） ────────
