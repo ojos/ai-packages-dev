@@ -89,7 +89,7 @@ dry-run（`execute: false`）が `[plan]` 行として出力する。
 | 2 | 作業ツリーが clean | 常時 | `require_clean_worktree` |
 | 3 | タグ形式が `vX.Y.Z` | 指定した版ごと | `extract_semver` |
 | 4 | 指定バージョンが未公開（DCB は Release の有無、ai-playbook はタグの有無で判定） | 指定した版ごと | `require_version_unpublished` / `require_tag_unpublished` |
-| 5 | DCB README の固定バージョン照合（3 箇所。「バージョンの正本」節を参照） | `--dcb-version` 指定時 | `validate_dcb_docs` |
+| 5 | DCB のバージョン正本照合（5 箇所。「バージョンの正本」節を参照） | `--dcb-version` 指定時 | `validate_dcb_docs` |
 | 6 | Markdown の相対リンク・アンカー検証（配下の `README*.md` が対象） | `--dcb-version` 時は `packages/devcontainer-bootstrap/` と `.ai-playbook/`、`--playbook-version` 時は `.ai-playbook/` | `validate_markdown_links_in_tree` |
 | 7 | DCB 機能テスト `packages/devcontainer-bootstrap/tests/run-tests.sh`（約 4 分かかる） | `--dcb-version` 指定時 | `run_dcb_tests` |
 
@@ -116,11 +116,29 @@ workflow の `dcb-version` / `playbook-version` に渡す値も同じ `vX.Y.Z` �
 
 ## バージョンの正本
 
-- DCB: `packages/devcontainer-bootstrap/README.md` の固定バージョン。
-  preflight の `validate_dcb_docs` が次の **3 箇所**を照合し、1 つでも `dcb-version` と揃わなければ落ちる。
-  1. 見出し行 `最新安定リリース:`（または `Latest stable release:`）が存在すること
-  2. 固定行 `` - `vX.Y.Z` `` が存在すること
-  3. 取得手順の `TAG=vX.Y.Z` が一致すること
+- DCB: **版そのものの正本は、公開するタグ**（workflow の `dcb-version` 入力、`vX.Y.Z`）である。
+  `packages/devcontainer-bootstrap/README.md` の 3 箇所と、
+  `packages/devcontainer-bootstrap/bootstrap.sh` / `doctor.sh` の `DCB_VERSION` は、
+  いずれもこのタグの**独立した写し**であり、5 箇所は対等（どちらかがどちらかから
+  自動生成される関係にはない）。リリース準備で人手によりすべて揃える。
+  preflight の `validate_dcb_docs` が次の **5 箇所**を照合し、1 つでも `dcb-version` と揃わなければ落ちる。
+  1. `README.md` の見出し行 `最新安定リリース:`（または `Latest stable release:`）が存在すること
+  2. `README.md` の固定行 `` - `vX.Y.Z` `` が存在すること
+  3. `README.md` の取得手順の `TAG=vX.Y.Z` が一致すること
+  4. `bootstrap.sh` の `DCB_VERSION="vX.Y.Z"` が一致すること
+  5. `doctor.sh` の `DCB_VERSION="vX.Y.Z"` が一致すること
+
+  4・5 は生成物の由来記録（`.devcontainer/ORIGIN`）と `doctor.sh` の自己診断（ネットワークを
+  使わず、自身に埋め込んだ版で上流の更新を判定する）が使う値で、`bootstrap.sh` /
+  `doctor.sh` はそれぞれ単体取得されうるため互いを参照できず、値を複製で持つ。
+  `bootstrap.sh` と `doctor.sh` の**間**の整合は
+  `packages/devcontainer-bootstrap/tests/test-origin-record.sh` が別に機械照合する
+  （あちらは 2 ファイル間の整合を見ており、ここでの `validate_dcb_docs` は
+  **リリースするタグとの**整合を見ている。見ているものが違うため両方を残す）。
+
+  RUNBOOK 側のこの一覧と `validate_dcb_docs` の照合件数が一致することは
+  `tests/test-dcb-version-anchors.sh` が機械照合する。一覧を増減したら
+  `validate_dcb_docs` 側も同数に揃えること。
 - ai-playbook: リリース時に `playbook-version` で指定するタグ（README 側の照合はない）
 
 ## workflow の入力
@@ -145,7 +163,7 @@ workflow の `dcb-version` / `playbook-version` に渡す値も同じ `vX.Y.Z` �
 
 `execute: true` は `main` からしか起動できない。次をすべてコミットし、PR を経て `main` へマージしてから起動する。
 
-- DCB を出す場合、`packages/devcontainer-bootstrap/README.md` の 3 箇所（「バージョンの正本」節）が目的の版へ更新済みであること。
+- DCB を出す場合、バージョンの正本 5 箇所（「バージョンの正本」節。`README.md` の 3 箇所 + `bootstrap.sh` + `doctor.sh` の `DCB_VERSION`）が目的の版へ更新済みであること。
 - 各パッケージの変更点をリリースノートへ追記していること。
 
   | パッケージ | リリースノート |
