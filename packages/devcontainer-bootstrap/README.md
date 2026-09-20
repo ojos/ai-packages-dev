@@ -239,6 +239,7 @@ tar -xzf PACKAGE_ARCHIVE.tar.gz
 | `CLAUDE.md` / `.github/copilot-instructions.md` | 実行環境の入口ファイル（3 層の優先順位を配線） |
 | `scripts/second-opinion-review.sh` | 第二意見レビューの実行体。`scripts/loop-gate.sh` が存在すれば自動で直列化する。既定は `gemini` CLI（Antigravity CLI への切り替えにも対応するが、`agy` の導入はこの生成器の対象外） |
 | `.claude/skills/intake/SKILL.md` | Claude Code 向け intake 起点スキル（`--with-claude` 指定時のみ）。規範を複製せず `.ai-playbook/intake/` を参照するだけの薄いスキル |
+| `.claude/skills/land/SKILL.md` | Claude Code 向け PR 確認・マージ起点スキル（`--with-claude` 指定時のみ）。判定基準を複製せず `.ai-playbook/review-workflow.md` と `.ai-playbook/task-playbooks/pr-review.md` を参照する。マージ直前の確認そのものは `scripts/confirm-merge-hook.sh`（下記）が機構として保証する |
 | `.claude/agents/explorer.md` / `.claude/agents/implementer.md` | Claude Code 向け委譲先エージェント定義（`--with-claude` 指定時のみ）。`model` と `tools` を frontmatter で固定する。判定の導線は規範側（`shared-ai-rules.md` の「実装委譲パターン」）が持ち、ここでは再定義しない |
 
 取得元は次の順で解決します。
@@ -656,6 +657,7 @@ OAuth トークン（`CLAUDE_CODE_OAUTH_TOKEN`）を `remoteEnv` へ注入する
 - `scripts/second-opinion-review.sh`（第二意見レビュー。`scripts/loop-gate.sh` が存在を検出して自動で直列化します。上記「ループコーディング支援」参照）
 - `.github/workflows/copilot-review.yml` / `.github/workflows/review-gate.yml` / `scripts/review-usable.sh` / `scripts/check-review-usable.sh`（`--with-copilot-review` を併せて選択した場合のみ。4 本で 1 組。下記参照）
 - `.claude/skills/intake/SKILL.md`（`--with-claude` を併せて指定した場合のみ。intake 起点スキル）
+- `.claude/skills/land/SKILL.md`（`--with-claude` を併せて指定した場合のみ。PR 確認・マージ起点スキル）
 - `.claude/agents/explorer.md` / `.claude/agents/implementer.md`（`--with-claude` を併せて指定した場合のみ。委譲先エージェント定義）
 
 `--with-aws` / `--with-gcp` のいずれかを選択した場合は、加えて次を出力します（規範の配置は前提としません）。
@@ -745,7 +747,7 @@ github/gitignore のテンプレートは言語・OS・エディタの生成物�
 | `--with-claude` | `.claude/worktrees/` | 中身はリポジトリ全体のチェックアウトそのもので、除外しないと `git add .` で**リポジトリが自分自身を抱え込みます** |
 | `--with-aws` / `--with-gcp` | `**/.terraform/*` / `*.tfstate` / `*.tfstate.*` / `*.tfvars` / `*.tfvars.json` / `tfplan` / `*.tfplan` / `crash.log` / `crash.*.log` / `override.tf` 系 / `.terraformrc` / `terraform.rc` | **tfstate は機密を平文で保持します。** tfvars も同様に機密を含みやすく、plan の出力は**変数の値が解決済みで展開される**ため state / tfvars と同じ理由で機密が載ります（`-out=tfplan` が慣用のため、拡張子なしと `*.tfplan` の両方を書きます） |
 
-> **`.claude/` はディレクトリごと除外しません。** `.claude/skills/` には追跡する成果物（intake 起点スキル）が入るため、`.claude/worktrees/` だけを除外します。
+> **`.claude/` はディレクトリごと除外しません。** `.claude/skills/` には追跡する成果物（intake 起点スキル・land 起点スキル）が入るため、`.claude/worktrees/` だけを除外します。
 
 > **`.terraform.lock.hcl` は追跡します。** プロバイダ版の固定に必要なため、意図して除外していません（管理セクション内にもその旨のコメントを出力します）。
 

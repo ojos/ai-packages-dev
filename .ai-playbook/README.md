@@ -36,7 +36,7 @@
 | `loop-workflow.md` | ループコーディング運用の規範（受け入れ検証の機械ゲート化・verify ランナー契約・収束） |
 | `loop-coding-guide.md` | ループコーディングの解説ガイド（従来ワークフローとの違い・考え方。`loop-workflow.md` の解説版） |
 | `intake/` | intake テンプレート、相談テンプレート、判定 reason code |
-| `templates/` | 導入用の雛形 10 種（`entry.md` 実行環境の入口ファイル / `project-ai-rules.md` プロジェクト共通ルール / `second-opinion-review.sh` 第二意見レビューの実装例 / `copilot-review.yml` リモート最終ゲートの要求側の実装例 / `review-gate.yml` リモート最終ゲートの確認側の実装例 / `review-usable.sh` 確認側が使う「読まれたか」の判定本体 / `check-review-usable.sh` 上記の表駆動の自己検査 / `claude-skill-intake.md` Claude Code の intake 起点スキル / `claude-agent-explorer.md`・`claude-agent-implementer.md` Claude Code の委譲先エージェント定義） |
+| `templates/` | 導入用の雛形 11 種（`entry.md` 実行環境の入口ファイル / `project-ai-rules.md` プロジェクト共通ルール / `second-opinion-review.sh` 第二意見レビューの実装例 / `copilot-review.yml` リモート最終ゲートの要求側の実装例 / `review-gate.yml` リモート最終ゲートの確認側の実装例 / `review-usable.sh` 確認側が使う「読まれたか」の判定本体 / `check-review-usable.sh` 上記の表駆動の自己検査 / `claude-skill-intake.md` Claude Code の intake 起点スキル / `claude-skill-land.md` Claude Code の PR 確認・マージ起点スキル / `claude-agent-explorer.md`・`claude-agent-implementer.md` Claude Code の委譲先エージェント定義） |
 | `.gitignore` | このパッケージを開発するときの追跡除外設定。規範ではないため配布・取り込みの対象外（`shared-ai-rules.md` 14 章） |
 
 共通ルールの補足として、AI からの質問は一問ずつ行い、各質問には意図を添え、回答は選択肢優先で提示します。
@@ -184,18 +184,23 @@ chmod +x scripts/second-opinion-review.sh
 
 この雛形は認証手段の違う 2 つの CLI から選べます（`--engine gemini|antigravity`。既定は `gemini`）。どの CLI をどう導入するかはプロジェクト層が決めます。判定ロジックはエンジンによらず 1 か所に集約してあり、エンジンごとに違うのは CLI 名・認証・差分の渡し方だけです。
 
-### 5. intake 起点を配線する（Claude Code を使う場合・任意）
+### 5. Claude Code 向けスキルを配線する（Claude Code を使う場合・任意）
 
-入口ファイルは「読まれる」だけで「起動する」機構を持ちません。Claude Code では skill が起点になるため、実装依頼を受けた瞬間に intake 判定へ入る配線として、規範を参照するだけの薄いスキルを 1 つ置きます。
+入口ファイルは「読まれる」だけで「起動する」機構を持ちません。Claude Code では skill が起点になるため、規範を参照するだけの薄いスキルを置きます。
 
 ```bash
 # Claude Code の機構はスキル定義ファイル名を SKILL.md に固定するため、
 # lower-kebab-case の雛形名から改名して配置する（shared-ai-rules.md 8 章の例外）。
-mkdir -p .claude/skills/intake
+mkdir -p .claude/skills/intake .claude/skills/land
 cp .ai-playbook/templates/claude-skill-intake.md .claude/skills/intake/SKILL.md
+cp .ai-playbook/templates/claude-skill-land.md .claude/skills/land/SKILL.md
 ```
 
-このスキルは判定基準・`reason_code` 一覧・intake 票の項目定義を複製せず、`.ai-playbook/intake/` と `.ai-playbook/role-contracts/intake-manager.md` を参照するだけです。Copilot 等 skill 機構を持たない実行環境は、同じ規範を各環境の機構で参照する形になります。
+**intake 起点** は、実装依頼を受けた瞬間に intake 判定へ入るための配線です。判定基準・`reason_code` 一覧・intake 票の項目定義を複製せず、`.ai-playbook/intake/` と `.ai-playbook/role-contracts/intake-manager.md` を参照するだけです。
+
+**land 起点** は、PR を作ったあと利用者の指示を待たずに確認・マージへ進むための配線です。指摘を解決済みとみなす条件、打ち切りの規則、指摘の却下、差分の読み方を複製せず、`.ai-playbook/review-workflow.md` と `.ai-playbook/task-playbooks/pr-review.md` を参照するだけです。マージの承認そのものは、実行環境がツール実行の前に判定を差し込める機構を持つ場合に、その機構でマージ直前に確認を挟む形で担保します（`.ai-playbook/role-contracts/closer.md`「手動承認は機構で保証する」）。この機構自体は雛形に含まれないため、導入先で別途用意してください。
+
+Copilot 等 skill 機構を持たない実行環境は、同じ規範を各環境の機構で参照する形になります。
 
 あわせて、委譲先のエージェント定義を置きます。`model` と `tools` を frontmatter で固定するのが目的で、**指示文による呼びかけは迂回できますが、実行環境が読む機構は迂回できません**（`shared-ai-rules.md` 12 章）。
 
@@ -237,7 +242,7 @@ chmod +x scripts/review-usable.sh scripts/check-review-usable.sh
 | 2. 3 層構造を配線する | 実施する（`.github/project-ai-rules.md` と入口ファイル 2 種） |
 | 3. プロジェクト固有の値を埋める | **実施しない。** 内容の判断が必要で自動化できないため、生成後に手で埋める |
 | 4. 第二意見レビューを用意する | 実施する（`scripts/second-opinion-review.sh` を実行可能属性付きで配置） |
-| 5. intake 起点を配線する | Claude Code の装備を選んだ場合のみ実施する |
+| 5. Claude Code 向けスキルを配線する | Claude Code の装備を選んだ場合のみ実施する（intake 起点・land 起点とも） |
 | 6. リモート最終ゲートを配線する | 該当のレビュー機構を選んだ場合のみ実施する |
 
 DCB は雛形の内容を持たず、このパッケージの `templates/` をコピーするだけです。正本はこのパッケージ側にあります。
