@@ -123,6 +123,30 @@ assert_ask   'gh api --method PUT repos/o/r/pulls/1/merge'
 assert_silent 'gh api repos/o/r/pulls/1/merge'
 assert_silent "grep -rn 'mergePullRequest' ."
 
+# ── 制御語の直後もコマンド位置として扱う（実測で判明した迂回）───────────────
+#
+# 区切り文字（; && || | (）の直後という条件だけでは、シェルの制御語を 1 つ
+# 前置くだけで「コマンド位置」の条件から外れて素通りしていた。
+assert_ask 'if gh pr merge 1; then :; fi' 'if の直後'
+assert_ask '! gh pr merge 1' '! の直後'
+assert_ask 'while gh pr merge 1; do :; done' 'while の直後'
+assert_ask 'until gh pr merge 1; do :; done' 'until の直後'
+assert_ask 'if false; then gh pr merge 1; fi' 'then の直後'
+assert_ask 'if false; then :; elif gh pr merge 1; then :; fi' 'elif の直後'
+assert_ask 'while false; do gh pr merge 1; done' 'do の直後'
+# 迂回対処の対照群: 制御語の後ろに素直に別コマンドが続くだけの形は、
+# 引き続き無関係なコマンドとして通す（制御語の追加が誤検知を増やしていない）。
+assert_silent 'if true; then echo hi; fi' 'if 直後の無関係なコマンド'
+assert_silent 'while true; do echo hi; done' 'while 直後の無関係なコマンド'
+
+# ── コマンド境界の解析でのみ拾える形（列挙の正規表現は ) を境界に含まない）──
+#
+# ) は case 文の分岐区切りとして現れる。列挙（cmd_pos）の前置きには ) を含めて
+# いない（) を境界に加えると副作用が読みにくくなるため）が、コマンド境界の解析
+# （command_position_has）は ( と同じく ) も境界として扱うため、こちらは拾う。
+# 列挙だけでは素通りする実例であり、解析を足したことの効果を示す回帰でもある。
+assert_ask 'case x in a) gh pr merge 1;; esac' 'case 分岐の ) 直後（解析でのみ拾える）'
+
 # REST 経由の綴りの揺れ。--method=PUT（= 連結）・-XPUT（連結形）・--method put（小文字）は
 # いずれも意図的な迂回ではなく普通の綴りで、gh が実際に受理する（第二意見の指摘）。
 assert_ask   'gh api --method=PUT repos/o/r/pulls/1/merge'
@@ -133,6 +157,22 @@ assert_silent 'gh api --method=GET repos/o/r/pulls/1/merge'
 assert_silent 'gh api -XGET repos/o/r/pulls/1/merge'
 # merge エンドポイントを含まない行での PUT は対象にしない（同一行の条件を維持）。
 assert_silent 'gh api --method PUT repos/o/r/issues/1/labels'
+
+# ── 誤検知: 同一行の別コマンド（実測で判明した誤検知）───────────────────────
+#
+# merge エンドポイントと PUT が「同じ物理行」にあることだけを条件にすると、
+# ; & | で連結された無関係な 2 つのコマンドまで同じコマンドとして誤って
+# 一致する。判定の単位を「行」ではなく「コマンド節」にすることで区別する。
+assert_silent 'echo repos/o/r/pulls/1/merge; gh api --method PUT repos/o/r/issues/1/labels' \
+  '; で連結された無関係な 2 コマンド'
+assert_silent 'echo repos/o/r/pulls/1/merge && gh api --method PUT repos/o/r/issues/1/labels' \
+  '&& で連結された無関係な 2 コマンド'
+assert_silent 'gh api --method PUT repos/o/r/issues/1/labels | cat repos/o/r/pulls/1/merge' \
+  '| で連結された無関係な 2 コマンド'
+# 対照群: 同じコマンド節の中に両方があれば、引き続き検知する（区切り文字を
+# 導入したことで正しい検知まで壊していないことの確認）。
+assert_ask 'echo hi; gh api --method PUT repos/o/r/pulls/1/merge' \
+  '; の後ろの同一コマンド節に両方がある'
 
 it "壊れた JSON でも確認を求める（fail-open にしない）"
 # jq がコマンドを取り出せない場合はペイロード全体を検査対象にする。「取れなければ
