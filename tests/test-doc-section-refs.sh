@@ -193,7 +193,10 @@ BODY_QUOTE_ALLOWLIST="packages/devcontainer-bootstrap/README.md	.ai-playbook/rol
 
 is_allowed_body_quote() {
   local src="$1" target="$2" section="$3"
-  printf '%s\n' "$BODY_QUOTE_ALLOWLIST" | grep -qxF -- "$src	$target	$section"
+  # -q を外し >/dev/null で EOF まで読ませる。BODY_QUOTE_ALLOWLIST は増える前提の
+  # 許可リストで（上記コメント「件数が黙って増えない形にしておく」）、行数が
+  # 増えたときに同じ SIGPIPE のリスクを持ち込まないため、他の箇所と書き方を揃える。
+  printf '%s\n' "$BODY_QUOTE_ALLOWLIST" | grep -xF -- "$src	$target	$section" >/dev/null
 }
 
 # validate_ref <base_dir> <参照元ファイル> <行> <パス断片> <節名> <改行区切りの全 .md 一覧>
@@ -270,7 +273,11 @@ it "マルチバイト節名（intake フロー）を取りこぼさない"
 # 壊れていないのに赤を出す（tests/test-template-mirror.sh が抽出のアンカーに
 # 行番号を使わないのと同じ理由）。見たいのは「この参照を抽出できたか」であって
 # 「何行目にあるか」ではない。
-if printf '%s\n' "$REFS" | grep -qE "$(printf '^CLAUDE\\.md\t[0-9]+\t\\.github/project-ai-rules\\.md\tintake フロー$')"; then
+# $REFS はリポジトリ全体から抽出した参照一覧で、リポジトリが育つほど伸びる。
+# -q は最初の一致でパイプを閉じるため、producer（printf）が書き込み中に閉じられ
+# SIGPIPE で死にうる。set -uo pipefail 下では判定が反転しかねないため、-q を外し
+# >/dev/null で EOF まで読ませる。
+if printf '%s\n' "$REFS" | grep -E "$(printf '^CLAUDE\\.md\t[0-9]+\t\\.github/project-ai-rules\\.md\tintake フロー$')" >/dev/null; then
   pass
 else
   fail "CLAUDE.md の「intake フロー」参照を抽出できなかった"
@@ -317,6 +324,106 @@ if [[ -z "$SHORT_FAILS" ]]; then
   pass
 else
   fail "$SHORT_FAILS"
+fi
+
+# #322: 13 章「実装委譲パターン」は委譲する側（何を渡すか）までしか書いておらず、
+# 統合する側（複数レーンを束ねる側）の実務が無かった。足した節が見出しごと
+# 消えても検査が気づかない状態を避けるため、節の見出しと配下 6 項目の見出しを
+# 個別に確認する。文面の正しさではなく、見出しの存在だけを見る（本文の妥当性は
+# 機械判定できない）。
+#
+# grep -q は producer の書き込み中にパイプを閉じうる。set -uo pipefail 下では
+# producer が SIGPIPE で死に、判定が反転しかねない（tests/test-pipefail-sigpipe.sh
+# が検出する形と同じ）。producer はこのファイルの外にあり将来も伸びるため、
+# 現時点でパイプバッファに収まっていることを理由に据え置かない。-q を外し、
+# >/dev/null で EOF まで読ませる（同ファイルの書き方に合わせる）。
+CHAPTER13_FILE="$REPO_ROOT/.ai-playbook/shared-ai-rules.md"
+CHAPTER13_BODY="$(awk '/^## 13\./{flag=1} flag{print} /^## 14\./{exit}' "$CHAPTER13_FILE")"
+
+it "shared-ai-rules.md 13 章に「統合する側の実務」の節がある"
+if printf '%s\n' "$CHAPTER13_BODY" | grep -xF '### 統合する側の実務' >/dev/null; then
+  pass
+else
+  fail "13 章に「### 統合する側の実務」の見出しが見つからない"
+fi
+
+# 「統合する側の実務」の**配下**だけを取り出す。13 章の本文全体を検索すると、6 項目の
+# 見出しがどこにあっても（親節の外へ移されていても）一致してしまい、テスト名が
+# 保証しているはずの親子関係を検査していないことになる（Copilot レビューの指摘）。
+#
+# 打ち切りは「####（4 個ちょうど）ではない見出し」ではなく、**レベル 1〜3 の見出しに
+# 限定**する。「#### 以外の見出し行すべて」で切ると、レベル 5 以上の見出し
+# （`##### `）だけでなく、コードブロック内の行頭コメント（`# 〜` のような、見出しと
+# 区別が付かない行）でも打ち切ってしまい、正しい文書が赤になる（第二意見が実測で
+# 確認）。区間指定 `{1,3}` は #296 の実測でこのリポジトリが対象とする 2 種類の awk
+# （macOS の BWK awk / devcontainer の mawk）のどちらでも機能するため、移植性は
+# 理由にならない（tests/test-md-table-integrity.sh の類例が既にそう書いている）。
+# それでも列挙する（`/^#[ \t]/ || /^##[ \t]/ || /^###[ \t]/`）のは、区間指定より
+# 「レベル 1〜3」という意図をそのまま読めるため。
+#
+# ただしレベル制限だけでは、コードブロック内の行頭コメントは直らない。
+# `# コメント` はレベル 1 の見出しと文字面が区別できないため、レベル制限だけでは
+# 依然として打ち切ってしまう。フェンス（``` で囲まれた範囲）の内外を追い、フェンス内
+# では打ち切り判定そのものを行わない。フェンスの開閉判定は反転にしない。文書がフェンス
+# の書き方を説明するために入れ子（外側を 4 個以上のバッククォートで囲む）を使うことが
+# あり、反転だと内側の開始で外へ出たことになるため。開いたときの長さを覚え、それ以上の
+# 長さの閉じだけを閉じとして扱う（CommonMark のフェンス規則。
+# tests/test-md-table-integrity.sh の outside_fences() と同じ規則）。フェンス内の行は
+# 空行へ置換して出力する。素通しすると、6 項目の見出しと同じ文字列をコード例として
+# 書いただけで検査を誤って通す余地が残るため。
+#
+# 打ち切りは `exit` にしない。`exit` は awk の入力（このパイプの読み手）を EOF 前に
+# 閉じ、producer（printf）が書き込み中なら SIGPIPE で死にうる（同じコミットで
+# `grep -q` を外した理由と同じ問題を awk 側で作ってしまう）。フラグを落として
+# 出力だけを止め、最後まで読む。
+SECTION_BODY="$(printf '%s\n' "$CHAPTER13_BODY" | awk '
+  function fence_len(s,   n) {
+    sub(/^[[:space:]]*/, "", s)
+    n = 0
+    while (substr(s, n + 1, 1) == "`") n++
+    return n
+  }
+  {
+    fl = fence_len($0)
+    if (fl >= 3) {
+      if (!inside) { inside = 1; open_len = fl }
+      else if (fl >= open_len && $0 ~ /^[[:space:]]*`+[[:space:]]*$/) { inside = 0 }
+      if (found) print ""
+      next
+    }
+    if (!found) {
+      if ($0 == "### 統合する側の実務") found = 1
+      next
+    }
+    if (!inside && ($0 ~ /^#[ \t]/ || $0 ~ /^##[ \t]/ || $0 ~ /^###[ \t]/)) {
+      found = 0
+      next
+    }
+    if (inside) print ""; else print
+  }
+')"
+
+it "「統合する側の実務」節の配下に 6 項目の見出しが揃っている（節の外は数えない）"
+REQUIRED_HEADINGS="#### 所有一覧の機械照合
+#### 所有の定義
+#### 波及先の洗い出し
+#### 正本文書の扱い
+#### 相乗りの防止
+#### 報告を鵜呑みにしない"
+MISSING_HEADINGS=""
+while IFS= read -r h; do
+  [[ -z "$h" ]] && continue
+  if ! printf '%s\n' "$SECTION_BODY" | grep -xF "$h" >/dev/null; then
+    MISSING_HEADINGS="${MISSING_HEADINGS}${h}
+"
+  fi
+done <<HEADINGSEOF
+$REQUIRED_HEADINGS
+HEADINGSEOF
+if [[ -z "$MISSING_HEADINGS" ]]; then
+  pass
+else
+  fail "見出しが節の配下に無い（消えたか、親節の外にある）: $MISSING_HEADINGS"
 fi
 
 # ── フィクスチャでの負例検査（リポジトリの実ファイルは書き換えない） ────────
