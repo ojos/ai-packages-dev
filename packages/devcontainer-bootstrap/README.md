@@ -640,6 +640,7 @@ OAuth トークン（`CLAUDE_CODE_OAUTH_TOKEN`）を `remoteEnv` へ注入する
 - `scripts/verify.sh` / `scripts/acceptance.sh` / `scripts/loop-gate.sh`（ループコーディング支援。下記参照）
 - `scripts/check-no-secrets.sh`（機密混入の検知ゲート。`verify.sh` が受け入れ条件の手前で呼ぶ。下記参照）
 - `.github/workflows/verify.yml`（受け入れ検証を CI で回すゲート。上記「受け入れ検証の CI ワークフロー」参照）
+- `.devcontainer/ORIGIN`（生成物の由来の記録。DCB の版・使った `--with-*` フラグ・各生成物のハッシュを持つ機械可読な key=value 形式。`doctor.sh` が乖離の診断に使います。下記「生成物の由来の記録」参照）
 - `.gitignore` の managed セクション（言語構成に応じて自動更新。`--no-gitignore` で無効化）
 
 `--with-claude` を選んだ場合は、規範の配置とは独立に次を出力します（下記「[マージ確認フック](#マージ確認フックclaude-code)」参照）。
@@ -665,6 +666,33 @@ OAuth トークン（`CLAUDE_CODE_OAUTH_TOKEN`）を `remoteEnv` へ注入する
 - `scripts/acceptance-remote.sh`（**外部層**の受け入れ条件の雛形。宣言と実際の外部状態の一致を検証する骨格のみ。上記「受け入れ条件の二層」参照）
 
 なお bootstrap.sh は生成先の README.md を読み書きしません。セットアップ手順を README へ追記する処理は持たないため、生成後の README への反映は利用者側の作業です。
+
+#### 生成物の由来の記録（`.devcontainer/ORIGIN`）
+
+装備の選択によらず常に、`.devcontainer/ORIGIN` へ生成物の由来を記録します。目的は、生成先で**意図的に改造した**箇所と、**単に古い写し**（上流が直したのに追随できていない箇所）を区別できるようにすることです。`.ai-playbook/VERSION` と同じ「取り込み側が生成する機械可読な記録」の流儀に揃えています。
+
+```
+# devcontainer-bootstrap が記録した生成物の由来。
+# doctor.sh はこの記録と現物を突き合わせて乖離を診断する。手で編集しないこと。
+version=v0.11.0
+flags=aws,claude
+hash:.devcontainer/compose.yaml=<sha256>
+hash:.devcontainer/devcontainer.json=<sha256>
+hash:.env.example=<sha256>
+...
+```
+
+| キー | 意味 |
+|---|---|
+| `version` | 生成に使った DCB 自身の版 |
+| `flags` | 指定した `--with-*` フラグの昇順カンマ区切り一覧（指定順によらず同じ集合なら同じ値）。フラグを含めるのは、「`--with-aws` を付け忘れた」と「意図的に外した」を区別するためです |
+| `hash:<相対パス>` | その生成物の sha256（`sha256sum` が無い環境では `shasum -a 256`、それも無ければ `openssl dgst -sha256` を使います） |
+
+- ハッシュの対象は、この実行で生成した DCB 自身のテンプレート一覧（常時生成ぶん・`--with-*` 条件付きぶん）に限ります。`.ai-playbook/**` は対象外です（あちらは `--playbook-conflict-policy` と `.ai-playbook/VERSION` が別に担っており、二重に記録すると片方だけ更新されたときにどちらが正本か読めなくなります）。
+- 衝突ポリシーは他の生成物（`.devcontainer/` / `scripts/` のテンプレート）と同じです。**`--force` を付けない再実行では、既存の記録をそのまま温存します。** `--force` を付けた再実行でのみ書き直します（[再実行したときの挙動](#再実行したときの挙動)）。生成物を意図的に直して `--force` で作り直したときは記録も更新され、それ自体が「直した」証跡になります。
+- **既知の限界**: `.devcontainer/ORIGIN` 自体もこの衝突ポリシーに従うため、既に記録がある生成先へ `--force` を付けずに `--with-*` を追加で指定して再実行すると、新しく増えた生成物のハッシュは記録に追加されません（記録済みファイルの一覧だけが対象になるため）。記録に無いファイルを doctor.sh が誤って「変化した」と報告することはありませんが、その代わりに**診断の対象にも入りません**。取りこぼしなく記録したい場合は、既存の生成物を直した場合と同様に `--force` で作り直してください。
+
+由来をどう診断するかは「[Doctor 自己診断](#doctor-自己診断)」を参照してください。
 
 #### マージ確認フック（Claude Code）
 
@@ -815,15 +843,31 @@ github/gitignore のテンプレートは言語・OS・エディタの生成物�
 - `--strict`（既定: 無効。WARN があれば非 0 で終了する）
 - `-h` / `--help`
 
-検査は 3 カテゴリです。
+検査は 4 カテゴリです。
 
 | カテゴリ | 検査内容 |
 |---|---|
 | 静的構造 | `.devcontainer/devcontainer.json` / `.env.example` / `scripts/on-attach.sh` / `scripts/fix-mount-owner.sh` / `scripts/post-rebuild-check.sh` / `scripts/verify.sh` / `scripts/acceptance.sh` / `scripts/loop-gate.sh` / `scripts/check-no-secrets.sh` の実在。`devcontainer.json` が妥当な JSON であること。**`${localEnv:` の混入が無いこと**（下記）。`dockerComposeFile` が参照する compose ファイルが実在すること |
 | スクリプト検査 | 生成した各スクリプトの `bash -n` 構文検査（NG なら FAIL）と実行ビットの有無（無ければ WARN） |
+| 生成物の由来（下記） | `.devcontainer/ORIGIN`（[生成物の由来の記録](#生成物の由来の記録devcontainerorigin)）と現物を突き合わせ、生成時からの変更・記録した版が古いことを検出する |
 | 実行時コマンドの可用性 | `bash` / `jq` / `perl` / `gh`。`devcontainer.json` の features から検出した言語ランタイム（`rust` は feature 名と実行ファイル名が異なるため `cargo` で判定。`ruby` は一致するため `ruby` で判定）。`--with-aws` / `--with-gcp` で配線した cloud CLI（`aws` / `gcloud` / `terraform`）。`docker-outside-of-docker` を配線していれば `docker`。いずれも不在は WARN |
 
 **`${localEnv:` の検出がこの診断の中核です。** 「[資格情報の扱い](#資格情報の扱い)」で述べたホスト資格情報の非注入は、方針を書いただけでは守られません。`remoteEnv` へホスト環境変数の参照が復活していないことを doctor が機械的に検査し、見つけたら FAIL にします。作業ディレクトリの受け渡し（`${localWorkspaceFolder}`）は `localEnv` ではないため対象外です。
+
+**生成物の由来の検査（`.devcontainer/ORIGIN`）は次のように判定します。**
+
+| 状態 | 判定 |
+|---|---|
+| 記録が無い | `[WARN]` **診断できません。** この生成先が本機能より前に作られたか、記録が削除された可能性があります。記録の無い生成先への遡及はできません |
+| 記録が壊れている（`version=` 行が読めない等） | `[FAIL]` 診断できません |
+| 記録した生成物が現物と一致しない | `[FAIL]` 該当ファイル名を添えて「生成時から変化しています」と報告 |
+| 記録した生成物が消えている | `[FAIL]` 該当ファイル名を添えて報告 |
+| 記録の版が `doctor.sh` 自身の版より古い | `[WARN]` 「上流が更新されています」と報告 |
+| 記録の版が一致（または新しい） | `[OK]` |
+
+いずれも**検査が成立しないことを合格（`[OK]`）にはしません。** 記録の欠落・破損は `[WARN]` または `[FAIL]` として明示し、黙って通過させません。
+
+> **既知の限界**: 上流の更新有無は、ネットワークへ問い合わせず `doctor.sh` 自身に埋め込んだ版とだけ比較します（規範がループ用の受け入れ検証から外部層を外しているのと同じ理由です）。そのため、**古い `doctor.sh` をそのまま使い続けると、その後さらに上流が更新されていても気づけません。** `doctor.sh` は公開リリースごとに取得し直してください（[doctor.sh を後から取得する](#doctorsh-を後から取得する)）。「診断が緑なら最新」とは言えません。
 
 判定は `[OK]` / `[WARN]` / `[FAIL]` の 3 種で出力し、末尾に `Summary: PASS=<n> WARN=<n> FAIL=<n>` を表示します。終了コードは 3 値です。
 

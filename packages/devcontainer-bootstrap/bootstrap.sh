@@ -36,6 +36,22 @@ PLAYBOOK_REL_ROOT=".ai-playbook"
 PLAYBOOK_DIR=""
 PLAYBOOK_TMP_ROOT=""
 
+# DCB 自身の版。生成物の由来記録（下記 ORIGIN_REL_PATH の `version=`）へ書き出す。
+#
+# リリース準備のたびに、README の「バージョンの正本」4 箇所と同時にここを更新する
+# こと。doctor.sh 側にも同じリテラルを持つ（doctor.sh は curl で単体取得
+# されうるため、bootstrap.sh を参照できない）。両者が食い違うと doctor.sh の
+# 「上流が更新されている」判定が自分自身の版を誤って報告するため、
+# tests/test-origin-record.sh が 2 箇所の一致を機械照合する。
+DCB_VERSION="v0.11.0"
+
+# 生成物の由来記録の置き場。.ai-playbook/VERSION と同じ「取り込み側が生成する
+# 機械可読 key=value の記録」の流儀に揃える。.ai-playbook/
+# 配下に置かないのは、あちらは規範専用の記録（VERSION）が既に機能しており、
+# 二重に記録すると片方だけ更新されたときにどちらが正本か読めなくなるため。
+# .devcontainer/ は常に生成される唯一のディレクトリなので、常時生成物の置き場に選ぶ。
+ORIGIN_REL_PATH=".devcontainer/ORIGIN"
+
 usage() {
   # 1 行目は呼び出しに使われたパスをそのまま示す。開発リポジトリでは
   # packages/devcontainer-bootstrap/bootstrap.sh、公開配布物ではリポジトリ直下と
@@ -4409,6 +4425,80 @@ write_file() {
   echo "write: $out"
 }
 
+# ── 生成物の由来の記録 ──────────────────────────────────────────────────────
+
+# ファイルの sha256 を計算する。sha256sum は GNU coreutils 前提で macOS 既定には無い
+# （shasum -a 256 を使う）。両方無い環境向けに openssl も試す。いずれも無ければ、
+# 生成そのものは終わっているのに由来だけ記録できない中途半端な状態を隠さず落とす。
+dcb_file_sha256() {
+  local f="$1"
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$f" | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$f" | awk '{print $1}'
+  elif command -v openssl >/dev/null 2>&1; then
+    openssl dgst -sha256 "$f" | awk '{print $NF}'
+  else
+    echo "error: sha256 を計算できるコマンドが見つかりません（sha256sum / shasum / openssl のいずれかが必要です）" >&2
+    exit 1
+  fi
+}
+
+# 選択された --with-* フラグを、重複を除いた昇順カンマ区切りへ整形する。
+# 順序を固定するのは、フラグの指定順が違っても同じ集合なら記録が一致するようにする
+# ため（受け入れ条件「同じ版・同じフラグで生成し直すと記録が一致する」）。
+with_flags_csv() {
+  local sorted line out="" w
+  sorted="$(for w in ${WITH_SET[@]+"${WITH_SET[@]}"}; do printf '%s\n' "$w"; done | sort -u)"
+  while IFS= read -r line; do
+    [[ -n "$line" ]] || continue
+    if [[ -z "$out" ]]; then out="$line"; else out="$out,$line"; fi
+  done <<EOF
+$sorted
+EOF
+  printf '%s' "$out"
+}
+
+# .devcontainer/ORIGIN を生成する。DCB の版・使った --with-* フラグ・各生成物の
+# ハッシュを記録し、doctor.sh が生成後の乖離（生成時からの変更・上流の更新）を
+# 診断するために使う。.ai-playbook/VERSION と同じ、機械可読な
+# key=value 形式にする。
+#
+# ハッシュの対象は sorted_rels（この実行で生成した DCB 自身のテンプレート一覧）に
+# 限る。.ai-playbook/** は対象外（あちらは --playbook-conflict-policy と
+# .ai-playbook/VERSION が別に担う。二重に記録すると片方だけ更新されたときに
+# どちらが正本か読めなくなる）。
+#
+# 既存の生成物と同じ衝突ポリシー（--force のときだけ上書き）に従わせる。記録だけを
+# 無条件で上書きすると、意図して古い生成物を温存している構成でも記録が「いま」に
+# 書き換わってしまい、由来が現物と食い違う（.ai-playbook/VERSION と同じ理由）。
+write_origin_record() {
+  local dest="$OUTPUT_DIR/$ORIGIN_REL_PATH" tmp rel h flags_csv
+  if [[ -e "$dest" && "$FORCE" != "true" ]]; then
+    echo "skip (exists): $dest"
+    return 0
+  fi
+  mkdir -p "$(dirname "$dest")"
+  tmp="$(mktemp "${TMPDIR:-/tmp}/dcb-origin.XXXXXX")"
+  flags_csv="$(with_flags_csv)"
+  {
+    echo "# devcontainer-bootstrap が記録した生成物の由来。"
+    echo "# doctor.sh はこの記録と現物を突き合わせて乖離を診断する。手で編集しないこと。"
+    echo "version=$DCB_VERSION"
+    echo "flags=$flags_csv"
+    while IFS= read -r rel; do
+      [[ -n "$rel" ]] || continue
+      h="$(dcb_file_sha256 "$OUTPUT_DIR/$rel")"
+      echo "hash:$rel=$h"
+    done <<EOF
+$sorted_rels
+EOF
+  } > "$tmp"
+  mv "$tmp" "$dest"
+  chmod 644 "$dest"
+  echo "write: $dest"
+}
+
 # ── メイン処理 ──────────────────────────────────────────────────────────────────────
 
 # --with-copilot-review が配置するのは規範パッケージの雛形だけなので、規範を配置
@@ -4452,6 +4542,9 @@ if [[ "$DRY_RUN" == "true" ]]; then
   done <<EOF
 $sorted_rels
 EOF
+
+  # 由来の記録は装備の選択によらず常に生成する（--with-playbook の有無にも依らない）。
+  echo "plan: $OUTPUT_DIR/$ORIGIN_REL_PATH"
 
   if [[ "$MANAGE_GITIGNORE" == "true" ]]; then
     echo "plan: $OUTPUT_DIR/.gitignore (managed section update)"
@@ -4497,6 +4590,10 @@ while IFS= read -r rel; do
 done <<EOF
 $sorted_rels
 EOF
+
+# sorted_rels の全ファイルが揃ってから由来を記録する。ハッシュ対象が、まだ
+# 書き込まれていないファイルを含んでいては困るため、書き込みループの直後に置く。
+write_origin_record
 
 if [[ "$MANAGE_GITIGNORE" == "true" ]]; then
   upsert_gitignore
