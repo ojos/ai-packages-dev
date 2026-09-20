@@ -106,4 +106,21 @@ else
   assert_eq "$RULES_COUNT" "$CI_JOB_COUNT" "project-ai-rules が記述するジョブ数"
 fi
 
+# ── 手動起動の口が残っていること ────────────────────────────────────────────
+#
+# **契機のイベントが届かず、CI の実行が 1 件も作られないことがある。** 2026-09-19、
+# force push で置き換えた SHA に対して pull_request の実行が作られない状態が数時間
+# 続いた（reopened でも回復せず、新しいコミットを積んで回復した）。そのあいだ
+# CI を回す手段が無かった。原因は特定できていない。
+#
+# **手動の口が黙って消えると、同じ事態でまた打つ手が無くなる。** 消えたことに
+# 気づける形にしておく。ここで見るのは「on: に workflow_dispatch があるか」だけで、
+# **実際に手動起動できるかは検証していない**（それは GitHub 上でしか確かめられない）。
+it "ci.yml が workflow_dispatch を持つ（契機が届かないときの手動起動の口）"
+if awk '/^on:/{inon=1; next} /^[a-z]/{inon=0} inon && /^[[:space:]]+workflow_dispatch:/{found=1} END{exit !found}' "$CI"; then
+  pass
+else
+  fail "ci.yml の on: に workflow_dispatch が無い（契機が届かないとき CI を回せなくなる）"
+fi
+
 exit_with_result
