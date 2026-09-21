@@ -71,6 +71,18 @@ echo "[acceptance] (shell) shellcheck"
 # 同じ理由で -f gcc を選んでいる。指摘の所在は file:line:col で足りる。
 shellcheck -x -f gcc packages/devcontainer-bootstrap/bootstrap.sh packages/devcontainer-bootstrap/doctor.sh
 
+# ── Hygiene checks（描画・展開するまで見えない壊れ方） ────────────────────────
+# CI のどのジョブもミラーしない。ci.yml にはまだ対応するジョブが無く、
+# tests/test-ci-mirror.sh の「ci.yml のジョブと acceptance.sh のミラーが一致する」は
+# 見出しを `# ── CI: ` で始まる節だけを対象にするため、この節はその照合から意図的に
+# 外れる（CI 側へジョブを追加する判断は別途行う）。判定の正本は各スクリプト自身。
+# bash / awk / git だけに依存し、ネットワークも外部認証も要らないため、この受け入れ
+# 条件（ローカル層）にそのまま収まる。
+echo "[acceptance] (hygiene) control characters"
+bash scripts/check-control-chars.sh
+echo "[acceptance] (hygiene) markdown table breaks"
+bash scripts/check-table-breaks.sh
+
 # ── CI: Self devcontainer credential isolation ───────────────────────────────
 # このリポジトリ自身の devcontainer も、生成物と同じ「資格情報をホストから
 # 注入しない」構造を保つ。remoteEnv に ${localEnv:...} を 1 つでも足すと、

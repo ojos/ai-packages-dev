@@ -639,6 +639,8 @@ OAuth トークン（`CLAUDE_CODE_OAUTH_TOKEN`）を `remoteEnv` へ注入する
 - `.github/workflows/identity-guard.yml`（コミット identity の検証 CI。下記参照）
 - `scripts/verify.sh` / `scripts/acceptance.sh` / `scripts/loop-gate.sh`（ループコーディング支援。下記参照）
 - `scripts/check-no-secrets.sh`（機密混入の検知ゲート。`verify.sh` が受け入れ条件の手前で呼ぶ。下記参照）
+- `scripts/check-control-chars.sh`（追跡ファイルへの表示されない制御文字混入の検知ゲート。単体で `bash scripts/check-control-chars.sh` として実行する。`acceptance.sh` からは自動で呼ばれないため、通す契機にしたい場合はプロジェクト側で配線する）
+- `scripts/check-table-breaks.sh`（Markdown の表の途中へ段落が差し込まれ、続く行が表として描画されなくなっていないかの検知ゲート。単体で `bash scripts/check-table-breaks.sh` として実行する。`acceptance.sh` からは自動で呼ばれないため、通す契機にしたい場合はプロジェクト側で配線する。**先頭行（ヘッダー行）が `|` を持たない表**（`a | b` / `--- | ---` の形。GFM としては有効）**は対象外**。判定を広げると本文中の `|` を含む段落を誤検知し始めるため、意図して見ない。この対象外の挙動はテストで固定している）
 - `.github/workflows/verify.yml`（受け入れ検証を CI で回すゲート。上記「受け入れ検証の CI ワークフロー」参照）
 - `.devcontainer/ORIGIN`（生成物の由来の記録。DCB の版・使った `--with-*` フラグ・各生成物のハッシュを持つ機械可読な key=value 形式。`doctor.sh` が乖離の診断に使います。下記「生成物の由来の記録」参照）
 - `.gitignore` の managed セクション（言語構成に応じて自動更新。`--no-gitignore` で無効化）
@@ -819,7 +821,9 @@ github/gitignore のテンプレートは言語・OS・エディタの生成物�
 
 | テンプレート | 生成時の扱い | 展開されるもの |
 |---|---|---|
+| `scripts/check-control-chars.sh` | そのまま書き出す | — |
 | `scripts/check-no-secrets.sh` | そのまま書き出す | — |
+| `scripts/check-table-breaks.sh` | そのまま書き出す | — |
 | `scripts/confirm-merge-hook.sh` | そのまま書き出す | —（`--with-claude` のときだけ生成） |
 | `scripts/load-project-env.sh` | そのまま書き出す | — |
 | `scripts/loop-gate.sh` | そのまま書き出す | — |
@@ -838,9 +842,9 @@ github/gitignore のテンプレートは言語・OS・エディタの生成物�
 
 - **配置されるかどうかは、この 2 分類とは別軸です。** `scripts/acceptance-remote.sh` は展開を持たない（そのまま書き出す）一方で、配置は `--with-aws` / `--with-gcp` の選択に従います。
 
-この開発リポジトリ自身も DCB の生成物を取り込んで使っており、`scripts/` はテンプレートの写しにあたります。上表のうち**写しを持つ 7 本**（`check-no-secrets.sh` / `load-project-env.sh` / `loop-gate.sh` / `on-attach.sh` / `setup-git-identity.sh` / `verify-commit-identity.sh` / `verify.sh`）は、正本と写しがバイト一致していることを `tests/test-template-mirror.sh` が機械照合します（片方だけ直しても両方のテストが緑になり、配布物と手元が黙って食い違うため）。「生成時に展開」側はプレースホルダを持ち一致し得ないので検査対象外です。`scripts/acceptance-remote.sh` も検査対象外ですが理由が異なり、**この開発リポジトリが写しを持たない**（cloud 装備を使わないため）ので比べる相手がありません。いずれも判断と理由を同テストのコメントに残し、写しを置いた時点で一致必須へ移す判断が要ることも機械で担保しています（「検査していない」と「検査対象外と判断した」を読み分けられるようにするため）。
+この開発リポジトリ自身も DCB の生成物を取り込んで使っており、`scripts/` はテンプレートの写しにあたります。上表のうち**写しを持つもの**は、正本と写しがバイト一致していることを `tests/test-template-mirror.sh` の `MIRRORED_RELS` が機械照合します（片方だけ直しても両方のテストが緑になり、配布物と手元が黙って食い違うため）。**対象をここへ書き並べません。** 書き並べると、写しを 1 本足すたびにこの文章だけが古い本数を言い続けます（`.ai-playbook/shared-ai-rules.md` 12 章「一覧の複製は機械照合で担保する」）。現在の対象は `tests/test-template-mirror.sh` の `MIRRORED_RELS` を参照してください。「生成時に展開」側はプレースホルダを持ち一致し得ないので検査対象外（`EXCLUDED_RELS`）です。`scripts/acceptance-remote.sh` も検査対象外ですが理由が異なり、**この開発リポジトリが写しを持たない**（cloud 装備を使わないため）ので比べる相手がありません（`EXCLUDED_NO_COPY_RELS`）。いずれも判断と理由を同テストのコメントに残し、写しを置いた時点で一致必須へ移す判断が要ることも機械で担保しています（「検査していない」と「検査対象外と判断した」を読み分けられるようにするため）。
 
-`scripts/confirm-merge-hook.sh` は**写しを持つ 8 本目**で、上の 7 本と同じく `tests/test-template-mirror.sh` が照合します。かつてこの開発リポジトリは `.claude/settings.json` を追跡せず、フックを配線できないため写しも置いていませんでした（写しだけを置くと、誰も起動しないスクリプトが `scripts/` とカタログに並ぶためです）。**その後、許可リストを `.claude/settings.local.json` へ分離し、`settings.json` をフックの配線だけにして追跡へ切り替えたため、配線できない理由は成立しなくなりました。** 同テストのコメントが「配線を入れる判断をしたときは写しを置いて一致必須へ移すこと」を要求しており、その手順どおりに移しています。
+`scripts/confirm-merge-hook.sh` を一致必須の対象へ加えた経緯は、後から写しを足す判断がどう起きるかの一例です。かつてこの開発リポジトリは `.claude/settings.json` を追跡せず、フックを配線できないため写しも置いていませんでした（写しだけを置くと、誰も起動しないスクリプトが `scripts/` とカタログに並ぶためです）。**その後、許可リストを `.claude/settings.local.json` へ分離し、`settings.json` をフックの配線だけにして追跡へ切り替えたため、配線できない理由は成立しなくなりました。** 同テストのコメントが「配線を入れる判断をしたときは写しを置いて一致必須へ移すこと」を要求しており、その手順どおりに移しています。`scripts/check-control-chars.sh` / `scripts/check-table-breaks.sh` は、判定がプレースホルダを持たず生成条件に依らず全構成で同一であるため、最初から一致必須の対象として加えています。
 
 この開発リポジトリは `.claude/` 配下の写し（スキル定義・サブエージェント定義）も持ちます。こちらは `tests/test-claude-mirror.sh` が雛形とのバイト一致を照合します。**`scripts/` に照合があって `.claude/` に無かったあいだ、実際に 3 件がドリフトしていました。**
 
