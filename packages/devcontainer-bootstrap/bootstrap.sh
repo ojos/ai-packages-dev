@@ -2957,6 +2957,74 @@ TMPL
 # では実行できず確認を求められる。ファイル経由（git commit -F、テストスクリプト）で
 # 回避できる。
 #
+# ── squash 本文の CI 抑止の綴り ──────────────────────────────────────────────
+#
+# gh pr merge をコマンド位置で検知したときは、承認の判断材料を増やすため、squash
+# マージの本文になるテキストに CI を飛ばす綴りが無いかも見て、見つかれば理由へ
+# 添える（deny にはしない。上の「保証するのは黙ってマージしないことであって
+# マージさせないことではない」と同じ位置づけ）。ある事例では、この綴りは指示
+# として書かれたのではなく「この検査がコミットメッセージしか見ていないこと」を
+# 説明する文章の中にあった。GitHub は見出しでなく本文のどこにあっても従うため、
+# 検知は行の先頭や見出しの形には絞らない。
+#
+# squash 本文の組み立て方（PR の説明文だけを使うか、各コミットのメッセージを
+# 連ねるか）はリポジトリの設定（squash_merge_commit_message）による。配布物
+# なので特定の設定を前提にせず、設定を読んで検査対象を切り替えることもしない
+# （判定を 2 経路に分けるほど、どちらかの経路だけが古くなる余地が増える）。
+# 代わりに、設定によらず両方（PR 本文と全コミットメッセージ）を常に見る。
+#
+# --body / --subject に明示された文字列も見る（実測で判明した漏れ）。これらは
+# 最終的な squash 本文を CLI 側で直接差し替えるものであり、リモートの PR 本文が
+# 綺麗でも、渡された文面に綴りがあれば CI は飛ぶ。しかも squash 前の人手の手順
+# （land スキル）は「該当行が出たら、その指示を除いた本文をファイルに書き、
+# --body-file で差し替えてマージする」という回復手順を持つ。--body 系を検査
+# しないと、この回復手順そのものがこの検査をすり抜ける経路になる。--body /
+# --subject の値はコマンド文字列から直接取り出して判定でき、gh を待たずに
+# 済む。リモート側（PR 本文・コミットメッセージ）も打ち切らずに別途見るのは、
+# --body 等が実際にどこまで上書きするかを完全には前提にしないためで、見た
+# 結果は「found（後述の優先順位で上書きされない）」側にしか働かない。
+#
+# --body-file の中身は読まない。このフックはコマンドの実行前に走るため、同じ
+# コマンド内で（例: echo ... > file && gh pr merge ... --body-file file）これ
+# から書かれるファイルを正しく読める保証が無く、cwd の想定もフック側とコマンド
+# 側で揃うとは限らない。**読まないと決めた以上、その対象は「綴りが無い」とは
+# 扱わない**（読めなかったことを合格にしない、という下の方針と同じ）。--body-file
+# を検出したら、その対象は unavailable として扱う（他の情報源で found が確定
+# すれば found が優先される。優先順位は下記）。
+#
+# 1 つのコマンド文字列に gh pr merge が複数回現れる場合（例:
+# gh pr merge 1 && gh pr merge 2）、全対象を集約して見る。片方だけを見て
+# 判定を確定させると、承認 1 回で残りの対象が未検査のまま実行されてしまう
+# （実測で判明した漏れ）。
+#
+# 複数の対象・複数の情報源（--body / --subject / リモートの本文・コミット）を
+# 見た結果は、found（綴りあり） > unavailable（確認できていない） > clean
+# （綴りなし）の優先順位で 1 つに集約する。found が 1 件でもあれば、他の対象
+# や情報源の結果に関わらず found を報告する。found が無く、unavailable が
+# 1 件でもあれば、他が clean であっても全体を clean とはしない。
+#
+# 判定できなかったとき（gh コマンドが無い・PR 情報を取得できない・コマンド
+# 文字列を取り出せていない・--body-file の中身を読んでいない、など）は
+# 「綴りが無い」とは扱わない。確認できていないことをそのまま理由文へ書く。
+# 読めなかったことを合格にはしない、という上の「fail-open にしない」と同じ
+# 方針をこの検査にも適用する。
+#
+# 綴りの一覧は、このフックだけの独自の一覧を持たず、squash 前に人手でも同じ
+# 判定を行う手順（land スキルの対応する手順）と同じものを使う。一覧を 2 か所に
+# 複製すると、見つかった綴りを片方にだけ足して他方が古くなる余地ができる。
+# 一致は配布物側のテスト（tests/test-confirm-merge-hook.sh）で検査し、複製の
+# 食い違いを機械的に検知できるようにしている。
+#
+# gh pr merge 以外（REST の PUT / gh api graphql の mergePullRequest）には、この
+# 検査を広げていない。REST 経由の URL は変数展開を含む形が普通にあり（上の
+# 「既知の限界」参照）、PR 番号やリポジトリをそこから安全に取り出せる保証が
+# 無い。誤って別の PR の本文を見にいく（見当違いの結果を確信を持って返す）ほう
+# が、確認しないより悪いと判断した。これらの経路でも既存の ask 自体は変わらず
+# 働く。
+#
+# この追加検査も security boundary ではない。squash 本文に実際に何が入るかは
+# GitHub 側の設定と挙動に依存し、ここでの判定は近似でしかない。
+#
 # 終了コード: 常に 0。判定は標準出力の JSON（permissionDecision）で伝える。
 set -uo pipefail
 
@@ -3331,6 +3399,173 @@ _rest_clause_handler() {
   fi
 }
 
+# for_each_clause のハンドラ。節が「gh pr merge」をコマンド位置に持つ場合、その
+# 直後に続く語から、対象 1 件ぶんの情報（PR セレクタ・--repo・--body・
+# --subject・--body-file の有無）を取り出し、mth_targets_*（配列。呼び出し側が
+# 用意する）の末尾（mth_count）へ積む。1 つのコマンド文字列に gh pr merge が
+# 複数回現れれば、この関数もその回数だけ呼ばれ、対象が積み上がる（同じコマンド
+# の承認 1 回で複数 PR がマージされうるため、全対象を見る必要がある。実測で
+# 判明した漏れ）。
+#
+# --repo=value・--repo value・-R value、--body=value・--body value、
+# --subject=value・--subject value を認識する。--body-file はどちらの形
+# （--body-file=path・--body-file path）でも中身は読まず、有無だけを記録する
+# （理由はヘッダ「squash 本文の CI 抑止の綴り」を参照）。それ以外の語でハイフン
+# 始まりのものは値を取るかどうかを個別には追わず、素通りする
+# （--match-head-commit の値などを誤って PR セレクタと取り違える余地が残る）。
+# 取り違えた場合、その語は実在しない PR セレクタとして gh へ渡ることになり、
+# _check_one_merge_target（下で定義）側の gh 呼び出しが失敗して「確認できて
+# いない」側へ倒れる。セレクタの取り違えが「綴りが無い」という誤った判定には
+# つながらない設計であるため、ここでは簡便な抽出にとどめている。
+# shellcheck disable=SC2329  # for_each_clause から "$handler" 経由で間接的に呼ばれる
+_gh_pr_merge_target_handler() {
+  _cmd_start_idx
+  local idx=$_cmd_start_idx_result
+  if [[ "${clause_words[$idx]:-}" != gh ]] \
+    || [[ "${clause_words[$((idx + 1))]:-}" != pr ]] \
+    || [[ "${clause_words[$((idx + 2))]:-}" != merge ]]; then
+    return
+  fi
+  local sel="" repo="" body="" subject="" hasfile=0
+  local j=$((idx + 3)) w skip_next=0
+  while [[ $j -lt ${#clause_words[@]} ]]; do
+    w="${clause_words[$j]}"
+    if [[ $skip_next -eq 1 ]]; then
+      skip_next=0
+      j=$((j + 1))
+      continue
+    fi
+    case "$w" in
+      --repo=*) repo="${w#--repo=}" ;;
+      --repo | -R)
+        repo="${clause_words[$((j + 1))]:-}"
+        skip_next=1
+        ;;
+      --body=*) body="${w#--body=}" ;;
+      --body)
+        body="${clause_words[$((j + 1))]:-}"
+        skip_next=1
+        ;;
+      --subject=*) subject="${w#--subject=}" ;;
+      --subject)
+        subject="${clause_words[$((j + 1))]:-}"
+        skip_next=1
+        ;;
+      --body-file=*) hasfile=1 ;;
+      --body-file)
+        hasfile=1
+        skip_next=1
+        ;;
+      -*) : ;;
+      *)
+        [[ -z "$sel" ]] && sel="$w"
+        ;;
+    esac
+    j=$((j + 1))
+  done
+  mth_targets_selector[mth_count]="$sel"
+  mth_targets_repo[mth_count]="$repo"
+  mth_targets_body[mth_count]="$body"
+  mth_targets_subject[mth_count]="$subject"
+  mth_targets_hasfile[mth_count]="$hasfile"
+  mth_count=$((mth_count + 1))
+}
+
+# 対象 1 件ぶん（PR セレクタ・リポジトリ・--body・--subject の文字列・
+# --body-file の有無）について、squash 本文になるテキストに CI 抑止の綴りが
+# 無いかを見る。_one_status（found / clean / unavailable）と _one_detail
+# （unavailable のときの理由）を設定する。ネットワークに出る（gh 経由で PR
+# 情報を取得する）唯一の箇所。
+_check_one_merge_target() {
+  local sel="$1" repo="$2" body="$3" subject="$4" hasfile="$5"
+  _one_status=clean
+  _one_detail=""
+
+  # --body-file の中身は読まない（理由はヘッダ参照）。読まないと決めた以上、
+  # 確認できていないという扱いにする。found で上書きされうる（下）。
+  if [[ "$hasfile" -eq 1 ]]; then
+    _one_status=unavailable
+    _one_detail='--body-file の中身は確認していない'
+  fi
+
+  # --body / --subject に明示された文字列は、gh を待たずにその場で判定できる。
+  local inline="${body}"$'\n'"${subject}"
+  if grep -n -i -E "$SQUASH_CI_SKIP_RE" <<<"$inline" >/dev/null; then
+    _one_status=found
+    return
+  fi
+
+  if ! command -v gh >/dev/null 2>&1; then
+    [[ "$_one_status" == clean ]] && { _one_status=unavailable; _one_detail='gh コマンドが無い'; }
+    return
+  fi
+
+  local gh_args=(pr view)
+  [[ -n "$sel" ]] && gh_args+=("$sel")
+  [[ -n "$repo" ]] && gh_args+=(--repo "$repo")
+  gh_args+=(--json "body,commits" --jq '.body, (.commits[] | .messageHeadline, .messageBody)')
+
+  local body_text gh_rc
+  body_text="$(gh "${gh_args[@]}" 2>/dev/null)"
+  gh_rc=$?
+  if [[ $gh_rc -ne 0 ]]; then
+    [[ "$_one_status" == clean ]] && { _one_status=unavailable; _one_detail='PR 情報を取得できなかった'; }
+    return
+  fi
+
+  # land スキルの対応する手順と同じ一覧を使う（ヘッダ参照）。行頭に絞らない
+  # （skip-checks: true 行だけは元の手順どおり行頭を要求する）。GitHub は
+  # 見出しでなく本文のどこにあっても従うため、位置は問わない。
+  if grep -n -i -E "$SQUASH_CI_SKIP_RE" <<<"$body_text" >/dev/null; then
+    _one_status=found
+  fi
+}
+
+# gh pr merge がコマンド位置で見つかったときに呼ぶ。コマンド文字列に含まれる
+# 全対象（_gh_pr_merge_target_handler が積んだもの）それぞれについて
+# _check_one_merge_target で判定し、found > unavailable > clean の優先順位
+# （ヘッダ参照）で 1 つに集約する。squash_ci_skip_status / squash_ci_skip_detail
+# を設定する。
+squash_ci_skip_check() {
+  local text="$1"
+  mth_count=0
+  mth_targets_selector=()
+  mth_targets_repo=()
+  mth_targets_body=()
+  mth_targets_subject=()
+  mth_targets_hasfile=()
+  for_each_clause _gh_pr_merge_target_handler "$text"
+
+  squash_ci_skip_status=unavailable
+  squash_ci_skip_detail=""
+
+  if [[ "$mth_count" -eq 0 ]]; then
+    squash_ci_skip_detail='マージ対象の PR を特定できなかった'
+    return
+  fi
+
+  local overall=clean overall_detail="" i
+  for ((i = 0; i < mth_count; i++)); do
+    _check_one_merge_target \
+      "${mth_targets_selector[$i]}" "${mth_targets_repo[$i]}" \
+      "${mth_targets_body[$i]}" "${mth_targets_subject[$i]}" \
+      "${mth_targets_hasfile[$i]}"
+
+    if [[ "$_one_status" == found ]]; then
+      overall=found
+      overall_detail=""
+      break
+    fi
+    if [[ "$_one_status" == unavailable ]] && [[ "$overall" != found ]]; then
+      overall=unavailable
+      overall_detail="$_one_detail"
+    fi
+  done
+
+  squash_ci_skip_status="$overall"
+  squash_ci_skip_detail="$overall_detail"
+}
+
 payload="$(cat)"
 
 reason=""
@@ -3377,6 +3612,11 @@ else
   # 取りこぼす。逆に境界を置かないと gh pr mergequeue のような別サブコマンドまで拾う。
   word_end='([^A-Za-z0-9_-]|$)'
 
+  # squash 本文に含まれていると CI を飛ばす綴り。land スキルの対応する手順と
+  # 同じ一覧（ヘッダ「squash 本文の CI 抑止の綴り」参照）。ここだけの一覧を
+  # 別に持たない。
+  SQUASH_CI_SKIP_RE='\[(skip ci|ci skip|no ci|skip actions|actions skip)\]|^skip-checks: *true'
+
   # パイプは使わずヒアストリングで渡す。grep -q は一致した時点で終了するため、上流を
   # パイプにすると SIGPIPE で pipefail が発火し、一致したのに条件が偽になる経路ができる。
   # cmd_pos_ask（上で定義）はこのヒアストリング渡しをそのまま踏襲する。
@@ -3385,6 +3625,27 @@ else
   # 照合を切り替える）に一本化している。上のヘッダ「コマンド位置の判定」を参照。
   if cmd_pos_ask "$norm_target" "$extracted" "$word_end" gh pr merge; then
     reason='gh pr merge をコマンド位置で実行しようとしています。既定の merge 方針は手動承認です。承認の記録を確認してください。'
+
+    # squash 本文の検査（ヘッダ「squash 本文の CI 抑止の綴り」参照）。実際の
+    # コマンド文字列を取り出せた（extracted=yes）ときだけ行う。ペイロード全体
+    # （JSON テキスト）を対象にしているときは、シェルのコマンド節を解析する
+    # 土台が無く、PR セレクタを安全に取り出せない。
+    if [[ "$extracted" == yes ]]; then
+      squash_ci_skip_check "$norm_target"
+    else
+      squash_ci_skip_status=unavailable
+      squash_ci_skip_detail='コマンド文字列を取り出せていない'
+    fi
+
+    case "$squash_ci_skip_status" in
+      found)
+        reason="${reason} squash 本文になるテキスト（PR 本文・コミットメッセージ・--body 等の指定）に CI を飛ばす綴りが見つかりました。除いてよいか確認してからマージしてください。"
+        ;;
+      unavailable)
+        reason="${reason} squash 本文の CI 抑止の綴りは確認できていません（${squash_ci_skip_detail}）。"
+        ;;
+      clean) : ;;
+    esac
   else
     # REST 経由の merge。PUT の指定と merge エンドポイントが同じコマンド節にある
     # ことを条件にする。GET は「マージ済みか」を調べるだけで状態を変えないため

@@ -423,4 +423,314 @@ else
   fail "ask を返す理由の記載が無い"
 fi
 
+# ── squash 本文の CI 抑止の綴り ──────────────────────────────────────────────
+#
+# gh pr merge を検知したときに、squash 本文になるテキスト（PR 本文・コミット
+# メッセージ・--body / --body-file / --subject の指定）へ CI 抑止の綴りが無いか
+# を追加で見る段を検証する。実際の gh やネットワークは呼ばず、偽の gh を PATH
+# の先頭へ差し込んで決定的に検証する。
+#
+# 綴りそのものをこのファイルへ連続した文字列として書かない。連続した文字列の
+# まま git の差分・コミットメッセージへ混ざると GitHub が実際に解釈してしまう
+# （この票の発端そのもの）。連結して組み立てることで、このファイル自身には
+# 連続した綴りを残さない。
+
+ci_skip_marker() {
+  local o='[' c=']'
+  printf '%s%s%s' "$o" "$1" "$c"
+}
+
+# 偽の gh。pr view が呼ばれたら、実際に渡された --json / --jq を fixture
+# （JSON。$FAKE_GH_FIXTURE。複数対象を PR セレクタで出し分けたいときは
+# $FAKE_GH_FIXTURE_MAP に "セレクタ<TAB>fixture のパス" を 1 行ずつ書く）へ
+# 適用してから返す。--json で要求したフィールドだけを fixture から絞り込んで
+# から --jq を適用するため、実装が要求するフィールドや jq 式を削っても、この
+# スタブは黙って前と同じ値を返さない（指摘: 固定文字列を返すだけのスタブは
+# 取得の契約そのものを検証しない）。$FAKE_GH_RC が 0 以外ならその終了コードで
+# 失敗する。$FAKE_GH_ARGS_FILE が設定されていれば、受け取った引数をそのまま
+# そこへ書く。pr view 以外は失敗させる（このフックは pr view しか呼ばない）。
+make_fake_gh() {
+  local dir="$1"
+  cat >"$dir/gh" <<'SH'
+#!/usr/bin/env bash
+if [[ -n "${FAKE_GH_ARGS_FILE:-}" ]]; then
+  printf '%s\n' "$*" > "$FAKE_GH_ARGS_FILE"
+fi
+if [[ "$1" != "pr" || "$2" != "view" ]]; then
+  exit 1
+fi
+if [[ "${FAKE_GH_RC:-0}" != "0" ]]; then
+  exit "${FAKE_GH_RC}"
+fi
+shift 2
+selector=""
+if [[ $# -gt 0 && "$1" != -* ]]; then
+  selector="$1"
+  shift
+fi
+json_fields=""
+jq_expr=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --json)
+      json_fields="$2"
+      shift 2
+      ;;
+    --jq)
+      jq_expr="$2"
+      shift 2
+      ;;
+    --repo)
+      shift 2
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
+if [[ -z "$json_fields" || -z "$jq_expr" ]]; then
+  echo "fake gh: --json/--jq が渡されていない" >&2
+  exit 1
+fi
+fixture="$FAKE_GH_FIXTURE"
+if [[ -n "${FAKE_GH_FIXTURE_MAP:-}" && -f "$FAKE_GH_FIXTURE_MAP" ]]; then
+  mapped="$(awk -F'\t' -v sel="$selector" '$1 == sel { print $2; exit }' "$FAKE_GH_FIXTURE_MAP")"
+  [[ -n "$mapped" ]] && fixture="$mapped"
+fi
+filtered="$(jq --arg f "$json_fields" '
+  ($f | split(",")) as $keep
+  | with_entries(select(.key as $k | $keep | index($k)))
+' "$fixture")" || exit 1
+printf '%s' "$filtered" | jq -r "$jq_expr"
+exit $?
+SH
+  chmod +x "$dir/gh"
+}
+
+fakebin="$(new_workdir)/fakebin"
+mkdir -p "$fakebin"
+make_fake_gh "$fakebin"
+
+# フックへペイロードを流し込み、偽の gh を PATH の先頭に置いた状態で判定と
+# 理由の両方を、タブ区切りの 1 行で返す。
+decision_and_reason_with_fake_gh() {
+  local cmd="$1" fixture="$2" rc="${3:-0}" out
+  out="$(printf '%s' "$(bash_payload "$cmd")" \
+    | FAKE_GH_FIXTURE="$fixture" FAKE_GH_RC="$rc" PATH="$fakebin:$PATH" bash "$HOOK")"
+  printf '%s\t%s' \
+    "$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecision // "(no decision)"')" \
+    "$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecisionReason // empty')"
+}
+
+BASE_MERGE_REASON='gh pr merge をコマンド位置で実行しようとしています。既定の merge 方針は手動承認です。承認の記録を確認してください。'
+
+# 対象 1 件ぶんの fixture（PR 本文・コミット 1 件のヘッドライン・本文）を JSON
+# で作る。fake gh はこの JSON へ、実際にフックが渡した --json / --jq を適用
+# する（上のコメント参照）。
+make_pr_fixture() {
+  local out_file="$1" body="$2" headline="$3" commit_body="$4"
+  jq -n --arg body "$body" --arg h "$headline" --arg b "$commit_body" \
+    '{body: $body, commits: [{messageHeadline: $h, messageBody: $b}]}' > "$out_file"
+}
+
+fx_dir="$(new_workdir)/fixtures"
+mkdir -p "$fx_dir"
+
+fixture_clean="$fx_dir/clean.json"
+make_pr_fixture "$fixture_clean" "この PR は README を更新します。" "docs: README を更新" ""
+
+# 実際に踏んだ形を再現する: 見出しではなく、検査そのものを説明する文章の
+# 途中に綴りが埋め込まれている。PR 本文側にある形。
+fixture_body_midsentence="$fx_dir/body-midsentence.json"
+make_pr_fixture "$fixture_body_midsentence" \
+  "$(printf '%s\n%s' 'この変更は手順を整理するものです。' \
+    "あわせて、手順 8 の $(ci_skip_marker 'skip ci') 検査が正しく動くことを確認しました。")" \
+  "fix: 手順を整理" ""
+
+# PR 本文はクリーンだが、コミットメッセージ側にだけ綴りがある形。squash 本文の
+# 組み立て方（PR_BODY / COMMIT_MESSAGES）のどちらでも見落とさないことの確認。
+fixture_commit_only="$fx_dir/commit-only.json"
+make_pr_fixture "$fixture_commit_only" "PR 本文はクリーンです。" "fix: 何かを直す" \
+  "詳細: $(ci_skip_marker 'ci skip') という綴りをコミット側に書いた（テスト用）。"
+
+it "squash 本文の途中（見出しではない）に綴りがあっても検知する"
+result="$(decision_and_reason_with_fake_gh 'gh pr merge 1' "$fixture_body_midsentence")"
+r_decision="${result%%$'\t'*}"
+r_reason="${result#*$'\t'}"
+assert_eq "$r_decision" "ask" "判定"
+assert_contains "$r_reason" "squash 本文になるテキスト" "理由（見出しではない綴りの検知）"
+
+it "PR 本文ではなくコミットメッセージ側の綴りも検知する"
+result="$(decision_and_reason_with_fake_gh 'gh pr merge 1' "$fixture_commit_only")"
+r_decision="${result%%$'\t'*}"
+r_reason="${result#*$'\t'}"
+assert_eq "$r_decision" "ask" "判定"
+assert_contains "$r_reason" "squash 本文になるテキスト" "理由（コミットメッセージ側の綴りの検知）"
+
+it "squash 本文に綴りが無ければ理由は従来どおり（対照群、追記されない）"
+result="$(decision_and_reason_with_fake_gh 'gh pr merge 1' "$fixture_clean")"
+r_reason="${result#*$'\t'}"
+assert_eq "$r_reason" "$BASE_MERGE_REASON" "クリーンな squash 本文の理由"
+
+it "gh コマンドが無いときは「綴りが無い」と扱わず、確認できていないことを理由に書く"
+nogh_dir="$(new_workdir)/nogh"
+mkdir -p "$nogh_dir"
+for c in cat grep jq; do
+  src="$(command -v "$c")"
+  [[ -n "$src" ]] && ln -sf "$src" "$nogh_dir/$c"
+done
+bash_bin="$(command -v bash)"
+nogh_out="$(printf '%s' "$(bash_payload 'gh pr merge 1')" | PATH="$nogh_dir" "$bash_bin" "$HOOK")"
+nogh_reason="$(printf '%s' "$nogh_out" | jq -r '.hookSpecificOutput.permissionDecisionReason // empty')"
+assert_contains "$nogh_reason" "gh コマンドが無い" "gh 不在時の理由"
+
+it "gh pr view が失敗したときも「綴りが無い」と扱わない"
+result="$(decision_and_reason_with_fake_gh 'gh pr merge 1' "$fixture_clean" 1)"
+r_decision="${result%%$'\t'*}"
+r_reason="${result#*$'\t'}"
+assert_eq "$r_decision" "ask" "判定"
+assert_contains "$r_reason" "PR 情報を取得できなかった" "gh pr view 失敗時の理由"
+
+it "コマンド文字列を取り出せない（壊れた JSON）ときも「綴りが無い」と扱わない"
+broken_out="$(printf '%s' '{"tool_input": {"command": "gh pr merge 1"' \
+  | FAKE_GH_FIXTURE="$fixture_clean" PATH="$fakebin:$PATH" bash "$HOOK")"
+broken_reason="$(printf '%s' "$broken_out" | jq -r '.hookSpecificOutput.permissionDecisionReason // empty')"
+assert_contains "$broken_reason" "コマンド文字列を取り出せていない" "壊れた JSON のときの理由"
+
+it "REST 経由の merge には squash 本文の検査を広げていない（対照群）"
+rest_out="$(printf '%s' "$(bash_payload 'gh api --method PUT repos/o/r/pulls/1/merge')" | bash "$HOOK")"
+rest_reason="$(printf '%s' "$rest_out" | jq -r '.hookSpecificOutput.permissionDecisionReason // empty')"
+case "$rest_reason" in
+  *"squash 本文になるテキスト"*) fail "REST 経路にまで squash 本文検査が意図せず広がっている" ;;
+  *) pass ;;
+esac
+
+it "PR セレクタと --repo を、gh pr merge の後続の語から正しく抜き出す"
+args_file="$(new_workdir)/gh-args.txt"
+printf '%s' "$(bash_payload 'gh pr merge 42 --repo owner/repo --squash')" \
+  | FAKE_GH_FIXTURE="$fixture_clean" FAKE_GH_ARGS_FILE="$args_file" PATH="$fakebin:$PATH" bash "$HOOK" >/dev/null
+gh_args_seen="$(cat "$args_file" 2>/dev/null || true)"
+case "$gh_args_seen" in
+  "pr view 42 --repo owner/repo "*) pass ;;
+  *) fail "gh へ渡された引数が期待と異なる: $gh_args_seen" ;;
+esac
+
+it "gh へ渡す --json は body と commits の両方を要求する（指摘: 取得の契約の検査）"
+assert_contains "$gh_args_seen" "--json body,commits" "gh へ渡された --json"
+
+it "gh へ渡す --jq は本文と全コミットのヘッドライン・本文を取り出す式である（指摘: 取得の契約の検査）"
+assert_contains "$gh_args_seen" "--jq .body, (.commits[] | .messageHeadline, .messageBody)" "gh へ渡された --jq"
+
+# ── --body / --body-file / --subject（指摘: 実測で判明した漏れ）───────────────
+#
+# gh pr merge --body "..." のように squash 本文を CLI 側で直接渡すと、リモート
+# の PR 本文が綺麗でも、渡した文面に綴りがあれば CI は飛ぶ。しかも squash 前の
+# 人手の回復手順（land スキル）は「該当行が出たら、その指示を除いた本文を
+# ファイルに書き、--body-file で差し替えてマージする」と定めており、--body 系
+# を見ないと回復手順そのものがこの検査をすり抜ける経路になっていた。
+
+it "--body に渡した文字列の綴りを検知する（実測で判明した漏れ）"
+body_arg="この変更につき、$(ci_skip_marker 'skip ci') を含む本文を直接渡す（テスト用）。"
+cmd="gh pr merge 1 --squash --body \"${body_arg}\""
+result="$(decision_and_reason_with_fake_gh "$cmd" "$fixture_clean")"
+r_decision="${result%%$'\t'*}"
+r_reason="${result#*$'\t'}"
+assert_eq "$r_decision" "ask" "判定"
+assert_contains "$r_reason" "squash 本文になるテキスト" "--body の綴りの検知"
+
+it "--body がクリーンでも、リモートの本文・コミットは別途見る（安全側に倒す設計）"
+cmd="gh pr merge 1 --squash --body \"この本文はクリーンです。\""
+result="$(decision_and_reason_with_fake_gh "$cmd" "$fixture_body_midsentence")"
+r_reason="${result#*$'\t'}"
+assert_contains "$r_reason" "squash 本文になるテキスト" "--body がクリーンでもリモート側の綴りを検知する"
+
+it "--body に綴りが無く、リモートもクリーンなら理由は従来どおり（対照群）"
+cmd="gh pr merge 1 --squash --body \"この本文はクリーンです。\""
+result="$(decision_and_reason_with_fake_gh "$cmd" "$fixture_clean")"
+r_reason="${result#*$'\t'}"
+assert_eq "$r_reason" "$BASE_MERGE_REASON" "--body・リモートともにクリーンなときの理由"
+
+it "--body-file の中身は読まず、確認できていない扱いにする（実測で判明した漏れ）"
+result="$(decision_and_reason_with_fake_gh 'gh pr merge 1 --squash --body-file notes.md' "$fixture_clean")"
+r_decision="${result%%$'\t'*}"
+r_reason="${result#*$'\t'}"
+assert_eq "$r_decision" "ask" "判定"
+assert_contains "$r_reason" "確認できていません" "--body-file 使用時の理由"
+assert_contains "$r_reason" "body-file" "--body-file 使用時の理由に具体的な対象が書かれている"
+
+it "--body-file（= 連結）でも同じく確認できていない扱いにする"
+result="$(decision_and_reason_with_fake_gh 'gh pr merge 1 --squash --body-file=notes.md' "$fixture_clean")"
+r_reason="${result#*$'\t'}"
+assert_contains "$r_reason" "確認できていません" "--body-file（= 連結）使用時の理由"
+
+it "--body-file があっても --subject に綴りがあれば found が優先される（優先順位の確認）"
+subj_arg="$(ci_skip_marker 'skip actions')"
+cmd="gh pr merge 1 --squash --body-file notes.md --subject \"${subj_arg}\""
+result="$(decision_and_reason_with_fake_gh "$cmd" "$fixture_clean")"
+r_reason="${result#*$'\t'}"
+assert_contains "$r_reason" "squash 本文になるテキスト" "--body-file と --subject 併存時、found が優先される"
+
+it "--subject（= 連結）に渡した文字列の綴りも検知する"
+cmd="gh pr merge 1 --squash --subject=\"$(ci_skip_marker 'no ci')\""
+result="$(decision_and_reason_with_fake_gh "$cmd" "$fixture_clean")"
+r_reason="${result#*$'\t'}"
+assert_contains "$r_reason" "squash 本文になるテキスト" "--subject（= 連結）の綴りの検知"
+
+# ── 複数の gh pr merge を同じコマンドで実行する場合（指摘: 実測で判明した漏れ）─
+#
+# gh pr merge 1 && gh pr merge 2 のように 1 つのコマンドへ複数の対象があると、
+# 承認は 1 回しか出ない。片方だけを照会して判定を確定させると、確認していない
+# 側の対象がそのまま実行されてしまう。
+
+it "複数の対象のうち 2 件目にだけ綴りがあっても検知する（実測で判明した漏れの再現）"
+map_file="$(new_workdir)/map-2nd.tsv"
+printf '1\t%s\n2\t%s\n' "$fixture_clean" "$fixture_body_midsentence" > "$map_file"
+out="$(printf '%s' "$(bash_payload 'gh pr merge 1 && gh pr merge 2')" \
+  | FAKE_GH_FIXTURE="$fixture_clean" FAKE_GH_FIXTURE_MAP="$map_file" PATH="$fakebin:$PATH" bash "$HOOK")"
+r_reason="$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecisionReason // empty')"
+assert_contains "$r_reason" "squash 本文になるテキスト" "複数対象のうち 2 件目の綴りの検知"
+
+it "複数の対象のうち 1 件目にだけ綴りがあっても検知する（順序に依らないことの確認）"
+map_file="$(new_workdir)/map-1st.tsv"
+printf '1\t%s\n2\t%s\n' "$fixture_body_midsentence" "$fixture_clean" > "$map_file"
+out="$(printf '%s' "$(bash_payload 'gh pr merge 1 && gh pr merge 2')" \
+  | FAKE_GH_FIXTURE="$fixture_clean" FAKE_GH_FIXTURE_MAP="$map_file" PATH="$fakebin:$PATH" bash "$HOOK")"
+r_reason="$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecisionReason // empty')"
+assert_contains "$r_reason" "squash 本文になるテキスト" "複数対象のうち 1 件目の綴りの検知"
+
+it "複数の対象がいずれもクリーンなら理由は従来どおり（対照群。多いだけで unavailable へ倒していない）"
+map_file="$(new_workdir)/map-both-clean.tsv"
+printf '1\t%s\n2\t%s\n' "$fixture_clean" "$fixture_clean" > "$map_file"
+out="$(printf '%s' "$(bash_payload 'gh pr merge 1 && gh pr merge 2')" \
+  | FAKE_GH_FIXTURE="$fixture_clean" FAKE_GH_FIXTURE_MAP="$map_file" PATH="$fakebin:$PATH" bash "$HOOK")"
+r_reason="$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecisionReason // empty')"
+assert_eq "$r_reason" "$BASE_MERGE_REASON" "複数対象がいずれもクリーンなときの理由"
+
+# ── フックと land 雛形の綴り一覧が一致すること（指摘）───────────────────────────
+#
+# scripts/confirm-merge-hook.sh の SQUASH_CI_SKIP_RE と、squash 前に人手で同じ
+# 判定を行う手順（.ai-playbook/templates/claude-skill-land.md の対応する手順）
+# の grep パターンは、独立した文字列として存在する。どちらかへだけ綴りを足すと
+# 人手の手順とフックの検査がずれ、見落としか誤警告になる。一致を機械で検査し、
+# 食い違いに気づけるようにする。
+#
+# .ai-playbook/templates/claude-skill-land.md はこのフックの所有物ではない。
+# 読み取りと、一致を検査するこのテストの追加だけをこの指摘に限り行い、雛形
+# 自体は編集しない。
+#
+# 抽出は単一引用符区切りのフィールド分割（awk -F"'"）で行う。両ファイルとも
+# 対象の行にはパターンを挟む単一引用符が 1 組しか無いため、sed の後方参照や
+# GNU 拡張に頼らず、BSD 系の awk でも同じ結果になる（移植性）。
+
+it "フックと land 雛形の CI 抑止の綴り一覧が一致する"
+hook_re="$(awk -F"'" '/SQUASH_CI_SKIP_RE=/{print $2}' "$HOOK")"
+land_re="$(awk -F"'" '/grep -n -i -E /{print $2}' "$PLAYBOOK_SRC/templates/claude-skill-land.md")"
+if [[ -z "$hook_re" ]]; then
+  fail "フック側の SQUASH_CI_SKIP_RE を抽出できなかった（抽出そのものが壊れている疑い）"
+elif [[ -z "$land_re" ]]; then
+  fail "land 雛形側の grep パターンを抽出できなかった（抽出そのものが壊れている疑い）"
+else
+  assert_eq "$hook_re" "$land_re" "CI 抑止の綴り一覧（フック側 vs land 雛形側）"
+fi
+
 exit_with_result
