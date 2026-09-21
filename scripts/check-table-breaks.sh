@@ -302,42 +302,56 @@ END {
   # 継続行かどうかは「直前が ROW かどうか」の単純な 1 行前参照では決まらない。
   # 区切り行は先頭 `|` を省略できる（`| a | b |` の次の行が `--- | ---` でも GFM は
   # 妥当な表として描画する）ため、先頭 `|` を持たない区切り行は cls[] 上は TEXT の
-  # ままだが、delim[] では区切り行として認識している。かといって「直前が区切り行の
-  # 形をしている（delim[i-1]）」を無条件の継続条件にすると、**表と無関係な水平線
-  # （`---` だけの行）の直後に取り残された表の残骸を見落とす**——水平線も
-  # is_delim() を満たすため、直前行の delim[] だけでは「本当に直前の表の区切り行か」
-  # 「たまたま区切り行の形をした無関係な水平線か」を区別できない。
+  # ままだが、delim[] では区切り行として認識している。
   #
-  # そこで state（in_table）を明示的に追跡する。ROW の塊を表として確定させた
-  # （tables++ した）ときだけ state=1 にし、その直後の 1 行が「確定させた表の
-  # 区切り行」であることが分かっている場合に限って継続を許す。state が 0 の
-  # ときに delim[] の形をした行に出会っても、それは「表を確定させていない」
-  # ので継続扱いにしない（＝直後の ROW 行は改めて表の先頭候補として判定される）。
+  # state は 3 値を持つ（2 値の in_table では表せない区別がある）。
+  #   0 = IDLE          表の外。
+  #   1 = HEADER        直前の行を表のヘッダー行として確定させた直後で、次の 1 行が
+  #                      その区切り行（先頭 `|` の有無を問わない）であることを期待する。
+  #   2 = BODY          区切り行まで確定し、データ行を読んでいる区間。
+  #
+  # **2 と 1 を分けるのが要点。** state を 1 か所（in_table のような 2 値）にまとめると、
+  # データ行を読んでいる区間（本来の BODY）でも「直前が区切り行の形」を無条件に
+  # 継続として受け入れてしまい、**表と無関係な水平線（`---` だけの行）がデータ行の
+  # 直後に来ただけで、その先の取り残された残骸を見落とす**——水平線も is_delim() を
+  # 満たすため、「区切り行の形をした行」というだけでは、それが今読んでいる表の
+  # 区切り行なのか、表が終わったあとの無関係な水平線なのかを区別できない。
+  # delim[] の形をした TEXT 行を「区切り行として消費してよい」のは、**ヘッダー行を
+  # 確定させた直後（state == HEADER）に限る。** BODY（state == 2）でその形に出会っても
+  # 区切り行としては消費せず、表の終わりとして扱う（IDLE へ戻す）。
+  IDLE = 0; HEADER = 1; BODY = 2
   tables = 0
   hits = 0
-  in_table = 0
+  state = IDLE
   for (i = 1; i <= n; i++) {
-    if (cls[i] == "BLANK") { in_table = 0; continue }
-    if (cls[i] == "CODE") { in_table = 0; continue }
+    if (cls[i] == "BLANK") { state = IDLE; continue }
+    if (cls[i] == "CODE") { state = IDLE; continue }
     if (cls[i] == "TEXT") {
-      # in_table 中に現れる TEXT 行は、直前に確定させた表の（先頭 `|` を省略した）
-      # 区切り行でありうる。区切り行の形をしているときだけ表の内側のまま進める。
-      if (in_table && delim[i]) continue
-      in_table = 0
+      # ヘッダー行確定の直後だけ、区切り行の形をした行を消費して BODY へ進む。
+      if (state == HEADER && delim[i]) { state = BODY; continue }
+      state = IDLE
       continue
     }
     # cls[i] == "ROW"
-    if (in_table) continue
-    if (i < n && delim[i + 1]) { tables++; in_table = 1; continue }
+    if (state == BODY) continue
+    if (state == HEADER) {
+      # 先頭 `|` を持つ区切り行（`|---|---|` 等）はここで消費する。HEADER へ遷移した
+      # 時点で delim[i] は確認済み（tables++ の条件そのもの）なので、ここでは
+      # 判定し直さず BODY へ進むだけでよい。
+      state = BODY
+      continue
+    }
+    # state == IDLE: 表の先頭候補。
+    if (i < n && delim[i + 1]) { tables++; state = HEADER; continue }
     hits++
     printf "HIT\t%d\t%s\n", i, raw[i]
     if (i < n) printf "NEXT\t%d\t%s\n", i + 1, raw[i + 1]
     else printf "NEXT\t%d\t（ファイル末尾）\n", i
-    # 取り残された残骸のブロックにつき 1 回だけ報告する。in_table を立てておき、
+    # 取り残された残骸のブロックにつき 1 回だけ報告する。BODY へ進めておき、
     # 同じ塊の続く行（cls が ROW のまま連なる行）を継続として黙らせる——1 つの
     # 壊れ方を行ごとに重複して報告しないため（BLANK / CODE に出会えば次の塊として
     # 改めて判定される）。
-    in_table = 1
+    state = BODY
   }
   printf "STAT\t%d\t%d\t%d\n", n, tables, hits
 }
@@ -382,6 +396,17 @@ selftest_broken_after_hr="$(scan_one <(printf 'text\n---\n| c | d |\n| e | f |\n
 case "$selftest_broken_after_hr" in
   *HIT*) ;;
   *) fail "自己診断に失敗しました: 無関係な水平線の直後に取り残された残骸を検出できません。検査が成立していないため失敗させます。" ;;
+esac
+
+# (1e) 正しい表の**データ行の直後**に無関係な水平線が来て、その先に残骸が続く形も、
+# 必ず当たること（(1d) はヘッダー行の前、こちらはデータ行の後という別の位置）。
+# state を HEADER / BODY で分けずに 1 つの真偽値へ畳むと、BODY（データ行を読んで
+# いる区間）でも「直前が区切り行の形」を無条件の継続とみなしてしまい、この形を
+# 見落とす。
+selftest_broken_after_data_hr="$(scan_one <(printf '| a | b |\n|---|---|\n| 1 | 2 |\n---\n| 残骸 |\n') || true)"
+case "$selftest_broken_after_data_hr" in
+  *HIT*) ;;
+  *) fail "自己診断に失敗しました: データ行の直後の無関係な水平線に続く残骸を検出できません。検査が成立していないため失敗させます。" ;;
 esac
 
 # (2) 正しい表・引用内の表・コードブロック内の `|`・表の直後に空行を挟んだ段落は、
