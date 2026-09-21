@@ -295,6 +295,28 @@ assert_ask 'VAR=foo gh pr merge 1' 'クォートなしの環境変数代入（�
 # はならず、gh はコマンド位置に来ない。
 assert_silent '"VAR"=foo gh pr merge 1' 'name 側をクォートすると代入にならない（対照群）'
 
+# ── 空クォート（'' / ""）も語として数える（第二意見の指摘で判明した迂回・誤検知）
+#
+# 空クォートは中身の文字を 1 つも追加しないため、「内容が付いたときにだけ語が
+# 始まったとみなす」実装だと、空クォートだけの語はいつまでも「語が始まって
+# いない」扱いのままになる。その結果、空白や区切り文字に達しても語を確定させる
+# 処理（word_start のリセットを含む）が走らず、次の語の先頭で word_start が
+# 上書きされないまま残る。直前の空クォートや区切り文字まで巻き込んで語の元
+# テキストを切り出してしまい、環境変数代入の判定（name= が引用符を挟まずに
+# 始まっているか）が本来の name の手前に無関係な文字が挟まって外れる（実測:
+# `echo '' ; FOO=bar gh pr merge 1` が素通りしていた）。
+assert_ask "echo '' ; FOO=bar gh pr merge 1" \
+  '空クォートの直後の ; を挟んだ環境変数代入（迂回）'
+assert_ask 'git commit -m "" ; VAR=1 gh pr merge 1' \
+  '空の二重引用符引数の直後の ; を挟んだ環境変数代入（迂回）'
+assert_ask 'test -z "" && FOO=bar gh pr merge 1' \
+  '空の二重引用符引数の直後の && を挟んだ環境変数代入（迂回）'
+# 逆方向: 空クォート自体が語として clause_words に入らないと、'' 自身が
+# コマンド名（bash はこれを実行しようとし、gh は起動されない）であるにも
+# かかわらず、gh が誤って先頭語として扱われ、逆方向の誤検知が起きる（実測）。
+assert_silent "'' gh pr merge 1" \
+  '空クォートがコマンド名になる（gh は引数、誤検知の対照群）'
+
 # REST / GraphQL 経由。permissions の前方一致では捕捉できない経路。
 assert_ask   'curl -X PUT https://api.github.com/repos/o/r/pulls/1/merge'
 assert_ask   'gh api graphql -f query="mutation { mergePullRequest(input: {pullRequestId: \"x\"}) { clientMutationId } }"'
