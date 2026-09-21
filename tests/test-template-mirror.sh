@@ -98,7 +98,15 @@ BOOTSTRAP="$REPO_ROOT/packages/devcontainer-bootstrap/bootstrap.sh"
 #   EXCLUDED_NO_COPY_RELS のコメントが要求していた「配線を入れる判断をしたときは
 #   MIRRORED_RELS へ移す」を実施した）。判定ロジックはプレースホルダを 1 つも
 #   持たず、生成条件に依らず全構成で同一である。
-MIRRORED_RELS='scripts/check-no-secrets.sh
+#
+#   check-control-chars.sh / check-table-breaks.sh を MIRRORED に入れる理由:
+#   どちらも判定（禁止バイト・表の崩れの検出規則）は生成条件に依らず全構成で
+#   同一であり、置換プレースホルダを 1 つも持たない。加えて、このリポジトリ自身の
+#   scripts/acceptance.sh がこの写しを呼ぶため、正本と写しがずれると「配布物では
+#   落ちるが手元では通る」壊れ方が生まれる。
+MIRRORED_RELS='scripts/check-control-chars.sh
+scripts/check-no-secrets.sh
+scripts/check-table-breaks.sh
 scripts/confirm-merge-hook.sh
 scripts/load-project-env.sh
 scripts/loop-gate.sh
