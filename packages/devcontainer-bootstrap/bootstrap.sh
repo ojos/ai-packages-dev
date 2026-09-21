@@ -2822,44 +2822,74 @@ TMPL
 # `pulls/1/merge`（マージ済みか調べるだけ）まで確認を要求する。確認が頻発すれば内容を
 # 読まずに承認する習慣ができ、機構は形だけになる。
 #
-# ── コマンド位置の判定: 列挙 + 解析の二重化 ──────────────────────────────────
+# ── コマンド位置の判定: クォート認識の解析 1 つに集約する ─────────────────────
 #
-# 「コマンド位置か」を 2 つの独立した経路で判定し、どちらかが一致すれば ask にする。
+# 「コマンド位置か」は command_position_has（下で定義）だけで判定する。クォート
+# を認識しながら文字単位で区切り文字を走査し（for_each_clause）、単純コマンド
+# ごとの語のリストを組み立てて、期待する語列と完全一致するかを見る。
 #
-#   (a) 列挙（正規表現の前方一致 cmd_pos）: 行頭、または ; && || | ( の直後、
-#       シェルの制御語（if / elif / while / until / then / do / else）の直後、
-#       否定 ! の直後を、コマンド位置とみなす前置きとして列挙する。区切り文字の
-#       直後という条件だけでは、`if gh pr merge 1; then :; fi` のように制御語を
-#       1 つ前置くだけで素通りしていた（実測）。else も同様に漏れていた（実測:
-#       `if false; then :; else gh pr merge 1; fi`）。列挙である以上、ここに
-#       挙げていない制御語や書き方は引き続き漏れ得る。
-#   (b) 解析（command_position_has、下で定義）: クォートを認識しながら文字単位で
-#       区切り文字を走査し、単純コマンドごとの語のリストを組み立てて、期待する
-#       語列と完全一致するかを見る。列挙にない書き方（多重の制御語の入れ子、
-#       `{ gh pr merge 1; }` のようなグループコマンドなど）にも届くが、bash の
-#       文法を全部実装したものではない（範囲は関数側のコメントに明記する）。
+# かつては、同じ問いをもう 1 つの独立した経路（制御語などを前置きとして列挙した
+# 正規表現。クォートを認識しない grep）でも判定し、どちらか一致すれば ask にする
+# 二重化を採っていた。役割としては、列挙が実測した迂回を確実に塞ぐ下限の保証、
+# 解析が未知の書き方（グループコマンドの入れ子など）に届く担当という住み分け
+# だったが、OR で結ぶ限り、クォートを見ない側だけが起こす誤検知は構造として
+# 避けられなかった。`'if' gh pr merge 1`（予約語ではなく if という名前のコマンド
+# を実行する入力）を予約語 if の直後と誤認し、`echo "x; gh pr merge 1"`（二重
+# 引用符の中の ;）を区切り文字と誤認して、どちらも確認を求めていた（実測）。
+# 走査を 1 つにし、この種の食い違いを構造として作れないようにした。
 #
-# (a) と (b) を両方残すのは、役割が違うため。(a) は実測した迂回を確実に塞ぐ下限の
-# 保証であり、(b) が仮に取りこぼしても揺らがない。(b) は未知の書き方に届く代わりに
-# 部分実装であり、取りこぼしも誤検知も起こしうる。**「迂回できない」とは書かない。**
-# 塞ぐのは実測で確認した形と、解析が届く範囲だけである。先行する環境変数代入は
-# どちらの経路でも読み飛ばす。前方一致にしないのは cd との連結を捕捉するためで、
-# 逆に引用符の内側は両方の経路で通る。
+# 列挙（if / elif / while / until / then / do / else / 否定の !）自体は消して
+# いない。for_each_clause の中の _cmd_start_idx（下で定義）が唯一の置き場所に
+# なった。節の語のリストを先頭から見て、環境変数代入（FOO=bar）とこれらの制御語
+# の繰り返しを読み飛ばし、そこから先を「実コマンドの語」として扱う。**この 2 つは
+# クォートの扱いが違うため、判定条件も分けている。** 予約語として読み飛ばすのは、
+# その語がクォートもバックスラッシュエスケープも含まないときだけにしている。
+# `'if'` や `"if"`、`i\f` のように一部でも引用・エスケープされた語は、bash の
+# 文法上そもそも予約語として認識されず、実際に起動されるコマンド名の一部
+# （＝実コマンドの語そのもの）になるため、ここで読み飛ばしてはならない（実測）。
+# 環境変数代入として読み飛ばすのは逆に、`name=` の部分に引用符を挟んでいない
+# ときだけで、値側の引用符は問わない。`VAR="foo" gh pr merge 1` や
+# `KEY='bar' gh pr merge 1` は値側だけがクォートされた代入で、実際に `gh` が
+# コマンド位置に来る（実測: `env` で代入として効くことを確認）。予約語と同じ
+# 「語にクォートが 1 文字でもあれば読み飛ばさない」を代入にも適用すると、この
+# 2 例を取りこぼして素通りしてしまう（実測。解析を `grep` の列挙へ一本化した
+# ときに、クォートを見ない `grep` 側のフォールバックが無くなったことで露見した
+# 退行）。詳細と判定条件は _cmd_start_idx のコメントを参照。
 #
-# `{`（グループコマンド）は (a) には加えていない。正規表現には「その位置が本当に
-# コマンド位置か」を判定する手段が無く、`{` を素朴に境界へ加えると
+# 列挙を解析の外に出さなかった代わりに、実測で踏んだ形（if / elif / while /
+# until / then / do / else / ! それぞれの直後）が確実に ask になることは、
+# 実装の構造にではなくテスト（tests/test-confirm-merge-hook.sh）で固定する。
+# 解析は bash の文法を全部実装したものではなく部分実装であり、取りこぼしうる
+# （範囲は下のコメントに明記する）。「解析が拾うはずだから列挙のテストは要らない」
+# とはしない。
+#
+# 先行する環境変数代入はどちらの語（制御語・実コマンド）の前でも読み飛ばす。
+# 前方一致にしないのは cd との連結を捕捉するためで、逆に引用符の内側は通る。
+#
+# JSON から command を取り出せなかった場合（ペイロード全体を検査対象にしている
+# とき）は command_position_has を使わない。ペイロード全体はシェルの行ではなく
+# JSON テキストであり、位置を解析する土台が無いためである。この場合は位置を
+# 問わない語の並び照合へ落とす（cmd_pos_ask、下で定義）。
+#
+# `{`（グループコマンド）は、その節で「環境変数代入と制御語だけ」を前置きとして
+# 許した上で、まだ実コマンドの語を 1 つも集めていないときだけ、グループコマンド
+# の開始として読み飛ばす（_clause_prefix_is_reserved_only、下で定義）。かつては
+# 「節でまだ語を 1 つも集めていない」を唯一の条件にしていたため、`if { gh pr
+# merge 1; }; then :; fi` のように制御語を 1 つ前置くだけで `{` が語として残り、
+# 解析が gh pr merge へ到達できずに素通りしていた（実測）。正規表現には「その
+# 位置が本当にコマンド位置か」を判定する手段が無く、`{` を素朴に境界へ加えると
 # `echo hi { gh pr merge 1`（`{` 以降も echo の引数でしかなく、実際には実行され
-# ない）のような無害な文字列まで拾ってしまう（実測）。(b) は「この節でまだ語を
-# 1 つも集めていない」ことを条件にできるため、真にコマンド位置にある `{` だけを
-# 区別できる。入れすぎて誤検知を増やさないため、この非対称は意図的である。
+# ない）のような無害な文字列まで拾ってしまうため、列挙（cmd_pos_ask の grep 側）
+# には `{` を加えていない（実測）。解析は「この節の語が制御語・代入だけで説明
+# できるか」を判定できるため、真にコマンド位置にある `{` だけを区別できる。
 #
-# `case` / `esac` / `fi` / `done` / `}` は列挙にも解析にも追加していない。これら
-# は必ず直後に区切り文字（; か改行）を要求する構文であり（実測: `fi echo hi` や
+# `case` / `esac` / `fi` / `done` / `}` は予約語としては扱っていない。これらは
+# 必ず直後に区切り文字（; か改行）を要求する構文であり（実測: `fi echo hi` や
 # `done echo hi` は構文エラーで実行されない）、既存の区切り文字判定がそのまま
-# 効くため、独立した対応は要らない。`in`（for / case で使う語）も追加していない。
+# 効くため、独立した対応は要らない。`in`（for / case で使う語）も加えていない。
 # `for x in gh pr merge 1; do ...; done` の `gh pr merge 1` は for のワードリスト
-# （x が順に取る値）であって実行されるコマンドではなく、`in` の直後をコマンド位置
-# として扱うとここが誤検知になる（実測）。
+# （x が順に取る値）であって実行されるコマンドではなく、この節の先頭の語は
+# `for` のままなので gh pr merge との一致は生じない（実測）。
 #
 # ── fail-open にしない ───────────────────────────────────────────────────────
 #
@@ -2868,6 +2898,31 @@ TMPL
 # 飛ばして通す。検知層が黙って無効化されるのは最悪の壊れ方で、このフックが防ごうとして
 # いる「気づかないまま実行できる」状態そのものを再現する。出力側も同じ理由で jq に
 # 依存させない（printf のフォールバックを持つ）。
+#
+# ── この解析は bash の字句解析の部分的な再実装である ──────────────────────────
+#
+# for_each_clause 以下の解析は、bash の字句解析（トークナイザ）を部分的に
+# 再現したものであり、bash の文法を全部実装したものではない（範囲は
+# for_each_clause のコメントに明記している）。ここまでに、少なくとも次の
+# 境界事例が、いずれも実際にこの解析へ入力してから見つかっている。
+#
+#   - コマンド位置の判定を「列挙（クォートを認識しない正規表現）」と「解析
+#     （クォート認識）」の二重化にしていたことに起因する誤検知
+#     （`'if' gh pr merge 1` / `echo "x; gh pr merge 1"`）
+#   - 環境変数代入の判定に、予約語と同じ「語にクォートが 1 文字でもあれば
+#     読み飛ばさない」を適用していたことによる迂回
+#     （`VAR="foo" gh pr merge 1` のように値側だけをクォートした代入）
+#   - 空クォート（`''` / `""`）の中身が空であるために「語が始まった」ことを
+#     記録し損ね、直後の語の切り出し範囲が直前の区切り文字まで巻き込まれた
+#     ことによる迂回・誤検知
+#     （`echo '' ; FOO=bar gh pr merge 1` / `'' gh pr merge 1`）
+#
+# いずれも「新しく入れた処理が別の経路で穴を作っていないか」という観点の
+# 変異テストを実際にかけて初めて見つかっている。この経緯が示すのは、
+# bash の字句規則を部分的に再実装する以上、境界事例は今後も見つかりうる
+# ということである。**「境界事例を網羅した」とは書かない。** 見つかった
+# 形はそのつど実測し、塞いで、テスト（tests/test-confirm-merge-hook.sh）
+# へ固定する、という「踏んだら足す」運用を前提にしている。
 #
 # ── 既知の限界（意図的に塞がない）────────────────────────────────────────────
 #
@@ -2931,14 +2986,27 @@ set -uo pipefail
 #
 # 解析する範囲: ; & && | || ( ) と改行を区切りとして扱う。単一引用符・二重引用符
 # の中身（二重引用符内のバックスラッシュエスケープを含む）、引用符の外の
-# バックスラッシュエスケープは区切りとして扱わない。空白を伴う { は、その節が
-# まだ 1 つも語を集めていないとき（＝真にコマンド位置にあるとき）だけ、その場の
-# 語・節テキストへ加えずに読み飛ばす（グループコマンド `{ gh pr merge 1; }` の
-# 開始を、節の先頭に居るときだけコマンド位置として扱うため）。
+# バックスラッシュエスケープは区切りとして扱わない。空白を伴う { は、その節の
+# 語が「環境変数代入と制御語だけ」で説明できる間（＝真にコマンド位置にある間）
+# だけ、その場の語・節テキストへ加えずに読み飛ばす（グループコマンド
+# `{ gh pr merge 1; }` の開始を、制御語や代入だけを前置いた真のコマンド位置に
+# あるときも含めてコマンド位置として扱うため。詳細は上のヘッダを参照）。
 #
-# 解析しない範囲（意図的に見ない。列挙による cmd_pos 側が、ここでの取りこぼしに
-# 対する下限の保証になる。bash の文法を完全に実装すると雛形として重くなりすぎる
-# ため、範囲を絞っている）:
+# 語ごとに「クォート・バックスラッシュエスケープを 1 文字でも含むか」も
+# clause_word_quoted（clause_words と対になる配列）へ、「元テキストそのもの
+# （クォートを残したまま）」も clause_word_raw へ記録する。予約語としての判定
+# （_cmd_start_idx、下で定義）は、clause_word_quoted が立っていない語（＝完全に
+# 素の語）に対してだけ行う。`'if'` のように一部でもクォートされた語は bash 上
+# そもそも予約語ではなく実コマンド名になるため、ここで区別できないと予約語だけ
+# を読み飛ばす判定が誤検知を起こす（実測）。環境変数代入としての判定は逆に
+# clause_word_quoted を見ず、clause_word_raw に対して直接正規表現を当てる。
+# `VAR="foo"` のように値側だけがクォートされていても代入として有効なままの
+# ため、語全体のクォート有無では代入かどうかを見分けられない（詳細は
+# _cmd_start_idx のコメントを参照）。
+#
+# 解析しない範囲（意図的に見ない。bash の文法を完全に実装すると雛形として
+# 重くなりすぎるため、範囲を絞っている。ここでの取りこぼしは、実測した形に
+# 限ってはテスト側で固定し、それ以外は取りこぼしうる）:
 #   - 変数展開・コマンド置換・算術展開（$(...) `...` $((...))）の中身。展開の
 #     結果によってコマンドが変わる形までは追わない
 #   - here-document（<<, <<-, <<<）の本体。区切り文字と同じ規則で割ってしまう
@@ -2949,14 +3017,30 @@ set -uo pipefail
 #     拾える
 #
 # 引数: $1 = 節ごとに呼び出すハンドラ関数名、$2 = 検査対象テキスト。
-# ハンドラは clause_words（配列）と clause_text（文字列）を読める。
+# ハンドラは clause_words（配列。クォートは剥がれる）・clause_word_quoted（配列。
+# 各語がクォート・バックスラッシュエスケープを 1 文字でも含んでいたか）・
+# clause_word_raw（配列。各語の元テキストそのもの。クォートは残したまま）・
+# clause_text（節全体の元テキスト。クォートは残したまま）を読める。
+#
+# clause_word_raw を別に持つ理由: 環境変数代入（FOO=bar）の判定は、bash の
+# 実際の挙動に合わせて「name= の部分が引用符を 1 文字も挟まずに書かれている
+# か」で見る必要がある（実測: `VAR="foo" env` は代入として効くが、`"VAR"=foo env`
+# は代入にならず `VAR=foo` という名前のコマンドを探しにいく）。value 側は引用符
+# で囲んでも代入として有効なままなので、clause_word_quoted（語全体にクォートが
+# 1 文字でもあるか）だけでは name= 部分だけを見分けられない。clause_word_raw
+# （引用符を残した元テキスト）に対して `^[A-Za-z_][A-Za-z0-9_]*=` を当てれば、
+# name 部分に引用符が挟まっている場合は正規表現がそこで止まって一致せず、
+# value 側だけが引用符で囲まれている場合は = より前で一致が確定するため、
+# 追加の状態管理なしで両方を正しく判定できる。
 for_each_clause() {
   local handler="$1" text="$2"
   local i n c
-  local word="" have_word=0
+  local word="" have_word=0 word_quoted=0 word_start=-1
   local in_squote=0 in_dquote=0
 
   clause_words=()
+  clause_word_quoted=()
+  clause_word_raw=()
   clause_text=""
   n=${#text}
 
@@ -2970,6 +3054,7 @@ for_each_clause() {
       else
         word+="$c"
         have_word=1
+        word_quoted=1
       fi
       continue
     fi
@@ -2984,53 +3069,90 @@ for_each_clause() {
           clause_text+="${text:i:1}"
           word+="${text:i:1}"
           have_word=1
+          word_quoted=1
         fi
       else
         clause_text+="$c"
         word+="$c"
         have_word=1
+        word_quoted=1
       fi
       continue
     fi
 
     case "$c" in
       "'")
+        # クォートが開いた時点で「語が始まった」ことを記録する。空クォート
+        # （'' / ""）は中身の文字を 1 つも追加しないため、内容が付くときにだけ
+        # have_word を立てる実装だと、空クォートだけの語はいつまでも
+        # have_word=0 のまま扱われる（実測）。その結果、空白や区切り文字に
+        # 達しても「語を確定させて word_start をリセットする」処理
+        # （下の空白・区切り文字の分岐、いずれも have_word -eq 1 を条件にする）
+        # が走らず、word_start が空クォートの開始位置に残り続ける。次の語の
+        # 先頭でも word_start が -1 に戻っていないため上書きされず、
+        # clause_word_raw の切り出しに直前の空クォートや区切り文字まで
+        # 巻き込んでしまい、環境変数代入の判定（^[A-Za-z_][A-Za-z0-9_]*=）が
+        # raw の先頭に来るはずの文字の前へ無関係な文字が挟まって外れる
+        # （実測: `echo '' ; FOO=bar gh pr merge 1` が素通りしていた）。逆に
+        # `'' gh pr merge 1` では、空クォートが語として clause_words に入らない
+        # ため gh が誤って先頭語として扱われ、逆方向の誤検知も起きていた
+        # （実測）。クォートが開いた瞬間に have_word と word_quoted を立てる
+        # ことで、中身が空でも「クォートで作った語」を 1 つの語として確定
+        # できるようにする。
+        [[ $word_start -eq -1 ]] && word_start=$i
+        have_word=1
+        word_quoted=1
         in_squote=1
         clause_text+="$c"
         ;;
       '"')
+        [[ $word_start -eq -1 ]] && word_start=$i
+        have_word=1
+        word_quoted=1
         in_dquote=1
         clause_text+="$c"
         ;;
       $'\\')
+        [[ $word_start -eq -1 ]] && word_start=$i
         clause_text+="$c"
         i=$((i + 1))
         if [[ $i -lt $n ]]; then
           clause_text+="${text:i:1}"
           word+="${text:i:1}"
           have_word=1
+          word_quoted=1
         fi
         ;;
       ' ' | $'\t')
         clause_text+="$c"
         if [[ $have_word -eq 1 ]]; then
           clause_words+=("$word")
+          clause_word_quoted+=("$word_quoted")
+          clause_word_raw+=("${text:word_start:i-word_start}")
           word=""
           have_word=0
+          word_quoted=0
+          word_start=-1
         fi
         ;;
       '{')
-        # 真にコマンド位置（この節でまだ語を 1 つも集めていない）で、かつ直後が
-        # 空白のときだけグループコマンドの開始として読み飛ばす。それ以外（他の
-        # コマンドの引数の途中など）は素通しの文字として扱う。ここを区別しないと
-        # `echo hi { gh pr merge 1` のような、実際には実行されない文字列まで
-        # 誤って一致させてしまう（実測）。
-        if [[ $have_word -eq 0 && ${#clause_words[@]} -eq 0 ]] \
+        # グループコマンドの開始として読み飛ばすのは、(1) まだ語の途中でなく、
+        # (2) この節でここまでに集めた語が環境変数代入・制御語だけで説明でき
+        # （＝実コマンドの語をまだ 1 つも集めていない。_clause_prefix_is_reserved_only、
+        # 下で定義）、(3) 直後が空白であるときだけ。それ以外（他のコマンドの
+        # 引数の途中など）は素通しの文字として扱う。(2) を「節の語が空か」だけに
+        # すると、`if { gh pr merge 1; }; then :; fi` のように制御語を 1 つ
+        # 前置くだけで { が語として残り、解析が gh pr merge へ届かなくなる
+        # （実測）。逆に無条件で許すと `echo hi { gh pr merge 1`（{ 以降も echo
+        # の引数でしかなく実際には実行されない）のような無害な文字列まで拾って
+        # しまう（実測）。
+        if [[ $have_word -eq 0 ]] && _clause_prefix_is_reserved_only \
           && { [[ "${text:$((i + 1)):1}" == ' ' ]] \
             || [[ "${text:$((i + 1)):1}" == $'\t' ]] \
             || [[ "${text:$((i + 1)):1}" == $'\n' ]]; }; then
           :
         else
+          [[ $word_start -eq -1 ]] && word_start=$i
           clause_text+="$c"
           word+="$c"
           have_word=1
@@ -3039,13 +3161,19 @@ for_each_clause() {
       $'\n' | ';' | '&' | '|' | '(' | ')')
         if [[ $have_word -eq 1 ]]; then
           clause_words+=("$word")
+          clause_word_quoted+=("$word_quoted")
+          clause_word_raw+=("${text:word_start:i-word_start}")
           word=""
           have_word=0
+          word_quoted=0
+          word_start=-1
         fi
         if [[ -n "$clause_text" || ${#clause_words[@]} -gt 0 ]]; then
           "$handler"
         fi
         clause_words=()
+        clause_word_quoted=()
+        clause_word_raw=()
         clause_text=""
         # && / || の 2 文字目は読み飛ばす（境界としては 1 回でよい）。
         if { [[ "$c" == '&' ]] || [[ "$c" == '|' ]]; } \
@@ -3054,6 +3182,7 @@ for_each_clause() {
         fi
         ;;
       *)
+        [[ $word_start -eq -1 ]] && word_start=$i
         clause_text+="$c"
         word+="$c"
         have_word=1
@@ -3063,35 +3192,84 @@ for_each_clause() {
 
   if [[ $have_word -eq 1 ]]; then
     clause_words+=("$word")
+    clause_word_quoted+=("$word_quoted")
+    clause_word_raw+=("${text:word_start:n-word_start}")
   fi
   if [[ -n "$clause_text" || ${#clause_words[@]} -gt 0 ]]; then
     "$handler"
   fi
   clause_words=()
+  clause_word_quoted=()
+  clause_word_raw=()
   clause_text=""
 }
 
-# for_each_clause のハンドラ。呼び出し側が cph_expect（配列）を用意してから
-# command_position_has を呼ぶ。節の語のリスト（clause_words）が、先頭の環境変数
-# 代入（FOO=bar）とシェルの制御語（if / elif / while / until / then / do / else /
-# !）の繰り返しを読み飛ばした直後に、cph_expect と完全一致すれば cph_found を立てる。
-# shellcheck disable=SC2329  # for_each_clause から "$handler" 経由で間接的に呼ばれる
-_cph_clause_handler() {
-  local idx=0 w0
+# clause_words / clause_word_quoted / clause_word_raw（グローバル。for_each_clause
+# が用意する）を先頭から見て、環境変数代入（FOO=bar）とシェルの制御語（if /
+# elif / while / until / then / do / else / 否定の !）の繰り返しを読み飛ばした
+# 次のインデックスを _cmd_start_idx_result へ設定する。
+#
+# 環境変数代入と予約語（制御語・否定）は、クォートの扱いが違うため判定条件も
+# 分けている（実測。以下はいずれも `env` で確認した実際の bash の挙動）。
+#
+#   - 環境変数代入: name= の部分に引用符が 1 文字も挟まっていないことだけを
+#     求める。値側の引用符は問わない。`VAR="foo" env` / `KEY='bar' env` は
+#     どちらも代入として有効に効く。判定は clause_word_raw（引用符を残した
+#     元テキスト）に対して `^[A-Za-z_][A-Za-z0-9_]*=` を当てる。value 側が
+#     引用符で囲まれていても = より前で一致が確定するため代入として読み飛ばす
+#     一方、`"VAR"=foo env` のように name 側に引用符が挟まっていると `"` の
+#     時点で正規表現が止まり一致しないため、代入として読み飛ばさない
+#     （これは実際に `"VAR"=foo` という名前のコマンドを探しにいく入力であり、
+#     env は実行されない）。
+#   - 予約語（制御語・否定 !）: 語がクォート・バックスラッシュエスケープを
+#     1 文字も含まない（clause_word_quoted が 0 の）ときだけ読み飛ばす。
+#     `'if'` や `"if"`、`i\f` のように一部でも引用・エスケープされた語は、
+#     bash の文法上そもそも予約語として認識されず、実際に起動されるコマンド
+#     名の一部（＝実コマンドの語そのもの）になるため、ここで読み飛ばしては
+#     ならない。
+#
+# command_position_has（下）と for_each_clause の `{` 判定
+# （_clause_prefix_is_reserved_only、下）の両方がこの関数だけを参照しており、
+# 列挙（制御語の一覧）の置き場所はここ 1 か所にまとめている。
+_cmd_start_idx() {
+  local idx=0 w
   while [[ $idx -lt ${#clause_words[@]} ]]; do
-    w0="${clause_words[$idx]}"
-    if [[ "$w0" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; then
+    if [[ "${clause_word_raw[$idx]:-}" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; then
       idx=$((idx + 1))
       continue
     fi
-    case "$w0" in
-      if | elif | while | until | then | do | else | '!')
-        idx=$((idx + 1))
-        continue
-        ;;
-    esac
+    if [[ "${clause_word_quoted[$idx]:-0}" -eq 0 ]]; then
+      w="${clause_words[$idx]}"
+      case "$w" in
+        if | elif | while | until | then | do | else | '!')
+          idx=$((idx + 1))
+          continue
+          ;;
+      esac
+    fi
     break
   done
+  _cmd_start_idx_result=$idx
+}
+
+# for_each_clause の `{` 判定用。ここまでに集めた clause_words が「環境変数代入と
+# 制御語だけ」で説明できる（＝実コマンドの語がまだ 1 つも無い）ときに真を返す。
+# clause_words が空（まだ何も集めていない）ときも、_cmd_start_idx_result が 0 で
+# 長さも 0 になるため真になる。
+_clause_prefix_is_reserved_only() {
+  _cmd_start_idx
+  [[ $_cmd_start_idx_result -eq ${#clause_words[@]} ]]
+}
+
+# for_each_clause のハンドラ。呼び出し側が cph_expect（配列）を用意してから
+# command_position_has を呼ぶ。節の語のリスト（clause_words）が、_cmd_start_idx
+# の読み飛ばし（環境変数代入・制御語の繰り返し。読み飛ばす条件は語の種類ごとに
+# 違う。詳細は _cmd_start_idx のコメントを参照）の直後に、cph_expect と
+# 完全一致すれば cph_found を立てる。
+# shellcheck disable=SC2329  # for_each_clause から "$handler" 経由で間接的に呼ばれる
+_cph_clause_handler() {
+  _cmd_start_idx
+  local idx=$_cmd_start_idx_result
   local j=0 ok=1
   while [[ $j -lt ${#cph_expect[@]} ]]; do
     if [[ "${clause_words[$((idx + j))]:-}" != "${cph_expect[$j]}" ]]; then
@@ -3105,8 +3283,8 @@ _cph_clause_handler() {
 
 # 引数: 検査対象テキスト、続けて期待する語（可変長。例: gh pr merge）。
 # 戻り値: 0 = 一致する単純コマンドがある、1 = 無い。
-# 正規表現の前方一致（cmd_pos）とは別経路で同じ問いに答えるための第二の判定で、
-# 上のヘッダ「コマンド位置の判定」に対応する。
+# コマンド位置の判定はこの関数（と for_each_clause / _cmd_start_idx）に集約して
+# いる。上のヘッダ「コマンド位置の判定」を参照。
 command_position_has() {
   local text="$1"
   shift
@@ -3114,6 +3292,32 @@ command_position_has() {
   cph_found=0
   for_each_clause _cph_clause_handler "$text"
   [[ $cph_found -eq 1 ]]
+}
+
+# コマンド位置に期待する語列があるかを判定する。extracted=="yes"（Bash ツールの
+# tool_input.command を取り出せた）ときは command_position_has だけで判定する。
+# extracted=="no"（JSON からの取り出しに失敗し、ペイロード全体を検査対象にして
+# いる）ときは、そもそも「シェルの行」ではなく JSON テキストであり位置を解析する
+# 土台が無いため、位置を問わない語の並び照合（grep）へ落とし、確認を増やす側へ
+# 振る（fail-open にしない）。
+#
+# 引数: $1 = 検査対象テキスト、$2 = extracted（yes/no）、$3 = 語末境界の正規表現
+# （呼び出し側の word_end）、続けて期待する語（可変長。例: gh pr merge）。
+cmd_pos_ask() {
+  local text="$1" ex="$2" wend="$3"
+  shift 3
+  if [[ "$ex" == "yes" ]]; then
+    command_position_has "$text" "$@"
+    return $?
+  fi
+  local re="" w
+  for w in "$@"; do
+    if [[ -n "$re" ]]; then
+      re="${re}[[:space:]]+"
+    fi
+    re="${re}${w}"
+  done
+  grep -qE "${re}${wend}" <<<"$text"
 }
 
 # for_each_clause のハンドラ。節のテキスト（clause_text。クォートは残ったまま）
@@ -3169,38 +3373,17 @@ else
   norm_target="${target//$'\\\r\n'/ }"
   norm_target="${norm_target//$'\\\n'/ }"
 
-  # コマンド位置の前置き（列挙）。行頭、または ; && || | ( の直後で、先行する環境
-  # 変数代入（FOO=bar gh ...）を読み飛ばす。grep は行単位で見るため ^ が各行の
-  # 先頭に効く。
-  #
-  # それらの直後に加え、シェルの制御語（if / elif / while / until / then / do /
-  # else）の直後と、否定の ! の直後も同じくコマンド位置として扱う。制御語は複数
-  # 連なり得る（if false; then while ...; do のような形）ため * で繰り返しを許す。
-  # 列挙である以上、ここに挙げていない書き方は引き続き漏れ得る。この取りこぼしは
-  # command_position_has（解析）が別経路で拾うことがある。
-  #
-  # 取り出しに失敗したときはこの前置きを外す。ペイロード全体はシェルの行ではなく JSON
-  # であり、コマンドは引用符の内側に現れる。位置を問う条件をそのまま当てると必ず外れ、
-  # 「全体を検査対象にする」が実質 fail-open になる（実測: 壊れた JSON
-  # {"tool_input": {"command": "gh pr merge 1" が素通りした）。取り出せていない以上
-  # 位置は判定できないため、位置を問わない照合へ落として確認を増やす側へ振る。
-  # command_position_has 側も同じ理由で、取り出せたとき（extracted == yes）だけ使う
-  # （JSON テキストをシェルの語として解析しても意味を持たない）。
-  cmd_pos='(^|[;&|(])[[:space:]]*((if|elif|while|until|then|do|else)[[:space:]]+)*!?[[:space:]]*([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*'
-  if [[ "$extracted" == "no" ]]; then
-    cmd_pos=''
-  fi
-
   # 語末の境界。空白か行末だけにすると、JSON の引用符（"gh pr merge"）に隣接した形を
   # 取りこぼす。逆に境界を置かないと gh pr mergequeue のような別サブコマンドまで拾う。
   word_end='([^A-Za-z0-9_-]|$)'
 
   # パイプは使わずヒアストリングで渡す。grep -q は一致した時点で終了するため、上流を
   # パイプにすると SIGPIPE で pipefail が発火し、一致したのに条件が偽になる経路ができる。
+  # cmd_pos_ask（上で定義）はこのヒアストリング渡しをそのまま踏襲する。
   #
-  # 列挙（grep）と解析（command_position_has）の OR。どちらかが一致すれば ask にする。
-  if grep -qE "${cmd_pos}gh[[:space:]]+pr[[:space:]]+merge${word_end}" <<<"$norm_target" \
-    || { [[ "$extracted" == "yes" ]] && command_position_has "$norm_target" gh pr merge; }; then
+  # コマンド位置の判定は cmd_pos_ask（extracted に応じて解析と位置を問わない
+  # 照合を切り替える）に一本化している。上のヘッダ「コマンド位置の判定」を参照。
+  if cmd_pos_ask "$norm_target" "$extracted" "$word_end" gh pr merge; then
     reason='gh pr merge をコマンド位置で実行しようとしています。既定の merge 方針は手動承認です。承認の記録を確認してください。'
   else
     # REST 経由の merge。PUT の指定と merge エンドポイントが同じコマンド節にある
@@ -3226,10 +3409,11 @@ else
     if [[ "$rest_found" -eq 1 ]]; then
       reason='PR の merge エンドポイントへ PUT を実行しようとしています（REST 経由の merge）。既定の merge 方針は手動承認です。承認の記録を確認してください。'
     elif grep -qF 'mergePullRequest' <<<"$norm_target" \
-      && { grep -qE "${cmd_pos}gh[[:space:]]+api[[:space:]]+graphql${word_end}" <<<"$norm_target" \
-        || { [[ "$extracted" == "yes" ]] && command_position_has "$norm_target" gh api graphql; }; }; then
-      # graphql だけは行をまたぐ判定にする。クエリはヒアドキュメントや複数行の
-      # -f query=... で渡されることがあり、同じ行にあることを条件にすると外れる。
+      && cmd_pos_ask "$norm_target" "$extracted" "$word_end" gh api graphql; then
+      # mergePullRequest の有無はクォートを問わない部分一致でよい（クエリは
+      # ヒアドキュメントや複数行の -f query=... で渡されることがあり、行や節を
+      # またいでよいテキストのため）。gh api graphql がコマンド位置にあるかは
+      # cmd_pos_ask（コマンド位置の判定）に委ねる。
       reason='gh api graphql から mergePullRequest を実行しようとしています。既定の merge 方針は手動承認です。承認の記録を確認してください。'
     fi
   fi
