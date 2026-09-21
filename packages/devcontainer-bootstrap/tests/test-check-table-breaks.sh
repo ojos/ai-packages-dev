@@ -170,6 +170,28 @@ add_md "$repo" "nopipe-delim.md" '| a | b |
 run_check "$repo"
 assert_pass "先頭 | の無い区切り行"
 
+# ── スコープ外（意図的）: ヘッダー行も先頭 | を持たない表 ─────────────────────
+#
+# GFM は `a | b` / `--- | ---` / `c | d` のようにヘッダー行自体が先頭 `|` を
+# 省略した表も有効とみなすが、この検査は対象外にしている（scripts/check-table-breaks.sh
+# 冒頭「何を見ないか」参照）。ヘッダー行が先頭 `|` を持たないと `cls[]` 上そもそも
+# ROW に分類されず、走査対象に乗らない。分断しても検知しないことを固定し、
+# 「検知漏れ」ではなく「意図した対象外」であることをテストとして残す。
+
+it "ヘッダー行も先頭 | を持たない表は、分断しても検知しない（スコープ外・意図的）"
+repo="$(new_repo)"
+add_md "$repo" "nopipe-header.md" 'a | b
+--- | ---
+c | d
+
+段落が差し込まれました。
+
+e | f
+g | h
+'
+run_check "$repo"
+assert_pass "先頭 | を持たないヘッダーはスコープ外"
+
 # ── 陰性（対照群）: フェンス（コードブロック）内の `|` 行 ────────────────────
 
 it "フェンス内の \`|\` 行は報告しない（対照群）"
@@ -276,6 +298,24 @@ add_md "$repo" "no-blank-before.md" '| a | b |
 run_check "$repo"
 assert_fail "空行なしで取り残された行" "no-blank-before.md"
 
+# ── 陽性: 表と無関係な水平線の直後に取り残された行 ────────────────────────────
+#
+# 水平線（`---` だけの行）も区切り行の形をしている（is_delim() を満たす）ため、
+# 「直前が区切り行の形をしていれば継続」という単純な判定だと、水平線の直後に
+# 取り残された表の残骸を継続行として見落とす（第二意見が実際に指摘した形）。
+
+it "表と無関係な水平線の直後に取り残された行を報告する"
+repo="$(new_repo)"
+add_md "$repo" "after-hr.md" '見出し
+
+---
+
+| c | d |
+| e | f |
+'
+run_check "$repo"
+assert_fail "水平線の直後の残骸" "after-hr.md"
+
 # ── CRLF 改行の文書 ───────────────────────────────────────────────────────────
 #
 # scripts/check-control-chars.sh は CR を CRLF という改行の流儀の一部として許容
@@ -360,6 +400,60 @@ elif ! printf '%s' "$CHECK_OUT" | grep -q 'TABLE_BREAKS_FAIL'; then
   fail "TABLE_BREAKS_FAIL が出ていない: $CHECK_OUT"
 elif ! printf '%s' "$CHECK_OUT" | grep -qF 'git ls-files に失敗しました'; then
   fail "既存の fatal 文言が無い: $CHECK_OUT"
+else
+  pass
+fi
+
+# ── 改行を含むパス名（TSV 出力の集計が壊れないこと） ──────────────────────────
+#
+# scripts/check-table-breaks.sh の awk 側は出力に FILENAME を含めない（呼び出し側の
+# シェルが対象パスを持っているため）。改行を含むパス名で HIT/STAT の TSV レコードが
+# 複数行へ割れ、集計を数え損なう退行が無いことを固定する
+# （2 段目ゲートの第二意見が指摘した形。scripts/check-no-secrets.sh が NUL 区切りの
+# 列挙へ移った経緯と同じ類の問題）。
+
+it "改行を含むパス名の Markdown でも表の分断を検知する（陽性、#263 と同種の問題）"
+NEWLINE_MD_NAME=$'nl\ndir/broken.md'
+repo="$(new_repo)"
+mkdir -p "$repo/${NEWLINE_MD_NAME%/*}"
+printf '%s' '| a | b |
+|---|---|
+| 1 | 2 |
+
+差し込まれた段落。
+
+| 3 | 4 |
+| 5 | 6 |
+' > "$repo/$NEWLINE_MD_NAME"
+( cd "$repo" && git add -f -- "$NEWLINE_MD_NAME" && $GIT_AS commit -q -m add-newline-path ) >/dev/null 2>&1
+run_check "$repo"
+if [[ "$CHECK_RC" -eq 0 ]]; then
+  fail "落ちるべきところで通過した: $CHECK_OUT"
+elif ! printf '%s' "$CHECK_OUT" | grep -q 'TABLE_BREAKS_FAIL'; then
+  fail "TABLE_BREAKS_FAIL が出ていない: $CHECK_OUT"
+elif ! printf '%s' "$CHECK_OUT" | grep -qF 'broken.md'; then
+  fail "パス名の一部（broken.md）が報告に出ていない: $CHECK_OUT"
+else
+  pass
+fi
+
+# ── 走査自体の失敗（fail-closed） ─────────────────────────────────────────────
+
+it "読み取れないファイルがあると落ちる（awk の失敗を fail-closed にする）"
+repo="$(new_repo)"
+add_md "$repo" "unreadable.md" '| a | b |
+|---|---|
+| 1 | 2 |
+'
+chmod 000 "$repo/unreadable.md"
+run_check "$repo"
+chmod 644 "$repo/unreadable.md"
+if [[ "$CHECK_RC" -eq 0 ]]; then
+  fail "落ちるべきところで通過した: $CHECK_OUT"
+elif ! printf '%s' "$CHECK_OUT" | grep -q 'TABLE_BREAKS_FAIL'; then
+  fail "TABLE_BREAKS_FAIL が出ていない: $CHECK_OUT"
+elif ! printf '%s' "$CHECK_OUT" | grep -qF '走査に失敗しました'; then
+  fail "走査失敗の fatal 文言が無い: $CHECK_OUT"
 else
   pass
 fi

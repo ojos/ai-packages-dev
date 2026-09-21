@@ -79,6 +79,15 @@
 #   ただし区切り行だけは例外で、先頭 `|` の有無に関わらず区切り行として認識する
 #   （`| a | b |` の次の行が `--- | ---` の形でも GFM は妥当な表として描画するため、
 #   ここを見ないと先頭 `|` の無い区切り行を使うだけの正しい表を誤検知する）。
+#
+#   **この除外はヘッダー行にも及ぶ。** ヘッダー行自体が先頭 `|` を持たない形
+#   （`a | b` / `--- | ---` / `c | d` のように全行が先頭 `|` を省略した表）は、
+#   ヘッダー行が `cls[]` 上そもそも ROW に分類されないため、この検査の走査対象に
+#   一切乗らない。その表が段落で分断されても検知しない。GFM としては有効な表で
+#   あり、これは**意図的な対象外**であって見落としではない（判定を広げると上記の
+#   偽陽性が増えるため、偽陽性を出さないほうを選んでいる）。**自動修正や検知の
+#   拡張は行わない。** テスト（`packages/devcontainer-bootstrap/tests/test-check-table-breaks.sh`）
+#   にこの対象外の挙動を固定するフィクスチャを置き、黙って挙動が変わらないようにする。
 # - **Markdown 全般の lint はしない。** 汎用 linter の導入は影響範囲が変更行数に
 #   比例せず、別の判断が要る。**この 1 形だけを見る。**
 #
@@ -269,7 +278,14 @@ END {
 
   # フェンスが閉じないまま終わった場合、そこから後ろを全部コードとして黙らせている。
   # 検査が届かなかった範囲があることを呼び出し側へ伝える（緑にしない材料になる）。
-  if (infence) printf "UNCLOSED\t%s\n", FILENAME
+  #
+  # 出力に FILENAME を含めない。呼び出し側（シェル）はファイルを 1 本ずつ処理して
+  # おり、対象パスは既に呼び出し側が知っている。ここへ含めると、パス名に改行を
+  # 含むファイル（レアだが実在しうる。scripts/check-no-secrets.sh が NUL 区切りの
+  # 列挙へ移った経緯そのもの）で 1 レコードが複数行へ割れ、呼び出し側のタブ区切り
+  # 読み取りがフィールド境界を誤り、以降の HIT/STAT が数え損なわれる（検査が
+  # 壊れているのに TABLE_BREAKS_PASS になりうる、実害の大きい形）。
+  if (infence) print "UNCLOSED"
 
   # ── 2 段目: 判定 ──────────────────────────────────────────────────────────
   #
@@ -283,25 +299,47 @@ END {
   # 一部を見落とす。GFM は表が段落へ割り込むこと（空行なしで表が始まること）を
   # 許すため、直前が TEXT であることは「表ではない」根拠にならない。
   #
-  # 継続行として読み飛ばす条件は「直前が ROW」だけでなく「直前が区切り行の形を
-  # している（delim[i-1]）」も含める。区切り行は先頭 `|` を省略できる
-  # （`| a | b |` の次の行が `--- | ---` でも GFM は妥当な表として描画する）ため、
-  # 先頭 `|` を持たない区切り行は cls[] 上は TEXT のままだが、delim[] では
-  # 区切り行として認識している。ここを見ずに「直前が ROW でなければ表の先頭候補」
-  # とすると、先頭 `|` の無い区切り行の直後のデータ行を「新しい表の先頭」と
-  # 誤認し、区切り行を伴わないただの継続データ行として誤検知する。
+  # 継続行かどうかは「直前が ROW かどうか」の単純な 1 行前参照では決まらない。
+  # 区切り行は先頭 `|` を省略できる（`| a | b |` の次の行が `--- | ---` でも GFM は
+  # 妥当な表として描画する）ため、先頭 `|` を持たない区切り行は cls[] 上は TEXT の
+  # ままだが、delim[] では区切り行として認識している。かといって「直前が区切り行の
+  # 形をしている（delim[i-1]）」を無条件の継続条件にすると、**表と無関係な水平線
+  # （`---` だけの行）の直後に取り残された表の残骸を見落とす**——水平線も
+  # is_delim() を満たすため、直前行の delim[] だけでは「本当に直前の表の区切り行か」
+  # 「たまたま区切り行の形をした無関係な水平線か」を区別できない。
+  #
+  # そこで state（in_table）を明示的に追跡する。ROW の塊を表として確定させた
+  # （tables++ した）ときだけ state=1 にし、その直後の 1 行が「確定させた表の
+  # 区切り行」であることが分かっている場合に限って継続を許す。state が 0 の
+  # ときに delim[] の形をした行に出会っても、それは「表を確定させていない」
+  # ので継続扱いにしない（＝直後の ROW 行は改めて表の先頭候補として判定される）。
   tables = 0
   hits = 0
+  in_table = 0
   for (i = 1; i <= n; i++) {
-    if (cls[i] != "ROW") continue
-    if (i > 1 && (cls[i - 1] == "ROW" || delim[i - 1])) continue
-    if (i < n && delim[i + 1]) { tables++; continue }
+    if (cls[i] == "BLANK") { in_table = 0; continue }
+    if (cls[i] == "CODE") { in_table = 0; continue }
+    if (cls[i] == "TEXT") {
+      # in_table 中に現れる TEXT 行は、直前に確定させた表の（先頭 `|` を省略した）
+      # 区切り行でありうる。区切り行の形をしているときだけ表の内側のまま進める。
+      if (in_table && delim[i]) continue
+      in_table = 0
+      continue
+    }
+    # cls[i] == "ROW"
+    if (in_table) continue
+    if (i < n && delim[i + 1]) { tables++; in_table = 1; continue }
     hits++
-    printf "HIT\t%s\t%d\t%s\n", FILENAME, i, raw[i]
-    if (i < n) printf "NEXT\t%s\t%d\t%s\n", FILENAME, i + 1, raw[i + 1]
-    else printf "NEXT\t%s\t%d\t（ファイル末尾）\n", FILENAME, i
+    printf "HIT\t%d\t%s\n", i, raw[i]
+    if (i < n) printf "NEXT\t%d\t%s\n", i + 1, raw[i + 1]
+    else printf "NEXT\t%d\t（ファイル末尾）\n", i
+    # 取り残された残骸のブロックにつき 1 回だけ報告する。in_table を立てておき、
+    # 同じ塊の続く行（cls が ROW のまま連なる行）を継続として黙らせる——1 つの
+    # 壊れ方を行ごとに重複して報告しないため（BLANK / CODE に出会えば次の塊として
+    # 改めて判定される）。
+    in_table = 1
   }
-  printf "STAT\t%s\t%d\t%d\t%d\n", FILENAME, n, tables, hits
+  printf "STAT\t%d\t%d\t%d\n", n, tables, hits
 }
 '
 
@@ -337,6 +375,15 @@ case "$selftest_nopipe_delim" in
   *HIT*) fail "自己診断に失敗しました: 先頭 | の無い区切り行を使う正しい表を誤検出します。検査が成立していないため失敗させます。" ;;
 esac
 
+# (1d) 表と無関係な水平線（`---` だけの行）の直後に取り残された表の残骸は、
+# 必ず当たること。水平線も is_delim() を満たすため、直前行が delim[] の形を
+# しているというだけで継続扱いにすると、この形を見落とす。
+selftest_broken_after_hr="$(scan_one <(printf 'text\n---\n| c | d |\n| e | f |\n') || true)"
+case "$selftest_broken_after_hr" in
+  *HIT*) ;;
+  *) fail "自己診断に失敗しました: 無関係な水平線の直後に取り残された残骸を検出できません。検査が成立していないため失敗させます。" ;;
+esac
+
 # (2) 正しい表・引用内の表・コードブロック内の `|`・表の直後に空行を挟んだ段落は、
 #     いずれも当たらないこと。**この 4 つが偽陽性の主な候補である。**
 # バッククォート（コードフェンス）を含む単一引用符文字列。展開させない意図で
@@ -368,7 +415,10 @@ git rev-parse --is-inside-work-tree >/dev/null 2>&1 \
 # 区別が付かなくなる（検査が成立していないことを合格にしない、に反する）。
 LIST_FILE="$(mktemp "${TMPDIR:-/tmp}/check-table-breaks-list.XXXXXX")" \
   || fail "一時ファイルを作成できません。対象文書の列挙が成立しません。"
-trap 'rm -f "$LIST_FILE"' EXIT
+# SCAN_OUT は下の走査段で使う。ここでまとめて作り、1 つの trap で両方を消す。
+SCAN_OUT="$(mktemp "${TMPDIR:-/tmp}/check-table-breaks-scan.XXXXXX")" \
+  || fail "一時ファイルを作成できません。走査結果を保存できません。"
+trap 'rm -f "$LIST_FILE" "$SCAN_OUT"' EXIT
 
 git ls-files -z '*.md' '*.markdown' > "$LIST_FILE" \
   || fail "git ls-files に失敗しました。対象文書を列挙できません。"
@@ -396,17 +446,29 @@ unclosed=0
 # ループを素通りさせる。
 if [[ "${#targets[@]}" -gt 0 ]]; then
   for path in "${targets[@]}"; do
-    while IFS=$'\t' read -r kind f a b c; do
+    # scan_one（awk）の結果を一時ファイルへ落としてから読む。
+    # `done < <(scan_one "$path")` のようにプロセス置換へ直接つなぐと、bash は
+    # プロセス置換内のコマンドの終了コードを呼び出し元へ伝播しない（set -e でも
+    # 捕まらない）。読み取り不能・awk 自体の異常終了などで scan_one が失敗しても、
+    # 出力が空のまま次のファイルへ進んでしまい、total_tables / total_hits が
+    # 0 のまま「表が無いので合格」という正当な経路と区別が付かなくなる
+    # （検査が成立していないことを合格にしない、に反する）。
+    scan_rc=0
+    scan_one "$path" > "$SCAN_OUT" || scan_rc=$?
+    [[ "$scan_rc" -eq 0 ]] \
+      || fail "$path の走査に失敗しました（awk 終了コード ${scan_rc}）。検査が成立していないため失敗させます。"
+
+    while IFS=$'\t' read -r kind a b c; do
       case "$kind" in
         HIT)
-          printf '[table-breaks] %s:%s: 表の先頭に見えますが、次の行が区切り行ではありません。\n' "$f" "$a" >&2
+          printf '[table-breaks] %s:%s: 表の先頭に見えますが、次の行が区切り行ではありません。\n' "$path" "$a" >&2
           printf '[table-breaks]     %s\n' "$b" >&2
           ;;
         NEXT)
           printf '[table-breaks]   次の行 %s: %s\n' "$a" "$b" >&2
           ;;
         UNCLOSED)
-          printf '[table-breaks] %s: コードブロックが閉じていません。閉じ忘れた位置から先は走査できていません。\n' "$f" >&2
+          printf '[table-breaks] %s: コードブロックが閉じていません。閉じ忘れた位置から先は走査できていません。\n' "$path" >&2
           unclosed=$((unclosed + 1))
           ;;
         STAT)
@@ -415,7 +477,7 @@ if [[ "${#targets[@]}" -gt 0 ]]; then
           total_hits=$((total_hits + c))
           ;;
       esac
-    done < <(scan_one "$path")
+    done < "$SCAN_OUT"
   done
 fi
 

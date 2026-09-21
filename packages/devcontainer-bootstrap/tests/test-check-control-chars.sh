@@ -103,6 +103,29 @@ printf 'a\000b\n' > "$repo/nul-fixture.txt"
 run_check "$repo"
 assert_contains "$CHECK_OUT" '^@' "cat -v 表記（NUL）"
 
+# ── 陽性: DEL・ESC（中間の C0 範囲）の混入 ────────────────────────────────────
+#
+# NUL だけを陽性フィクスチャにしていると、パターンから DEL（0x7F）や中間の C0
+# 範囲（0x0B-0x1F 等）が誤って抜け落ちても、この検査自身は気づけない
+# （2 段目ゲートの第二意見が実際に指摘した形）。禁止バイトの範囲全体を
+# 1 バイトずつ検証するわけではないが、範囲の両端（NUL は先頭側で既に確認済み、
+# DEL は末尾側）と、範囲の中間（ESC）を separately に確認することで、
+# パターンの書き損じ（例: 範囲の片側だけを書き忘れる）を検出しやすくする。
+
+it "DEL（0x7F）を仕込んだ追跡ファイルを検知する（陽性）"
+repo="$(new_repo)"
+printf 'a\x7fb\n' > "$repo/del-fixture.txt"
+( cd "$repo" && git add -f del-fixture.txt && $GIT_AS commit -q -m add-del ) >/dev/null 2>&1
+run_check "$repo"
+assert_fail "DEL 混入" "del-fixture.txt"
+
+it "ESC（0x1B、中間の C0 範囲）を仕込んだ追跡ファイルを検知する（陽性）"
+repo="$(new_repo)"
+printf 'a\x1bb\n' > "$repo/esc-fixture.txt"
+( cd "$repo" && git add -f esc-fixture.txt && $GIT_AS commit -q -m add-esc ) >/dev/null 2>&1
+run_check "$repo"
+assert_fail "ESC 混入" "esc-fixture.txt"
+
 # ── 陰性（対照群）: TAB / LF / CR しか含まないファイル ───────────────────────
 
 it "TAB / LF / CR しか含まないファイルは通る（対照群）"
