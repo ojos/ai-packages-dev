@@ -423,4 +423,148 @@ else
   fail "ask を返す理由の記載が無い"
 fi
 
+# ── squash 本文の CI 抑止の綴り ──────────────────────────────────────────────
+#
+# gh pr merge を検知したときに、squash 本文になるテキスト（PR 本文・コミット
+# メッセージ）へ CI 抑止の綴りが無いかを追加で見る段を検証する。実際の gh や
+# ネットワークは呼ばず、偽の gh を PATH の先頭へ差し込んで決定的に検証する。
+#
+# 綴りそのものをこのファイルへ連続した文字列として書かない。連続した文字列の
+# まま git の差分・コミットメッセージへ混ざると GitHub が実際に解釈してしまう
+# （この票の発端そのもの）。連結して組み立てることで、このファイル自身には
+# 連続した綴りを残さない。
+
+ci_skip_marker() {
+  local o='[' c=']'
+  printf '%s%s%s' "$o" "$1" "$c"
+}
+
+# 偽の gh。pr view が呼ばれたら $FAKE_GH_FIXTURE の中身を標準出力へ返す
+# （$FAKE_GH_RC が 0 以外ならその終了コードで失敗する）。$FAKE_GH_ARGS_FILE が
+# 設定されていれば、受け取った引数をそこへ書く（引数の抽出そのものを検証する
+# ため）。pr view 以外は失敗させる（このフックは pr view しか呼ばない）。
+make_fake_gh() {
+  local dir="$1"
+  cat >"$dir/gh" <<'SH'
+#!/usr/bin/env bash
+if [[ -n "${FAKE_GH_ARGS_FILE:-}" ]]; then
+  printf '%s\n' "$*" > "$FAKE_GH_ARGS_FILE"
+fi
+if [[ "$1" == "pr" && "$2" == "view" ]]; then
+  if [[ "${FAKE_GH_RC:-0}" != "0" ]]; then
+    exit "${FAKE_GH_RC}"
+  fi
+  cat "$FAKE_GH_FIXTURE"
+  exit 0
+fi
+exit 1
+SH
+  chmod +x "$dir/gh"
+}
+
+fakebin="$(new_workdir)/fakebin"
+mkdir -p "$fakebin"
+make_fake_gh "$fakebin"
+
+# フックへペイロードを流し込み、偽の gh を PATH の先頭に置いた状態で判定と
+# 理由の両方を、タブ区切りの 1 行で返す。
+decision_and_reason_with_fake_gh() {
+  local cmd="$1" fixture="$2" rc="${3:-0}" out
+  out="$(printf '%s' "$(bash_payload "$cmd")" \
+    | FAKE_GH_FIXTURE="$fixture" FAKE_GH_RC="$rc" PATH="$fakebin:$PATH" bash "$HOOK")"
+  printf '%s\t%s' \
+    "$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecision // "(no decision)"')" \
+    "$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecisionReason // empty')"
+}
+
+BASE_MERGE_REASON='gh pr merge をコマンド位置で実行しようとしています。既定の merge 方針は手動承認です。承認の記録を確認してください。'
+
+fx_dir="$(new_workdir)/fixtures"
+mkdir -p "$fx_dir"
+
+fixture_clean="$fx_dir/clean.txt"
+{
+  echo "この PR は README を更新します。"
+  echo "docs: README を更新"
+} > "$fixture_clean"
+
+# 実際に踏んだ形を再現する: 見出しではなく、検査そのものを説明する文章の
+# 途中に綴りが埋め込まれている。PR 本文側にある形。
+fixture_body_midsentence="$fx_dir/body-midsentence.txt"
+{
+  echo "この変更は手順を整理するものです。"
+  echo "あわせて、手順 8 の $(ci_skip_marker 'skip ci') 検査が正しく動くことを確認しました。"
+} > "$fixture_body_midsentence"
+
+# PR 本文はクリーンだが、コミットメッセージ側にだけ綴りがある形。squash 本文の
+# 組み立て方（PR_BODY / COMMIT_MESSAGES）のどちらでも見落とさないことの確認。
+fixture_commit_only="$fx_dir/commit-only.txt"
+{
+  echo "PR 本文はクリーンです。"
+  echo "fix: 何かを直す"
+  echo "詳細: $(ci_skip_marker 'ci skip') という綴りをコミット側に書いた（テスト用）。"
+} > "$fixture_commit_only"
+
+it "squash 本文の途中（見出しではない）に綴りがあっても検知する"
+result="$(decision_and_reason_with_fake_gh 'gh pr merge 1' "$fixture_body_midsentence")"
+r_decision="${result%%$'\t'*}"
+r_reason="${result#*$'\t'}"
+assert_eq "$r_decision" "ask" "判定"
+assert_contains "$r_reason" "squash 本文になるテキスト" "理由（見出しではない綴りの検知）"
+
+it "PR 本文ではなくコミットメッセージ側の綴りも検知する"
+result="$(decision_and_reason_with_fake_gh 'gh pr merge 1' "$fixture_commit_only")"
+r_decision="${result%%$'\t'*}"
+r_reason="${result#*$'\t'}"
+assert_eq "$r_decision" "ask" "判定"
+assert_contains "$r_reason" "squash 本文になるテキスト" "理由（コミットメッセージ側の綴りの検知）"
+
+it "squash 本文に綴りが無ければ理由は従来どおり（対照群、追記されない）"
+result="$(decision_and_reason_with_fake_gh 'gh pr merge 1' "$fixture_clean")"
+r_reason="${result#*$'\t'}"
+assert_eq "$r_reason" "$BASE_MERGE_REASON" "クリーンな squash 本文の理由"
+
+it "gh コマンドが無いときは「綴りが無い」と扱わず、確認できていないことを理由に書く"
+nogh_dir="$(new_workdir)/nogh"
+mkdir -p "$nogh_dir"
+for c in cat grep jq; do
+  src="$(command -v "$c")"
+  [[ -n "$src" ]] && ln -sf "$src" "$nogh_dir/$c"
+done
+bash_bin="$(command -v bash)"
+nogh_out="$(printf '%s' "$(bash_payload 'gh pr merge 1')" | PATH="$nogh_dir" "$bash_bin" "$HOOK")"
+nogh_reason="$(printf '%s' "$nogh_out" | jq -r '.hookSpecificOutput.permissionDecisionReason // empty')"
+assert_contains "$nogh_reason" "gh コマンドが無い" "gh 不在時の理由"
+
+it "gh pr view が失敗したときも「綴りが無い」と扱わない"
+result="$(decision_and_reason_with_fake_gh 'gh pr merge 1' "$fixture_clean" 1)"
+r_decision="${result%%$'\t'*}"
+r_reason="${result#*$'\t'}"
+assert_eq "$r_decision" "ask" "判定"
+assert_contains "$r_reason" "PR 情報を取得できなかった" "gh pr view 失敗時の理由"
+
+it "コマンド文字列を取り出せない（壊れた JSON）ときも「綴りが無い」と扱わない"
+broken_out="$(printf '%s' '{"tool_input": {"command": "gh pr merge 1"' \
+  | FAKE_GH_FIXTURE="$fixture_clean" PATH="$fakebin:$PATH" bash "$HOOK")"
+broken_reason="$(printf '%s' "$broken_out" | jq -r '.hookSpecificOutput.permissionDecisionReason // empty')"
+assert_contains "$broken_reason" "コマンド文字列を取り出せていない" "壊れた JSON のときの理由"
+
+it "REST 経由の merge には squash 本文の検査を広げていない（対照群）"
+rest_out="$(printf '%s' "$(bash_payload 'gh api --method PUT repos/o/r/pulls/1/merge')" | bash "$HOOK")"
+rest_reason="$(printf '%s' "$rest_out" | jq -r '.hookSpecificOutput.permissionDecisionReason // empty')"
+case "$rest_reason" in
+  *"squash 本文になるテキスト"*) fail "REST 経路にまで squash 本文検査が意図せず広がっている" ;;
+  *) pass ;;
+esac
+
+it "PR セレクタと --repo を、gh pr merge の後続の語から正しく抜き出す"
+args_file="$(new_workdir)/gh-args.txt"
+printf '%s' "$(bash_payload 'gh pr merge 42 --repo owner/repo --squash')" \
+  | FAKE_GH_FIXTURE="$fixture_clean" FAKE_GH_ARGS_FILE="$args_file" PATH="$fakebin:$PATH" bash "$HOOK" >/dev/null
+gh_args_seen="$(cat "$args_file" 2>/dev/null || true)"
+case "$gh_args_seen" in
+  "pr view 42 --repo owner/repo "*) pass ;;
+  *) fail "gh へ渡された引数が期待と異なる: $gh_args_seen" ;;
+esac
+
 exit_with_result
