@@ -62,11 +62,20 @@
 # 列挙（if / elif / while / until / then / do / else / 否定の !）自体は消して
 # いない。for_each_clause の中の _cmd_start_idx（下で定義）が唯一の置き場所に
 # なった。節の語のリストを先頭から見て、環境変数代入（FOO=bar）とこれらの制御語
-# の繰り返しを読み飛ばし、そこから先を「実コマンドの語」として扱う。予約語として
-# 読み飛ばすのは、その語がクォートもバックスラッシュエスケープも含まないときだけ
-# にしている。`'if'` や `"if"`、`i\f` のように一部でも引用・エスケープされた語は、
-# bash の文法上そもそも予約語として認識されず、実際に起動されるコマンド名の一部
+# の繰り返しを読み飛ばし、そこから先を「実コマンドの語」として扱う。**この 2 つは
+# クォートの扱いが違うため、判定条件も分けている。** 予約語として読み飛ばすのは、
+# その語がクォートもバックスラッシュエスケープも含まないときだけにしている。
+# `'if'` や `"if"`、`i\f` のように一部でも引用・エスケープされた語は、bash の
+# 文法上そもそも予約語として認識されず、実際に起動されるコマンド名の一部
 # （＝実コマンドの語そのもの）になるため、ここで読み飛ばしてはならない（実測）。
+# 環境変数代入として読み飛ばすのは逆に、`name=` の部分に引用符を挟んでいない
+# ときだけで、値側の引用符は問わない。`VAR="foo" gh pr merge 1` や
+# `KEY='bar' gh pr merge 1` は値側だけがクォートされた代入で、実際に `gh` が
+# コマンド位置に来る（実測: `env` で代入として効くことを確認）。予約語と同じ
+# 「語にクォートが 1 文字でもあれば読み飛ばさない」を代入にも適用すると、この
+# 2 例を取りこぼして素通りしてしまう（実測。解析を `grep` の列挙へ一本化した
+# ときに、クォートを見ない `grep` 側のフォールバックが無くなったことで露見した
+# 退行）。詳細と判定条件は _cmd_start_idx のコメントを参照。
 #
 # 列挙を解析の外に出さなかった代わりに、実測で踏んだ形（if / elif / while /
 # until / then / do / else / ! それぞれの直後）が確実に ask になることは、
@@ -180,11 +189,16 @@ set -uo pipefail
 # あるときも含めてコマンド位置として扱うため。詳細は上のヘッダを参照）。
 #
 # 語ごとに「クォート・バックスラッシュエスケープを 1 文字でも含むか」も
-# clause_word_quoted（clause_words と対になる配列）へ記録する。予約語・環境変数
-# 代入としての判定（_cmd_start_idx、下で定義）は、この記録が立っていない語
-# （＝完全に素の語）に対してだけ行う。`'if'` のように一部でもクォートされた語は
-# bash 上そもそも予約語ではなく実コマンド名になるため、ここで区別できないと
-# 予約語だけを読み飛ばす判定が誤検知を起こす（実測）。
+# clause_word_quoted（clause_words と対になる配列）へ、「元テキストそのもの
+# （クォートを残したまま）」も clause_word_raw へ記録する。予約語としての判定
+# （_cmd_start_idx、下で定義）は、clause_word_quoted が立っていない語（＝完全に
+# 素の語）に対してだけ行う。`'if'` のように一部でもクォートされた語は bash 上
+# そもそも予約語ではなく実コマンド名になるため、ここで区別できないと予約語だけ
+# を読み飛ばす判定が誤検知を起こす（実測）。環境変数代入としての判定は逆に
+# clause_word_quoted を見ず、clause_word_raw に対して直接正規表現を当てる。
+# `VAR="foo"` のように値側だけがクォートされていても代入として有効なままの
+# ため、語全体のクォート有無では代入かどうかを見分けられない（詳細は
+# _cmd_start_idx のコメントを参照）。
 #
 # 解析しない範囲（意図的に見ない。bash の文法を完全に実装すると雛形として
 # 重くなりすぎるため、範囲を絞っている。ここでの取りこぼしは、実測した形に
@@ -199,16 +213,30 @@ set -uo pipefail
 #     拾える
 #
 # 引数: $1 = 節ごとに呼び出すハンドラ関数名、$2 = 検査対象テキスト。
-# ハンドラは clause_words（配列）・clause_word_quoted（配列。各語がクォート等を
-# 含んでいたか）・clause_text（文字列）を読める。
+# ハンドラは clause_words（配列。クォートは剥がれる）・clause_word_quoted（配列。
+# 各語がクォート・バックスラッシュエスケープを 1 文字でも含んでいたか）・
+# clause_word_raw（配列。各語の元テキストそのもの。クォートは残したまま）・
+# clause_text（節全体の元テキスト。クォートは残したまま）を読める。
+#
+# clause_word_raw を別に持つ理由: 環境変数代入（FOO=bar）の判定は、bash の
+# 実際の挙動に合わせて「name= の部分が引用符を 1 文字も挟まずに書かれている
+# か」で見る必要がある（実測: `VAR="foo" env` は代入として効くが、`"VAR"=foo env`
+# は代入にならず `VAR=foo` という名前のコマンドを探しにいく）。value 側は引用符
+# で囲んでも代入として有効なままなので、clause_word_quoted（語全体にクォートが
+# 1 文字でもあるか）だけでは name= 部分だけを見分けられない。clause_word_raw
+# （引用符を残した元テキスト）に対して `^[A-Za-z_][A-Za-z0-9_]*=` を当てれば、
+# name 部分に引用符が挟まっている場合は正規表現がそこで止まって一致せず、
+# value 側だけが引用符で囲まれている場合は = より前で一致が確定するため、
+# 追加の状態管理なしで両方を正しく判定できる。
 for_each_clause() {
   local handler="$1" text="$2"
   local i n c
-  local word="" have_word=0 word_quoted=0
+  local word="" have_word=0 word_quoted=0 word_start=-1
   local in_squote=0 in_dquote=0
 
   clause_words=()
   clause_word_quoted=()
+  clause_word_raw=()
   clause_text=""
   n=${#text}
 
@@ -250,14 +278,17 @@ for_each_clause() {
 
     case "$c" in
       "'")
+        [[ $word_start -eq -1 ]] && word_start=$i
         in_squote=1
         clause_text+="$c"
         ;;
       '"')
+        [[ $word_start -eq -1 ]] && word_start=$i
         in_dquote=1
         clause_text+="$c"
         ;;
       $'\\')
+        [[ $word_start -eq -1 ]] && word_start=$i
         clause_text+="$c"
         i=$((i + 1))
         if [[ $i -lt $n ]]; then
@@ -272,9 +303,11 @@ for_each_clause() {
         if [[ $have_word -eq 1 ]]; then
           clause_words+=("$word")
           clause_word_quoted+=("$word_quoted")
+          clause_word_raw+=("${text:word_start:i-word_start}")
           word=""
           have_word=0
           word_quoted=0
+          word_start=-1
         fi
         ;;
       '{')
@@ -294,6 +327,7 @@ for_each_clause() {
             || [[ "${text:$((i + 1)):1}" == $'\n' ]]; }; then
           :
         else
+          [[ $word_start -eq -1 ]] && word_start=$i
           clause_text+="$c"
           word+="$c"
           have_word=1
@@ -303,15 +337,18 @@ for_each_clause() {
         if [[ $have_word -eq 1 ]]; then
           clause_words+=("$word")
           clause_word_quoted+=("$word_quoted")
+          clause_word_raw+=("${text:word_start:i-word_start}")
           word=""
           have_word=0
           word_quoted=0
+          word_start=-1
         fi
         if [[ -n "$clause_text" || ${#clause_words[@]} -gt 0 ]]; then
           "$handler"
         fi
         clause_words=()
         clause_word_quoted=()
+        clause_word_raw=()
         clause_text=""
         # && / || の 2 文字目は読み飛ばす（境界としては 1 回でよい）。
         if { [[ "$c" == '&' ]] || [[ "$c" == '|' ]]; } \
@@ -320,6 +357,7 @@ for_each_clause() {
         fi
         ;;
       *)
+        [[ $word_start -eq -1 ]] && word_start=$i
         clause_text+="$c"
         word+="$c"
         have_word=1
@@ -330,35 +368,53 @@ for_each_clause() {
   if [[ $have_word -eq 1 ]]; then
     clause_words+=("$word")
     clause_word_quoted+=("$word_quoted")
+    clause_word_raw+=("${text:word_start:n-word_start}")
   fi
   if [[ -n "$clause_text" || ${#clause_words[@]} -gt 0 ]]; then
     "$handler"
   fi
   clause_words=()
   clause_word_quoted=()
+  clause_word_raw=()
   clause_text=""
 }
 
-# clause_words / clause_word_quoted（グローバル。for_each_clause が用意する）を
-# 先頭から見て、環境変数代入（FOO=bar）とシェルの制御語（if / elif / while /
-# until / then / do / else / 否定の !）の繰り返しを読み飛ばした次のインデックス
-# を _cmd_start_idx_result へ設定する。読み飛ばすのは、その語がクォート・
-# バックスラッシュエスケープを 1 文字も含まない（clause_word_quoted が 0 の）
-# ときだけにしている。`'if'` や `"if"`、`i\f` のように一部でも引用・エスケープ
-# された語は、bash の文法上そもそも予約語として認識されず、実際に起動される
-# コマンド名の一部（＝実コマンドの語そのもの）になるため、ここで読み飛ばして
-# はならない（実測）。command_position_has（下）と for_each_clause の `{` 判定
+# clause_words / clause_word_quoted / clause_word_raw（グローバル。for_each_clause
+# が用意する）を先頭から見て、環境変数代入（FOO=bar）とシェルの制御語（if /
+# elif / while / until / then / do / else / 否定の !）の繰り返しを読み飛ばした
+# 次のインデックスを _cmd_start_idx_result へ設定する。
+#
+# 環境変数代入と予約語（制御語・否定）は、クォートの扱いが違うため判定条件も
+# 分けている（実測。以下はいずれも `env` で確認した実際の bash の挙動）。
+#
+#   - 環境変数代入: name= の部分に引用符が 1 文字も挟まっていないことだけを
+#     求める。値側の引用符は問わない。`VAR="foo" env` / `KEY='bar' env` は
+#     どちらも代入として有効に効く。判定は clause_word_raw（引用符を残した
+#     元テキスト）に対して `^[A-Za-z_][A-Za-z0-9_]*=` を当てる。value 側が
+#     引用符で囲まれていても = より前で一致が確定するため代入として読み飛ばす
+#     一方、`"VAR"=foo env` のように name 側に引用符が挟まっていると `"` の
+#     時点で正規表現が止まり一致しないため、代入として読み飛ばさない
+#     （これは実際に `"VAR"=foo` という名前のコマンドを探しにいく入力であり、
+#     env は実行されない）。
+#   - 予約語（制御語・否定 !）: 語がクォート・バックスラッシュエスケープを
+#     1 文字も含まない（clause_word_quoted が 0 の）ときだけ読み飛ばす。
+#     `'if'` や `"if"`、`i\f` のように一部でも引用・エスケープされた語は、
+#     bash の文法上そもそも予約語として認識されず、実際に起動されるコマンド
+#     名の一部（＝実コマンドの語そのもの）になるため、ここで読み飛ばしては
+#     ならない。
+#
+# command_position_has（下）と for_each_clause の `{` 判定
 # （_clause_prefix_is_reserved_only、下）の両方がこの関数だけを参照しており、
 # 列挙（制御語の一覧）の置き場所はここ 1 か所にまとめている。
 _cmd_start_idx() {
   local idx=0 w
   while [[ $idx -lt ${#clause_words[@]} ]]; do
+    if [[ "${clause_word_raw[$idx]:-}" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; then
+      idx=$((idx + 1))
+      continue
+    fi
     if [[ "${clause_word_quoted[$idx]:-0}" -eq 0 ]]; then
       w="${clause_words[$idx]}"
-      if [[ "$w" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; then
-        idx=$((idx + 1))
-        continue
-      fi
       case "$w" in
         if | elif | while | until | then | do | else | '!')
           idx=$((idx + 1))
@@ -382,8 +438,9 @@ _clause_prefix_is_reserved_only() {
 
 # for_each_clause のハンドラ。呼び出し側が cph_expect（配列）を用意してから
 # command_position_has を呼ぶ。節の語のリスト（clause_words）が、_cmd_start_idx
-# の読み飛ばし（環境変数代入・制御語の繰り返し。クォートされた語では読み飛ばさ
-# ない）の直後に、cph_expect と完全一致すれば cph_found を立てる。
+# の読み飛ばし（環境変数代入・制御語の繰り返し。読み飛ばす条件は語の種類ごとに
+# 違う。詳細は _cmd_start_idx のコメントを参照）の直後に、cph_expect と
+# 完全一致すれば cph_found を立てる。
 # shellcheck disable=SC2329  # for_each_clause から "$handler" 経由で間接的に呼ばれる
 _cph_clause_handler() {
   _cmd_start_idx

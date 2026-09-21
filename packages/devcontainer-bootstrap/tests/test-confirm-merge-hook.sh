@@ -276,6 +276,25 @@ assert_silent 'echo "gh pr merge"'
 assert_silent 'gh pr list'
 assert_silent 'gh pr mergequeue 1'
 
+# ── 環境変数代入は値側のクォートを問わない（第二意見の指摘で判明した迂回）───
+#
+# VAR="foo" gh pr merge 1 / KEY='bar' gh pr merge 1 は、どちらも値側だけが
+# クォートされた代入で、実際には gh がコマンド位置に来る（実測: env で代入と
+# して効くことを確認した）。予約語と同じ「語にクォートが 1 文字でもあれば
+# 読み飛ばさない」を代入の判定にも適用すると、この 2 例で name= の直後に来る
+# gh へ到達できず素通りしていた（実測。grep の列挙を廃した際に、クォートを
+# 見ない grep 側のフォールバックが無くなったことで露見した退行）。環境変数
+# 代入の判定は、name= の部分にクォートが挟まっていないことだけを見て、値側の
+# クォートは問わない形に直した。
+assert_ask 'VAR="foo" gh pr merge 1' '値だけを二重引用符で囲んだ環境変数代入'
+assert_ask "KEY='bar' gh pr merge 1" '値だけを単一引用符で囲んだ環境変数代入'
+assert_ask 'VAR="foo" { gh pr merge 1; }' '値をクォートした代入 + { グループコマンド'
+assert_ask 'VAR=foo gh pr merge 1' 'クォートなしの環境変数代入（対照群・回帰）'
+# 対照群: name 側にクォートが挟まっている形は、bash 上そもそも代入にならず
+# "VAR"=foo という名前のコマンドを探しにいく（実測）。代入として読み飛ばして
+# はならず、gh はコマンド位置に来ない。
+assert_silent '"VAR"=foo gh pr merge 1' 'name 側をクォートすると代入にならない（対照群）'
+
 # REST / GraphQL 経由。permissions の前方一致では捕捉できない経路。
 assert_ask   'curl -X PUT https://api.github.com/repos/o/r/pulls/1/merge'
 assert_ask   'gh api graphql -f query="mutation { mergePullRequest(input: {pullRequestId: \"x\"}) { clientMutationId } }"'
