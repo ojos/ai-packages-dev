@@ -52,6 +52,13 @@ add_md() {
   ( cd "$repo" && git add -f "$name" && $GIT_AS commit -q -m "add-$name" ) >/dev/null 2>&1
 }
 
+# repo 内に 1 本の Markdown を CRLF 改行で追加してコミットする。
+add_md_crlf() {
+  local repo="$1" name="$2" content="$3"
+  printf '%s' "$content" | sed 's/$/\r/' > "$repo/$name"
+  ( cd "$repo" && git add -f "$name" && $GIT_AS commit -q -m "add-$name" ) >/dev/null 2>&1
+}
+
 # 検査を実行し、CHECK_OUT / CHECK_RC へ結果を入れる。
 CHECK_OUT=""
 CHECK_RC=0
@@ -227,6 +234,38 @@ else
   pass
 fi
 
+# ── CRLF 改行の文書 ───────────────────────────────────────────────────────────
+#
+# scripts/check-control-chars.sh は CR を CRLF という改行の流儀の一部として許容
+# している。表の分断検査が CRLF を未処理のまま扱うと、空行・区切り行・閉じフェンスの
+# 判定がすべて揃わなくなり、CRLF の文書だけ誤検知する（2 段目ゲートの第二意見が
+# 実際に指摘した形）。
+
+it "CRLF 改行の正しい表は誤検知しない（対照群）"
+repo="$(new_repo)"
+add_md_crlf "$repo" "crlf-valid.md" '# 見出し
+
+| a | b |
+|---|---|
+| 1 | 2 |
+'
+run_check "$repo"
+assert_pass "CRLF の正しい表"
+
+it "CRLF 改行でも表の分断を検知する（陽性）"
+repo="$(new_repo)"
+add_md_crlf "$repo" "crlf-broken.md" '| a | b |
+|---|---|
+| 1 | 2 |
+
+差し込まれた段落。
+
+| 3 | 4 |
+| 5 | 6 |
+'
+run_check "$repo"
+assert_fail "CRLF の分断" "crlf-broken.md"
+
 # ── 検査が成立していないことを合格にしない ────────────────────────────────────
 
 it "git 管理外では落ちる（検査が成立していない）"
@@ -235,8 +274,10 @@ cp -R "$BASE" "$out"
 run_check "$out"
 assert_fail "git 管理外" "git の作業ツリーではありません"
 
-it "追跡している Markdown が 1 件も無ければ落ちる"
-# 空の出力を「該当なし」と読むと、検査していないのに合格になる。
+it "追跡している Markdown が 1 件も無くても合格として扱う（配布直後のプロジェクトを想定）"
+# bootstrap の既定構成（--with-playbook なし）は Markdown を 1 本も生成しない。
+# 「表が無い」ことと「表が崩れていない」ことは両立するため、これを不合格にしない
+# （表の途中へ段落が差し込まれた文書を検知する検査自体は上の陽性テストが担保する）。
 out="$(new_workdir)/empty"
 mkdir -p "$out/scripts"
 cp "$BASE/scripts/check-table-breaks.sh" "$out/scripts/check-table-breaks.sh"
@@ -250,6 +291,6 @@ chmod +x "$out/scripts/check-table-breaks.sh"
   $GIT_AS commit -q -m c1
 ) >/dev/null 2>&1
 run_check "$out"
-assert_fail "追跡 Markdown 0 件" "追跡している Markdown が 1 件もありません"
+assert_pass "追跡 Markdown 0 件"
 
 exit_with_result

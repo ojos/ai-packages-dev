@@ -639,8 +639,8 @@ OAuth トークン（`CLAUDE_CODE_OAUTH_TOKEN`）を `remoteEnv` へ注入する
 - `.github/workflows/identity-guard.yml`（コミット identity の検証 CI。下記参照）
 - `scripts/verify.sh` / `scripts/acceptance.sh` / `scripts/loop-gate.sh`（ループコーディング支援。下記参照）
 - `scripts/check-no-secrets.sh`（機密混入の検知ゲート。`verify.sh` が受け入れ条件の手前で呼ぶ。下記参照）
-- `scripts/check-control-chars.sh`（追跡ファイルへの表示されない制御文字混入の検知ゲート。`acceptance.sh` が呼ぶ）
-- `scripts/check-table-breaks.sh`（Markdown の表の途中へ段落が差し込まれ、続く行が表として描画されなくなっていないかの検知ゲート。`acceptance.sh` が呼ぶ）
+- `scripts/check-control-chars.sh`（追跡ファイルへの表示されない制御文字混入の検知ゲート。単体で `bash scripts/check-control-chars.sh` として実行する。`acceptance.sh` からは自動で呼ばれないため、通す契機にしたい場合はプロジェクト側で配線する）
+- `scripts/check-table-breaks.sh`（Markdown の表の途中へ段落が差し込まれ、続く行が表として描画されなくなっていないかの検知ゲート。単体で `bash scripts/check-table-breaks.sh` として実行する。`acceptance.sh` からは自動で呼ばれないため、通す契機にしたい場合はプロジェクト側で配線する）
 - `.github/workflows/verify.yml`（受け入れ検証を CI で回すゲート。上記「受け入れ検証の CI ワークフロー」参照）
 - `.devcontainer/ORIGIN`（生成物の由来の記録。DCB の版・使った `--with-*` フラグ・各生成物のハッシュを持つ機械可読な key=value 形式。`doctor.sh` が乖離の診断に使います。下記「生成物の由来の記録」参照）
 - `.gitignore` の managed セクション（言語構成に応じて自動更新。`--no-gitignore` で無効化）
