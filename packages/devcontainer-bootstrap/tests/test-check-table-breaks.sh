@@ -53,9 +53,15 @@ add_md() {
 }
 
 # repo 内に 1 本の Markdown を CRLF 改行で追加してコミットする。
+#
+# sed の置換文字列（RHS）内で \r を CR と解釈させるのは GNU sed の拡張で、
+# BSD sed ではリテラルの文字 r になる（scripts/check-table-breaks.sh 自身が
+# GNU 拡張に依存しない方針を掲げているのに、それを検証するテスト側だけが
+# 依存すると本末転倒）。awk の printf は POSIX の範囲でエスケープを解釈するため
+# 移植性の懸念が無い。
 add_md_crlf() {
   local repo="$1" name="$2" content="$3"
-  printf '%s' "$content" | sed 's/$/\r/' > "$repo/$name"
+  printf '%s' "$content" | awk '{ printf "%s\r\n", $0 }' > "$repo/$name"
   ( cd "$repo" && git add -f "$name" && $GIT_AS commit -q -m "add-$name" ) >/dev/null 2>&1
 }
 
@@ -64,7 +70,8 @@ CHECK_OUT=""
 CHECK_RC=0
 run_check() {
   local repo="$1"
-  CHECK_OUT="$(cd "$repo" && bash scripts/check-table-breaks.sh 2>&1)"
+  shift
+  CHECK_OUT="$(cd "$repo" && env "$@" bash scripts/check-table-breaks.sh 2>&1)"
   CHECK_RC=$?
 }
 
@@ -234,6 +241,29 @@ else
   pass
 fi
 
+# ── 陽性: 段落の直後に空行を挟まず取り残された行 ─────────────────────────────
+#
+# 表の途中へ段落を差し込むと、多くの場合そのあとに空行を挟まず表の残骸が続く
+# （段落自体が改行だけで終わるため）。直前が空行のときしか表の先頭候補にしない
+# 判定だと、この形を見落とす（2 段目ゲートの第二意見が実際に指摘した形）。
+
+it "段落の直後に空行を挟まず取り残された行を報告する（空行を挟む形より見落としやすい）"
+repo="$(new_repo)"
+# 単一引用符内のバッククォートはリテラル表示のためで、展開させない。
+# shellcheck disable=SC2016
+add_md "$repo" "no-blank-before.md" '| a | b |
+|---|---|
+| 1 | 2 |
+
+`planner` は当初サブエージェントとして定義していましたが、親担当へ移しました。
+ではありません。
+| reviewer | 第二意見は別ベンダーのモデルで取ります |
+
+続きの本文。
+'
+run_check "$repo"
+assert_fail "空行なしで取り残された行" "no-blank-before.md"
+
 # ── CRLF 改行の文書 ───────────────────────────────────────────────────────────
 #
 # scripts/check-control-chars.sh は CR を CRLF という改行の流儀の一部として許容
@@ -292,5 +322,34 @@ chmod +x "$out/scripts/check-table-breaks.sh"
 ) >/dev/null 2>&1
 run_check "$out"
 assert_pass "追跡 Markdown 0 件"
+
+it "git ls-files が失敗すると落ちる（プロセス置換越しでも検査が成立していないことを合格にしない）"
+# git ls-files -z '*.md' '*.markdown' だけを横取りする git スタブを PATH の先頭へ置く
+# （2 段目ゲートの第二意見が指摘した形: プロセス置換 `done < <(git ls-files ...)` は
+# bash がコマンドの終了コードを呼び出し元へ伝播しないため、一時ファイル経由に
+# 直した後でもここで退行しないことを固定する）。
+repo="$(new_repo)"
+fake_git_dir="$(new_workdir)/fakebin"
+mkdir -p "$fake_git_dir"
+real_git="$(command -v git)"
+cat > "$fake_git_dir/git" <<STUB
+#!/usr/bin/env bash
+if [[ "\${1:-}" == "ls-files" && "\${2:-}" == "-z" ]]; then
+  echo "stub: ls-files が失敗しました（permission denied を模す）" >&2
+  exit 128
+fi
+exec "$real_git" "\$@"
+STUB
+chmod +x "$fake_git_dir/git"
+run_check "$repo" "PATH=$fake_git_dir:$PATH"
+if [[ "$CHECK_RC" -eq 0 ]]; then
+  fail "落ちるべきところで通過した: $CHECK_OUT"
+elif ! printf '%s' "$CHECK_OUT" | grep -q 'TABLE_BREAKS_FAIL'; then
+  fail "TABLE_BREAKS_FAIL が出ていない: $CHECK_OUT"
+elif ! printf '%s' "$CHECK_OUT" | grep -qF 'git ls-files に失敗しました'; then
+  fail "既存の fatal 文言が無い: $CHECK_OUT"
+else
+  pass
+fi
 
 exit_with_result
