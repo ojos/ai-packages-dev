@@ -285,6 +285,42 @@ rule_case md5sum     'md5sum "$f" > SUMS'                                   # bs
 rule_case stat-c     'mode="$(stat -c %a "$1")"'                            # bsd-ok: フィクスチャ
 
 # 分岐が完成している形は報告しない。**報告すると、動くコードの書き換えを迫る。**
+# 規則の対処は、その綴りに対して正しくなければならない。sha256sum と md5sum を
+# 1 行にまとめていたため、md5sum の利用者に SHA-256 の代替を提示していた
+# （レビューの指摘。**指摘どおりに直すとハッシュ方式が変わる**）。
+it "規則表: md5sum の対処が md5 側を示し、sha256 系を示さない"
+{
+  printf '%s\n' 'set -euo pipefail'
+  printf '%s\n' 'md5sum "$f" > SUMS'                                        # bsd-ok: フィクスチャ
+} > "$FIXBODY"
+probe rule-md5-advice
+if [[ "$CHECK_RC" -eq 0 ]]; then
+  fail "md5sum を検出していない"
+elif ! printf '%s' "$CHECK_OUT" | grep -F 'openssl dgst -md5' >/dev/null; then
+  fail "md5 側の代替を示していない: $CHECK_OUT"
+elif printf '%s' "$CHECK_OUT" | grep -E 'md5sum は無い[^\n]*(sha256|shasum)' >/dev/null; then
+  fail "md5sum の対処に sha256 系の代替が混ざっている: $CHECK_OUT"   # bsd-ok: 検査名に綴りが入るだけ
+else
+  pass
+fi
+
+it "規則表: md5sum の分岐（md5 / openssl dgst -md5）を分岐とみなす（陰性）"
+{
+  printf '%s\n' 'set -euo pipefail'
+  printf '%s\n' 'h="$(md5sum "$f" 2>/dev/null || md5 -q "$f")"'             # bsd-ok: フィクスチャ
+} > "$FIXBODY"
+probe rule-md5-branch
+assert_clean "md5 への分岐"
+
+it "規則表: sha256sum の分岐は md5sum の分岐とみなされない（陽性。取り違えないこと）"  # bsd-ok: 検査名に綴りが入るだけ
+# 分岐の綴りを取り違えると、片方の規則がもう片方の分岐で黙る。
+{
+  printf '%s\n' 'set -euo pipefail'
+  printf '%s\n' 'h="$(md5sum "$f" 2>/dev/null || shasum -a 256 "$f")"'      # bsd-ok: フィクスチャ
+} > "$FIXBODY"
+probe rule-md5-wrong-branch
+assert_detected "md5sum に sha256 の分岐" RULE                  # bsd-ok: 検査名に綴りが入るだけ
+
 it "規則表: 同じ行に BSD 側の綴りがあれば報告しない（陰性）"
 {
   printf '%s\n' 'set -euo pipefail'

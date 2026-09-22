@@ -123,6 +123,11 @@
 #   **踏んだ事故を書き足す場所である。** 表を増やすときは、必ず「代わりに何を書くか」
 #   まで書くこと。指摘だけの検査は、直し方を探す時間を利用者へ押し付ける。
 #
+#   **1 つの規則へ複数の綴りをまとめるのは、対処が同じときに限る。** `sha256sum` と
+#   `md5sum` を 1 行にまとめると、対処として書ける代替はどちらか一方になり、もう
+#   一方の利用者は**指摘どおりに直すとハッシュ方式が変わる。** 検査が壊れた助言を
+#   与えるのは、検査が無いより悪い（レビューの指摘で実際に踏んだ）。
+#
 #   規則は 1 行ずつ当てるだけで、引用の内外は区別しない。たとえば sed -i の規則は
 #   `sed 's/ -i / X /' f` のように**プログラムの中に ` -i ` を含む形**も拾う。
 #   引用を解析すれば避けられるが、規則表は綴りを 1 行足すだけで増やせることに価値が
@@ -197,7 +202,8 @@ find [^|;&]*-printf	BSD の find に -printf は無い。-exec か -print と組
 xargs [^|;&]*-r	BSD の xargs に -r は無い（空入力でも実行しない挙動が既定）		# bsd-ok: 規則表の綴りそのもの
 (head|tail) +-n +-[0-9]	負の行数は GNU 拡張。BSD には無い		# bsd-ok: 規則表の綴りそのもの
 (^|[^-[:alnum:]_/])tac( |$)	BSD 系には tac が無い。tail -r か awk で代用する		# bsd-ok: 規則表の綴りそのもの
-(^|[^-[:alnum:]_])(sha256sum|md5sum)	BSD 系には sha256sum / md5sum が無い。shasum -a 256 か openssl dgst -sha256 への分岐を書く	shasum|openssl[[:space:]]+dgst	# bsd-ok: 規則表の綴りそのもの
+(^|[^-[:alnum:]_])sha256sum	BSD 系に sha256sum は無い。shasum -a 256 か openssl dgst -sha256 への分岐を書く	shasum|openssl[[:space:]]+dgst	# bsd-ok: 規則表の綴りそのもの
+(^|[^-[:alnum:]_])md5sum	BSD 系に md5sum は無い（macOS は md5）。md5 か openssl dgst -md5 への分岐を書く。**sha256 系へ置き換えないこと。ハッシュ方式が変わる**	(^|[^-[:alnum:]_])md5([^-[:alnum:]_]|$)|openssl[[:space:]]+dgst[^|;&]*-md5	# bsd-ok: 規則表の綴りそのもの
 stat[[:space:]]+-c	BSD の stat は -f である。両方へ分岐するか、別の手段を選ぶ	stat[[:space:]]+-f	# bsd-ok: 規則表の綴りそのもの
 IGNORECASE[[:space:]]*=	IGNORECASE は gawk の拡張。mawk と BSD awk は黙って無視するので、大小の違う入力に一致しなくなる。tolower($0) ~ /.../ と書く		# bsd-ok: 規則表の綴りそのもの
 RULES_EOF
