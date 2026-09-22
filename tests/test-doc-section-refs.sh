@@ -743,11 +743,39 @@ LOOP_WORKFLOW="$REPO_ROOT/.ai-playbook/loop-workflow.md"
 TOOL_SECTION='## 道具自体を見る検査の置き場所'
 
 # 指定した `## ` 節の本文を返す（次の `## ` の手前まで）。**判定の本体。**
+#
+# **フェンスで囲まれたコード部分は空行へ置き換える。** 2 つの理由がある
+# （どちらもレビューの指摘。実測で確認した）。
+#
+#   1. 節内のコード例に `## ` が 1 行あるだけで、本文がそこで打ち切られる。以降の
+#      見出しが「無い」ことになり、**正しい文書が赤になる**
+#   2. フェンス内の文字列を実在の見出し・記述として数えると、**対象をコード例へ
+#      残したまま実文書から消す変異が緑になる**
+#
+# 上の「統合する側の実務」の切り出しと同じ扱いにそろえる。
 section_body() {
   awk -v want="$2" '
-    $0 == want { inside = 1; next }
-    inside && /^## / { exit }
-    inside { print }
+    function fence_len(s,   n) {
+      sub(/^[[:space:]]*/, "", s)
+      n = 0
+      while (substr(s, n + 1, 1) == "`") n++
+      return n
+    }
+    {
+      fl = fence_len($0)
+      if (fl >= 3) {
+        if (!inside_fence) { inside_fence = 1; open_len = fl }
+        else if (fl >= open_len && $0 ~ /^[[:space:]]*`+[[:space:]]*$/) { inside_fence = 0 }
+        if (inside) print ""
+        next
+      }
+      if (!inside) {
+        if ($0 == want) inside = 1
+        next
+      }
+      if (!inside_fence && /^## /) exit
+      if (inside_fence) print ""; else print
+    }
   ' "$1"
 }
 
@@ -842,6 +870,53 @@ if [[ "$got" == 'この文字列は節に存在しない' ]]; then
   pass
 else
   fail "無い語句を検出できない（判定の本体が壊れている）: ${got:-なし}"
+fi
+
+it "フェンス内の ## で本文が打ち切られない（意図的なフィクスチャ）"
+# コード例に `## ` が 1 行あるだけで、以降の見出しが落ちて正しい文書が赤になる。
+FENCE_FIXTURE="$(mktemp "${TMPDIR:-/tmp}/section-fence.XXXXXX")"
+{
+  printf '%s\n' '## 見本の節'
+  printf '%s\n' '```markdown'
+  printf '%s\n' '## コード例の中の見出し'
+  printf '%s\n' '```'
+  printf '%s\n' '### フェンスより後ろの見出し'
+} > "$FENCE_FIXTURE"
+got="$(printf '%s\n' '### フェンスより後ろの見出し' | missing_headings "$(section_body "$FENCE_FIXTURE" '## 見本の節')")"
+if [[ -z "$got" ]]; then
+  pass
+else
+  fail "フェンス内の ## で本文が打ち切られた（後ろの見出しを見失う）"
+fi
+
+it "フェンス内の見出しを、実在の見出しとして数えない（意図的なフィクスチャ）"
+# **対象をコード例へ残したまま実文書から消す変異が、緑になってしまう経路。**
+{
+  printf '%s\n' '## 見本の節'
+  printf '%s\n' '```markdown'
+  printf '%s\n' '### コード例の中にだけある見出し'
+  printf '%s\n' '```'
+} > "$FENCE_FIXTURE"
+got="$(printf '%s\n' '### コード例の中にだけある見出し' | missing_headings "$(section_body "$FENCE_FIXTURE" '## 見本の節')")"
+if [[ "$got" == '### コード例の中にだけある見出し' ]]; then
+  pass
+else
+  fail "フェンス内の見出しを実在として数えた"
+fi
+
+it "フェンス内の語句を、実在の記述として数えない（意図的なフィクスチャ）"
+{
+  printf '%s\n' '## 見本の節'
+  printf '%s\n' '```text'
+  printf '%s\n' 'コード例の中にだけある語句'
+  printf '%s\n' '```'
+} > "$FENCE_FIXTURE"
+got="$(printf '%s\n' 'コード例の中にだけある語句' | missing_phrases "$(section_body "$FENCE_FIXTURE" '## 見本の節')")"
+rm -f "$FENCE_FIXTURE"
+if [[ "$got" == 'コード例の中にだけある語句' ]]; then
+  pass
+else
+  fail "フェンス内の語句を実在として数えた"
 fi
 
 it "別の節にしかない見出しを、この節の配下とみなさない（対照群）"
