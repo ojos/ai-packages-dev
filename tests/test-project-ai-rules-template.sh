@@ -113,15 +113,22 @@ playbook_paths() {
 # 実測で確認した）。cp 行は雛形と配置先の対応を正確に持っているので、そこから取る。
 # 決め打ちにすると、規範側が置き先を変えたときに古い場所を見続けて緑のままになる
 # （tests/test-workflow-mirror.sh と同じ理由）。
+# **雛形名と配置先は同じ行から取る。** 配置先だけを取り出してから雛形名を grep で
+# 引き直すと、`cp … scripts/` の形（ディレクトリ指定）が複数あるときに常に 1 行目の
+# 雛形名が選ばれ、2 行目以降が 1 行目の名前に化ける（第二意見の指摘。実測で確認した。
+# 現行の README では該当が 1 行しかないため表面化していないが、2 行目を足した日に
+# 壊れる）。1 回の awk で両方を読む。
 placed_paths() {
-  grep -E '^cp \.ai-playbook/templates/' "$REPO_ROOT/.ai-playbook/README.md" \
-    | awk '{ print $3 }' \
-    | while IFS= read -r dest; do
-        case "$dest" in
-          */) printf '%s%s\n' "$dest" "$(basename "$(grep -E "^cp .*${dest}\$" "$REPO_ROOT/.ai-playbook/README.md" | awk '{ print $2 }' | sed -n 1p)")" ;;
-          *)  printf '%s\n' "$dest" ;;
-        esac
-      done
+  awk '
+    /^cp \.ai-playbook\/templates\// {
+      src = $2
+      dest = $3
+      n = split(src, a, "/")
+      # 配置先がディレクトリ指定（末尾が /）なら、雛形のファイル名を足す。
+      if (dest ~ /\/$/) print dest a[n]
+      else print dest
+    }
+  ' "$1"
 }
 
 # 一覧に無いパスを返す。**判定の本体。** 標準入力からパスを受ける。
@@ -158,7 +165,7 @@ fi
 it "雛形が挙げるパスがすべて実在する（または理由つきで除外されている）"
 GENERATED="$(generated_paths)"
 PLAYBOOK="$(playbook_paths)"
-PLACED="$(placed_paths)"
+PLACED="$(placed_paths "$REPO_ROOT/.ai-playbook/README.md")"
 missing="$(printf '%s\n' "$PATHS" | unknown_paths "$GENERATED" "$PLAYBOOK" "$PLACED")"
 if [[ -z "$missing" ]]; then
   pass
@@ -264,6 +271,24 @@ if [[ "$wrong" == "wrong-dir/second-opinion-review.sh" ]]; then
   pass
 else
   fail "ディレクトリ部分の違うパスを見逃した: ${wrong:-なし}"
+fi
+
+it "ディレクトリ指定の cp 行が複数あっても、雛形名を取り違えない"
+# 配置先だけを取り出してから雛形名を引き直すと、2 行目以降が 1 行目の名前に化ける。
+# 現行の README では該当が 1 行しかないため、**フィクスチャでしか確かめられない。**
+mix="$FIXTURE_DIR/readme-mix.md"
+{
+  printf '%s\n' 'cp .ai-playbook/templates/second-opinion-review.sh scripts/'
+  printf '%s\n' 'cp .ai-playbook/templates/another-helper.sh scripts/'
+  printf '%s\n' 'cp .ai-playbook/templates/review-usable.sh scripts/review-usable.sh'
+} > "$mix"
+# **本番と同じ関数を通す。** ここで awk を書き直すと、関数を壊してもこの検査が
+# 緑のままになる（同じ PR で 2 度踏んだ形）。
+got="$(placed_paths "$mix" | tr '\n' ' ')"
+if [[ "$got" == "scripts/second-opinion-review.sh scripts/another-helper.sh scripts/review-usable.sh " ]]; then
+  pass
+else
+  fail "ディレクトリ指定の cp 行で雛形名を取り違えた: $got"
 fi
 
 it "雛形の配置先を README の cp 行から取れている（対照群）"
