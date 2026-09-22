@@ -110,7 +110,7 @@ it "node / php はサードパーティ language server 拡張を配線しない
 out="$(new_workdir)/p"
 run_bootstrap "$out" --languages node,php >/dev/null 2>&1
 dc="$out/.devcontainer/devcontainer.json"
-if jq -r '.customizations.vscode.extensions[]' "$dc" | grep -qiE 'intelephense|php|typescript-language'; then
+if jq -r '.customizations.vscode.extensions[]' "$dc" | grep -iE 'intelephense|php|typescript-language' >/dev/null; then
   fail "node/php にサードパーティ拡張が混入"
 else
   pass

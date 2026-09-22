@@ -286,7 +286,7 @@ managed_section() {
 
 # 管理セクションが行そのものとして持つかを見る（コメント中の言及に一致させない）。
 section_has_line() {
-  managed_section "$1" | grep -qFx "$2"
+  managed_section "$1" | grep -Fx "$2" >/dev/null
 }
 
 # 生成先を git リポジトリにして、パスの除外可否を git 自身に判定させる。
@@ -328,7 +328,7 @@ fi
 it "--with-claude: settings.local.json の除外は管理セクションが持たない"
 # .claude/ の中で閉じる除外は .claude/ を配る側の責務にする。二重に持つと、片方だけを
 # 直したときに食い違い、どちらが効いているのかが読めなくなる。
-if managed_section "$gi" | grep -q 'settings\.local\.json'; then
+if managed_section "$gi" | grep 'settings\.local\.json' >/dev/null; then
   fail "管理セクションが settings.local.json を持っている（配置先の二重化）"
 else
   pass
@@ -401,7 +401,7 @@ done
 if [[ -z "$found" ]]; then pass; else fail "装備未選択なのに除外行がある:$found"; fi
 
 it "素の生成物の管理セクションには DCB 固有ブロックの見出しが出ない"
-if managed_section "$out/.gitignore" | grep -q 'devcontainer-bootstrap owned ignores'; then
+if managed_section "$out/.gitignore" | grep 'devcontainer-bootstrap owned ignores' >/dev/null; then
   fail "装備未選択なのに DCB 固有ブロックの見出しがある"
 else
   pass

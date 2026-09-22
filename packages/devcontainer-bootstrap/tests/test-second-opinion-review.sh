@@ -881,7 +881,7 @@ if locale -a 2>/dev/null | grep -i '^C\.utf8$\|^C\.UTF-8$' >/dev/null; then
   i=1
   while [[ "$i" -le "$n_files" ]]; do
     : > "$d/j$i.txt"
-    yes "$line" 2>/dev/null | head -n "$lines_needed" >> "$d/j$i.txt"
+    yes "$line" 2>/dev/null | head -n "$lines_needed" >> "$d/j$i.txt"  # bsd-ok: yes は無限に出力するので SIGPIPE で終わるのが正常。終了コードは読んでいない
     i=$((i + 1))
   done
   ( cd "$d" && git add j*.txt )

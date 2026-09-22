@@ -200,7 +200,7 @@ fail() {
 # 出力は種別付きの行（HIT / NEXT / UNCLOSED / STAT）で、集計は呼び出し側が行う。
 #
 # awk は mawk（Debian 既定）を前提に、POSIX の範囲だけで書く
-# （gensub 等の gawk 拡張は使わない。tests/test-shell-portability.sh が固定している
+# （gensub 等の gawk 拡張は使わない。scripts/check-shell-portability.sh が固定している
 # 移植性方針と同じ考え方）。
 #
 # awk プログラム全体を単一引用符で囲む。中の $0 / $1 等はシェルではなく awk が

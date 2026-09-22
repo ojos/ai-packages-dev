@@ -116,7 +116,7 @@ check_origin_record() {
 
   # `sed ... | head -1` にしない。version= が複数行あるとき sed が全行を出し切る前に
   # head が読み取りを打ち切り、pipefail 下で SIGPIPE により判定が反転しうる
-  # （tests/test-pipefail-sigpipe.sh が検出する）。awk 単体で最初の一致だけを取る。
+  # （scripts/check-shell-portability.sh が検出する）。awk 単体で最初の一致だけを取る。
   local origin_version
   origin_version="$(awk '/^version=/ { sub(/^version=/, ""); print; exit }' "$origin_file")"
   if [[ -z "$origin_version" ]]; then

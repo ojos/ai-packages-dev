@@ -82,6 +82,8 @@ echo "[acceptance] (hygiene) control characters"
 bash scripts/check-control-chars.sh
 echo "[acceptance] (hygiene) markdown table breaks"
 bash scripts/check-table-breaks.sh
+echo "[acceptance] (hygiene) shell portability"
+bash scripts/check-shell-portability.sh
 
 # ── CI: Self devcontainer credential isolation ───────────────────────────────
 # このリポジトリ自身の devcontainer も、生成物と同じ「資格情報をホストから

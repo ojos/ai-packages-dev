@@ -26,6 +26,7 @@
 | `scripts/verify.sh` | `acceptance.sh` を非対話実行し、一意な通過信号（`VERIFY_PASS`）を返す接地信号。手前で `check-no-secrets.sh` を実行する。 |
 | `scripts/check-no-secrets.sh` | 機密混入の検知ゲート（追跡前 / 追跡済みの 2 経路 + `.env.example` の機密値 + `.env` とのキー整合）。判定の正本で、`verify.sh` と CI が共用する。 |
 | `scripts/check-control-chars.sh` | 追跡ファイルへの表示されない制御文字（C0 制御文字と DEL。TAB / LF / CR は除く）混入の検知ゲート。`acceptance.sh` が呼ぶ。 |
+| `scripts/check-shell-portability.sh` | 「この環境では通るが BSD 系（macOS）では落ちる」綴りの検知ゲート。追跡している `*.sh` と `*.md`（フェンス内）を走査し、`# bsd-ok: 理由` を逃げ道とする。`acceptance.sh` が呼ぶ。 |
 | `scripts/check-table-breaks.sh` | Markdown の表の途中へ段落が差し込まれ、続く行が表として描画されなくなっていないかの検知ゲート。`acceptance.sh` が呼ぶ。 |
 | `scripts/loop-gate.sh` | push / PR 前のローカル事前ゲート。commit identity 検証・`verify.sh`・第二意見を直列化する単一入口（`GATE_PASS`）。 |
 | `scripts/verify-commit-identity.sh` | コミット履歴の identity 検証（email のみで判定）。CI（identity-guard）と手元で共用。 |

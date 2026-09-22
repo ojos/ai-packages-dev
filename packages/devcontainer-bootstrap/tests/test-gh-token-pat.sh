@@ -87,7 +87,7 @@ it "到達性を /dev/tcp で断定しない"
 # 直接接続はプロキシ経由の環境で塞がれ、gh が疎通していても不通と誤判定する。
 # コメント行は対象外にする。採らなかった理由として /dev/tcp に言及する行が
 # スクリプト内にあり、それごと落とすと理由を書けなくなる。
-if grep -vE '^[[:space:]]*#' "$OA" | grep -q '/dev/tcp'; then
+if grep -vE '^[[:space:]]*#' "$OA" | grep '/dev/tcp' >/dev/null; then
   fail "/dev/tcp による到達性判定が入っている（プロキシ環境で誤判定する）"
 else
   pass

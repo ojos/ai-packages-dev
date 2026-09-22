@@ -28,14 +28,14 @@ compose_of() { printf '%s' "$1/.devcontainer/compose.yaml"; }
 # ── フラグそのもの ────────────────────────────────────────────────────────────
 
 it "--with-antigravity を実装が受理する"
-if impl_flags | grep -qx -- '--with-antigravity'; then
+if impl_flags | grep -x -- '--with-antigravity' >/dev/null; then
   pass
 else
   fail "引数解析が --with-antigravity を持たない"
 fi
 
 it "usage に --with-antigravity が載る"
-if bash "$BOOTSTRAP" --help 2>&1 | grep -q -- '--with-antigravity'; then
+if bash "$BOOTSTRAP" --help 2>&1 | grep -- '--with-antigravity' >/dev/null; then
   pass
 else
   fail "--help の出力に載っていない"

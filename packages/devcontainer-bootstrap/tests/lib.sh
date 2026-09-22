@@ -275,7 +275,7 @@ impl_flags() {
 # bootstrap.sh / doctor.sh に複製された DCB_VERSION="vX.Y.Z" の値を取り出す。
 # `sed -n '...p' | head -1` にしない。head が最初の一致を得た時点で読み取りを打ち切り、
 # 生産側（sed）がまだ書き込み中だと pipefail 下で SIGPIPE により判定が反転しうる
-# （tests/test-pipefail-sigpipe.sh が検出する）。awk 単体で最初の一致だけを取れば
+# （scripts/check-shell-portability.sh が検出する）。awk 単体で最初の一致だけを取れば
 # パイプの早期終了が起きない。
 dcb_version_of() {
   awk -F'"' '/^DCB_VERSION="/ { print $2; exit }' "$1"

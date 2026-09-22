@@ -211,6 +211,6 @@ else
 fi
 
 it "ヘルプの --languages 説明が ruby を列挙する"
-if bash "$BOOTSTRAP" --help 2>&1 | grep -q 'node,go,python,php,rust,ruby'; then pass; else fail "ヘルプに ruby が無い"; fi
+if bash "$BOOTSTRAP" --help 2>&1 | grep 'node,go,python,php,rust,ruby' >/dev/null; then pass; else fail "ヘルプに ruby が無い"; fi
 
 exit_with_result
