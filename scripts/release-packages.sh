@@ -398,13 +398,13 @@ generate_standard_assets() {
       exit 1
     }
   done
-  sha256sum "${SUMS_TARGETS[@]}" > SHA256SUMS
+  sha256sum "${SUMS_TARGETS[@]}" > SHA256SUMS  # bsd-ok: リリース実行は Actions（Linux）でしか行わない
 
   # RELEASE-MANIFEST.json
   local archive_sha
-  archive_sha=$(sha256sum PACKAGE_ARCHIVE.tar.gz | awk '{print $1}')
+  archive_sha=$(sha256sum PACKAGE_ARCHIVE.tar.gz | awk '{print $1}')  # bsd-ok: リリース実行は Actions（Linux）でしか行わない
   local sums_sha
-  sums_sha=$(sha256sum SHA256SUMS | awk '{print $1}')
+  sums_sha=$(sha256sum SHA256SUMS | awk '{print $1}')  # bsd-ok: リリース実行は Actions（Linux）でしか行わない
 
   # assets は「この Release に添付されるファイル」の一覧。標準 3 資産だけを固定で
   # 書いていると、README が公式の入手手順として案内する bootstrap.sh / doctor.sh が
@@ -662,7 +662,7 @@ verify_release_assets_dir() {
       failed=1
       continue
     fi
-    actual="$(sha256sum "$dir/$name" | awk '{print $1}')"
+    actual="$(sha256sum "$dir/$name" | awk '{print $1}')"  # bsd-ok: リリース実行は Actions（Linux）でしか行わない
     if [[ "$actual" == "$expected" ]]; then
       echo "[audit] OK    $label  $name  (SHA256SUMS)"
     else
@@ -716,7 +716,7 @@ verify_release_assets_dir() {
       failed=1
       continue
     fi
-    actual="$(sha256sum "$dir/$name" | awk '{print $1}')"
+    actual="$(sha256sum "$dir/$name" | awk '{print $1}')"  # bsd-ok: リリース実行は Actions（Linux）でしか行わない
     if [[ "$actual" == "$expected" ]]; then
       echo "[audit] OK    $label  $name  (RELEASE-MANIFEST.json)"
     else
@@ -791,7 +791,7 @@ audit_release_assets() {
   # 呼び出し元（--audit 経路 / リリース末尾）のどちらから来ても同じ前提を要求する。
   require_cmd gh
   require_cmd jq
-  require_cmd sha256sum
+  require_cmd sha256sum  # bsd-ok: リリース実行は Actions（Linux）でしか行わない
 
   # ai-playbook は Release 資産を持たない（タグのみ配布）ため監査対象外。
   local repos=("$owner/devcontainer-bootstrap")
@@ -926,7 +926,7 @@ require_cmd git
 require_cmd gh
 require_cmd bash
 require_cmd tar
-require_cmd sha256sum
+require_cmd sha256sum  # bsd-ok: リリース実行は Actions（Linux）でしか行わない
 # python3 は validate_markdown_links_in_tree の実体であり、preflight で必ず走る。
 # ここで検査しないと、不在環境では「python3: command not found」という、
 # 何の前提が欠けているのか分からないエラーで preflight が落ちる。

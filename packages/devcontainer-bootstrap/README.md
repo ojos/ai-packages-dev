@@ -62,12 +62,17 @@ trap 'rm -rf "$d"' EXIT
 curl -sSL "${BASE}/bootstrap.sh" -o "$d/bootstrap.sh"
 curl -sSL "${BASE}/SHA256SUMS"  -o "$d/SHA256SUMS"
 
-# --ignore-missing: SHA256SUMS は doctor.sh も対象にするため、bootstrap.sh だけを
-# 取得した場合は付けないと「doctor.sh が無い」で失敗する。
+# sha256sum は GNU coreutils のコマンドで、macOS には無い。shasum へ分岐する。
+#
+# SHA256SUMS は doctor.sh も対象にするため、取得した行だけを抜き出して検証する。
+# --ignore-missing は実装と版によって有無が違うので使わない。一致する行が 1 件も
+# 無ければ、どちらの実装も「整形された行が無い」として非 0 で終わるため、検証が
+# 成立しないまま通ることはない。
 #
 # 検証と実行は && で連結する。この手順は対話シェルへ貼って使うため set -e が効かず、
 # 行を分けると検証に失敗しても次の bash が走る。
-( cd "$d" && sha256sum --ignore-missing -c SHA256SUMS ) &&
+if command -v sha256sum >/dev/null 2>&1; then sha256c="sha256sum"; else sha256c="shasum -a 256"; fi
+( cd "$d" && grep ' bootstrap.sh$' SHA256SUMS | $sha256c -c - ) &&
 bash "$d/bootstrap.sh" --project-name myapp --output-dir "$PWD/myapp" \
   --languages node,go --with-aws --with-claude
 ```
@@ -75,7 +80,7 @@ bash "$d/bootstrap.sh" --project-name myapp --output-dir "$PWD/myapp" \
 一時ディレクトリから実行するため、次の 2 点に注意してください。
 
 - **`--output-dir` を必ず明示します。** 省略時の既定は `$PWD/<project-name>`、つまり一時ディレクトリの中になり、生成物が `trap` で消えます。
-- **`sha256sum --ignore-missing` は GNU coreutils 8.25 以降が必要です。** それ以前の環境や BSD 系の `shasum` を使う場合は、`doctor.sh` も取得したうえで `--ignore-missing` を外してください。
+- **`sha256sum` は GNU coreutils のコマンドで、macOS には入っていません。** 上の手順は `command -v` で判定して `shasum -a 256` へ分岐します。`--ignore-missing` は実装と版によって有無が違うため使わず、`SHA256SUMS` から**取得したファイルの行だけを抜き出して**検証します。
 
 検証を挟まない `curl | bash` 形式は採りません。`SHA256SUMS` は改ざんと取得失敗の両方を検出する唯一の手段で、省くと配布物の同一性を確認する経路が無くなります。
 
@@ -83,7 +88,8 @@ AI 共通ルールも配置する場合は、ルールの取得元を指定し�
 
 ```bash
 # 上の手順の最後（検証と実行）を、規範の取得元を足した形へ置き換える。
-( cd "$d" && sha256sum --ignore-missing -c SHA256SUMS ) &&
+if command -v sha256sum >/dev/null 2>&1; then sha256c="sha256sum"; else sha256c="shasum -a 256"; fi
+( cd "$d" && grep ' bootstrap.sh$' SHA256SUMS | $sha256c -c - ) &&
 bash "$d/bootstrap.sh" --project-name myapp --output-dir "$PWD/myapp" \
   --languages node,go --with-claude --playbook-version v0.1.4
 ```
@@ -106,11 +112,12 @@ trap 'rm -rf "$d"' EXIT
 curl -sSL "${BASE}/doctor.sh"  -o "$d/doctor.sh"
 curl -sSL "${BASE}/SHA256SUMS" -o "$d/SHA256SUMS"
 
-( cd "$d" && sha256sum --ignore-missing -c SHA256SUMS ) &&
+if command -v sha256sum >/dev/null 2>&1; then sha256c="sha256sum"; else sha256c="shasum -a 256"; fi
+( cd "$d" && grep ' doctor.sh$' SHA256SUMS | $sha256c -c - ) &&
 bash "$d/doctor.sh" --target-dir ./myapp
 ```
 
-診断のたびに取得すれば、生成先のリポジトリへ `doctor.sh` を混入させずに済みます。手元へ置いて繰り返し使う場合は、`bootstrap.sh` と `doctor.sh` を同じディレクトリへ取得し、`--ignore-missing` を付けずに `sha256sum -c SHA256SUMS` で両方を検証してください。
+診断のたびに取得すれば、生成先のリポジトリへ `doctor.sh` を混入させずに済みます。手元へ置いて繰り返し使う場合は、`bootstrap.sh` と `doctor.sh` を同じディレクトリへ取得し、行を抜き出さずに `$sha256c -c SHA256SUMS` で両方を検証してください。
 
 ### リリース資産
 
@@ -120,7 +127,7 @@ bash "$d/doctor.sh" --target-dir ./myapp
 |---|---|
 | `bootstrap.sh` | 生成コマンド本体。単体で動作します |
 | `doctor.sh` | 生成後の自己診断コマンド。単体で動作します |
-| `SHA256SUMS` | 上の 2 つのチェックサム。`sha256sum -c SHA256SUMS` で改ざん・取得失敗を検出します（片方だけ取得した場合は `--ignore-missing` を付けます） |
+| `SHA256SUMS` | 上の 2 つのチェックサム。`sha256sum -c SHA256SUMS`（macOS では `shasum -a 256 -c SHA256SUMS`）で改ざん・取得失敗を検出します。片方だけ取得した場合は、その行を `grep` で抜き出して `-c -` へ渡します |
 | `PACKAGE_ARCHIVE.tar.gz` | そのリリース時点の公開リポジトリのツリー一式（`.git` と生成した 3 資産を除く。`bootstrap.sh` / `doctor.sh` / この README / `LICENSE` / `CHANGELOG.md`）。スクリプトと手順書を 1 つの塊として手元へ固定したい場合や、リリース間の差分を追いたい場合に使います |
 | `RELEASE-MANIFEST.json` | パッケージ名・版・資産一覧・チェックサムを機械可読にまとめたもの。`assets` がそのリリースに添付された資産の一覧、`checksums` が `PACKAGE_ARCHIVE.tar.gz` と `SHA256SUMS` のハッシュです |
 
@@ -133,13 +140,16 @@ curl -sSL "${BASE}/RELEASE-MANIFEST.json" -o RELEASE-MANIFEST.json
 curl -sSL "${BASE}/PACKAGE_ARCHIVE.tar.gz" -o PACKAGE_ARCHIVE.tar.gz
 curl -sSL "${BASE}/SHA256SUMS" -o SHA256SUMS
 
+# sha256sum は GNU coreutils のコマンドで、macOS には無い。shasum へ分岐する。
+if command -v sha256sum >/dev/null 2>&1; then sha256c="sha256sum"; else sha256c="shasum -a 256"; fi
+
 # 1. マニフェストが記録したハッシュと実物を突き合わせる
-jq -r '.checksums | to_entries[] | "\(.value)  \(.key)"' RELEASE-MANIFEST.json | sha256sum -c -
+jq -r '.checksums | to_entries[] | "\(.value)  \(.key)"' RELEASE-MANIFEST.json | $sha256c -c -
 
 # 2. マニフェストが検証した SHA256SUMS で、実行するスクリプトを検証する
 curl -sSL "${BASE}/bootstrap.sh" -o bootstrap.sh
 curl -sSL "${BASE}/doctor.sh" -o doctor.sh
-sha256sum -c SHA256SUMS
+$sha256c -c SHA256SUMS
 
 # アーカイブから中身を取り出す場合
 tar -xzf PACKAGE_ARCHIVE.tar.gz

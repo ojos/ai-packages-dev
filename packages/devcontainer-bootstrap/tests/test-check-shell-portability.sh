@@ -280,6 +280,52 @@ it "規則表: \\x の規則が、バックスラッシュの無い x を誤検�
 probe rule-hex-controls
 assert_clean "バックスラッシュの無い x"
 
+rule_case sha256sum  'sha256sum "$f" > SUMS'                                # bsd-ok: フィクスチャ
+rule_case md5sum     'md5sum "$f" > SUMS'                                   # bsd-ok: フィクスチャ
+rule_case stat-c     'mode="$(stat -c %a "$1")"'                            # bsd-ok: フィクスチャ
+
+# 分岐が完成している形は報告しない。**報告すると、動くコードの書き換えを迫る。**
+it "規則表: 同じ行に BSD 側の綴りがあれば報告しない（陰性）"
+{
+  printf '%s\n' 'set -euo pipefail'
+  printf '%s\n' 'owner="$(stat -c %U "$1" 2>/dev/null || stat -f %Su "$1" 2>/dev/null)"'  # bsd-ok: フィクスチャ
+} > "$FIXBODY"
+probe rule-branch-same-line
+assert_clean "同一行の分岐"
+
+it "規則表: 隣の行に BSD 側の綴りがあれば報告しない（陰性）"
+# 分岐は同じ行に収まるとは限らない。行継続の並びや if/elif の枝は隣の行に来るうえ、
+# 行継続の途中には行コメントを書けず、逃げ道の印で黙らせることもできない。
+{
+  printf '%s\n' 'set -euo pipefail'
+  printf '%s\n' 'for mode in \'                                            # bsd-ok: フィクスチャ
+  printf '%s\n' '  "$(stat -c %a "$1" 2>/dev/null || true)" \'             # bsd-ok: フィクスチャ
+  printf '%s\n' '  "$(stat -f %Lp "$1" 2>/dev/null || true)"; do :; done'   # bsd-ok: フィクスチャ
+} > "$FIXBODY"
+probe rule-branch-next-line
+assert_clean "隣の行の分岐"
+
+it "規則表: 分岐を持たない stat -c は報告する（陽性。除外が広すぎないこと）"  # bsd-ok: 検査名に綴りが入るだけ
+# 除外を広く取りすぎると、本物を見逃す側へ倒れる。対照として固定する。
+{
+  printf '%s\n' 'set -euo pipefail'
+  printf '%s\n' 'mode="$(stat -c %a "$1")"'                                 # bsd-ok: フィクスチャ
+  printf '%s\n' 'echo "$mode"'
+} > "$FIXBODY"
+probe rule-branch-absent
+assert_detected "分岐を持たない stat -c" RULE                  # bsd-ok: 検査名に綴りが入るだけ
+
+it "存在確認（command -v）の行は報告しない（陰性）"
+# command -v は「あるか」を見る書き方で、可搬性のための分岐を書く唯一の手段である。
+# 呼び出しではないので、規則表に依らず落とす。
+{
+  printf '%s\n' 'set -euo pipefail'
+  printf '%s\n' 'if command -v sha256sum >/dev/null 2>&1; then :; fi'       # bsd-ok: フィクスチャ
+  printf '%s\n' 'command -v readlink -f >/dev/null'                         # bsd-ok: フィクスチャ
+} > "$FIXBODY"
+probe command-v-exclusion
+assert_clean "存在確認の行"
+
 it "規則表: 正しい綴りは検出しない（陰性）"
 {
   printf '%s\n' 'set -euo pipefail'
