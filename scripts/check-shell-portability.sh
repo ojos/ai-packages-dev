@@ -123,6 +123,11 @@
 #   **踏んだ事故を書き足す場所である。** 表を増やすときは、必ず「代わりに何を書くか」
 #   まで書くこと。指摘だけの検査は、直し方を探す時間を利用者へ押し付ける。
 #
+#   規則は 1 行ずつ当てるだけで、引用の内外は区別しない。たとえば sed -i の規則は
+#   `sed 's/ -i / X /' f` のように**プログラムの中に ` -i ` を含む形**も拾う。
+#   引用を解析すれば避けられるが、規則表は綴りを 1 行足すだけで増やせることに価値が
+#   あるので、構造解析は持ち込まない。誤検出はその行の `# bsd-ok: 理由` で黙らせる。
+#
 # ── 検査が成立していないことを合格にしない ──────────────────────────────────
 #
 #   git 管理外での実行、git コマンドの失敗、対象 0 件、awk 自体の失敗は、いずれも
@@ -173,7 +178,7 @@ cat > "$RULES" <<'RULES_EOF'
 (^|[^[:alnum:]_.-])mktemp([[:space:]]+-[a-zA-Z-]+)*[[:space:]]*([)|;&`<>#]|$)	テンプレート引数の無い mktemp は BSD 系で usage エラーになる。mktemp -d "${TMPDIR:-/tmp}/name.XXXXXX" と書く	# bsd-ok: 規則表の綴りそのもの
 date [^|;&]*%N	BSD の date に %N（ナノ秒）は無い。秒で足りるなら %s、要るなら別の手段を選ぶ	# bsd-ok: 規則表の綴りそのもの
 sed [^|;&]*\\x[0-9A-Fa-f]	\xNN は GNU sed の拡張。BSD sed は文字 x として扱う。ESC="$(printf '\033')" のように作って渡す	# bsd-ok: 規則表の綴りそのもの
-sed +-i( +-[a-zA-Z]+)* +[^'"]	sed -i の引数の扱いが GNU と BSD で違う。一時ファイルへ書いて mv する	# bsd-ok: 規則表の綴りそのもの
+(^|[^[:alnum:]_.-])sed[[:space:]]+([^|;&]*[[:space:]])?-i([[:space:]]|\.|$)	sed -i の引数の扱いが GNU と BSD で違う（BSD は直後の引数をバックアップ拡張子と解釈する）。一時ファイルへ書いて mv する	# bsd-ok: 規則表の綴りそのもの
 (^|[^[:alnum:]_.-])grep [^|;&]*(-P|--perl-regexp)	BSD の grep に -P は無い。-E で書き直す	# bsd-ok: 規則表の綴りそのもの
 readlink +-f	BSD の readlink に -f は無い。cd と pwd で解決する	# bsd-ok: 規則表の綴りそのもの
 base64 [^|;&]*-w	BSD の base64 に -w は無い。折り返しが要るなら fold へ渡す	# bsd-ok: 規則表の綴りそのもの
@@ -570,6 +575,8 @@ selftest_scan() {
   printf 'GREP_DASH_Z_FLAG\t%s\n' 'grep -lZa -f pattern.txt -- "$path"'           # bsd-ok: 自己診断の見本
   printf 'RULE\t%s\n' 'd="$(mktemp -d)"'                                          # bsd-ok: 自己診断の見本
   printf 'RULE\t%s\n' 'readlink -f "$path"'                                       # bsd-ok: 自己診断の見本
+  printf 'RULE\t%s\n' "sed -i 's/a/b/' f"                                        # bsd-ok: 自己診断の見本
+  printf 'RULE\t%s\n' 'sed -i.bak s/a/b/ f'                                      # bsd-ok: 自己診断の見本
   printf 'RULE\t%s\n' 'stamp="$(date +%s%N)"'                                     # bsd-ok: 自己診断の見本
   printf 'PIPEFAIL_SIGPIPE\t%s\n' 'if ! find . -name "*.md" | grep -q .; then :; fi'  # bsd-ok: 自己診断の見本
   printf 'PIPEFAIL_SIGPIPE\t%s\n' 'first="$(find . -type d | head -n 1)"; if ! v="$(find . | head -n 1)"; then :; fi'  # bsd-ok: 自己診断の見本
@@ -582,6 +589,9 @@ selftest_scan() {
   printf '%s\n' "sed 's/x/a\nb/' f"                                               # bsd-ok: 自己診断の見本
   printf '%s\n' "awk '/^x{2,3}\$/ { print }' f"                                   # bsd-ok: 自己診断の見本
   printf '%s\n' 'grep -z -f pattern.txt -- "$path"'                               # bsd-ok: 自己診断の見本
+  printf '%s\n' 'sed -E "s/a/b/" f'                                              # bsd-ok: 自己診断の見本
+  printf '%s\n' "sed -n 's/^- //p' f"                                            # bsd-ok: 自己診断の見本
+  printf '%s\n' "sed 's/x1/y/' f"                                                # bsd-ok: 自己診断の見本
   printf '%s\n' 'grep --null -f pattern.txt -- "$path"'                           # bsd-ok: 自己診断の見本
   printf '%s\n' 'some-other-tool -Z "$path"'                                      # bsd-ok: 自己診断の見本
   printf '%s\n' 'd="$(mktemp -d "${TMPDIR:-/tmp}/x.XXXXXX")"'                      # bsd-ok: 自己診断の見本

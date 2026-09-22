@@ -800,7 +800,11 @@ pad="$(head -c "$hunk_pad_bytes" /dev/zero | tr '\0' 'X')"
 b_i=1
 while [[ "$b_i" -le "$blocks" ]]; do
   target_line=$(( (b_i - 1) * lines_per_block + lines_per_block / 2 ))
-  sed -i "${target_line}s/\$/ MODIFIED $pad/" "$d/big.txt"
+  # sed -i は GNU と BSD で引数の扱いが割れる（BSD は直後をバックアップ拡張子と
+  # 解釈する）。テンポラリへ書いて差し替える。
+  awk -v n="$target_line" -v pad="$pad" 'NR == n { print $0 " MODIFIED " pad; next } { print }' \
+    "$d/big.txt" > "$d/big.txt.new"
+  mv "$d/big.txt.new" "$d/big.txt"
   b_i=$((b_i + 1))
 done
 ( cd "$d" && git add big.txt )

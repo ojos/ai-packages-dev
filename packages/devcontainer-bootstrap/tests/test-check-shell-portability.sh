@@ -227,7 +227,6 @@ rule_case() {
 rule_case mktemp     'd="$(mktemp -d)"'                                     # bsd-ok: フィクスチャ
 rule_case date-ns    'stamp="$(date +%s%N)"'                                # bsd-ok: フィクスチャ
 rule_case sed-hex    'sed "s/x/\x1b/" f'                                    # bsd-ok: フィクスチャ
-rule_case sed-inplace 'sed -i s/a/b/ f'                                     # bsd-ok: フィクスチャ
 rule_case grep-perl  'grep -P "\d+" f'                                      # bsd-ok: フィクスチャ
 rule_case readlink-f 'readlink -f "$path"'                                  # bsd-ok: フィクスチャ
 rule_case base64-w   'base64 -w 0 f'                                        # bsd-ok: フィクスチャ
@@ -236,6 +235,50 @@ rule_case xargs-r    'printf "" | xargs -r echo'                            # bs
 rule_case head-neg   'head -n -1 f'                                         # bsd-ok: フィクスチャ
 rule_case tac        'tac f > g'                                            # bsd-ok: フィクスチャ
 rule_case ignorecase 'awk "BEGIN { IGNORECASE = 1 }" f'                     # bsd-ok: フィクスチャ
+
+# sed -i は形の幅が広く、**最も頻出する「引用符で囲んだスクリプト」を当初見逃して
+# いた**（第二意見の指摘。実測で確認した）。形ごとに個別に固定する。
+sed_inplace_case() {
+  local label="$1" body="$2"
+  it "規則表: sed -i（$label）を検出する（陽性）"
+  {
+    printf '%s\n' 'set -euo pipefail'
+    printf '%s\n' "$body"
+  } > "$FIXBODY"
+  probe "rule-sed-i-$label"
+  assert_detected "sed -i $label" RULE                        # bsd-ok: 検査名に綴りが入るだけ
+}
+
+sed_inplace_case quoted    "sed -i 's/a/b/' f"                       # bsd-ok: フィクスチャ
+sed_inplace_case dquoted   'sed -i "s/$v/b/" f'                      # bsd-ok: フィクスチャ
+sed_inplace_case bsd-empty "sed -i '' 's/a/b/' f"                    # bsd-ok: フィクスチャ
+sed_inplace_case suffix    'sed -i.bak s/a/b/ f'                     # bsd-ok: フィクスチャ
+sed_inplace_case bare      'sed -i s/a/b/ f'                         # bsd-ok: フィクスチャ
+sed_inplace_case other-opt 'sed -n -i -e s/a/b/ f'                   # bsd-ok: フィクスチャ
+
+it "規則表: sed -i を伴わない sed は検出しない（陰性）"        # bsd-ok: 検査名に綴りが入るだけ
+# -i を含む別のオプションや、-i を持たない呼び出しまで拾うと、正しい記述を
+# 直そうとして戻す方向の修正を招く。
+{
+  printf '%s\n' 'set -euo pipefail'
+  printf '%s\n' "sed -n 's/^- //p' f"                               # bsd-ok: フィクスチャ
+  printf '%s\n' 'sed -E "s/a/b/" f'                                 # bsd-ok: フィクスチャ
+  printf '%s\n' 'grep -i pattern f'                                 # bsd-ok: フィクスチャ
+  printf '%s\n' 'parsed -i x'                                       # bsd-ok: フィクスチャ
+} > "$FIXBODY"
+probe rule-sed-i-controls
+assert_clean "sed -i の対照群"                                 # bsd-ok: 検査名に綴りが入るだけ
+
+it "規則表: \\x の規則が、バックスラッシュの無い x を誤検出しない（陰性）"
+# 規則は動的正規表現として評価される。エスケープの解釈が 1 段ずれると、
+# `sed 's/x1/y/'` のような無関係な記述まで赤くなる（第二意見が疑った経路）。
+{
+  printf '%s\n' 'set -euo pipefail'
+  printf '%s\n' "sed 's/x1/y/' f"                                   # bsd-ok: フィクスチャ
+  printf '%s\n' "sed 's/exit/x/' f"                                 # bsd-ok: フィクスチャ
+} > "$FIXBODY"
+probe rule-hex-controls
+assert_clean "バックスラッシュの無い x"
 
 it "規則表: 正しい綴りは検出しない（陰性）"
 {
