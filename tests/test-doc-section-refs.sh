@@ -333,7 +333,7 @@ fi
 # 機械判定できない）。
 #
 # grep -q は producer の書き込み中にパイプを閉じうる。set -uo pipefail 下では
-# producer が SIGPIPE で死に、判定が反転しかねない（tests/test-pipefail-sigpipe.sh
+# producer が SIGPIPE で死に、判定が反転しかねない（scripts/check-shell-portability.sh
 # が検出する形と同じ）。producer はこのファイルの外にあり将来も伸びるため、
 # 現時点でパイプバッファに収まっていることを理由に据え置かない。-q を外し、
 # >/dev/null で EOF まで読ませる（同ファイルの書き方に合わせる）。
@@ -357,7 +357,7 @@ fi
 # 区別が付かない行）でも打ち切ってしまい、正しい文書が赤になる（第二意見が実測で
 # 確認）。区間指定 `{1,3}` は #296 の実測でこのリポジトリが対象とする 2 種類の awk
 # （macOS の BWK awk / devcontainer の mawk）のどちらでも機能するため、移植性は
-# 理由にならない（tests/test-shell-portability.sh に実測がある）。
+# 理由にならない（scripts/check-shell-portability.sh に実測がある）。
 # それでも列挙する（`/^#[ \t]/ || /^##[ \t]/ || /^###[ \t]/`）のは、区間指定より
 # 「レベル 1〜3」という意図をそのまま読めるため。
 #

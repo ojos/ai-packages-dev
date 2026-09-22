@@ -220,7 +220,7 @@ fi
 
 it "既存リリースを上書きしない"
 # tag_and_release から --clobber 経路が消えていること。コメント行は対象外。
-if grep -vE '^\s*#' "$RELEASE_SH" | grep -q 'gh release upload .*--clobber'; then
+if grep -vE '^\s*#' "$RELEASE_SH" | grep 'gh release upload .*--clobber' >/dev/null; then
   fail "--clobber による資産上書きが残っている"
 else
   pass

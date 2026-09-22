@@ -197,7 +197,7 @@ fi
 # 入力検証 case の受理集合を実装から取り出す。
 impl_languages() {
   sed -n 's/^[[:space:]]*\(node|[a-z|]*\)) ;;$/\1/p' "$PKG_DIR/bootstrap.sh" \
-    | head -1 | tr '|' '\n' | sort -u
+    | sed -n 1p | tr '|' '\n' | sort -u
 }
 
 # README「言語サポート」節の箇条書きから取り出す。節内の ### 小見出し（拡張表）は
