@@ -225,6 +225,53 @@ write_lock "$d" package-lock.json "$ROOT_ENTRY"
 run_check "$d"
 assert_fail_says "記録なし" "npm が導入時に書く記録"
 
+# Copilot の指摘で直した 3 件。いずれも**偽の緑**だった（比較が成立していない、
+# または壊れた状態を一致とみなす）。実測で確かめてから直している。
+
+it "どちらの lockfile も packages を持たなければ落ちる（比較が成立していない）"
+# `|| {}` で受けると両方が空になり、差分ゼロ＝一致として DEPS_PASS を返していた。
+d="$(new_project)"; mkdir -p "$d/node_modules"
+printf '{}\n' > "$d/package-lock.json"
+printf '{}\n' > "$d/node_modules/.package-lock.json"
+run_check "$d"
+# 失敗メッセージだけを見ない。**どの失敗経路でも同じ文言が出るため、判定を外しても
+# 別の例外で落ちて素通りする**（実測で踏んだ）。node が出した理由そのものを見る。
+assert_fail_says "packages なし" "package-lock.json に packages がありません"
+
+it "lockfileVersion 1（packages を持たない）でも落ちる"
+# 空として扱うと、v1 のプロジェクトが毎回「一致」で素通りする。
+d="$(new_project)"; mkdir -p "$d/node_modules"
+printf '{ "lockfileVersion": 1, "dependencies": {} }\n' > "$d/package-lock.json"
+write_lock "$d" node_modules/.package-lock.json ""
+run_check "$d"
+assert_fail_says "lockfileVersion 1" "package-lock.json に packages がありません"
+
+it "導入記録側の link も報告しない（除外を両側で揃える）"
+# 宣言側だけで外すと、workspace 参照が実体の確認まで到達して「実体が無い」になる。
+d="$(new_project)"; mkdir -p "$d/node_modules"
+write_lock "$d" package-lock.json "$ROOT_ENTRY, \"node_modules/w\": { \"link\": true }"
+write_lock "$d" node_modules/.package-lock.json "\"node_modules/w\": { \"link\": true }"
+run_check "$d"
+assert_signal "記録側の link" "DEPS_PASS" 0
+
+it "ディレクトリが通常ファイルに置き換わっていれば検出する"
+# existsSync は通常ファイルでも真になる。壊れた導入を「一致」として通していた。
+d="$(new_project)"; mkdir -p "$d/node_modules"
+write_lock "$d" package-lock.json "$ROOT_ENTRY, \"node_modules/a\": { \"version\": \"1.0.0\" }"
+write_lock "$d" node_modules/.package-lock.json "\"node_modules/a\": { \"version\": \"1.0.0\" }"
+printf 'x' > "$d/node_modules/a"
+run_check "$d"
+assert_fail_says "通常ファイル" "実体が無い: node_modules/a@1.0.0"
+
+it "ディレクトリへのシンボリックリンクは報告しない（対照群）"
+# 上の修正で「ディレクトリであること」を要求したので、リンクを落とさないことを固定する。
+d="$(new_project)"; mkdir -p "$d/node_modules" "$d/real"
+write_lock "$d" package-lock.json "$ROOT_ENTRY, \"node_modules/a\": { \"version\": \"1.0.0\" }"
+write_lock "$d" node_modules/.package-lock.json "\"node_modules/a\": { \"version\": \"1.0.0\" }"
+ln -s ../real "$d/node_modules/a"
+run_check "$d"
+assert_signal "ディレクトリへのリンク" "DEPS_PASS" 0
+
 it "package-lock.json が壊れた JSON なら落ち、原因が読める"
 d="$(new_project)"; mkdir -p "$d/node_modules"
 printf '{ broken\n' > "$d/package-lock.json"

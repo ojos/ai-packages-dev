@@ -2649,11 +2649,16 @@ TMPL
 #     - 宣言にあって記録に無い   … `npm ci` していない
 #     - 版が食い違う             … 別の版のまま残っている
 #     - 記録にあって宣言に無い   … 依存を削ったあと `npm ci` していない
-#     - 記録にあるが実体が無い   … ディレクトリを消した（退避した）状態
+#     - 記録にあるが実体が無い   … ディレクトリを消した（退避した）状態、または
+#                                    ディレクトリが通常ファイルに置き換わった状態
 #
 #   optional な依存は宣言にあっても入らないのが正常なので、宣言側から除く（他の
 #   プラットフォーム向けの esbuild / workerd などがこれに当たる）。link は
-#   workspace への参照で実体の版を持たないため、同じく除く。
+#   workspace への参照で実体の版を持たないため、**宣言側と記録側の両方から**除く。
+#
+#   **どちらの lockfile も packages を持っていなければ失敗させる。** 空として扱うと、
+#   両方が空になって「差分ゼロ＝一致」になり、比較が成立していないのに緑を返す。
+#   lockfileVersion 1 は packages を持たないので、この検査は 2 以降を前提にする。
 #
 # 対象は npm だけである:
 #   pnpm / yarn / bun は記録の形式が違う。見ない。
@@ -2706,8 +2711,22 @@ if ! diff_report="$(node - <<'JS'
 const fs = require('fs');
 const read = (p) => JSON.parse(fs.readFileSync(p, 'utf8'));
 
-const declared = read('package-lock.json').packages || {};
-const installed = read('node_modules/.package-lock.json').packages || {};
+// `|| {}` で受けない。**packages を持たない文書を空の宣言として扱うと、両方が空に
+// なって「差分ゼロ＝一致」になる。** 比較が一度も成立していないのに緑を返す経路で、
+// 検査が成立しないことを合格にしないという方針に反する（実測で踏んだ）。
+//
+// lockfileVersion 1 は packages を持たない（dependencies だけ）。この検査は 2 以降を
+// 前提にする。1 のまま使うプロジェクトは `npm install` で作り直すこと。
+const packagesOf = (doc, path) => {
+  const pkgs = doc.packages;
+  if (pkgs === null || typeof pkgs !== 'object' || Array.isArray(pkgs)) {
+    throw new Error(`${path} に packages がありません（lockfileVersion 2 以降が必要です）`);
+  }
+  return pkgs;
+};
+
+const declared = packagesOf(read('package-lock.json'), 'package-lock.json');
+const installed = packagesOf(read('node_modules/.package-lock.json'), 'node_modules/.package-lock.json');
 const problems = [];
 
 for (const [path, entry] of Object.entries(declared)) {
@@ -2732,13 +2751,26 @@ for (const [path, entry] of Object.entries(installed)) {
   // ことを前提にしない。** 将来の版が書くようになると fs.existsSync('') が false を
   // 返すため、正常な状態が毎回「実体が無い」になる。1 行のガードで版への依存を外す。
   if (path === '') continue;
+  // **記録側でも link を外す。** 宣言側だけで外すと、workspace への参照が実体の
+  // 確認まで到達して「実体が無い」と報告される。除外の契約は両側で同じにする。
+  if (entry.link) continue;
   if (!(path in declared)) {
     problems.push(`宣言に無い: ${path}@${entry.version ?? '(版不明)'}`);
     continue;
   }
   // 記録にあるものが実体として置かれていることも見る。記録だけを信じると、
   // ディレクトリを消した（退避した）状態を「一致している」と報告してしまう。
-  if (!fs.existsSync(path)) {
+  //
+  // **existsSync では足りない。通常ファイルでも真になる。** ディレクトリが 1 バイトの
+  // ファイルに置き換わった壊れ方を「一致」として通していた（実測で踏んだ）。
+  // statSync はシンボリックリンクを辿るので、ディレクトリへのリンクは通る。
+  let isDir = false;
+  try {
+    isDir = fs.statSync(path).isDirectory();
+  } catch {
+    isDir = false;
+  }
+  if (!isDir) {
     problems.push(`実体が無い: ${path}@${entry.version ?? '(版不明)'}`);
   }
 }
@@ -2757,7 +2789,7 @@ JS
   # 1 行目を件数として表示してしまう。**足さない理由をここへ残す。**
   if [ -z "$diff_report" ]; then
     printf '[deps] ---- 上は node の出力 ----\n' >&2
-    fail "package-lock.json / $HIDDEN を読めませんでした（JSON が壊れているか、ファイルがありません）。'npm ci' を実行してください。"
+    fail "package-lock.json / $HIDDEN を読めませんでした（JSON が壊れているか、packages を持っていません）。上の node の出力に理由があります。lockfileVersion 1 のままなら 'npm install' で作り直し、それ以外は 'npm ci' を実行してください。"
   fi
 
   # 先頭行が件数（数字）でなければ、想定外の出力である。**件数として表示しない。**
