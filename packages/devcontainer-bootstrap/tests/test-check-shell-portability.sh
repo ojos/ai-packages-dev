@@ -294,12 +294,25 @@ it "規則表: md5sum の対処が md5 側を示し、sha256 系を示さない"
   printf '%s\n' 'md5sum "$f" > SUMS'                                        # bsd-ok: フィクスチャ
 } > "$FIXBODY"
 probe rule-md5-advice
+# **対象の行だけを取り出してから見る。** 出力全体へ正規表現を当てると、別の行の
+# 綴りを拾う。
+#
+# 判定は固定文字列で行う。**ブラケット式の中の `\n` は locale と実装で意味が変わる**
+# ——「改行以外」と読む実装もあれば、POSIX どおり「バックスラッシュと n の集合」と
+# 読む実装もある。当初 `[^\n]*` と書いたところ、テストが走る locale では後者に
+# なって当たらず、**主張している性質を検査しないまま緑になっていた**（第二意見の
+# 指摘。実測で確認した）。
+md5_line="$(printf '%s\n' "$CHECK_OUT" | grep -F 'pf/rule-md5-advice.sh:' | sed -n 1p)"
 if [[ "$CHECK_RC" -eq 0 ]]; then
-  fail "md5sum を検出していない"
-elif ! printf '%s' "$CHECK_OUT" | grep -F 'openssl dgst -md5' >/dev/null; then
-  fail "md5 側の代替を示していない: $CHECK_OUT"
-elif printf '%s' "$CHECK_OUT" | grep -E 'md5sum は無い[^\n]*(sha256|shasum)' >/dev/null; then
-  fail "md5sum の対処に sha256 系の代替が混ざっている: $CHECK_OUT"   # bsd-ok: 検査名に綴りが入るだけ
+  fail "md5sum を検出していない"                                 # bsd-ok: 検査名に綴りが入るだけ
+elif [[ -z "$md5_line" ]]; then
+  fail "md5sum の報告行を取り出せない: $CHECK_OUT"
+elif ! printf '%s' "$md5_line" | grep -F 'openssl dgst -md5' >/dev/null; then
+  fail "md5 側の代替を示していない: $md5_line"
+elif printf '%s' "$md5_line" | grep -F 'shasum -a 256' >/dev/null; then
+  fail "md5sum の対処に sha256 系の代替が混ざっている: $md5_line"   # bsd-ok: 検査名に綴りが入るだけ
+elif printf '%s' "$md5_line" | grep -F 'dgst -sha256' >/dev/null; then
+  fail "md5sum の対処に sha256 系の代替が混ざっている: $md5_line"   # bsd-ok: 検査名に綴りが入るだけ
 else
   pass
 fi
