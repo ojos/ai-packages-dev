@@ -442,6 +442,63 @@ it "入れ子のフェンスで内外の判定がずれない（陰性）"
 probe doc-nested md
 assert_clean "入れ子フェンスの外の地の文"
 
+it "~~~ で囲んだコードも走査する（陽性）"
+# CommonMark はチルダのフェンスも認める。見ないと、配布先の文書のコードが丸ごと
+# 走査から外れる（気づけない偽陰性）。
+{
+  printf '%s\n' '手順です。'
+  printf '%s\n' '~~~bash'
+  printf '%s\n' 'set -euo pipefail'
+  printf '%s\n' 'd="$(mktemp -d)"'                                # bsd-ok: フィクスチャ
+  printf '%s\n' '~~~'
+} > "$FIXBODY"
+probe doc-tilde md
+assert_detected "チルダのフェンス内" RULE
+
+it "~~~ の外の地の文は検出しない（陰性）"
+{
+  printf '%s\n' '~~~bash'
+  printf '%s\n' 'echo ok'
+  printf '%s\n' '~~~'
+  printf '%s\n' '素の `mktemp -d` は macOS で落ちる。'             # bsd-ok: フィクスチャ
+} > "$FIXBODY"
+probe doc-tilde-prose md
+assert_clean "チルダのフェンスの外"
+
+it "バッククォートとチルダのフェンスが互いを閉じない（陰性）"
+# 互いに閉じ合うとみなすと、以降の内外がずれ続け、地の文を誤検出する。
+{
+  printf '%s\n' '~~~'
+  printf '%s\n' '```'
+  printf '%s\n' 'echo ok'
+  printf '%s\n' '~~~'
+  printf '%s\n' '素の `mktemp -d` は macOS で落ちる。'             # bsd-ok: フィクスチャ
+} > "$FIXBODY"
+probe doc-tilde-mixed md
+assert_clean "印の違うフェンス"
+
+it "sed の特殊文字を含むパス名でも、検査が成立して正しいパスを報告する（陽性）"
+# パスを sed の置換文字列へ埋めていたため、`|` を含むパスで sed 自体がエラーになり、
+# **判定を出さないまま落ちていた**（Copilot の指摘。実測で確認した）。
+for name in 'amp&x' 'pipe|x' 'back\x'; do
+  printf 'set -euo pipefail\nreadlink -f "$p"\n' > "$REPO/pf/$name.sh"   # bsd-ok: フィクスチャ
+  ( cd "$REPO" && git add -f "pf/$name.sh" ) >/dev/null 2>&1
+done
+run_check
+special_ok=1
+if [[ "$CHECK_RC" -eq 0 ]]; then
+  special_ok=0
+else
+  for name in 'amp&x' 'pipe|x' 'back\x'; do
+    printf '%s' "$CHECK_OUT" | grep -F "pf/$name.sh:2:" >/dev/null || special_ok=0
+  done
+fi
+for name in 'amp&x' 'pipe|x' 'back\x'; do
+  ( cd "$REPO" && git rm -q -f --cached "pf/$name.sh" ) >/dev/null 2>&1
+  rm -f "$REPO/pf/$name.sh"
+done
+if [[ "$special_ok" -eq 1 ]]; then pass; else fail "特殊文字を含むパスを正しく報告できない: $CHECK_OUT"; fi
+
 # ── 検査が成立しないことを合格にしない ──────────────────────────────────────
 
 it "git の作業ツリー外では落ちる（検査が成立しない）"

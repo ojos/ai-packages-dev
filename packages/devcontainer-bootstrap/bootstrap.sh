@@ -2804,19 +2804,42 @@ cat > "$SCAN" <<'SCAN_EOF'
 #   mode       … sh / md
 #
 # 出力:
-#   欠陥     KIND <TAB> 行番号 <TAB> 対処 <TAB> 該当行
+#   欠陥     パス <TAB> KIND <TAB> 行番号 <TAB> 対処 <TAB> 該当行
 #   統計     #STATS <TAB> 逃げ道の印の件数 <TAB> 走査した行数
+#
+# パスは環境変数 PORTABILITY_PATH で受ける。**-v で渡すとエスケープが解釈され、
+# `\t` を含むパスが壊れる。** 呼び出し側で sed の置換文字列へ埋めるのも不可で、
+# `|` や `&` を含むパスで sed 自体がエラーになり、検査が判定を出さずに落ちる
+# （実測で踏んだ）。
 
 function is_comment(s) { return s ~ /^[[:space:]]*#/ }
 
 # 逃げ道の印。理由が空のものは認めない（印だけ付けて黙らせる形を残さない）。
 function has_bsd_ok(s) { return s ~ /#[[:space:]]*bsd-ok:[[:space:]]*[^[:space:]]/ }
 
-function fence_len(s,   n) {
+# フェンスの印（バッククォートかチルダ）。CommonMark はどちらも認め、**互いに閉じ
+# 合わない。** チルダを見ないと、`~~~bash` で囲んだコードが丸ごと走査から外れる
+# （配布先で起きる偽陰性）。
+function fence_char(s,   t, c) {
+  t = s
+  sub(/^[[:space:]]*/, "", t)
+  c = substr(t, 1, 1)
+  return (c == "`" || c == "~") ? c : ""
+}
+
+function fence_len(s, ch,   n) {
   sub(/^[[:space:]]*/, "", s)
   n = 0
-  while (substr(s, n + 1, 1) == "`") n++
+  while (substr(s, n + 1, 1) == ch) n++
   return n
+}
+
+# 閉じのフェンスは、印の連なりだけで言語指定を持たない行に限る。
+function fence_only(s, ch,   t) {
+  t = s
+  sub(/^[[:space:]]*/, "", t)
+  while (substr(t, 1, 1) == ch) t = substr(t, 2)
+  return t ~ /^[[:space:]]*$/
 }
 
 # prefix に cmd のトークンがあるか。名前の一部（gawk の awk など）を拾わないよう
@@ -3068,7 +3091,7 @@ function continues(s,   i, n) {
 }
 
 function report(kind, lineno, message, line) {
-  printf "%s\t%d\t%s\t%s\n", kind, lineno, message, line
+  printf "%s\t%s\t%d\t%s\t%s\n", ENVIRON["PORTABILITY_PATH"], kind, lineno, message, line
 }
 
 BEGIN {
@@ -3106,10 +3129,11 @@ NR == FNR {
     # 内側の開始で外へ出たことになる。以降の内外がずれ続け、コード内の綴りを見落とし、
     # 地の文を誤検出する。開いたときの長さを覚え、それ以上の長さで、かつ言語指定を
     # 持たない行だけを閉じとして扱う（CommonMark のフェンス規則）。
-    fl = fence_len(line)
+    fc = fence_char(line)
+    fl = (fc == "") ? 0 : fence_len(line, fc)
     if (fl >= 3) {
-      if (!inside) { inside = 1; open_len = fl; next }
-      if (fl >= open_len && line ~ /^[[:space:]]*`+[[:space:]]*$/) { inside = 0; next }
+      if (!inside) { inside = 1; open_len = fl; open_char = fc; next }
+      if (fc == open_char && fl >= open_len && fence_only(line, fc)) { inside = 0; next }
       next
     }
     if (!inside) next
@@ -3161,8 +3185,12 @@ SCAN_EOF
 SELFTEST="$WORK/selftest"
 mkdir -p "$SELFTEST"
 
+# **`--` を渡さない。** BSD 系の awk が `--` を「オプションの終わり」として扱うか
+# どうかを、この環境では確かめられない。扱わなければ `--` という名前のファイルを
+# 開こうとして、配布先の macOS で自己診断が起動できずに落ちる。`--` の目的は
+# オプションと紛れる名前を守ることなので、**絶対パスや `./` 前置で同じ目的を満たす。**
 selftest_scan() {
-  awk -v rulesfile="$RULES" -v mode="$1" -f "$SCAN" -- "$2" "$2" 2>&1 \
+  PORTABILITY_PATH="$2" awk -v rulesfile="$RULES" -v mode="$1" -f "$SCAN" "$2" "$2" 2>&1 \
     | sed '/^#STATS/d'
 }
 
@@ -3213,7 +3241,7 @@ while IFS="$(printf '\t')" read -r want body; do
   selftest_index=$((selftest_index + 1))
   sample="$SELFTEST/hit-$selftest_index.sh"
   printf 'set -euo pipefail\n%s\n' "$body" > "$sample"
-  got="$(selftest_scan sh "$sample" | cut -f1 | sort -u | tr '\n' ' ')"
+  got="$(selftest_scan sh "$sample" | cut -f2 | sort -u | tr '\n' ' ')"
   case " $got " in
     *" $want "*) : ;;
     *) fail "自己診断に失敗しました: 「$body」から $want を検出できません（得た種別: ${got:-なし}）。検査が成立していないため失敗させます。" ;;
@@ -3241,7 +3269,7 @@ done < "$SELFTEST/must-miss.txt"
   printf '%s\n' '```'
   printf '%s\n' '`mktemp -d` を使う場合は注意する。'                              # bsd-ok: 自己診断の見本
 } > "$SELFTEST/doc.md"
-doc_hits="$(selftest_scan md "$SELFTEST/doc.md" | cut -f2 | tr '\n' ' ')"
+doc_hits="$(selftest_scan md "$SELFTEST/doc.md" | cut -f3 | tr '\n' ' ')"
 if [ "$doc_hits" != "4 " ]; then
   fail "自己診断に失敗しました: 文書のフェンス内 4 行目だけを拾えません（得た行: ${doc_hits:-なし}）。検査が成立していないため失敗させます。"
 fi
@@ -3257,7 +3285,7 @@ fi
   printf '%s\n' '````'
   printf '%s\n' '素の `mktemp` は macOS で落ちる。'                              # bsd-ok: 自己診断の見本
 } > "$SELFTEST/nested.md"
-nested_hits="$(selftest_scan md "$SELFTEST/nested.md" | cut -f2 | tr '\n' ' ')"
+nested_hits="$(selftest_scan md "$SELFTEST/nested.md" | cut -f3 | tr '\n' ' ')"
 if [ "$nested_hits" != "4 " ]; then
   fail "自己診断に失敗しました: 入れ子フェンスの 4 行目だけを拾えません（得た行: ${nested_hits:-なし}）。検査が成立していないため失敗させます。"
 fi
@@ -3280,6 +3308,8 @@ git rev-parse --is-inside-work-tree >/dev/null 2>&1 \
   || fail "git の作業ツリーではありません。追跡ファイルを列挙できないため失敗させます。"
 
 # 列挙は NUL 区切り。パス名に改行を含むファイルでも 1 レコードのまま崩れずに読める。
+# ただし**報告の書式は行区切り**なので、改行を含むパスは報告の見た目が崩れる
+# （検出そのものは効く）。走査の可否と報告の見やすさを分けて考える。
 git ls-files -z -- '*.sh' '*.md' > "$TRACKED" \
   || fail "git ls-files に失敗しました。追跡ファイルを列挙できません。"
 
@@ -3304,14 +3334,16 @@ while IFS= read -r -d '' path; do
     *.md) scan_mode="md" ;;
     *)    scan_mode="sh" ;;
   esac
-  out="$(awk -v rulesfile="$RULES" -v mode="$scan_mode" -f "$SCAN" -- "$path" "$path" 2>>"$AWK_ERR")" \
+  # パスは環境変数で渡す（上記 scan.awk 冒頭の理由）。`./` を前置してオプションと
+  # 紛れる名前を避け、`--` は渡さない（同）。
+  out="$(PORTABILITY_PATH="$path" awk -v rulesfile="$RULES" -v mode="$scan_mode" -f "$SCAN" "./$path" "./$path" 2>>"$AWK_ERR")" \
     || fail "awk が異常終了しました（$path）。検査が成立していないため失敗させます。"
   # 統計行と欠陥行を分ける。パイプの読み手に早期終了するものを置かない
   # （この検査自身が禁じている形である）。
   stats="$(printf '%s\n' "$out" | sed -n 's/^#STATS\t//p')"
   bsd_ok_marks=$((bsd_ok_marks + $(printf '%s' "$stats" | cut -f1)))
   scanned_lines=$((scanned_lines + $(printf '%s' "$stats" | cut -f2)))
-  printf '%s\n' "$out" | sed -e '/^#STATS/d' -e "/./s|^|$path\t|" >> "$REPORT"
+  printf '%s\n' "$out" | sed '/^#STATS/d' >> "$REPORT"
 done < "$TRACKED"
 
 if [ -s "$AWK_ERR" ]; then
