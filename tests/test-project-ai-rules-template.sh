@@ -43,13 +43,23 @@ ENTRY="$REPO_ROOT/CLAUDE.md"
 # **`（記載）` や `（例:` で数えない。** その形は `（コマンドを記載）` /
 # `（記録先を記載）` / `（種別・対象・有効期限を記載）` を取りこぼす（実測で踏んだ。
 # 23 箇所のうち 8 箇所しか数えられていなかった）。
+#
+# **ファイルを引数で受ける。** 本番の判定と負例のフィクスチャが**同じ関数を通る**
+# ようにするため。フィクスチャ側で同じ処理を書き直すと、**本番の判定を無効化しても
+# フィクスチャが緑のまま**になり、検査が壊れたことに誰も気づけない（この形を
+# 実際に踏んだ。レビューの指摘）。
 blank_fields() {
-  grep -nE '^[-*]|^[0-9]+\.' "$TEMPLATE" | grep -E ': （.*）$'
+  grep -nE '^[-*]|^[0-9]+\.' "$1" | grep -E ': （.*）$'
+}
+
+# 空欄のうち、既定の不在を宣言していない行を返す。**判定の本体。**
+undeclared_blanks() {
+  blank_fields "$1" | grep -v '既定はありません' || true
 }
 
 it "雛形から空欄形式の行を抽出できる"
 # 0 件のまま緑になると、以降の検査は対象ゼロで無条件に通る（偽の緑）。
-BLANKS="$(blank_fields)"
+BLANKS="$(blank_fields "$TEMPLATE")"
 BLANK_COUNT="$(printf '%s\n' "$BLANKS" | grep -c . || true)"
 if [[ "$BLANK_COUNT" -gt 0 ]]; then
   pass
@@ -60,7 +70,7 @@ fi
 it "残した空欄がすべて「既定はありません」と宣言している"
 # **これがこの検査の本体である。** 埋め忘れと意図的な未記入を、読む側が区別できる
 # ようにする唯一の印。
-undeclared="$(printf '%s\n' "$BLANKS" | grep -v '既定はありません' || true)"
+undeclared="$(undeclared_blanks "$TEMPLATE")"
 if [[ -z "$undeclared" ]]; then
   pass
 else
@@ -96,6 +106,41 @@ playbook_paths() {
   printf '%s\n' 'CLAUDE.md'
 }
 
+# 規範パッケージの雛形の**配置先**。`.ai-playbook/README.md` の cp 行から取る。
+#
+# **basename で照合しない。** ディレクトリ部分が見られず、
+# `wrong-dir/second-opinion-review.sh` のような誤ったパスが通る（レビューの指摘。
+# 実測で確認した）。cp 行は雛形と配置先の対応を正確に持っているので、そこから取る。
+# 決め打ちにすると、規範側が置き先を変えたときに古い場所を見続けて緑のままになる
+# （tests/test-workflow-mirror.sh と同じ理由）。
+placed_paths() {
+  grep -E '^cp \.ai-playbook/templates/' "$REPO_ROOT/.ai-playbook/README.md" \
+    | awk '{ print $3 }' \
+    | while IFS= read -r dest; do
+        case "$dest" in
+          */) printf '%s%s\n' "$dest" "$(basename "$(grep -E "^cp .*${dest}\$" "$REPO_ROOT/.ai-playbook/README.md" | awk '{ print $2 }' | sed -n 1p)")" ;;
+          *)  printf '%s\n' "$dest" ;;
+        esac
+      done
+}
+
+# 一覧に無いパスを返す。**判定の本体。** 標準入力からパスを受ける。
+unknown_paths() {
+  local generated="$1" playbook="$2" placed="$3" path
+  while IFS= read -r path; do
+    [ -n "$path" ] || continue
+    case "
+$EXCLUDED
+" in *"
+$path
+"*) continue ;; esac
+    printf '%s\n' "$generated" | grep -Fxq "$path" && continue
+    printf '%s\n' "$playbook" | grep -Fxq "$path" && continue
+    printf '%s\n' "$placed" | grep -Fxq "$path" && continue
+    printf '%s\n' "$path"
+  done
+}
+
 # 照合から外すパスと、その理由。**外した事実を消さない。**
 #
 #   .env  利用者が自分で作るもので、生成物には含まれない。既定値としては書けるが
@@ -113,21 +158,8 @@ fi
 it "雛形が挙げるパスがすべて実在する（または理由つきで除外されている）"
 GENERATED="$(generated_paths)"
 PLAYBOOK="$(playbook_paths)"
-missing=""
-while IFS= read -r path; do
-  [[ -n "$path" ]] || continue
-  case "
-$EXCLUDED
-" in *"
-$path
-"*) continue ;; esac
-  printf '%s\n' "$GENERATED" | grep -Fxq "$path" && continue
-  printf '%s\n' "$PLAYBOOK" | grep -Fxq "$path" && continue
-  [[ -f "$REPO_ROOT/.ai-playbook/templates/$(basename "$path")" ]] && continue
-  missing="${missing}${path}"$'\n'
-done <<PATHS_EOF
-$PATHS
-PATHS_EOF
+PLACED="$(placed_paths)"
+missing="$(printf '%s\n' "$PATHS" | unknown_paths "$GENERATED" "$PLAYBOOK" "$PLACED")"
 if [[ -z "$missing" ]]; then
   pass
 else
@@ -178,41 +210,69 @@ FIXTURE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/test-project-ai-rules.XXXXXX")"
 trap 'rm -rf "$FIXTURE_DIR"' EXIT
 
 it "「既定はありません」を消した空欄を検出する（意図的な負例）"
+# **本番と同じ関数を通す。** ここで同じ処理を書き直すと、本番の判定を無効化しても
+# この検査が緑のままになり、検査が壊れたことに誰も気づけない（実測で踏んだ）。
 printf '%s\n' '- 何かの項目: （記載）' > "$FIXTURE_DIR/bad.md"
-if printf '%s\n' "$(grep -nE '^[-*]|^[0-9]+\.' "$FIXTURE_DIR/bad.md" | grep -E ': （.*）$')" \
-  | grep -v '既定はありません' | grep . >/dev/null; then
+if [[ -n "$(undeclared_blanks "$FIXTURE_DIR/bad.md")" ]]; then
   pass
 else
-  fail "宣言の無い空欄を検出できない"
+  fail "宣言の無い空欄を検出できない（判定の本体が壊れている）"
 fi
 
 it "「既定はありません」のある空欄は検出しない（対照群）"
 printf '%s\n' '- 何かの項目: （記載。**既定はありません**）' > "$FIXTURE_DIR/ok.md"
-if printf '%s\n' "$(grep -nE '^[-*]|^[0-9]+\.' "$FIXTURE_DIR/ok.md" | grep -E ': （.*）$')" \
-  | grep -v '既定はありません' | grep . >/dev/null; then
-  fail "宣言のある空欄を誤検出した"
-else
+if [[ -z "$(undeclared_blanks "$FIXTURE_DIR/ok.md")" ]]; then
   pass
+else
+  fail "宣言のある空欄を誤検出した"
+fi
+
+it "空欄でない行は拾わない（対照群）"
+# 地の文の例示（`（例: \`src\` / \`docs\`）` のような形）を拾うと、正しい記述を
+# 落とす方向の修正を招く。
+printf '%s\n' 'トップレベル構造（例: `src` / `docs`）は推奨として扱います。' > "$FIXTURE_DIR/prose.md"
+if [[ -z "$(blank_fields "$FIXTURE_DIR/prose.md")" ]]; then
+  pass
+else
+  fail "地の文を空欄として拾った"
 fi
 
 it "実在しないパスを検出する（意図的な負例）"
-fake='scripts/this-does-not-exist.sh'
-if printf '%s\n' "$GENERATED" | grep -Fxq "$fake"; then
-  fail "フィクスチャのパスが実在してしまっている（前提が崩れた）"
-elif printf '%s\n' "$PLAYBOOK" | grep -Fxq "$fake"; then
-  fail "フィクスチャのパスが規範パッケージに実在してしまっている（前提が崩れた）"
-elif [[ -f "$REPO_ROOT/.ai-playbook/templates/$(basename "$fake")" ]]; then
-  fail "フィクスチャのパスが雛形として実在してしまっている（前提が崩れた）"
-else
+# **本番と同じ関数へ流す。** 「実在しないこと」を別経路で確かめるだけでは、
+# 判定ループが欠落パスを常に合格にするよう壊れていても緑のままになる。
+fake="$(printf '%s\n' 'scripts/this-does-not-exist.sh' | unknown_paths "$GENERATED" "$PLAYBOOK" "$PLACED")"
+if [[ "$fake" == "scripts/this-does-not-exist.sh" ]]; then
   pass
+else
+  fail "実在しないパスを検出できない（判定の本体が壊れている）: ${fake:-なし}"
 fi
 
 it "実在するパスは誤検出しない（対照群）"
-real='scripts/verify.sh'
-if printf '%s\n' "$GENERATED" | grep -Fxq "$real"; then
+known="$(printf '%s\n' 'scripts/verify.sh' | unknown_paths "$GENERATED" "$PLAYBOOK" "$PLACED")"
+if [[ -z "$known" ]]; then
   pass
 else
-  fail "実在するパスを抽出できていない（生成対象の抽出が壊れている）"
+  fail "実在するパスを欠落として報告した: $known"
+fi
+
+it "ディレクトリ部分の違うパスを検出する（basename 照合では通ってしまう形）"
+# `.ai-playbook/templates/second-opinion-review.sh` は実在するが、配置先は
+# `scripts/second-opinion-review.sh` である。basename だけを見ると誤った
+# ディレクトリのパスが通る（レビューの指摘。実測で確認した）。
+wrong="$(printf '%s\n' 'wrong-dir/second-opinion-review.sh' | unknown_paths "$GENERATED" "$PLAYBOOK" "$PLACED")"
+if [[ "$wrong" == "wrong-dir/second-opinion-review.sh" ]]; then
+  pass
+else
+  fail "ディレクトリ部分の違うパスを見逃した: ${wrong:-なし}"
+fi
+
+it "雛形の配置先を README の cp 行から取れている（対照群）"
+# 決め打ちにすると、規範側が置き先を変えたときに古い場所を見続けて緑のままになる。
+placed_ok="$(printf '%s\n' 'scripts/second-opinion-review.sh' | unknown_paths "$GENERATED" "$PLAYBOOK" "$PLACED")"
+if [[ -z "$placed_ok" ]]; then
+  pass
+else
+  fail "README の cp 行から配置先を取れていない: $placed_ok"
 fi
 
 exit_with_result
