@@ -156,7 +156,15 @@ scripts/post-rebuild-check.sh'
 #                         scripts/ とその索引（scripts/CATALOG.md）へ増える。
 #                         写しが無いので追随漏れは起き得ず、MIRRORED にはできない
 #                         （一致相手が無い）。
-EXCLUDED_NO_COPY_RELS='scripts/acceptance-remote.sh'
+#
+#   check-deps-installed.sh  npm の導入記録と package-lock.json の照合（--languages に
+#                         node を選んだ構成へ配る）。**このリポジトリに package.json は
+#                         無い。** 写しを置いても毎回「対象が無い」で飛ばすだけになり、
+#                         acceptance-remote.sh と同じ理由で scripts/ と索引が太る。
+#                         **このリポジトリが node を導入したら、写しを置いて MIRRORED へ
+#                         移す判断が要る**（下の不変条件がその判断を促す）。
+EXCLUDED_NO_COPY_RELS='scripts/acceptance-remote.sh
+scripts/check-deps-installed.sh'
 
 # get_template_content() の case ラベルから、指定パスのヒアドキュメント本文を取り出す。
 # シングルクォートは awk へ変数で渡す（awk のプログラム自体をシングルクォートで

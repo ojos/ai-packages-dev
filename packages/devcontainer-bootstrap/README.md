@@ -656,6 +656,10 @@ OAuth トークン（`CLAUDE_CODE_OAUTH_TOKEN`）を `remoteEnv` へ注入する
 - `.devcontainer/ORIGIN`（生成物の由来の記録。DCB の版・使った `--with-*` フラグ・各生成物のハッシュを持つ機械可読な key=value 形式。`doctor.sh` が乖離の診断に使います。下記「生成物の由来の記録」参照）
 - `.gitignore` の managed セクション（言語構成に応じて自動更新。`--no-gitignore` で無効化）
 
+`--languages` に `node` を含めた場合は、次を出力します。
+
+- `scripts/check-deps-installed.sh`（`node_modules` が `package-lock.json` と一致しているかの照合。生成される `scripts/acceptance.sh` が、`npm test` の**手前**で呼びます。ずれたまま走らせるとテストが `Cannot find package` で全滅し、**自分の変更と無関係な赤**になって原因が読み取れなくなるためです。**直しません。落とすだけです**——判定と修復を混ぜると、何が起きたのかが見えないまま結果だけが変わります。対処は `npm ci` です。`package.json` が無い場合は `DEPS_SKIP` を出して飛ばし、**通過（`DEPS_PASS`）とは別の信号にします**。npm 専用で、pnpm / yarn / bun の記録形式は見ません）
+
 `--with-claude` を選んだ場合は、規範の配置とは独立に次を出力します（下記「[マージ確認フック](#マージ確認フックclaude-code)」参照）。
 
 - `scripts/confirm-merge-hook.sh`（マージ実行の前に確認を挟む PreToolUse フックの本体）
@@ -833,6 +837,7 @@ github/gitignore のテンプレートは言語・OS・エディタの生成物�
 | テンプレート | 生成時の扱い | 展開されるもの |
 |---|---|---|
 | `scripts/check-control-chars.sh` | そのまま書き出す | — |
+| `scripts/check-deps-installed.sh` | そのまま書き出す | —（`--languages` に `node` を含めたときだけ生成） |
 | `scripts/check-no-secrets.sh` | そのまま書き出す | — |
 | `scripts/check-shell-portability.sh` | そのまま書き出す | — |
 | `scripts/check-table-breaks.sh` | そのまま書き出す | — |
