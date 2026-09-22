@@ -87,18 +87,22 @@ else
 
   if [[ "$copied" -eq 0 ]]; then
     fail "README から curl 対象を抽出できなかった"
-  elif ( cd "$user" && sha256sum -c SHA256SUMS >/dev/null 2>&1 ); then
+  elif ( cd "$user" && sha256sum -c SHA256SUMS >/dev/null 2>&1 ); then  # bsd-ok: CI（Linux）でしか実行しないテスト
     pass
   else
-    fail "README が取得させるファイルだけでは検証が失敗する（手元: $(cd "$user" && ls | tr '\n' ' ')）:
-$( cd "$user" && sha256sum -c SHA256SUMS 2>&1 | head -5 )"
+    # 報告の中身を先に変数へ取る。文字列の中へ埋めたままだと、その行へ逃げ道の印を
+    # 書けない（行コメントが報告文の一部になってしまう）。
+    here="$(cd "$user" && ls | tr '\n' ' ')"
+    detail="$(cd "$user" && sha256sum -c SHA256SUMS 2>&1 | head -5)"  # bsd-ok: CI（Linux）でしか実行しないテスト
+    fail "README が取得させるファイルだけでは検証が失敗する（手元: $here）:
+$detail"
   fi
 fi
 
 it "マニフェストの検証チェーンが繋がっている"
 if [[ -f "$rel/RELEASE-MANIFEST.json" ]]; then
   claimed="$(jq -r '.checksums.SHA256SUMS' "$rel/RELEASE-MANIFEST.json" 2>/dev/null)"
-  actual="$(sha256sum "$rel/SHA256SUMS" | awk '{print $1}')"
+  actual="$(sha256sum "$rel/SHA256SUMS" | awk '{print $1}')"  # bsd-ok: CI（Linux）でしか実行しないテスト
   if [[ -n "$claimed" && "$claimed" == "$actual" ]]; then
     pass
   else

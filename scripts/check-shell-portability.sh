@@ -123,6 +123,11 @@
 #   **踏んだ事故を書き足す場所である。** 表を増やすときは、必ず「代わりに何を書くか」
 #   まで書くこと。指摘だけの検査は、直し方を探す時間を利用者へ押し付ける。
 #
+#   **1 つの規則へ複数の綴りをまとめるのは、対処が同じときに限る。** `sha256sum` と
+#   `md5sum` を 1 行にまとめると、対処として書ける代替はどちらか一方になり、もう
+#   一方の利用者は**指摘どおりに直すとハッシュ方式が変わる。** 検査が壊れた助言を
+#   与えるのは、検査が無いより悪い（レビューの指摘で実際に踏んだ）。
+#
 #   規則は 1 行ずつ当てるだけで、引用の内外は区別しない。たとえば sed -i の規則は
 #   `sed 's/ -i / X /' f` のように**プログラムの中に ` -i ` を含む形**も拾う。
 #   引用を解析すれば避けられるが、規則表は綴りを 1 行足すだけで増やせることに価値が
@@ -169,24 +174,38 @@ AWK_ERR="$WORK/awk.err"
 
 # ── 規則表 ───────────────────────────────────────────────────────────────────
 #
-# 1 行 = `正規表現<TAB>対処<TAB>この行自身の逃げ道`。
+# 1 行 = `正規表現<TAB>対処<TAB>分岐とみなす綴り<TAB>この行自身の逃げ道`。
+#
+# **3 列目は「近くに BSD 側の綴りがあれば、分岐が完成しているとみなす」印である。**
+# `stat -c %U "$1" 2>/dev/null || stat -f %Su "$1"` のように 1 行で両系統を書く形は、
+# 可搬性のための正しい書き方であって、報告すると**動くコードの書き換えを迫る。**
+#
+# **見るのは前後 1 行までを含む。** 分岐は同じ行に収まるとは限らない。`for mode in \`
+# の並びや `if command -v … ; then` の枝は**隣の行**に BSD 側が来るうえ、行継続の
+# 途中には行コメントを書けないので、逃げ道の印で黙らせることもできない（実測で踏んだ）。
+#
+# 代償は偽陰性で、素の呼び出しの隣にたまたま BSD 側の綴りがあると見逃す。この検査の
+# 弱点は最初から偽陰性の側にあるので、向きは揃っている。空なら判定しない。
 #
 # **3 列目の `# bsd-ok:` は飾りではない。** この表は検出したい綴りをリテラルで持つ
 # ため、この検査が自分自身を走査したときに当たる。除外リストではなく逃げ道の印で
 # 通すのが、この検査の方針である（冒頭「逃げ道」参照）。
 cat > "$RULES" <<'RULES_EOF'
-(^|[^[:alnum:]_.-])mktemp([[:space:]]+-[a-zA-Z-]+)*[[:space:]]*([)|;&`<>#]|$)	テンプレート引数の無い mktemp は BSD 系で usage エラーになる。mktemp -d "${TMPDIR:-/tmp}/name.XXXXXX" と書く	# bsd-ok: 規則表の綴りそのもの
-date [^|;&]*%N	BSD の date に %N（ナノ秒）は無い。秒で足りるなら %s、要るなら別の手段を選ぶ	# bsd-ok: 規則表の綴りそのもの
-sed [^|;&]*\\x[0-9A-Fa-f]	\xNN は GNU sed の拡張。BSD sed は文字 x として扱う。ESC="$(printf '\033')" のように作って渡す	# bsd-ok: 規則表の綴りそのもの
-(^|[^[:alnum:]_.-])sed[[:space:]]+([^|;&]*[[:space:]])?-i([[:space:]]|\.|$)	sed -i の引数の扱いが GNU と BSD で違う（BSD は直後の引数をバックアップ拡張子と解釈する）。一時ファイルへ書いて mv する	# bsd-ok: 規則表の綴りそのもの
-(^|[^[:alnum:]_.-])grep [^|;&]*(-P|--perl-regexp)	BSD の grep に -P は無い。-E で書き直す	# bsd-ok: 規則表の綴りそのもの
-readlink +-f	BSD の readlink に -f は無い。cd と pwd で解決する	# bsd-ok: 規則表の綴りそのもの
-base64 [^|;&]*-w	BSD の base64 に -w は無い。折り返しが要るなら fold へ渡す	# bsd-ok: 規則表の綴りそのもの
-find [^|;&]*-printf	BSD の find に -printf は無い。-exec か -print と組み合わせる	# bsd-ok: 規則表の綴りそのもの
-xargs [^|;&]*-r	BSD の xargs に -r は無い（空入力でも実行しない挙動が既定）	# bsd-ok: 規則表の綴りそのもの
-(head|tail) +-n +-[0-9]	負の行数は GNU 拡張。BSD には無い	# bsd-ok: 規則表の綴りそのもの
-(^|[^-[:alnum:]_/])tac( |$)	BSD 系には tac が無い。tail -r か awk で代用する	# bsd-ok: 規則表の綴りそのもの
-IGNORECASE[[:space:]]*=	IGNORECASE は gawk の拡張。mawk と BSD awk は黙って無視するので、大小の違う入力に一致しなくなる。tolower($0) ~ /.../ と書く	# bsd-ok: 規則表の綴りそのもの
+(^|[^[:alnum:]_.-])mktemp([[:space:]]+-[a-zA-Z-]+)*[[:space:]]*([)|;&`<>#]|$)	テンプレート引数の無い mktemp は BSD 系で usage エラーになる。mktemp -d "${TMPDIR:-/tmp}/name.XXXXXX" と書く		# bsd-ok: 規則表の綴りそのもの
+date [^|;&]*%N	BSD の date に %N（ナノ秒）は無い。秒で足りるなら %s、要るなら別の手段を選ぶ		# bsd-ok: 規則表の綴りそのもの
+sed [^|;&]*\\x[0-9A-Fa-f]	\xNN は GNU sed の拡張。BSD sed は文字 x として扱う。ESC="$(printf '\033')" のように作って渡す		# bsd-ok: 規則表の綴りそのもの
+(^|[^[:alnum:]_.-])sed[[:space:]]+([^|;&]*[[:space:]])?-i([[:space:]]|\.|$)	sed -i の引数の扱いが GNU と BSD で違う（BSD は直後の引数をバックアップ拡張子と解釈する）。一時ファイルへ書いて mv する		# bsd-ok: 規則表の綴りそのもの
+(^|[^[:alnum:]_.-])grep [^|;&]*(-P|--perl-regexp)	BSD の grep に -P は無い。-E で書き直す		# bsd-ok: 規則表の綴りそのもの
+readlink +-f	BSD の readlink に -f は無い。cd と pwd で解決する		# bsd-ok: 規則表の綴りそのもの
+base64 [^|;&]*-w	BSD の base64 に -w は無い。折り返しが要るなら fold へ渡す		# bsd-ok: 規則表の綴りそのもの
+find [^|;&]*-printf	BSD の find に -printf は無い。-exec か -print と組み合わせる		# bsd-ok: 規則表の綴りそのもの
+xargs [^|;&]*-r	BSD の xargs に -r は無い（空入力でも実行しない挙動が既定）		# bsd-ok: 規則表の綴りそのもの
+(head|tail) +-n +-[0-9]	負の行数は GNU 拡張。BSD には無い		# bsd-ok: 規則表の綴りそのもの
+(^|[^-[:alnum:]_/])tac( |$)	BSD 系には tac が無い。tail -r か awk で代用する		# bsd-ok: 規則表の綴りそのもの
+(^|[^-[:alnum:]_])sha256sum	BSD 系に sha256sum は無い。shasum -a 256 か openssl dgst -sha256 への分岐を書く	shasum|openssl[[:space:]]+dgst	# bsd-ok: 規則表の綴りそのもの
+(^|[^-[:alnum:]_])md5sum	BSD 系に md5sum は無い（macOS は md5）。md5 か openssl dgst -md5 への分岐を書く。**sha256 系へ置き換えないこと。ハッシュ方式が変わる**	(^|[^-[:alnum:]_])md5([^-[:alnum:]_]|$)|openssl[[:space:]]+dgst[^|;&]*-md5	# bsd-ok: 規則表の綴りそのもの
+stat[[:space:]]+-c	BSD の stat は -f である。両方へ分岐するか、別の手段を選ぶ	stat[[:space:]]+-f	# bsd-ok: 規則表の綴りそのもの
+IGNORECASE[[:space:]]*=	IGNORECASE は gawk の拡張。mawk と BSD awk は黙って無視するので、大小の違う入力に一致しなくなる。tolower($0) ~ /.../ と書く		# bsd-ok: 規則表の綴りそのもの
 RULES_EOF
 
 # 規則表に `grep -P` の規則がある以上、この表自身も `stat -c` や `sha256sum` と同じく
@@ -504,6 +523,12 @@ BEGIN {
     rest = substr(ln, tab + 1)
     tab2 = index(rest, "\t")
     rule_msg[nrules] = (tab2 > 0) ? substr(rest, 1, tab2 - 1) : rest
+    rule_branch[nrules] = ""
+    if (tab2 > 0) {
+      rest = substr(rest, tab2 + 1)
+      tab3 = index(rest, "\t")
+      rule_branch[nrules] = (tab3 > 0) ? substr(rest, 1, tab3 - 1) : rest
+    }
   }
   close(rulesfile)
   skipped = 0
@@ -514,8 +539,19 @@ BEGIN {
 
 # ── 1 度目: ファイル全体の性質を拾う ────────────────────────────────────────
 NR == FNR {
+  src[FNR] = $0
+  sub(/\r$/, "", src[FNR])
+  nsrc = FNR
   if ($0 ~ /^[[:space:]]*set[[:space:]]/ && $0 ~ /pipefail/) has_pipefail = 1
   next
+}
+
+# 前後 1 行までのどこかに、分岐とみなす綴りがあるか。
+function branch_near(re, n) {
+  if (src[n] ~ re) return 1
+  if (n > 1 && src[n - 1] ~ re) return 1
+  if (n < nsrc && src[n + 1] ~ re) return 1
+  return 0
 }
 
 # ── 2 度目: 本走査 ──────────────────────────────────────────────────────────
@@ -548,6 +584,11 @@ NR == FNR {
   if (is_comment(line)) next
   if (has_bsd_ok(line)) { skipped++; next }
 
+  # **存在確認は逃げ道そのものである。** `command -v foo` は「foo があるか」を見る
+  # 書き方で、可搬性のための分岐を書く唯一の手段である。呼び出しではない。
+  # 規則表に依らない一般の除外なので、ここで落とす。
+  if (line ~ /(^|[^[:alnum:]_.-])command[[:space:]]+-v([[:space:]]|$)/) next
+
   scan(line, carry)
 
   if (sed_bracket_tab(sed_text))
@@ -556,8 +597,12 @@ NR == FNR {
   if (grep_z_flag(line))
     report("GREP_DASH_Z_FLAG", FNR, "grep -Z は GNU 拡張で BSD 系には無い。1 ファイルずつ走査するか、別の手段で NUL 区切りを作る", line)  # bsd-ok: 報告文が検出対象の綴りそのものを持つ
 
-  for (r = 1; r <= nrules; r++)
-    if (line ~ rule_re[r]) report("RULE", FNR, rule_msg[r], line)
+  for (r = 1; r <= nrules; r++) {
+    if (line !~ rule_re[r]) continue
+    # 近く（前後 1 行まで）に BSD 側の綴りがあれば、分岐が完成しているとみなす。
+    if (rule_branch[r] != "" && branch_near(rule_branch[r], FNR)) continue
+    report("RULE", FNR, rule_msg[r], line)
+  }
 
   if (has_pipefail) {
     for (k = 1; k <= npipes; k++) {

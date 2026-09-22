@@ -7,11 +7,11 @@
 # 使わない doctor.sh を検証のためだけに取得する必要もあった。
 #
 # 新手順は次の 3 つが揃って初めて成立する。1 つでも欠けると、生成物が trap で消える
-# （--output-dir 省略）、検証が落ちる（--ignore-missing 欠落）、後片付けが残る（trap 欠落）
+# （--output-dir 省略）、検証が落ちる（検証の欠落）、後片付けが残る（trap 欠落）
 # のいずれかになり、手順として機能しない。文面の書き戻しを検出できるようにここで固定する。
 #
 #   1. mktemp -d による作業ディレクトリと trap による破棄
-#   2. sha256sum --ignore-missing による検証（bootstrap.sh だけを取得するため）
+#   2. 取得した行だけを抜き出した検証（bootstrap.sh だけを取得するため）
 #   3. --output-dir の明示（既定は $PWD/<project-name> = 一時ディレクトリの中）
 #
 # 検査は README の記述だけでなく、その前提が実装側で成立していることまで見る。README に
@@ -85,9 +85,124 @@ fi
 
 # ── 検証 ──────────────────────────────────────────────────────────────────────
 
-it "導入手順が sha256sum --ignore-missing で検証している"
-# SHA256SUMS は doctor.sh も対象にするため、bootstrap.sh だけを取得する手順では必須。
-assert_contains "$INSTALL" 'sha256sum --ignore-missing -c SHA256SUMS' "導入手順"
+it "導入手順が、取得した行だけを抜き出して検証している"
+# SHA256SUMS は doctor.sh も対象にするため、bootstrap.sh だけを取得する手順では
+# 取得した行を選ぶ必要がある。--ignore-missing は実装と版によって有無が違うので
+# 使わない（sha256sum は GNU coreutils のコマンドで、macOS には無い）。
+assert_contains "$INSTALL" "grep ' bootstrap.sh\$' SHA256SUMS" "導入手順"
+
+it "導入手順が sha256sum の不在へ分岐している"  # bsd-ok: CI（Linux）でしか実行しないテスト
+# **macOS には sha256sum が無い。** 分岐が無いと、利用者は取得の 1 行目で落ちる。
+assert_contains "$INSTALL" 'command -v sha256sum' "導入手順"
+assert_contains "$INSTALL" 'shasum -a 256' "導入手順"
+
+# ── 手順を実際に走らせる ────────────────────────────────────────────────────
+#
+# **綴りの照合だけでは「手順が通ること」を保証しない。** 旧手順は sha256sum を直に
+# 呼んでおり、綴りとしては正しく書かれていたが、macOS には sha256sum が無いため
+# 利用者は取得の 1 行目で落ちた。README から検証部分を取り出し、実際に実行する。
+
+# README の導入手順から、分岐の定義行と検証行を取り出す。
+#
+# 導入手順のブロックは 2 つある（基本形と、規範の取得元を足した形）。どちらも同じ
+# 検証を持つので、**最初の 1 組だけ**を取る。全部を連ねても動くが、何を実行して
+# いるのかが読めなくなる。
+verify_lines() {
+  printf '%s\n' "$INSTALL_CODE" | awk '
+    !seen_branch && /command -v sha256sum/ { seen_branch = 1; print; next }
+    !seen_verify && /SHA256SUMS \| \$sha256c -c -/ {
+      seen_verify = 1
+      sub(/[[:space:]]*&&[[:space:]]*$/, "")
+      print
+    }
+  '
+}
+
+# 検証を 1 回走らせる。$1 = PATH、$2 = 作業ディレクトリ。終了コードを返す。
+run_readme_verify() {
+  local path="$1" dir="$2" code
+  code="$(verify_lines)"
+  ( cd "$dir" && PATH="$path" d="$dir" bash -c "$code" ) >/dev/null 2>&1
+}
+
+# sha256sum を隠した PATH を作る（macOS を模す）。
+NOSUM_BIN="$(new_workdir)/nosum"
+mkdir -p "$NOSUM_BIN"
+for c in shasum grep awk sed cat ls env bash sh coreutils; do
+  src="$(command -v "$c" 2>/dev/null || true)"
+  [[ -n "$src" ]] && ln -sf "$src" "$NOSUM_BIN/$c"
+done
+NOSUM_PATH="$NOSUM_BIN"
+
+# 検証対象を用意する。SHA256SUMS は doctor.sh も対象にするが、doctor.sh は取得しない
+# （README が想定する状況そのもの）。
+make_verify_dir() {
+  local dir
+  dir="$(new_workdir)/rel"
+  mkdir -p "$dir"
+  printf 'bootstrap\n' > "$dir/bootstrap.sh"
+  printf 'doctor\n' > "$dir/doctor.sh"
+  # 印で黙らせず、README へ書いたのと同じ分岐で作る。移植性の手順を検査する側が
+  # 移植性を欠いていると、macOS の手元でこのテストだけが落ちる。
+  ( cd "$dir" && if command -v sha256sum >/dev/null 2>&1; then
+      sha256sum bootstrap.sh doctor.sh > SHA256SUMS  # bsd-ok: 分岐の中（else 側に shasum の枝がある）
+    else
+      shasum -a 256 bootstrap.sh doctor.sh > SHA256SUMS
+    fi )
+  rm -f "$dir/doctor.sh"
+  printf '%s' "$dir"
+}
+
+it "README から検証部分を取り出せる（0 行なら以降が無条件に通る）"
+# 取り出せないまま以降を走らせると、空のコードが「通った」ことになり、全部が緑になる。
+extracted="$(verify_lines)"
+if [[ "$(printf '%s\n' "$extracted" | grep -c .)" -eq 2 ]] \
+  && printf '%s' "$extracted" | grep -F 'command -v sha256sum' >/dev/null \
+  && printf '%s' "$extracted" | grep -F '$sha256c -c -' >/dev/null; then
+  pass
+else
+  fail "分岐の定義行と検証行を 1 組だけ取り出せない: $(printf '%s' "$extracted" | tr '\n' '/')"
+fi
+
+it "手順どおりの検証が通る（sha256sum がある環境）"                    # bsd-ok: 検査名に綴りが入るだけ
+vdir="$(make_verify_dir)"
+if run_readme_verify "$PATH" "$vdir"; then pass; else fail "正しい入力で検証が落ちた"; fi
+
+it "手順どおりの検証が通る（sha256sum が無い環境。macOS を模す）"      # bsd-ok: 検査名に綴りが入るだけ
+# **これが本題である。** sha256sum が無いだけで落ちるなら、README は macOS 利用者を
+# 取得の 1 行目で止める。
+vdir="$(make_verify_dir)"
+if [[ -z "$(command -v shasum 2>/dev/null)" ]]; then
+  fail "shasum がこの環境に無く、分岐の片側を検査できない（検査が成立しないため失敗させる）"
+elif run_readme_verify "$NOSUM_PATH" "$vdir"; then
+  pass
+else
+  fail "sha256sum が無い環境で検証が落ちた（macOS 利用者が取得の 1 行目で止まる）"  # bsd-ok: 検査名に綴りが入るだけ
+fi
+
+it "改竄した SHA256SUMS では非 0 で止まる（対照群。両方の分岐で）"
+# 対照が無いと、「常に通る手順」へ退化させても気づけない。
+bad_ok=1
+for p in "$PATH" "$NOSUM_PATH"; do
+  vdir="$(make_verify_dir)"
+  awk '{ sub(/^./, "0"); print }' "$vdir/SHA256SUMS" > "$vdir/SHA256SUMS.new"
+  mv "$vdir/SHA256SUMS.new" "$vdir/SHA256SUMS"
+  run_readme_verify "$p" "$vdir" && bad_ok=0
+done
+if [[ "$bad_ok" -eq 1 ]]; then pass; else fail "改竄した入力で検証が通ってしまう"; fi
+
+it "SHA256SUMS に載っていても取得していないファイルは検証を妨げない（両方の分岐で）"
+# --ignore-missing に相当する挙動。上の make_verify_dir は doctor.sh を消してあるので、
+# 「通る」検査が同時にこれを見ている。ここでは行が抜き出せなかった場合に**素通り
+# しない**ことを固定する（検証が成立しないまま緑になる経路を塞ぐ）。
+miss_ok=1
+for p in "$PATH" "$NOSUM_PATH"; do
+  vdir="$(make_verify_dir)"
+  awk '{ sub(/ bootstrap\.sh$/, " renamed.sh"); print }' "$vdir/SHA256SUMS" > "$vdir/SHA256SUMS.new"
+  mv "$vdir/SHA256SUMS.new" "$vdir/SHA256SUMS"
+  run_readme_verify "$p" "$vdir" && miss_ok=0
+done
+if [[ "$miss_ok" -eq 1 ]]; then pass; else fail "一致する行が無いのに検証が通ってしまう"; fi
 
 it "検証とスクリプト実行が && で連結されている"
 # この手順は対話シェルへ貼って使う。set -e が効かないため、検証と実行を別の行に
@@ -136,7 +251,7 @@ fi
 
 it "doctor.sh の入手手順が取得・検証・実行を揃えている"
 missing=""
-for needle in '/doctor.sh' 'SHA256SUMS' 'sha256sum --ignore-missing' '--target-dir'; do
+for needle in '/doctor.sh' 'SHA256SUMS' 'command -v sha256sum' 'shasum -a 256' '--target-dir'; do
   case "$FETCH_DOCTOR" in
     *"$needle"*) ;;
     *) missing="$missing $needle" ;;

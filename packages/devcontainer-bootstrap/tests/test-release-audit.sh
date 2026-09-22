@@ -112,7 +112,7 @@ cp -R "$BASE" "$d"
 printf ' ' >> "$d/bootstrap.sh"
 # 語分割は意図的（スクリプトが宣言する対象の一覧を展開する）。
 # shellcheck disable=SC2086
-( cd "$d" && sha256sum $DCB_SUMS_TARGETS > SHA256SUMS ) >/dev/null 2>&1
+( cd "$d" && sha256sum $DCB_SUMS_TARGETS > SHA256SUMS ) >/dev/null 2>&1  # bsd-ok: CI（Linux）でしか実行しないテスト
 out="$(run_verify "$d")"
 rc=$?
 if [[ $rc -ne 0 ]]; then
@@ -185,7 +185,7 @@ setup_escape_target() {
   mkdir -p "$root/release"
   cp -R "$BASE"/. "$root/release"/
   printf 'escaped\n' > "$root/escape.txt"
-  sha256sum "$root/escape.txt" | awk '{print $1}'
+  sha256sum "$root/escape.txt" | awk '{print $1}'  # bsd-ok: CI（Linux）でしか実行しないテスト
 }
 
 it "SHA256SUMS がディレクトリ外を指す名前を持つと落ちる"

@@ -280,6 +280,101 @@ it "規則表: \\x の規則が、バックスラッシュの無い x を誤検�
 probe rule-hex-controls
 assert_clean "バックスラッシュの無い x"
 
+rule_case sha256sum  'sha256sum "$f" > SUMS'                                # bsd-ok: フィクスチャ
+rule_case md5sum     'md5sum "$f" > SUMS'                                   # bsd-ok: フィクスチャ
+rule_case stat-c     'mode="$(stat -c %a "$1")"'                            # bsd-ok: フィクスチャ
+
+# 分岐が完成している形は報告しない。**報告すると、動くコードの書き換えを迫る。**
+# 規則の対処は、その綴りに対して正しくなければならない。sha256sum と md5sum を
+# 1 行にまとめていたため、md5sum の利用者に SHA-256 の代替を提示していた
+# （レビューの指摘。**指摘どおりに直すとハッシュ方式が変わる**）。
+it "規則表: md5sum の対処が md5 側を示し、sha256 系を示さない"
+{
+  printf '%s\n' 'set -euo pipefail'
+  printf '%s\n' 'md5sum "$f" > SUMS'                                        # bsd-ok: フィクスチャ
+} > "$FIXBODY"
+probe rule-md5-advice
+# **対象の行だけを取り出してから見る。** 出力全体へ正規表現を当てると、別の行の
+# 綴りを拾う。
+#
+# 判定は固定文字列で行う。**ブラケット式の中の `\n` は locale と実装で意味が変わる**
+# ——「改行以外」と読む実装もあれば、POSIX どおり「バックスラッシュと n の集合」と
+# 読む実装もある。当初 `[^\n]*` と書いたところ、テストが走る locale では後者に
+# なって当たらず、**主張している性質を検査しないまま緑になっていた**（第二意見の
+# 指摘。実測で確認した）。
+md5_line="$(printf '%s\n' "$CHECK_OUT" | grep -F 'pf/rule-md5-advice.sh:' | sed -n 1p)"
+if [[ "$CHECK_RC" -eq 0 ]]; then
+  fail "md5sum を検出していない"                                 # bsd-ok: 検査名に綴りが入るだけ
+elif [[ -z "$md5_line" ]]; then
+  fail "md5sum の報告行を取り出せない: $CHECK_OUT"
+elif ! printf '%s' "$md5_line" | grep -F 'openssl dgst -md5' >/dev/null; then
+  fail "md5 側の代替を示していない: $md5_line"
+elif printf '%s' "$md5_line" | grep -F 'shasum -a 256' >/dev/null; then
+  fail "md5sum の対処に sha256 系の代替が混ざっている: $md5_line"   # bsd-ok: 検査名に綴りが入るだけ
+elif printf '%s' "$md5_line" | grep -F 'dgst -sha256' >/dev/null; then
+  fail "md5sum の対処に sha256 系の代替が混ざっている: $md5_line"   # bsd-ok: 検査名に綴りが入るだけ
+else
+  pass
+fi
+
+it "規則表: md5sum の分岐（md5 / openssl dgst -md5）を分岐とみなす（陰性）"
+{
+  printf '%s\n' 'set -euo pipefail'
+  printf '%s\n' 'h="$(md5sum "$f" 2>/dev/null || md5 -q "$f")"'             # bsd-ok: フィクスチャ
+} > "$FIXBODY"
+probe rule-md5-branch
+assert_clean "md5 への分岐"
+
+it "規則表: sha256sum の分岐は md5sum の分岐とみなされない（陽性。取り違えないこと）"  # bsd-ok: 検査名に綴りが入るだけ
+# 分岐の綴りを取り違えると、片方の規則がもう片方の分岐で黙る。
+{
+  printf '%s\n' 'set -euo pipefail'
+  printf '%s\n' 'h="$(md5sum "$f" 2>/dev/null || shasum -a 256 "$f")"'      # bsd-ok: フィクスチャ
+} > "$FIXBODY"
+probe rule-md5-wrong-branch
+assert_detected "md5sum に sha256 の分岐" RULE                  # bsd-ok: 検査名に綴りが入るだけ
+
+it "規則表: 同じ行に BSD 側の綴りがあれば報告しない（陰性）"
+{
+  printf '%s\n' 'set -euo pipefail'
+  printf '%s\n' 'owner="$(stat -c %U "$1" 2>/dev/null || stat -f %Su "$1" 2>/dev/null)"'  # bsd-ok: フィクスチャ
+} > "$FIXBODY"
+probe rule-branch-same-line
+assert_clean "同一行の分岐"
+
+it "規則表: 隣の行に BSD 側の綴りがあれば報告しない（陰性）"
+# 分岐は同じ行に収まるとは限らない。行継続の並びや if/elif の枝は隣の行に来るうえ、
+# 行継続の途中には行コメントを書けず、逃げ道の印で黙らせることもできない。
+{
+  printf '%s\n' 'set -euo pipefail'
+  printf '%s\n' 'for mode in \'                                            # bsd-ok: フィクスチャ
+  printf '%s\n' '  "$(stat -c %a "$1" 2>/dev/null || true)" \'             # bsd-ok: フィクスチャ
+  printf '%s\n' '  "$(stat -f %Lp "$1" 2>/dev/null || true)"; do :; done'   # bsd-ok: フィクスチャ
+} > "$FIXBODY"
+probe rule-branch-next-line
+assert_clean "隣の行の分岐"
+
+it "規則表: 分岐を持たない stat -c は報告する（陽性。除外が広すぎないこと）"  # bsd-ok: 検査名に綴りが入るだけ
+# 除外を広く取りすぎると、本物を見逃す側へ倒れる。対照として固定する。
+{
+  printf '%s\n' 'set -euo pipefail'
+  printf '%s\n' 'mode="$(stat -c %a "$1")"'                                 # bsd-ok: フィクスチャ
+  printf '%s\n' 'echo "$mode"'
+} > "$FIXBODY"
+probe rule-branch-absent
+assert_detected "分岐を持たない stat -c" RULE                  # bsd-ok: 検査名に綴りが入るだけ
+
+it "存在確認（command -v）の行は報告しない（陰性）"
+# command -v は「あるか」を見る書き方で、可搬性のための分岐を書く唯一の手段である。
+# 呼び出しではないので、規則表に依らず落とす。
+{
+  printf '%s\n' 'set -euo pipefail'
+  printf '%s\n' 'if command -v sha256sum >/dev/null 2>&1; then :; fi'       # bsd-ok: フィクスチャ
+  printf '%s\n' 'command -v readlink -f >/dev/null'                         # bsd-ok: フィクスチャ
+} > "$FIXBODY"
+probe command-v-exclusion
+assert_clean "存在確認の行"
+
 it "規則表: 正しい綴りは検出しない（陰性）"
 {
   printf '%s\n' 'set -euo pipefail'
