@@ -769,8 +769,12 @@ section_body() {
         if (inside) print ""
         next
       }
+      # **節の開始判定もフェンスの外に限る。** ここを見ないと、目的の節より手前の
+      # コード例に同じ見出しがあるだけで開始したことになり、本物の見出しへ到達した
+      # 時点で `exit` が発火して**本文が空になる**（正しい文書が赤になる。
+      # 第二意見の指摘。実測で確認した）。
       if (!inside) {
-        if ($0 == want) inside = 1
+        if (!inside_fence && $0 == want) inside = 1
         next
       }
       if (!inside_fence && /^## /) exit
@@ -872,9 +876,10 @@ else
   fail "無い語句を検出できない（判定の本体が壊れている）: ${got:-なし}"
 fi
 
+FENCE_FIXTURE="$(mktemp "${TMPDIR:-/tmp}/section-fence.XXXXXX")"
+
 it "フェンス内の ## で本文が打ち切られない（意図的なフィクスチャ）"
 # コード例に `## ` が 1 行あるだけで、以降の見出しが落ちて正しい文書が赤になる。
-FENCE_FIXTURE="$(mktemp "${TMPDIR:-/tmp}/section-fence.XXXXXX")"
 {
   printf '%s\n' '## 見本の節'
   printf '%s\n' '```markdown'
@@ -887,6 +892,24 @@ if [[ -z "$got" ]]; then
   pass
 else
   fail "フェンス内の ## で本文が打ち切られた（後ろの見出しを見失う）"
+fi
+
+it "手前のコード例にある同名の見出しを、節の開始とみなさない（意図的なフィクスチャ）"
+# 開始判定がフェンスを見ないと、コード例で開始したことになり、本物の見出しへ到達した
+# 時点で打ち切られて**本文が空になる**。
+{
+  printf '%s\n' '## 前の節'
+  printf '%s\n' '```markdown'
+  printf '%s\n' '## 見本の節'
+  printf '%s\n' '```'
+  printf '%s\n' '## 見本の節'
+  printf '%s\n' '### 本物の見出し'
+} > "$FENCE_FIXTURE"
+got="$(printf '%s\n' '### 本物の見出し' | missing_headings "$(section_body "$FENCE_FIXTURE" '## 見本の節')")"
+if [[ -z "$got" ]]; then
+  pass
+else
+  fail "手前のコード例を節の開始とみなし、本文が取れていない"
 fi
 
 it "フェンス内の見出しを、実在の見出しとして数えない（意図的なフィクスチャ）"
