@@ -139,6 +139,55 @@ it "ブラケット式の外の \`\\t\` は検出しない（陰性・実測で�
 probe outside-tab
 assert_clean "実測で否定された 2 形"
 
+it "sed の置換側と y コマンドは検出しない（陰性・構造上ブラケット式が無い）"
+# s/pat/repl/flags の repl と y の対応表に、ブラケット式は存在しない。[ と ] は
+# リテラルの文字であり、「ブラケット式の中の \t / \n」という判定が成り立たない。
+{
+  printf '%s\n' 'set -euo pipefail'
+  printf '%s\n' "sed 's/x/[\\n]/' f"                                        # bsd-ok: フィクスチャ
+  printf '%s\n' "sed 's/x/[\\t]/' f"                                        # bsd-ok: フィクスチャ
+  printf '%s\n' "sed 'y/ab/[\\n]/' f"                                       # bsd-ok: フィクスチャ
+  printf '%s\n' "sed '1,\$s/x/[\\n]/' f"                                     # bsd-ok: フィクスチャ
+} > "$FIXBODY"
+probe sed-replacement
+assert_clean "sed の置換側と y"
+
+it "sed のアドレスの正規表現は検出する（陽性）"
+# パターンは s コマンドの中だけに現れるとは限らない。置換側を外すときに
+# アドレスまで落とすと、本来の目的が消える。
+{
+  printf '%s\n' 'set -euo pipefail'
+  printf '%s\n' "sed -n '/^[ \t]*x/p' f"                                   # bsd-ok: フィクスチャ
+} > "$FIXBODY"
+probe sed-address
+assert_detected "アドレスの正規表現" SED_BRACKET_TAB
+
+it "区切り文字を変えた s コマンドのパターン側も検出する（陽性）"
+{
+  printf '%s\n' 'set -euo pipefail'
+  printf '%s\n' "sed 's|^[^\\n]*x||' f"                                     # bsd-ok: フィクスチャ
+} > "$FIXBODY"
+probe sed-alt-delim
+assert_detected "別の区切り文字" BRACKET_BACKSLASH_N
+
+it "英数字や空白を区切り文字にした s コマンドも検出する（陽性）"
+# sed の区切りにはバックスラッシュと改行以外のどの文字も使える（POSIX）。
+# 当初これを弾いていたため、この形のパターン側を取りこぼしていた。
+{
+  printf '%s\n' 'set -euo pipefail'
+  printf '%s\n' "sed 's1^[^\\n]*x1y1' f"                                    # bsd-ok: フィクスチャ
+} > "$FIXBODY"
+probe sed-alnum-delim
+assert_detected "英数字の区切り文字" BRACKET_BACKSLASH_N
+
+it "英字を区切り文字にした s コマンドも検出する（陽性）"
+{
+  printf '%s\n' 'set -euo pipefail'
+  printf '%s\n' "sed 'sX^[ \t]*xXyX' f"                                    # bsd-ok: フィクスチャ
+} > "$FIXBODY"
+probe sed-alpha-delim
+assert_detected "英字の区切り文字" SED_BRACKET_TAB
+
 it "awk の間隔指定（下限 2 以上）を検出する（陽性）"
 # 以前は「xx に一致するから機能する」として検出対象から外していた。その入力では
 # 間隔指定と「下限ちょうど」を区別できない。mawk は xxx に一致しない（実測）。
