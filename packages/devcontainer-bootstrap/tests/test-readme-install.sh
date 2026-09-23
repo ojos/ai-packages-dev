@@ -397,12 +397,54 @@ else
   fail "否定文が判定を通り抜けた（制約の説明と実際が食い違っている）"
 fi
 
-it "守る範囲（取得の破損を検出すること）を述べている"
-if [[ -n "$(install_section | grep -E '取得の破損' || true)" ]]; then
+# 入手手順が主張する「守る範囲」の語。**README の主張と 1 対 1 で対応させる。**
+#
+# 1 つにまとめて「どれかがあれば緑」にすると、片方を消しても通る（Copilot の指摘で
+# 実測: 「公開物どうしの食い違い」を削っても 28 件すべて緑だった）。1 語ずつ見る。
+#
+# **一覧をここへ書き写すだけでは足りない。** 一覧から 1 語を削れば、その語の検査が
+# 消えるだけで緑のままになる（実測で踏んだ）。README 側の主張を抽出して、この一覧と
+# 集合として突き合わせる（共通規範「一覧の複製は機械照合で担保する」）。
+SCOPE_PHRASES='取得の破損・途中切断
+公開物どうしの食い違い'
+
+# claimed_scopes
+#   入手手順の「…を検出します」の文から、強調（** **）で囲まれた語を列挙する。
+#   README が主張している守る範囲そのもので、この検査の一覧の照合元になる。
+claimed_scopes() {
+  install_section \
+    | { grep -F 'を検出します' || true; } \
+    | { grep -oE '\*\*[^*]+\*\*' || true; } \
+    | sed 's/^\*\*//; s/\*\*$//' \
+    | sort
+}
+
+it "README が主張する守る範囲と、この検査の一覧が一致する"
+# 一覧の側が古くなる経路（README へ主張を足したのに検査が追随しない）と、
+# 一覧から語を削って検査を薄くする経路の両方を塞ぐ。
+CLAIMED="$(claimed_scopes)"
+LISTED="$(printf '%s\n' "$SCOPE_PHRASES" | sort)"
+if [[ -z "$CLAIMED" ]]; then
+  fail "入手手順から「…を検出します」の主張を抽出できない（文の形が変わった）"
+elif [[ "$CLAIMED" == "$LISTED" ]]; then
   pass
 else
-  fail "入手手順が「取得の破損を検出する」範囲を述べていない"
+  fail "README の主張と検査の一覧が食い違っている:
+README: $(printf '%s' "$CLAIMED" | tr '\n' ' ')
+検査:   $(printf '%s' "$LISTED" | tr '\n' ' ')"
 fi
+
+while IFS= read -r phrase; do
+  [[ -z "$phrase" ]] && continue
+  it "守る範囲（$phrase）を述べている"
+  if [[ -n "$(install_section | grep -F "$phrase" || true)" ]]; then
+    pass
+  else
+    fail "入手手順が「$phrase」を守る範囲として述べていない"
+  fi
+done <<SCOPEEOF
+$SCOPE_PHRASES
+SCOPEEOF
 
 it "守らない範囲（リリース自体の改ざんに対抗しないこと）を述べている"
 # 「改ざんを検出する」を消しただけでは、保証範囲は読み手に伝わらない。否定の側を
