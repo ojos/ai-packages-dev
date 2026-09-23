@@ -2954,8 +2954,24 @@ TMPL
 #   固定文字列検索ではブラケットが正規表現として解釈されないため、`[^\n]` を書いても
 #   意図どおりの可搬な呼び出しである（実測。Copilot の指摘）。
 #
-#   **sed の置換側（`s/x/[\n]/` の右辺）は区別していない。** 既存の SED_BRACKET_TAB と
-#   同じ扱いで、この票では変えない。
+#   **sed 側はパターンだけを見る。**`s/pat/repl/flags` の
+#   置換側と `y` コマンドは対象外である。**そこにブラケット式は存在せず、`[` と `]` は
+#   リテラルの文字**なので、「ブラケット式の中の `\t` / `\n`」という判定が成り立たない。
+#   これは移植性の実測ではなく構造上の理由で、SED_BRACKET_TAB も同じ扱いにそろえた。
+#
+#   取り出すのは次の 2 つ。実測で確かめた形は下記のとおり。
+#
+#     アドレス           sed -n '/^[ \t]*x/p'        -> 検出する
+#     s のパターン側     sed -n 's/^[ \t]*x//p'      -> 検出する
+#     別の区切り         sed 's|^[^\n]*x||'          -> 検出する
+#     複数の -e          sed -e 's/a/b/' -e 's/^[^\n]//' -> 検出する
+#     アドレス付きの s   sed '1,$s/x/[\n]/'          -> 検出しない（置換側）
+#     s の置換側         sed 's/x/[\n]/'             -> 検出しない
+#     y コマンド         sed 'y/ab/[\n]/'            -> 検出しない
+#
+#   **限界: 区切り文字がブラケット式の中に現れる形（`sed 's/[/]/x/'`）は取りこぼす。**
+#   区切りを数える側がブラケットを見ないため、パターンが途中で切れる。正しい sed だが
+#   検出できない。偽陰性の側へ倒している。
 #
 #   **`\t` を sed 以外でも見るかは、この検査では扱わない**（sed 以外での実測をしていない）。
 #
@@ -3183,6 +3199,74 @@ function last_segment(prefix,   i, c, cut) {
 #
 # 制限: 置換側の `[` も開きとして数える。`s/x/[\t]/` のような形は誤検知になる。
 # s/// の構造まで解析していない。この形が出たときに構造解析を足す方が安い。
+# t の start 位置から、エスケープされていない区切り文字 d の位置を返す。無ければ 0。
+function sed_delim(t, start, d,   n, i) {
+  n = length(t)
+  i = start
+  while (i <= n) {
+    if (substr(t, i, 1) == "\\") { i += 2; continue }
+    if (substr(t, i, 1) == d) return i
+    i++
+  }
+  return 0
+}
+
+# sed のプログラムから、**ブラケット式として解釈される部分だけ**を取り出す。
+#
+#   - アドレスの正規表現（`/re/`）
+#   - `s` コマンドのパターン側（`s/pat/repl/flags` の pat）
+#
+# **置換側（repl）と `y` コマンドは含めない。そこにブラケット式は存在しない。**
+# `[` と `]` はリテラルの文字であり、「ブラケット式の中の `\t` / `\n`」という判定が
+# そもそも成り立たない。プログラム全体へ当てると `sed 's/x/[\n]/' f` を報告する
+# （実測。レビューで指摘された）。
+#
+# **これは移植性の実測ではなく、構造上の理由である。** 置換側の `\n` が両プラット
+# フォームで改行になることは別途記録済みだが、仮にそうでなくても、置換側に
+# ブラケット式は無い。
+#
+# **限界: 区切り文字がブラケット式の中に現れる形（`s/[/]/x/`）は取りこぼす。**
+# 区切りを数える側がブラケットを見ないため、パターンが途中で切れる。POSIX は
+# ブラケット式の中の区切り文字をリテラルとして扱うので、この形は正しい sed である。
+# 取りこぼす（偽陰性）側に倒しており、正しいコードを赤くはしない。
+function sed_regex_parts(t,   n, i, c, out, d, j, k) {
+  n = length(t)
+  i = 1
+  out = ""
+  while (i <= n) {
+    c = substr(t, i, 1)
+    if (c == "\\") { i += 2; continue }
+    if (c == "/") {
+      j = sed_delim(t, i + 1, "/")
+      if (j > 0) {
+        out = out substr(t, i + 1, j - i - 1) "\n"
+        i = j + 1
+        continue
+      }
+      i++
+      continue
+    }
+    if (c == "s" || c == "y") {
+      d = substr(t, i + 1, 1)
+      # 区切りに使えるのは英数字・空白・バックスラッシュ以外（POSIX）。
+      if (d != "" && d !~ /[[:alnum:][:space:]\\]/) {
+        j = sed_delim(t, i + 2, d)
+        if (j > 0) {
+          # y は文字の対応表で、正規表現ではない。取り出さない。
+          if (c == "s") out = out substr(t, i + 2, j - i - 2) "\n"
+          k = sed_delim(t, j + 1, d)
+          i = (k > 0) ? k + 1 : j + 1
+          continue
+        }
+      }
+      i++
+      continue
+    }
+    i++
+  }
+  return out
+}
+
 # ブラケット式の中に `\<ch>` があるか。ch は "t"（タブ）/ "n"（改行）のように、
 # 書き手が特殊文字を意図して書いたのに、ブラケットの中では失われるエスケープの 1 文字。
 function bracket_escape(t, ch,   n, i, c, inb, j) {
@@ -3584,10 +3668,10 @@ function branch_near(re, n) {
 
   scan(line, carry)
 
-  if (bracket_escape(sed_text, "t"))
+  if (bracket_escape(sed_regex_parts(sed_text), "t"))
     report("SED_BRACKET_TAB", FNR, "ブラケット式の中の \\t は BSD 系の sed でタブにならない。[[:space:]] を使うか、タブを変数へ作って渡す", line)
 
-  if (bracket_escape(sed_text, "n") || bracket_escape(awk_regex_parts(awk_text), "n") || bracket_escape(awk_v_text, "n") || bracket_escape(grep_text, "n"))
+  if (bracket_escape(sed_regex_parts(sed_text), "n") || bracket_escape(awk_regex_parts(awk_text), "n") || bracket_escape(awk_v_text, "n") || bracket_escape(grep_text, "n"))
     report("BRACKET_BACKSLASH_N", FNR, "ブラケット式の中の \\n は改行にならない（バックスラッシュと n の集合になり、n を含む行を落とす）。行を絞ってから固定文字列で判定するか、意図する集合を明示する", line)
 
   if (awk_interval(awk_regex_parts(awk_text)) || awk_interval(awk_v_text))
@@ -3643,6 +3727,8 @@ selftest_scan() {
 {
   printf 'SED_BRACKET_TAB\t%s\n' "sed -n 's/^[ \t]*x//p' f"                       # bsd-ok: 自己診断の見本
   printf 'SED_BRACKET_TAB\t%s\n' "sed -n 's/^[[:space:]\t]*x//p' f"               # bsd-ok: 自己診断の見本
+  printf 'SED_BRACKET_TAB\t%s\n' "sed -n '/^[ \t]*x/p' f"                          # bsd-ok: 自己診断の見本
+  printf 'BRACKET_BACKSLASH_N\t%s\n' "sed 's|^[^\\n]*x||' f"                       # bsd-ok: 自己診断の見本
   printf 'GREP_DASH_Z_FLAG\t%s\n' 'xargs -0 grep -l -Z -a -f "$P" -- < "$T"'      # bsd-ok: 自己診断の見本
   printf 'GREP_DASH_Z_FLAG\t%s\n' 'grep -lZa -f pattern.txt -- "$path"'           # bsd-ok: 自己診断の見本
   printf 'RULE\t%s\n' 'd="$(mktemp -d)"'                                          # bsd-ok: 自己診断の見本
@@ -3665,6 +3751,10 @@ selftest_scan() {
 {
   printf '%s\n' "sed 's/\t/X/' f"                                                 # bsd-ok: 自己診断の見本
   printf '%s\n' "sed 's/x/a\nb/' f"                                               # bsd-ok: 自己診断の見本
+  printf '%s\n' "sed 's/x/[\\n]/' f"                                              # bsd-ok: 自己診断の見本
+  printf '%s\n' "sed 's/x/[\\t]/' f"                                              # bsd-ok: 自己診断の見本
+  printf '%s\n' "sed 'y/ab/[\\n]/' f"                                             # bsd-ok: 自己診断の見本
+  printf '%s\n' "sed 'y/[\\n]/xyz/' f"                                            # bsd-ok: 自己診断の見本
   printf '%s\n' "awk '/^x{1,3}\$/ { print }' f"                                   # bsd-ok: 自己診断の見本
   printf '%s\n' "grep -oE 'x{2,3}' f"                                             # bsd-ok: 自己診断の見本
   printf '%s\n' "grep -F '[^\\n]' f"                                               # bsd-ok: 自己診断の見本
