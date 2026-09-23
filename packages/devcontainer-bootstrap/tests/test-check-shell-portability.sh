@@ -170,6 +170,24 @@ it "区切り文字を変えた s コマンドのパターン側も検出する�
 probe sed-alt-delim
 assert_detected "別の区切り文字" BRACKET_BACKSLASH_N
 
+it "英数字や空白を区切り文字にした s コマンドも検出する（陽性）"
+# sed の区切りにはバックスラッシュと改行以外のどの文字も使える（POSIX）。
+# 当初これを弾いていたため、この形のパターン側を取りこぼしていた。
+{
+  printf '%s\n' 'set -euo pipefail'
+  printf '%s\n' "sed 's1^[^\\n]*x1y1' f"                                    # bsd-ok: フィクスチャ
+} > "$FIXBODY"
+probe sed-alnum-delim
+assert_detected "英数字の区切り文字" BRACKET_BACKSLASH_N
+
+it "英字を区切り文字にした s コマンドも検出する（陽性）"
+{
+  printf '%s\n' 'set -euo pipefail'
+  printf '%s\n' "sed 'sX^[ \t]*xXyX' f"                                    # bsd-ok: フィクスチャ
+} > "$FIXBODY"
+probe sed-alpha-delim
+assert_detected "英字の区切り文字" SED_BRACKET_TAB
+
 it "awk の間隔指定（下限 2 以上）を検出する（陽性）"
 # 以前は「xx に一致するから機能する」として検出対象から外していた。その入力では
 # 間隔指定と「下限ちょうど」を区別できない。mawk は xxx に一致しない（実測）。

@@ -428,8 +428,14 @@ function sed_regex_parts(t,   n, i, c, out, d, j, k) {
     }
     if (c == "s" || c == "y") {
       d = substr(t, i + 1, 1)
-      # 区切りに使えるのは英数字・空白・バックスラッシュ以外（POSIX）。
-      if (d != "" && d !~ /[[:alnum:][:space:]\\]/) {
+      # **区切りにはバックスラッシュと改行以外のどの文字も使える**（POSIX）。英数字や
+      # 空白も有効で、`sed 's1^[^\n]*1x1'` は正しい sed である（実測: GNU sed で通る）。
+      # 当初これを弾いていたため、その形のパターン側を取りこぼしていた（レビューの指摘）。
+      #
+      # **バックスラッシュを弾く分岐に、当たる見本は無い。** `s` の直後が `\\` になる
+      # 正しい sed が存在しない（`s\\...` は unterminated で落ちる）ため、この条件を
+      # 外す変異は自己診断で赤にならない。POSIX の規定に合わせた保険として残す。
+      if (d != "" && d != "\\") {
         j = sed_delim(t, i + 2, d)
         if (j > 0) {
           # y は文字の対応表で、正規表現ではない。取り出さない。
@@ -909,6 +915,8 @@ selftest_scan() {
   printf 'SED_BRACKET_TAB\t%s\n' "sed -n 's/^[[:space:]\t]*x//p' f"               # bsd-ok: 自己診断の見本
   printf 'SED_BRACKET_TAB\t%s\n' "sed -n '/^[ \t]*x/p' f"                          # bsd-ok: 自己診断の見本
   printf 'BRACKET_BACKSLASH_N\t%s\n' "sed 's|^[^\\n]*x||' f"                       # bsd-ok: 自己診断の見本
+  printf 'BRACKET_BACKSLASH_N\t%s\n' "sed 's1^[^\\n]*x1y1' f"                       # bsd-ok: 自己診断の見本
+  printf 'SED_BRACKET_TAB\t%s\n' "sed 'sX^[ \t]*xXyX' f"                          # bsd-ok: 自己診断の見本
   printf 'GREP_DASH_Z_FLAG\t%s\n' 'xargs -0 grep -l -Z -a -f "$P" -- < "$T"'      # bsd-ok: 自己診断の見本
   printf 'GREP_DASH_Z_FLAG\t%s\n' 'grep -lZa -f pattern.txt -- "$path"'           # bsd-ok: 自己診断の見本
   printf 'RULE\t%s\n' 'd="$(mktemp -d)"'                                          # bsd-ok: 自己診断の見本
