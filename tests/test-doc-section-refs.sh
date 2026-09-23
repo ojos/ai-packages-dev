@@ -729,4 +729,226 @@ else
   fail "フィクスチャから参照を抽出できなかった"
 fi
 
+# ── loop-workflow.md「道具自体を見る検査の置き場所」──────────────────────────
+#
+# 層の分け方に「検査の対象が何か」という軸を足した節。**節があるだけでは足りない。**
+# この節は「重い検査を外す口実」へ転びやすいので、**転ばせない記述が残っていること**
+# まで見る。
+#
+# 判定の本体は関数へ切り出し、**本番と負例が同じ関数を通る**ようにする。負例側で
+# 処理を書き直すと、本番の判定を無効化しても負例が緑のままになり、検査が壊れたことに
+# 誰も気づけない（実際に踏んだ形）。
+
+LOOP_WORKFLOW="$REPO_ROOT/.ai-playbook/loop-workflow.md"
+TOOL_SECTION='## 道具自体を見る検査の置き場所'
+
+# 指定した `## ` 節の本文を返す（次の `## ` の手前まで）。**判定の本体。**
+#
+# **フェンスで囲まれたコード部分は空行へ置き換える。** 2 つの理由がある
+# （どちらもレビューの指摘。実測で確認した）。
+#
+#   1. 節内のコード例に `## ` が 1 行あるだけで、本文がそこで打ち切られる。以降の
+#      見出しが「無い」ことになり、**正しい文書が赤になる**
+#   2. フェンス内の文字列を実在の見出し・記述として数えると、**対象をコード例へ
+#      残したまま実文書から消す変異が緑になる**
+#
+# 上の「統合する側の実務」の切り出しと同じ扱いにそろえる。
+section_body() {
+  awk -v want="$2" '
+    function fence_len(s,   n) {
+      sub(/^[[:space:]]*/, "", s)
+      n = 0
+      while (substr(s, n + 1, 1) == "`") n++
+      return n
+    }
+    {
+      fl = fence_len($0)
+      if (fl >= 3) {
+        if (!inside_fence) { inside_fence = 1; open_len = fl }
+        else if (fl >= open_len && $0 ~ /^[[:space:]]*`+[[:space:]]*$/) { inside_fence = 0 }
+        if (inside) print ""
+        next
+      }
+      # **節の開始判定もフェンスの外に限る。** ここを見ないと、目的の節より手前の
+      # コード例に同じ見出しがあるだけで開始したことになり、本物の見出しへ到達した
+      # 時点で `exit` が発火して**本文が空になる**（正しい文書が赤になる。
+      # 第二意見の指摘。実測で確認した）。
+      if (!inside) {
+        if (!inside_fence && $0 == want) inside = 1
+        next
+      }
+      if (!inside_fence && /^## /) exit
+      if (inside_fence) print ""; else print
+    }
+  ' "$1"
+}
+
+# 本文に含まれていない見出しを返す。**判定の本体。**
+missing_headings() {
+  local body="$1" h
+  while IFS= read -r h; do
+    [ -n "$h" ] || continue
+    printf '%s\n' "$body" | grep -xF "$h" >/dev/null || printf '%s\n' "$h"
+  done
+}
+
+# 本文に含まれていない語句を返す。**判定の本体。**
+missing_phrases() {
+  local body="$1" ph
+  while IFS= read -r ph; do
+    [ -n "$ph" ] || continue
+    printf '%s\n' "$body" | grep -F "$ph" >/dev/null || printf '%s\n' "$ph"
+  done
+}
+
+it "loop-workflow.md に「道具自体を見る検査の置き場所」の節がある"
+TOOL_BODY="$(section_body "$LOOP_WORKFLOW" "$TOOL_SECTION")"
+if [[ -n "$TOOL_BODY" ]]; then
+  pass
+else
+  fail "節が無いか本文が空（抽出が壊れていれば以降が無条件に通る）"
+fi
+
+it "その節の配下に 4 項目の見出しが揃っている（節の外は数えない）"
+TOOL_HEADINGS='### 実装を変えたときに壊れるか
+### 外へ置くことは、検査しないことではありません
+### この層が守らないもの
+### 層をまたいで移すとき'
+missing="$(printf '%s\n' "$TOOL_HEADINGS" | missing_headings "$TOOL_BODY")"
+if [[ -z "$missing" ]]; then
+  pass
+else
+  fail "節の配下に無い見出し:
+$missing"
+fi
+
+it "節が、転ばせないための記述を持っている"
+# **この 3 つが無いと、第 3 の層は「重い検査を捨てる口実」になる。**
+#   1. 判断の基準（実装を変えたときに壊れるか）
+#   2. 外すときの条件（契機を定めずに外すのは削ることと同じ）
+#   3. この層の限界（反復の中では守られない）
+TOOL_PHRASES='実装を変えたときに壊れるか
+契機を定めずに外すのは、削ることと同じ
+反復の中では守られません
+費用が重いことは、この層へ移す理由になりません'
+missing="$(printf '%s\n' "$TOOL_PHRASES" | missing_phrases "$TOOL_BODY")"
+if [[ -z "$missing" ]]; then
+  pass
+else
+  fail "節に無い記述:
+$missing"
+fi
+
+it "「受け入れ条件の二層」の節名が変わっていない"
+# この票で改名しない、という判断の固定。改名すると 13 箇所へ波及する。
+if grep -xF '## 受け入れ条件の二層（ローカル層 / 外部層）' "$LOOP_WORKFLOW" >/dev/null; then
+  pass
+else
+  fail "「受け入れ条件の二層（ローカル層 / 外部層）」の見出しが失われている"
+fi
+
+# ── 判定ロジック自身の検証 ──────────────────────────────────────────────────
+#
+# 現行の文書が緑なのは「正しく書かれている」からであって「判定が動いている」証明では
+# ない。**負例は本番と同じ関数へ流す。**
+
+it "節の配下に無い見出しを検出する（意図的な負例）"
+got="$(printf '%s\n' '### 存在しない見出し' | missing_headings "$TOOL_BODY")"
+if [[ "$got" == '### 存在しない見出し' ]]; then
+  pass
+else
+  fail "無い見出しを検出できない（判定の本体が壊れている）: ${got:-なし}"
+fi
+
+it "節の配下にある見出しは検出しない（対照群）"
+got="$(printf '%s\n' '### この層が守らないもの' | missing_headings "$TOOL_BODY")"
+if [[ -z "$got" ]]; then
+  pass
+else
+  fail "ある見出しを無いと報告した: $got"
+fi
+
+it "節に無い語句を検出する（意図的な負例）"
+got="$(printf '%s\n' 'この文字列は節に存在しない' | missing_phrases "$TOOL_BODY")"
+if [[ "$got" == 'この文字列は節に存在しない' ]]; then
+  pass
+else
+  fail "無い語句を検出できない（判定の本体が壊れている）: ${got:-なし}"
+fi
+
+FENCE_FIXTURE="$(mktemp "${TMPDIR:-/tmp}/section-fence.XXXXXX")"
+
+it "フェンス内の ## で本文が打ち切られない（意図的なフィクスチャ）"
+# コード例に `## ` が 1 行あるだけで、以降の見出しが落ちて正しい文書が赤になる。
+{
+  printf '%s\n' '## 見本の節'
+  printf '%s\n' '```markdown'
+  printf '%s\n' '## コード例の中の見出し'
+  printf '%s\n' '```'
+  printf '%s\n' '### フェンスより後ろの見出し'
+} > "$FENCE_FIXTURE"
+got="$(printf '%s\n' '### フェンスより後ろの見出し' | missing_headings "$(section_body "$FENCE_FIXTURE" '## 見本の節')")"
+if [[ -z "$got" ]]; then
+  pass
+else
+  fail "フェンス内の ## で本文が打ち切られた（後ろの見出しを見失う）"
+fi
+
+it "手前のコード例にある同名の見出しを、節の開始とみなさない（意図的なフィクスチャ）"
+# 開始判定がフェンスを見ないと、コード例で開始したことになり、本物の見出しへ到達した
+# 時点で打ち切られて**本文が空になる**。
+{
+  printf '%s\n' '## 前の節'
+  printf '%s\n' '```markdown'
+  printf '%s\n' '## 見本の節'
+  printf '%s\n' '```'
+  printf '%s\n' '## 見本の節'
+  printf '%s\n' '### 本物の見出し'
+} > "$FENCE_FIXTURE"
+got="$(printf '%s\n' '### 本物の見出し' | missing_headings "$(section_body "$FENCE_FIXTURE" '## 見本の節')")"
+if [[ -z "$got" ]]; then
+  pass
+else
+  fail "手前のコード例を節の開始とみなし、本文が取れていない"
+fi
+
+it "フェンス内の見出しを、実在の見出しとして数えない（意図的なフィクスチャ）"
+# **対象をコード例へ残したまま実文書から消す変異が、緑になってしまう経路。**
+{
+  printf '%s\n' '## 見本の節'
+  printf '%s\n' '```markdown'
+  printf '%s\n' '### コード例の中にだけある見出し'
+  printf '%s\n' '```'
+} > "$FENCE_FIXTURE"
+got="$(printf '%s\n' '### コード例の中にだけある見出し' | missing_headings "$(section_body "$FENCE_FIXTURE" '## 見本の節')")"
+if [[ "$got" == '### コード例の中にだけある見出し' ]]; then
+  pass
+else
+  fail "フェンス内の見出しを実在として数えた"
+fi
+
+it "フェンス内の語句を、実在の記述として数えない（意図的なフィクスチャ）"
+{
+  printf '%s\n' '## 見本の節'
+  printf '%s\n' '```text'
+  printf '%s\n' 'コード例の中にだけある語句'
+  printf '%s\n' '```'
+} > "$FENCE_FIXTURE"
+got="$(printf '%s\n' 'コード例の中にだけある語句' | missing_phrases "$(section_body "$FENCE_FIXTURE" '## 見本の節')")"
+rm -f "$FENCE_FIXTURE"
+if [[ "$got" == 'コード例の中にだけある語句' ]]; then
+  pass
+else
+  fail "フェンス内の語句を実在として数えた"
+fi
+
+it "別の節にしかない見出しを、この節の配下とみなさない（対照群）"
+# 節の切り出しが次の `## ` で止まらないと、後続の節の見出しを数えてしまう。
+got="$(printf '%s\n' '### 入口承認・以降自動' | missing_headings "$TOOL_BODY")"
+if [[ "$got" == '### 入口承認・以降自動' ]]; then
+  pass
+else
+  fail "後続の節の見出しを、この節の配下として数えている"
+fi
+
 exit_with_result
