@@ -135,10 +135,104 @@ it "ブラケット式の外の \`\\t\` は検出しない（陰性・実測で�
   printf '%s\n' 'set -euo pipefail'
   printf '%s\n' "sed 's/\t/X/' f"                              # bsd-ok: フィクスチャ
   printf '%s\n' "sed 's/x/a\nb/' f"                            # bsd-ok: フィクスチャ
-  printf '%s\n' "awk '/^x{2,3}\$/ { print }' f"                # bsd-ok: フィクスチャ
 } > "$FIXBODY"
 probe outside-tab
-assert_clean "実測で否定された 3 形"
+assert_clean "実測で否定された 2 形"
+
+it "awk の間隔指定（下限 2 以上）を検出する（陽性）"
+# 以前は「xx に一致するから機能する」として検出対象から外していた。その入力では
+# 間隔指定と「下限ちょうど」を区別できない。mawk は xxx に一致しない（実測）。
+{
+  printf '%s\n' 'set -euo pipefail'
+  printf '%s\n' "awk '/^x{2,3}\$/ { print }' f"                # bsd-ok: フィクスチャ
+} > "$FIXBODY"
+probe awk-interval
+assert_detected "awk の間隔指定" AWK_INTERVAL
+
+it "awk へ -v で渡した動的正規表現の間隔指定も検出する（陽性）"
+# パターンはリテラルの /…/ だけに現れるとは限らない。形の幅を 1 形ずつ当てる。
+{
+  printf '%s\n' 'set -euo pipefail'
+  printf '%s\n' "awk -v p=\"a{3,}\" '\$0 ~ p' f"               # bsd-ok: フィクスチャ
+} > "$FIXBODY"
+probe awk-interval-dynamic
+assert_detected "-v 経由の間隔指定" AWK_INTERVAL
+
+it "~ の右辺の文字列リテラルの間隔指定も検出する（陽性）"
+{
+  printf '%s\n' 'set -euo pipefail'
+  printf '%s\n' "awk '\$0 ~ \"a{3,}\"' f"                                  # bsd-ok: フィクスチャ
+} > "$FIXBODY"
+probe awk-interval-tilde
+assert_detected "~ の右辺の間隔指定" AWK_INTERVAL
+
+it "正規表現でない awk の文字列は検出しない（陰性・Copilot の指摘）"
+# プログラム本文へ素当てすると、print の引数まで間隔指定として報告する。
+# 正常なコードへ逃げ道の印や書き換えを強いる検査は、検査が無いより悪い。
+{
+  printf '%s\n' 'set -euo pipefail'
+  printf '%s\n' "awk 'BEGIN { print \"{2,3}\" }' f"                          # bsd-ok: フィクスチャ
+  printf '%s\n' "awk 'BEGIN { print \"[^\\n]\" }' f"                         # bsd-ok: フィクスチャ
+} > "$FIXBODY"
+probe awk-literal-string
+assert_clean "awk の非正規表現の文字列"
+
+it "grep -F の固定文字列は検出しない（陰性・Copilot の指摘）"
+# -F ではブラケットが正規表現として解釈されないため、[^\n] を書いても可搬である。
+{
+  printf '%s\n' 'set -euo pipefail'
+  printf '%s\n' "grep -F '[^\\n]' f"                                       # bsd-ok: フィクスチャ
+  printf '%s\n' "grep --fixed-strings '[^\\n]' f"                           # bsd-ok: フィクスチャ
+} > "$FIXBODY"
+probe grep-fixed-strings
+assert_clean "grep -F の固定文字列"
+
+it "下限 1 の間隔指定は検出しない（陰性・実測で一致する形）"
+# {1,3} は mawk でも 1〜3 回に正しく一致し、4 回には一致しない（実測）。
+# ここを検出すると、動くコードの書き換えを迫る検査になる。
+{
+  printf '%s\n' 'set -euo pipefail'
+  printf '%s\n' "awk '/^x{1,3}\$/ { print }' f"                # bsd-ok: フィクスチャ
+} > "$FIXBODY"
+probe awk-interval-lower-one
+assert_clean "下限 1 の間隔指定"
+
+it "同じ行の grep の間隔指定は awk のものとして数えない（陰性）"
+# grep は POSIX どおりに解釈する。持ち主で絞らないと、パイプの右側を誤爆する。
+{
+  printf '%s\n' 'set -euo pipefail'
+  printf '%s\n' "awk '{ print \$1 }' f | grep -E 'x{2,3}'"      # bsd-ok: フィクスチャ
+  printf '%s\n' "grep -oE 'x{2,3}' f"                          # bsd-ok: フィクスチャ
+} > "$FIXBODY"
+probe grep-interval
+assert_clean "grep の間隔指定"
+
+it "ブラケット式の中の \`\\n\` を検出する（陽性・sed / awk / grep）"
+# [^\n] は「改行以外」ではなく「バックスラッシュと n 以外」で、n を含む行を落とす。
+{
+  printf '%s\n' 'set -euo pipefail'
+  printf '%s\n' "grep -E 'A[^\\n]*B' f"                        # bsd-ok: フィクスチャ
+} > "$FIXBODY"
+probe bracket-n-grep
+assert_detected "grep のブラケット内 \\n" BRACKET_BACKSLASH_N
+
+{
+  printf '%s\n' 'set -euo pipefail'
+  printf '%s\n' "awk '/[^\\n]/ { print }' f"                    # bsd-ok: フィクスチャ
+} > "$FIXBODY"
+probe bracket-n-awk
+assert_detected "awk のブラケット内 \\n" BRACKET_BACKSLASH_N
+
+it "bash の \`\$'\\n'\` は正規表現ではないので検出しない（陰性・実在の誤検知源）"
+# [[ … ]] の中の $'\n' はブラケット式ではない。行全体を対象にすると、動いている
+# 比較 4 箇所へ逃げ道の印を強いることになる（実測で数えた）。
+{
+  printf '%s\n' 'set -euo pipefail'
+  printf '%s\n' "if [[ \"\${t:0:1}\" == \$'\\n' ]]; then :; fi"   # bsd-ok: フィクスチャ
+  printf '%s\n' "printf '%s\\n' \"\$v\""                          # bsd-ok: フィクスチャ
+} > "$FIXBODY"
+probe bracket-n-bash
+assert_clean "bash の \$'\\n' と printf"
 
 it "否定つきブラケット式の中の \`\\t\` も検出する（陽性）"
 # `[^]` の ^ と、その直後の ] はリテラルで閉じではない。閉じと数えると見落とす。

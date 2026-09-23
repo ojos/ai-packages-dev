@@ -2879,15 +2879,85 @@ TMPL
 #     ブラケット内の \t   sed 's/[ \t]/X/'   a<TAB>b -> 一致しない / atb -> aXb
 #                          => タブとして効かない。**検出するのはこれだけ**
 #
-#   次の 3 つは検出対象にしていたが、測定で否定されたので外した。対象プラット
+#   次の 2 つは検出対象にしていたが、測定で否定されたので外した。対象プラット
 #   フォーム（macOS の BWK awk / Linux の mawk）のどちらでも動く。
 #   **実測に合っていない検査は、動くコードの書き換えを迫るぶん、検査が無いより悪い。**
 #
 #     ブラケット外の \t   sed 's/\t/TAB/'    -> aTABb（タブとして効く）
 #     置換側の \n         sed 's/x/a\nb/'    -> 2 行（改行になる）
-#     awk の間隔指定       awk '/^x{2,3}$/'   -> xx に一致（間隔指定として機能する）
 #
 #   パターン側の `\n`（`/^$/N;/^\n$/D` の形）も効くことを確認済み。
+#
+#   **3 つ目として awk の間隔指定も外していたが、その判断は誤りだった。** 根拠にした
+#   見本は「`xx` に一致するから間隔指定として機能する」だったが、**その入力では
+#   区別が付かない。** 間隔指定が機能していても、下限の 2 回だけに解釈されていても
+#   `xx` には一致する。**区別できる入力は 3 回以上の繰り返しである。** AWK_INTERVAL
+#   として検出へ戻した（下記）。
+#
+# AWK_INTERVAL: awk の正規表現の間隔指定（下限 2 以上）
+#
+#   **mawk は下限が 2 以上の間隔指定で、下限を超える繰り返しに一致しない。** 書いた
+#   意図より狭い集合を指すが、下限ちょうどの入力には一致するため、緑のまま通る。
+#
+#   実測（Linux / mawk 1.3.4 20240123。比較は GNU grep 3.11）:
+#
+#     awk '/^x{2,3}$/'   xx   -> 一致      grep -E '^x{2,3}$'   xx   -> 一致
+#     awk '/^x{2,3}$/'   xxx  -> **不一致** grep -E '^x{2,3}$'   xxx  -> 一致
+#     awk '/^x{2,4}$/'   xxxx -> **不一致** grep -E '^x{2,4}$'   xxxx -> 一致
+#     awk '/^x{2,}$/'    xxx  -> **不一致** grep -E '^x{2,}$'    xxx  -> 一致
+#
+#   **下限が 1 の形は一致する**（`{1,3}` は 1〜3 回に正しく一致し、4 回には一致しない）。
+#   したがって検出は**下限 2 以上に限る。** 「{n,m} を {n} と解釈する」という一般化は
+#   実測に反するので書かない。
+#
+#   **macOS の BWK awk（version 20200816）での挙動は未測である。** 上の 3 行を実機で
+#   測ったら、この表へ足すこと。mawk だけでも規則の理由は足りる（devcontainer の awk は
+#   mawk であり、対象プラットフォームに含まれる）。
+#
+#   検出は awk の引数のうち、**正規表現として解釈される部分だけ**を見る。
+#
+#     - `/…/` のリテラル（`gsub(/ {2,}/, …)` や `match($0, /b{4,}/)` を含む）
+#     - `~` / `!~` の右辺の文字列リテラル
+#     - `-v name=` の右辺
+#
+#   同じ行に `grep -E 'x{2,3}'` があっても、そちらは grep の引数なので数えない
+#   （grep は POSIX どおりに解釈する）。
+#
+#   **限界 1: 別ファイルの awk スクリプト（`awk -f scan.awk`）は拾えない。** パターンが
+#   行に現れないためで、この検査自身がその形である。
+#
+#   **限界 2: 文字列を変数へ入れてから `~` で使う形は拾えない**
+#   （`awk 'BEGIN { p = "a{2,5}" } $0 ~ p'`）。その文字列が正規表現として使われるかを
+#   構文だけでは決められない。プログラム本文へ素当てすると `awk 'BEGIN { print
+#   "{2,3}" }'` まで報告する（実測）。**正常なコードへ書き換えを迫るより、偽陰性の側へ
+#   倒す**（規則表の方針と同じ向き）。
+#
+#   網羅はしていない。
+#
+# BRACKET_BACKSLASH_N: ブラケット式の中の `\n`
+#
+#   ブラケット式の中でバックスラッシュは特殊な意味を失う（POSIX）。**`[^\n]` は
+#   「改行以外」ではなく「バックスラッシュと n 以外」であり、`n` という文字を含む行を
+#   黙って落とす。** 「同じ行の中で A と B」を表現したつもりの式が、意図と違う集合を指す。
+#
+#   実測（GNU grep 3.11。locale は C / C.UTF-8 / en_US.UTF-8 で差が無い）:
+#
+#     grep -E 'A[^\n]*B'   AxB    -> 一致
+#     grep -E 'A[^\n]*B'   A\nB   -> **不一致**（\ と n が集合から外れている）
+#     grep -E '[\n]'       n      -> **一致**（改行の集合ではない）
+#
+#   SED_BRACKET_TAB と同じ類型だが、あちらは sed の引数だけを見る。こちらは sed /
+#   awk / grep の引数を見る（`[^\n]` は grep の式として書かれた実例がある）。
+#
+#   **awk 側は AWK_INTERVAL と同じく正規表現の文脈だけを見る**（`awk 'BEGIN { print
+#   "[^\n]" }'` は報告しない）。**`grep -F` / `--fixed-strings` は対象外にする。**
+#   固定文字列検索ではブラケットが正規表現として解釈されないため、`[^\n]` を書いても
+#   意図どおりの可搬な呼び出しである（実測。Copilot の指摘）。
+#
+#   **sed の置換側（`s/x/[\n]/` の右辺）は区別していない。** 既存の SED_BRACKET_TAB と
+#   同じ扱いで、この票では変えない。
+#
+#   **`\t` を sed 以外でも見るかは、この検査では扱わない**（sed 以外での実測をしていない）。
 #
 # GREP_DASH_Z_FLAG: `grep -Z` は GNU 拡張
 #
@@ -3113,7 +3183,9 @@ function last_segment(prefix,   i, c, cut) {
 #
 # 制限: 置換側の `[` も開きとして数える。`s/x/[\t]/` のような形は誤検知になる。
 # s/// の構造まで解析していない。この形が出たときに構造解析を足す方が安い。
-function sed_bracket_tab(t,   n, i, c, inb, j) {
+# ブラケット式の中に `\<ch>` があるか。ch は "t"（タブ）/ "n"（改行）のように、
+# 書き手が特殊文字を意図して書いたのに、ブラケットの中では失われるエスケープの 1 文字。
+function bracket_escape(t, ch,   n, i, c, inb, j) {
   n = length(t)
   i = 1
   inb = 0
@@ -3138,10 +3210,94 @@ function sed_bracket_tab(t,   n, i, c, inb, j) {
       if (j > 0) { i = i + j + 1; continue }
     }
     if (c == "]") { inb = 0; i++; continue }
-    if (c == "\\" && substr(t, i + 1, 1) == "t") return 1
+    if (c == "\\" && substr(t, i + 1, 1) == ch) return 1
     i++
   }
   return 0
+}
+
+# awk のプログラム本文から、**正規表現として解釈される部分だけ**を取り出す。
+#
+#   - `/…/` のリテラル
+#   - `~` / `!~` の右辺の文字列リテラル
+#
+# プログラム全体へ当てると、正規表現でない文字列まで報告する（実測: `awk 'BEGIN
+# { print "{2,3}" }'` が AWK_INTERVAL になった。Copilot の指摘）。**正常なコードへ
+# 逃げ道の印や書き換えを強いる検査は、検査が無いより悪い。**
+#
+# **取り出せない形は対象外にする。** 文字列を変数へ入れてから `~` で使う形
+# （`BEGIN { p = "a{2,5}" } $0 ~ p`）は、文字列が正規表現として使われるかを構文だけ
+# では決められない。**この検査の弱点は偽陰性の側に置く**（規則表の方針と同じ向き）。
+function awk_regex_parts(t,   n, i, c, out, j, k, q) {
+  n = length(t)
+  i = 1
+  out = ""
+  while (i <= n) {
+    c = substr(t, i, 1)
+    if (c == "\\") { i += 2; continue }
+    if (c == "/") {
+      j = i + 1
+      while (j <= n) {
+        if (substr(t, j, 1) == "\\") { j += 2; continue }
+        if (substr(t, j, 1) == "/") break
+        j++
+      }
+      if (j <= n) {
+        out = out substr(t, i + 1, j - i - 1) "\n"
+        i = j + 1
+        continue
+      }
+      i++
+      continue
+    }
+    if (c == "~") {
+      j = i + 1
+      while (j <= n && substr(t, j, 1) == " ") j++
+      q = substr(t, j, 1)
+      if (q == "\"") {
+        k = j + 1
+        while (k <= n) {
+          if (substr(t, k, 1) == "\\") { k += 2; continue }
+          if (substr(t, k, 1) == "\"") break
+          k++
+        }
+        if (k <= n) {
+          out = out substr(t, j + 1, k - j - 1) "\n"
+          i = k + 1
+          continue
+        }
+      }
+      i++
+      continue
+    }
+    i++
+  }
+  return out
+}
+
+# awk の引数の中に、下限 2 以上の間隔指定があるか。
+#
+# **この判定に間隔指定を使わない。** 検出したい綴りそのものであり、mawk の下で書けば
+# 静かに狭くなる。`+` と `*` だけで書き、下限は数値として取り出して比べる。
+#
+# awk の動作ブロック `{ print }` は数字とカンマを持たないため当たらない。
+function awk_interval(t,   rest, spec, lo) {
+  rest = t
+  while (match(rest, /\{[0-9]+,[0-9]*\}/)) {
+    spec = substr(rest, RSTART + 1, RLENGTH - 2)
+    lo = spec
+    sub(/,.*$/, "", lo)
+    if (lo + 0 >= 2) return 1
+    rest = substr(rest, RSTART + RLENGTH)
+  }
+  return 0
+}
+
+# 固定文字列検索の grep か。`-F` / `--fixed-strings` ではブラケットが正規表現として
+# 解釈されないため、`[^\\n]` を書いても意図どおりの可搬な呼び出しである（Copilot の指摘）。
+function grep_fixed(prefix) {
+  if (prefix ~ /--fixed-strings/) return 1
+  return prefix ~ /(^|[[:space:]])-[A-Za-z]*F[A-Za-z]*([[:space:]]|$)/
 }
 
 function grep_z_flag(s) {
@@ -3211,8 +3367,20 @@ function early_consumer(s, p) {
 #
 # 条件文脈かどうかを位置ではなくフラグで覚えるのも同じ理由である。位置は行をまたぐと
 # 意味を失う。
+# 引用の中の 1 片を、いま追っているコマンドの引数へ足す。持ち主ごとに別の変数へ
+# 溜めるのは、判定を持ち主で絞るためである（awk の間隔指定は awk の引数だけを見る）。
+function accum(piece) {
+  if (owner == "sed") sed_text = sed_text piece
+  else if (owner == "awk") awk_text = awk_text piece
+  else if (owner == "awkv") awk_v_text = awk_v_text piece
+  else if (owner == "grep") grep_text = grep_text piece
+}
+
 function scan(s, carry,   n, i, c) {
   sed_text = ""
+  awk_text = ""
+  awk_v_text = ""
+  grep_text = ""
   npipes = 0
   if (!carry) {
     state = "OUT"
@@ -3229,14 +3397,14 @@ function scan(s, carry,   n, i, c) {
     if (state == "SQ") {
       # 単一引用の中にエスケープもコマンド置換も無い。次の ' が必ず閉じ。
       if (c == "'") { state = "OUT"; owner = ""; i++; continue }
-      if (owner == "sed") sed_text = sed_text c
+      accum(c)
       i++
       continue
     }
 
     if (state == "DQ") {
       if (c == "\\") {
-        if (owner == "sed") sed_text = sed_text substr(s, i, 2)
+        accum(substr(s, i, 2))
         i += 2
         continue
       }
@@ -3253,7 +3421,7 @@ function scan(s, carry,   n, i, c) {
         continue
       }
       if (c == "\"") { state = "OUT"; owner = ""; i++; continue }
-      if (owner == "sed") sed_text = sed_text c
+      accum(c)
       i++
       continue
     }
@@ -3312,8 +3480,13 @@ function scan(s, carry,   n, i, c) {
       prefix = last_segment(substr(s, 1, i - 1))
       # awk のプログラムは検査対象が無いが、持ち主として区別しておく。空にすると
       # sed の直後に awk が続く行で領域を sed とみなしうる。
-      if (has_cmd(prefix, "awk")) owner = "awk"
+      if (has_cmd(prefix, "awk")) {
+        # `-v name=` の右辺は、それ自体が正規表現として使われうる。プログラム本文とは
+        # 別に溜める（本文は /…/ と ~ の右辺だけを見るため、同じ扱いにできない）。
+        owner = (prefix ~ /-v[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=[[:space:]]*$/) ? "awkv" : "awk"
+      }
       else if (has_cmd(prefix, "sed")) owner = "sed"
+      else if (has_cmd(prefix, "grep")) owner = grep_fixed(prefix) ? "" : "grep"
       else owner = ""
       state = (c == "'") ? "SQ" : "DQ"
     }
@@ -3411,8 +3584,14 @@ function branch_near(re, n) {
 
   scan(line, carry)
 
-  if (sed_bracket_tab(sed_text))
+  if (bracket_escape(sed_text, "t"))
     report("SED_BRACKET_TAB", FNR, "ブラケット式の中の \\t は BSD 系の sed でタブにならない。[[:space:]] を使うか、タブを変数へ作って渡す", line)
+
+  if (bracket_escape(sed_text, "n") || bracket_escape(awk_regex_parts(awk_text), "n") || bracket_escape(awk_v_text, "n") || bracket_escape(grep_text, "n"))
+    report("BRACKET_BACKSLASH_N", FNR, "ブラケット式の中の \\n は改行にならない（バックスラッシュと n の集合になり、n を含む行を落とす）。行を絞ってから固定文字列で判定するか、意図する集合を明示する", line)
+
+  if (awk_interval(awk_regex_parts(awk_text)) || awk_interval(awk_v_text))
+    report("AWK_INTERVAL", FNR, "下限 2 以上の間隔指定は mawk が下限ちょうどにしか一致させない。回数を列挙するか、grep -E へ渡す。下限 1 の形は影響しない", line)
 
   if (grep_z_flag(line))
     report("GREP_DASH_Z_FLAG", FNR, "grep -Z は GNU 拡張で BSD 系には無い。1 ファイルずつ走査するか、別の手段で NUL 区切りを作る", line)  # bsd-ok: 報告文が検出対象の綴りそのものを持つ
@@ -3471,6 +3650,12 @@ selftest_scan() {
   printf 'RULE\t%s\n' "sed -i 's/a/b/' f"                                        # bsd-ok: 自己診断の見本
   printf 'RULE\t%s\n' 'sed -i.bak s/a/b/ f'                                      # bsd-ok: 自己診断の見本
   printf 'RULE\t%s\n' 'stamp="$(date +%s%N)"'                                     # bsd-ok: 自己診断の見本
+  printf 'AWK_INTERVAL\t%s\n' "awk '/^x{2,3}\$/ { print }' f"                       # bsd-ok: 自己診断の見本
+  printf 'AWK_INTERVAL\t%s\n' "awk -v p=\"a{3,}\" '\$0 ~ p' f"                        # bsd-ok: 自己診断の見本
+  printf 'AWK_INTERVAL\t%s\n' "awk '\$0 ~ \"a{3,}\"' f"                                 # bsd-ok: 自己診断の見本
+  printf 'BRACKET_BACKSLASH_N\t%s\n' "grep -E 'A[^\\n]*B' f"                          # bsd-ok: 自己診断の見本
+  printf 'BRACKET_BACKSLASH_N\t%s\n' "awk '/[^\\n]/ { print }' f"                      # bsd-ok: 自己診断の見本
+  printf 'BRACKET_BACKSLASH_N\t%s\n' "sed -n 's/^[^\\n]*x//p' f"                       # bsd-ok: 自己診断の見本
   printf 'PIPEFAIL_SIGPIPE\t%s\n' 'if ! find . -name "*.md" | grep -q .; then :; fi'  # bsd-ok: 自己診断の見本
   printf 'PIPEFAIL_SIGPIPE\t%s\n' 'first="$(find . -type d | head -n 1)"; if ! v="$(find . | head -n 1)"; then :; fi'  # bsd-ok: 自己診断の見本
 } > "$SELFTEST/must-hit.tsv"
@@ -3480,7 +3665,15 @@ selftest_scan() {
 {
   printf '%s\n' "sed 's/\t/X/' f"                                                 # bsd-ok: 自己診断の見本
   printf '%s\n' "sed 's/x/a\nb/' f"                                               # bsd-ok: 自己診断の見本
-  printf '%s\n' "awk '/^x{2,3}\$/ { print }' f"                                   # bsd-ok: 自己診断の見本
+  printf '%s\n' "awk '/^x{1,3}\$/ { print }' f"                                   # bsd-ok: 自己診断の見本
+  printf '%s\n' "grep -oE 'x{2,3}' f"                                             # bsd-ok: 自己診断の見本
+  printf '%s\n' "grep -F '[^\\n]' f"                                               # bsd-ok: 自己診断の見本
+  printf '%s\n' "grep --fixed-strings '[^\\n]' f"                                   # bsd-ok: 自己診断の見本
+  printf '%s\n' "awk 'BEGIN { print \"{2,3}\" }' f"                                  # bsd-ok: 自己診断の見本
+  printf '%s\n' "awk 'BEGIN { print \"[^\\n]\" }' f"                                 # bsd-ok: 自己診断の見本
+  printf '%s\n' "awk '{ print \$1 }' f | grep -E 'x{2,3}'"                         # bsd-ok: 自己診断の見本
+  printf '%s\n' "if [[ \"\${t:0:1}\" == \$'\\n' ]]; then :; fi"                      # bsd-ok: 自己診断の見本
+  printf '%s\n' "printf '%s\\n' \"\$v\""                                            # bsd-ok: 自己診断の見本
   printf '%s\n' 'grep -z -f pattern.txt -- "$path"'                               # bsd-ok: 自己診断の見本
   printf '%s\n' 'sed -E "s/a/b/" f'                                              # bsd-ok: 自己診断の見本
   printf '%s\n' "sed -n 's/^- //p' f"                                            # bsd-ok: 自己診断の見本
