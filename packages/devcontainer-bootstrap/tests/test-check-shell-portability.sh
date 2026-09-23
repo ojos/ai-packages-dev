@@ -158,6 +158,35 @@ it "awk へ -v で渡した動的正規表現の間隔指定も検出する（�
 probe awk-interval-dynamic
 assert_detected "-v 経由の間隔指定" AWK_INTERVAL
 
+it "~ の右辺の文字列リテラルの間隔指定も検出する（陽性）"
+{
+  printf '%s\n' 'set -euo pipefail'
+  printf '%s\n' "awk '\$0 ~ \"a{3,}\"' f"                                  # bsd-ok: フィクスチャ
+} > "$FIXBODY"
+probe awk-interval-tilde
+assert_detected "~ の右辺の間隔指定" AWK_INTERVAL
+
+it "正規表現でない awk の文字列は検出しない（陰性・Copilot の指摘）"
+# プログラム本文へ素当てすると、print の引数まで間隔指定として報告する。
+# 正常なコードへ逃げ道の印や書き換えを強いる検査は、検査が無いより悪い。
+{
+  printf '%s\n' 'set -euo pipefail'
+  printf '%s\n' "awk 'BEGIN { print \"{2,3}\" }' f"                          # bsd-ok: フィクスチャ
+  printf '%s\n' "awk 'BEGIN { print \"[^\\n]\" }' f"                         # bsd-ok: フィクスチャ
+} > "$FIXBODY"
+probe awk-literal-string
+assert_clean "awk の非正規表現の文字列"
+
+it "grep -F の固定文字列は検出しない（陰性・Copilot の指摘）"
+# -F ではブラケットが正規表現として解釈されないため、[^\n] を書いても可搬である。
+{
+  printf '%s\n' 'set -euo pipefail'
+  printf '%s\n' "grep -F '[^\\n]' f"                                       # bsd-ok: フィクスチャ
+  printf '%s\n' "grep --fixed-strings '[^\\n]' f"                           # bsd-ok: フィクスチャ
+} > "$FIXBODY"
+probe grep-fixed-strings
+assert_clean "grep -F の固定文字列"
+
 it "下限 1 の間隔指定は検出しない（陰性・実測で一致する形）"
 # {1,3} は mawk でも 1〜3 回に正しく一致し、4 回には一致しない（実測）。
 # ここを検出すると、動くコードの書き換えを迫る検査になる。
