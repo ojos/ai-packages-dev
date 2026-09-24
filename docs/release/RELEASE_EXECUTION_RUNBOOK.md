@@ -45,6 +45,45 @@ workflow は認証と identity をリポジトリ設定から解決する。値�
 - App は `ojos/devcontainer-bootstrap` と `ojos/ai-playbook` の 2 リポジトリへ install し、権限は `contents: write` のみを与える。Actions の `GITHUB_TOKEN` は自リポジトリにしかスコープが効かず、クロスリポジトリ push ができないため。
 - bot ユーザー ID は install 後に `gh api '/users/ojos-release-bot[bot]' --jq '.id'` で取得する。**App ID とは別番号**で、コミットを bot アカウントへ紐付けるのはこちら。
 
+### artifact attestation（#340）
+
+`release.yml` は `SHA256SUMS` へ artifact attestation（SLSA provenance）を発行する。**設定は要らない**（secret も variable も追加しない）。workflow の `permissions` に `id-token: write` と `attestations: write` があれば足りる。
+
+**このリポジトリが public でなければ発行できない。** private では拒否される（#189 の実測。`Feature not available for user-owned private repositories`）。
+
+発行の流れ:
+
+1. `release-packages.sh` が一時クローンで `SHA256SUMS` を作り、`ATTEST_SUBJECTS_DIR` が設定されていればその digest を `<package>.sha256` へ書く
+2. workflow が digest を読み、`actions/attest-build-provenance` へ `subject-digest` として渡す
+3. 対象が無い実行（playbook だけのリリース）では `if` で飛ばす
+
+**dry-run では発行されない。** `--execute` が無ければ資産生成より前に終了する。
+
+**発行元はこのリポジトリになる。** 資産は配布リポジトリのリリースに置かれるため、利用者は「配布リポジトリの owner」を指して検証する（同じ owner に属する attestation が引ける）。手順は DCB の README にある。
+
+配線は `tests/test-release-attestation.sh` が機械照合する。**実際に発行できることは検査しない**（リリースの実行を要するため）。#340 では使い捨てのワークフローで発行と検証を実測し、票へ記録した。
+
+#### 発行だけが失敗したときの復旧
+
+**attest ステップは `gh release create` の後に走る。** attestation API の一時障害でそこだけが失敗すると、**attestation の無いリリースが公開されたまま残る。** 同じ版での再実行は preflight が拒否するため（公開済みバージョンは不変）、`release.yml` では修復できない。
+
+**`attest-recover.yml` を使う**（`workflow_dispatch` のみ）。attestation は digest だけを対象にできるので、資産を作り直さずに後から発行できる。
+
+```bash
+# 1. 公開済みの SHA256SUMS を取得して digest を求める
+#    この手順はメンテナの手元で叩くため、macOS も想定して分岐する。
+curl -sSL "https://github.com/ojos/devcontainer-bootstrap/releases/download/<tag>/SHA256SUMS" -o SHA256SUMS
+if command -v sha256sum >/dev/null 2>&1; then sha256c="sha256sum"; else sha256c="shasum -a 256"; fi
+$sha256c SHA256SUMS
+
+# 2. その 64 桁を渡して実行する
+gh workflow run attest-recover.yml -f subject-digest=<64 桁の 16 進>
+```
+
+- **入力は形を検査してから発行する。** 64 桁の小文字 16 進以外は弾く（`sha256:` を付けた形も弾く）。誰も検証できない attestation を増やさないため
+- **発行し直しても既存の attestation は消えない。** 同じ digest に複数付くだけで、検証はどれか 1 つが通れば成功する
+- **契機は `workflow_dispatch` だけに限定している。** 公開リポジトリで発行権限を持つ workflow を自動起動させない（#203 の懸念 7）。`tests/test-release-attestation.sh` がこれを固定する
+
 ## 配布方式（パッケージごとに異なる）
 
 パッケージは消費モデルが異なるため、配布方式も異なる。均一の資産契約は課さない。

@@ -161,6 +161,36 @@ $sha256c -c SHA256SUMS
 tar -xzf PACKAGE_ARCHIVE.tar.gz
 ```
 
+### 任意: 署名の検証（artifact attestation）
+
+**この手順は任意です。** 上の 2 段検証は `curl` と `sha256sum` だけで閉じていますが、こちらは [GitHub CLI](https://cli.github.com/) が要ります。
+
+リリースの `SHA256SUMS` には、GitHub Actions が発行した **artifact attestation**（SLSA provenance）が付いています。**そこから先は上のハッシュチェーンが繋ぐ**ので、検証するのは `SHA256SUMS` 1 つで足ります。
+
+```bash
+# 取得元の owner を BASE から取り出す（固有名を手で書かない）
+OWNER="$(printf '%s' "$BASE" | sed -n 's#^https://github.com/\([^/]*\)/.*#\1#p')"
+
+if gh attestation verify SHA256SUMS --owner "$OWNER"; then
+  echo "attestation: ok"
+else
+  echo "attestation: 検証に失敗しました" >&2
+  exit 1
+fi
+```
+
+**成功しても何も表示されません。** 端末に繋がっていない環境では標準出力も標準エラーも空になります。**判定は終了コードで行ってください**（0 = 成功、非 0 = 失敗）。
+
+**終了コードを表示するだけの書き方（`gh attestation verify …; echo "exit=$?"`）にしないでください。** そのブロック全体の終了コードは `echo` のものになり、**検証の失敗が成功として扱われます**（実測: `( false; echo "exit=$?" )` は 0 を返す）。上のように分岐で受けてください。
+
+**`--owner` に渡すのは、配布リポジトリの owner です。** attestation を発行しているのは同じ owner の別リポジトリ（開発リポジトリ）ですが、`--owner` はその owner に属する attestation をまとめて引くため、これで解決します。**発行元が別の owner へ移った場合、この手順は通らなくなります。**
+
+> **この検証が守る範囲。** 分かるのは「その `SHA256SUMS` が、この owner の GitHub Actions のワークフローによって作られた」ことまでです。
+>
+> **ワークフローを実行できる立場なら、正規の attestation を作れます。** つまりリリースを書き換えられる攻撃者が同時にリポジトリへの書き込み権限を持つ場合、この検証は通ってしまいます。**信頼の起点が「リリースの内容」から「リポジトリへの書き込みの完全性」へ移るだけで、脅威が消えるわけではありません。**
+>
+> それでも、リリース資産だけを差し替える経路（たとえばリリースへの書き込み権限だけを得た場合）には対抗できます。
+
 > 同じタグの資産は差し替えません。`PACKAGE_ARCHIVE.tar.gz` は tar がタイムスタンプを埋めるため内容が同じでもハッシュが変わり、上書きは常に別物への差し替えになるためです。タグを固定すれば内容も固定されます。
 
 ### ライセンスと変更履歴
