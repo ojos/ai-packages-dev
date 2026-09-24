@@ -171,11 +171,17 @@ tar -xzf PACKAGE_ARCHIVE.tar.gz
 # 取得元の owner を BASE から取り出す（固有名を手で書かない）
 OWNER="$(printf '%s' "$BASE" | sed -n 's#^https://github.com/\([^/]*\)/.*#\1#p')"
 
-gh attestation verify SHA256SUMS --owner "$OWNER"
-echo "exit=$?"   # 0 なら検証成功
+if gh attestation verify SHA256SUMS --owner "$OWNER"; then
+  echo "attestation: ok"
+else
+  echo "attestation: 検証に失敗しました" >&2
+  exit 1
+fi
 ```
 
 **成功しても何も表示されません。** 端末に繋がっていない環境では標準出力も標準エラーも空になります。**判定は終了コードで行ってください**（0 = 成功、非 0 = 失敗）。
+
+**終了コードを表示するだけの書き方（`gh attestation verify …; echo "exit=$?"`）にしないでください。** そのブロック全体の終了コードは `echo` のものになり、**検証の失敗が成功として扱われます**（実測: `( false; echo "exit=$?" )` は 0 を返す）。上のように分岐で受けてください。
 
 **`--owner` に渡すのは、配布リポジトリの owner です。** attestation を発行しているのは同じ owner の別リポジトリ（開発リポジトリ）ですが、`--owner` はその owner に属する attestation をまとめて引くため、これで解決します。**発行元が別の owner へ移った場合、この手順は通らなくなります。**
 

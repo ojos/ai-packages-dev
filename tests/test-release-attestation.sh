@@ -173,4 +173,69 @@ else
   fail "dry-run の exit が資産生成より後にある（$EXIT_LINE >= $GEN_LINE）"
 fi
 
+# ── 復旧経路 ──────────────────────────────────────────────────────────────────
+#
+# release.yml の attest ステップは gh release create の**後**に走る。attestation の
+# 発行だけが失敗すると、attestation の無いリリースが公開されたまま残り、同じ版での
+# 再実行は preflight が拒否する（公開済みバージョンは不変）。**release.yml だけでは
+# 修復できない。** 公開済みの digest へ後から発行する経路を別に持つ。
+
+RECOVER="$REPO_ROOT/.github/workflows/attest-recover.yml"
+
+it "復旧用のワークフローがある"
+if [[ -f "$RECOVER" ]]; then
+  pass
+else
+  fail "attest-recover.yml が無い（発行だけが失敗したときに修復できない）"
+fi
+
+it "復旧用のワークフローが発行に要る権限を宣言している"
+MISSING=""
+for perm in id-token attestations; do
+  [[ -n "$(declares "$RECOVER" "$perm" 'write')" ]] || MISSING="$MISSING $perm"
+done
+if [[ -z "$MISSING" ]]; then
+  pass
+else
+  fail "復旧用のワークフローに足りない権限:$MISSING"
+fi
+
+it "復旧用のワークフローは workflow_dispatch だけで起動する"
+# **公開リポジトリで attestation の発行権限を持つ workflow を自動起動させない。**
+# push や pull_request が契機に混ざると、外部からの PR で発行を試みる形になりうる。
+TRIGGERS="$(awk '
+  /^on:/ { inblock = 1; next }
+  inblock {
+    if ($0 ~ /^[^[:space:]]/) { inblock = 0; next }
+    print
+  }
+' "$RECOVER" | sed 's/#.*$//' | grep -oE '^[[:space:]]{2}[a-z_]+:' | tr -d ' :' | sort -u)"
+if [[ "$TRIGGERS" == "workflow_dispatch" ]]; then
+  pass
+else
+  fail "契機が workflow_dispatch だけではない: $(printf '%s' "$TRIGGERS" | tr '\n' ' ')"
+fi
+
+it "復旧用のワークフローが digest の形を検査している"
+# 64 桁の 16 進以外を渡すと、発行は成功しうるのに誰も検証できない attestation が
+# 増える。入力の形だけは機械で固める。
+if [[ -n "$( { grep -nE "\[0-9a-f\]\{64\}" "$RECOVER" || true; } )" ]]; then
+  pass
+else
+  fail "digest の形（64 桁の 16 進）を検査していない"
+fi
+
+it "digest の形の判定が、正しい値と誤った値を区別する（対照群）"
+# 検査の式そのものをここで通す。式が緩ければ（あるいは厳しすぎれば）ここで落ちる。
+GOOD='360d6d3c78d619f731bb99fd192d4d7444b199d1869283824a43418ead4382ab'
+BAD_PREFIX='sha256:360d6d3c78d619f731bb99fd192d4d7444b199d1869283824a43418ead4382ab'
+BAD_SHORT='360d6d3c'
+if   [[ -n "$(printf '%s' "$GOOD"        | grep -E '^[0-9a-f]{64}$' || true)" ]] \
+  && [[ -z "$(printf '%s' "$BAD_PREFIX"  | grep -E '^[0-9a-f]{64}$' || true)" ]] \
+  && [[ -z "$(printf '%s' "$BAD_SHORT"   | grep -E '^[0-9a-f]{64}$' || true)" ]]; then
+  pass
+else
+  fail "digest の形の判定が区別できていない"
+fi
+
 exit_with_result

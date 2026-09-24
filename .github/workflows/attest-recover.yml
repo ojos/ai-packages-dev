@@ -1,0 +1,71 @@
+name: attest-recover
+
+# 公開済みの digest へ後から attestation を発行する復旧用ワークフロー。
+#
+# ## なぜ要るか
+#
+# release.yml の attest ステップは release-packages.sh（gh release create まで行う）
+# の**後**に走る。attestation API の一時障害でそこだけが失敗すると、**attestation の
+# 無いリリースが公開されたまま残る。** 同じ版での再実行は preflight が拒否するため
+# （公開済みバージョンは不変）、release.yml では修復できない。
+#
+# **attestation は digest だけを対象にできる。** 資産そのものを再生成する必要はなく、
+# 公開済みの SHA256SUMS の digest を渡せば後から発行できる。これがその経路である。
+#
+# ## 起動条件を限定している
+#
+# workflow_dispatch のみ。**このリポジトリは public なので、attestation の発行権限を
+# 持つ workflow を自動起動させない**（#203 の懸念 7）。dispatch できるのは書き込み
+# 権限を持つ利用者だけである。
+#
+# ## 使い方
+#
+#   1. 公開済みの SHA256SUMS を取得して digest を求める
+#        curl -sSL "<リリースの URL>/SHA256SUMS" -o SHA256SUMS
+#        sha256sum SHA256SUMS
+#   2. その 64 桁を subject-digest へ渡して実行する
+#
+# **発行し直しても既存の attestation は消えない。** 同じ digest に複数の attestation が
+# 付くだけで、検証はどれか 1 つが通れば成功する。
+
+on:
+  workflow_dispatch:
+    inputs:
+      subject-digest:
+        description: 'SHA256SUMS の sha256（64 桁の 16 進。sha256: は付けない）'
+        required: true
+        type: string
+      subject-name:
+        description: '対象の名前（既定は SHA256SUMS）'
+        required: false
+        default: 'SHA256SUMS'
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+  attestations: write
+
+jobs:
+  attest:
+    runs-on: ubuntu-latest
+    steps:
+      # 形を検査してから発行する。**64 桁の 16 進以外を渡すと、発行そのものは成功
+      # しうるのに誰も検証できない attestation が増える。** 入力の形だけは機械で固める。
+      - name: Validate the digest
+        id: validate
+        env:
+          RAW: ${{ inputs.subject-digest }}
+        run: |
+          set -euo pipefail
+          if ! printf '%s' "$RAW" | grep -qE '^[0-9a-f]{64}$'; then
+            echo "error: subject-digest は 64 桁の小文字 16 進で渡してください（受け取った長さ: ${#RAW}）" >&2
+            exit 1
+          fi
+          echo "digest=sha256:${RAW}" >> "$GITHUB_OUTPUT"
+
+      - name: Attest the published digest
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-name: ${{ inputs.subject-name }}
+          subject-digest: ${{ steps.validate.outputs.digest }}

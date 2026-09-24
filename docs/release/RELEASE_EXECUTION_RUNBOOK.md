@@ -63,6 +63,27 @@ workflow は認証と identity をリポジトリ設定から解決する。値�
 
 配線は `tests/test-release-attestation.sh` が機械照合する。**実際に発行できることは検査しない**（リリースの実行を要するため）。#340 では使い捨てのワークフローで発行と検証を実測し、票へ記録した。
 
+#### 発行だけが失敗したときの復旧
+
+**attest ステップは `gh release create` の後に走る。** attestation API の一時障害でそこだけが失敗すると、**attestation の無いリリースが公開されたまま残る。** 同じ版での再実行は preflight が拒否するため（公開済みバージョンは不変）、`release.yml` では修復できない。
+
+**`attest-recover.yml` を使う**（`workflow_dispatch` のみ）。attestation は digest だけを対象にできるので、資産を作り直さずに後から発行できる。
+
+```bash
+# 1. 公開済みの SHA256SUMS を取得して digest を求める
+#    この手順はメンテナの手元で叩くため、macOS も想定して分岐する。
+curl -sSL "https://github.com/ojos/devcontainer-bootstrap/releases/download/<tag>/SHA256SUMS" -o SHA256SUMS
+if command -v sha256sum >/dev/null 2>&1; then sha256c="sha256sum"; else sha256c="shasum -a 256"; fi
+$sha256c SHA256SUMS
+
+# 2. その 64 桁を渡して実行する
+gh workflow run attest-recover.yml -f subject-digest=<64 桁の 16 進>
+```
+
+- **入力は形を検査してから発行する。** 64 桁の小文字 16 進以外は弾く（`sha256:` を付けた形も弾く）。誰も検証できない attestation を増やさないため
+- **発行し直しても既存の attestation は消えない。** 同じ digest に複数付くだけで、検証はどれか 1 つが通れば成功する
+- **契機は `workflow_dispatch` だけに限定している。** 公開リポジトリで発行権限を持つ workflow を自動起動させない（#203 の懸念 7）。`tests/test-release-attestation.sh` がこれを固定する
+
 ## 配布方式（パッケージごとに異なる）
 
 パッケージは消費モデルが異なるため、配布方式も異なる。均一の資産契約は課さない。
