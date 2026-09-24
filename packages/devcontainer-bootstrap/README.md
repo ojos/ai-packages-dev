@@ -97,7 +97,7 @@ AI 共通ルールも配置する場合は、ルールの取得元を指定し�
 if command -v sha256sum >/dev/null 2>&1; then sha256c="sha256sum"; else sha256c="shasum -a 256"; fi
 ( cd "$d" && grep ' bootstrap.sh$' SHA256SUMS | $sha256c -c - ) &&
 bash "$d/bootstrap.sh" --project-name myapp --output-dir "$PWD/myapp" \
-  --languages node,go --with-claude --playbook-version v0.1.4
+  --languages node,go --with-claude --playbook-version v0.4.0
 ```
 
 `--playbook-version` は既定ソース `ojos/ai-playbook` のタグ tarball への糖衣で、長い archive URL を打たずに済みます。ソースを指定した時点で配置されるため `--with-playbook` は不要です。別 owner・任意の URL・ローカルディレクトリから取得する場合は、従来どおり `--playbook-from` を使います（`--playbook-version` とは排他）。
@@ -163,7 +163,7 @@ tar -xzf PACKAGE_ARCHIVE.tar.gz
 
 ### 任意: 署名の検証（artifact attestation）
 
-**この手順は任意です。** 上の 2 段検証は `curl` と `sha256sum` だけで閉じていますが、こちらは [GitHub CLI](https://cli.github.com/) が要ります。
+**この手順は任意です。** 上の 2 段検証は `curl` とチェックサム実装（`sha256sum` か `shasum -a 256`）だけで閉じていますが、こちらは [GitHub CLI](https://cli.github.com/) が要ります。
 
 リリースの `SHA256SUMS` には、GitHub Actions が発行した **artifact attestation**（SLSA provenance）が付いています。**そこから先は上のハッシュチェーンが繋ぐ**ので、検証するのは `SHA256SUMS` 1 つで足ります。
 
