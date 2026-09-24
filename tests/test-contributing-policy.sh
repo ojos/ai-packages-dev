@@ -98,4 +98,135 @@ else
   fail "1 要素を欠いた文書でも全 $REQ_COUNT 件当たった（要素ごとに見ていない）"
 fi
 
+# ── 文書の主張と workflow の実態を突き合わせる ────────────────────────────────
+#
+# CONTRIBUTING.md は「fork からの PR で CI は通り、review-gate / copilot-review は
+# 落ちる」と述べている。**その根拠は workflow の宣言である**（fork からの PR には
+# 読み取り専用のトークンしか渡らず、secrets も渡らない）。
+#
+# **宣言が変われば文書は古くなる。** 数え上げた説明が実態から離れる形
+# （`.ai-playbook/shared-ai-rules.md` 13 章 (c)）は `git grep` では拾えないので、
+# ここで機械的に突き合わせる。
+
+WF_DIR="$REPO_ROOT/.github/workflows"
+
+# permissions_block <ファイル>
+#   permissions: の配下だけを取り出す。**ファイル全体へ当ててはいけない。**
+#   コメントや run: の中に `statuses: write` のような綴りがあり（実測: review-gate.yml に
+#   3 箇所）、権限を外しても当たり続けて偽陰性になる。ブロックの終わりは、宣言より
+#   浅いか同じ字下げの非空行で判定する。
+permissions_block() {
+  awk '
+    /^[[:space:]]*permissions:[[:space:]]*$/ {
+      inblock = 1
+      indent = match($0, /[^ ]/)
+      next
+    }
+    inblock {
+      if ($0 ~ /^[[:space:]]*$/) next
+      cur = match($0, /[^ ]/)
+      if (cur <= indent) { inblock = 0; next }
+      print
+    }
+  ' "$1"
+}
+
+# declares_write <ファイル>
+#   permissions の配下で `: write` を宣言しているか。**判定はここ 1 つに置く。**
+declares_write() {
+  # **コメントを落としてから見る。** permissions の配下にも説明のコメントが書かれて
+  # おり（実測: review-gate.yml）、そこに `: write` の綴りがあると権限と取り違える。
+  { permissions_block "$1" | sed 's/#.*$//' | grep -nE ':[[:space:]]*write' || true; }
+}
+
+# uses_secrets <ファイル>
+uses_secrets() {
+  { grep -noE 'secrets\.[A-Z_]+' "$1" || true; }
+}
+
+it "CI が通るという主張の根拠: ci.yml が書き込み権限も secrets も要さない"
+if [[ ! -f "$WF_DIR/ci.yml" ]]; then
+  fail "ci.yml が無い（文書の主張の根拠が消えている）"
+elif [[ -n "$(declares_write "$WF_DIR/ci.yml")" ]]; then
+  fail "ci.yml が書き込み権限を宣言している。fork PR で通るという記述が古い: $(declares_write "$WF_DIR/ci.yml")"
+elif [[ -n "$(uses_secrets "$WF_DIR/ci.yml")" ]]; then
+  fail "ci.yml が secrets を参照している。fork PR で通るという記述が古い: $(uses_secrets "$WF_DIR/ci.yml")"
+else
+  pass
+fi
+
+it "落ちるという主張の根拠: review-gate / copilot-review が書き込み権限を要する"
+MISSING_WRITE=""
+for wf in review-gate.yml copilot-review.yml; do
+  if [[ ! -f "$WF_DIR/$wf" ]]; then
+    MISSING_WRITE="$MISSING_WRITE $wf(無い)"
+  elif [[ -z "$(declares_write "$WF_DIR/$wf")" ]]; then
+    MISSING_WRITE="$MISSING_WRITE $wf(書き込み権限を宣言していない)"
+  fi
+done
+if [[ -z "$MISSING_WRITE" ]]; then
+  pass
+else
+  fail "文書は落ちると述べているが、根拠が失われている:$MISSING_WRITE"
+fi
+
+it "同じ判定が、書き込み権限を宣言するものとしないものを区別する（対照群）"
+# 「常に空」でも「常に当たる」でも上の 2 件は通ってしまう形にしないための対照群。
+# ci.yml は宣言しない側、review-gate.yml は宣言する側で、同じ関数を通す。
+if [[ -z "$(declares_write "$WF_DIR/ci.yml")" ]] && [[ -n "$(declares_write "$WF_DIR/review-gate.yml")" ]]; then
+  pass
+else
+  fail "判定が区別できていない（ci.yml と review-gate.yml で同じ結果になった）"
+fi
+
+# fork からの PR に secrets が渡らない前提そのものを固定する。
+it "pull_request_target を使っていない（fork PR へ secrets が渡る形を作らない）"
+PRT="$( { grep -rln 'pull_request_target' "$WF_DIR" || true; } )"
+if [[ -z "$PRT" ]]; then
+  pass
+else
+  fail "pull_request_target を使っている: $PRT（fork PR へ secrets が渡るため、文書の前提が崩れる）"
+fi
+
+it "同じ判定が、コメントの中の write 指定を権限とみなさない（意図的な負例）"
+# **この負例が無いと、ファイル全体へ grep する緩い実装と区別できない**（実測で踏んだ）。
+# review-gate.yml にはコメント・run: の中に `statuses: write` 等が 3 箇所あり、
+# 権限を read へ落としても当たり続ける。判定が permissions の配下だけを見ている
+# ことを、ここで固定する。
+FAKE="$(mktemp "${TMPDIR:-/tmp}/wf.XXXXXX")"
+{
+  printf '%s\n' 'name: fake'
+  printf '%s\n' 'permissions:'
+  printf '%s\n' '  contents: read'
+  printf '%s\n' '  # `statuses: write` と書いてあるが、これはコメントである'
+  printf '%s\n' 'jobs:'
+  printf '%s\n' '  x:'
+  printf '%s\n' '    steps:'
+  printf '%s\n' '      - run: echo "statuses: write"'
+} > "$FAKE"
+FAKE_HITS="$(declares_write "$FAKE")"
+rm -f "$FAKE"
+if [[ -z "$FAKE_HITS" ]]; then
+  pass
+else
+  fail "コメントや run: の中の綴りを権限とみなした: $FAKE_HITS"
+fi
+
+it "同じ判定が、permissions の配下の write は拾う（負例の対照群）"
+FAKE2="$(mktemp "${TMPDIR:-/tmp}/wf.XXXXXX")"
+{
+  printf '%s\n' 'name: fake'
+  printf '%s\n' 'permissions:'
+  printf '%s\n' '  contents: read'
+  printf '%s\n' '  statuses: write'
+  printf '%s\n' 'jobs:'
+} > "$FAKE2"
+FAKE2_HITS="$(declares_write "$FAKE2")"
+rm -f "$FAKE2"
+if [[ -n "$FAKE2_HITS" ]]; then
+  pass
+else
+  fail "permissions の配下の write を拾えなかった（判定が厳しすぎる）"
+fi
+
 exit_with_result
