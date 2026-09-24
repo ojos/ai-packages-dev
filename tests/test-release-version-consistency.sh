@@ -92,6 +92,39 @@ readme_playbook_versions() {
     | awk '{print $2}' | sort -u
 }
 
+# ── 比較（判定の本体。実データも不一致フィクスチャもここを通す）──────────────
+#
+# **抽出だけを関数にしても足りない。** 比較を `it` の中へ直接書くと、比較を常に真へ
+# 変える変異が緑のまま残る（実測で踏んだ。レビューの指摘）。値を受け取る関数にして、
+# 実データと不一致フィクスチャの両方を同じ経路へ通す。
+
+# same_version <実測値> <期待値>
+#   一致すれば 0、違えば 1 を返し、違いを標準出力へ出す。
+same_version() {
+  if [[ "$1" == "$2" ]]; then
+    return 0
+  fi
+  printf '%s != %s\n' "$1" "$2"
+  return 1
+}
+
+# all_same_version <期待値> <値の並び（改行区切り）>
+#   並びのすべてが期待値と一致すれば 0。違うものを標準出力へ列挙して 1 を返す。
+all_same_version() {
+  local want="$1" input="$2" bad="" v
+  while IFS= read -r v; do
+    [[ -z "$v" ]] && continue
+    [[ "$v" == "$want" ]] || bad="$bad $v"
+  done <<ALLEOF
+$input
+ALLEOF
+  if [[ -z "$bad" ]]; then
+    return 0
+  fi
+  printf '%s\n' "$bad"
+  return 1
+}
+
 # ── 抽出が成立していること ────────────────────────────────────────────────────
 
 DCB_CURRENT="$(current_version "$HISTORY" 'devcontainer-bootstrap')"
@@ -124,10 +157,10 @@ fi
 # ── 4 条件 ────────────────────────────────────────────────────────────────────
 
 it "1. 現行バージョン表の DCB 版が bootstrap.sh の DCB_VERSION と一致する"
-if [[ "$DCB_CURRENT" == "$DCB_MARKER" ]]; then
+if DIFF="$(same_version "$DCB_CURRENT" "$DCB_MARKER")"; then
   pass
 else
-  fail "食い違い: RELEASE_HISTORY=[$DCB_CURRENT] bootstrap.sh=[$DCB_MARKER]（リリース履歴の正本と実際の版がずれる）"
+  fail "食い違い: RELEASE_HISTORY=[$DCB_CURRENT] bootstrap.sh=[$DCB_MARKER] ($DIFF)（リリース履歴の正本と実際の版がずれる）"
 fi
 
 it "2. 版更新表に現行 DCB 版の行がある"
@@ -147,14 +180,7 @@ fi
 it "3. README の --playbook-version の実行例が現行 playbook 版と一致する"
 # 「最小版以上」ではなく完全一致を求める。最小版を宣言する場所が機械可読な形で
 # 無く、その宣言自体が古びる経路が残るため（利用者の判断）。
-MISMATCH=""
-while IFS= read -r v; do
-  [[ -z "$v" ]] && continue
-  [[ "$v" == "$PB_CURRENT" ]] || MISMATCH="$MISMATCH $v"
-done <<PBEOF
-$README_PB
-PBEOF
-if [[ -z "$MISMATCH" ]]; then
+if MISMATCH="$(all_same_version "$PB_CURRENT" "$README_PB")"; then
   pass
 else
   fail "README の実行例が現行 playbook 版 $PB_CURRENT と違う:$MISMATCH（利用者が例をそのまま叩くと、雛形が無くて生成が止まる）"
@@ -221,5 +247,39 @@ if [[ -z "$FOUND" ]] && [[ -n "$HIT" ]]; then
 else
   fail "版更新表の判定が区別できていない（無い版=[$FOUND] ある版=[$HIT]）"
 fi
+
+# ── 比較の対照群（比較そのものが効いていることの固定）────────────────────────
+#
+# **実データは一致している。** 一致側だけを通しても「常に真」の実装と区別できない。
+# 不一致のフィクスチャを同じ関数へ通し、落ちることを見る。
+
+it "同じ比較が、一致する値を通し、違う値を落とす（意図的な負例）"
+if same_version 'v1.2.3' 'v1.2.3' >/dev/null \
+  && ! same_version 'v1.2.3' 'v1.2.4' >/dev/null; then
+  pass
+else
+  fail "版の比較が区別できていない（同じ値と違う値で結果が変わらない）"
+fi
+
+it "同じ比較が、並びの 1 つでも違えば落とす（意図的な負例）"
+if all_same_version 'v1.2.3' "$(printf 'v1.2.3\nv1.2.3\n')" >/dev/null \
+  && ! all_same_version 'v1.2.3' "$(printf 'v1.2.3\nv9.9.9\n')" >/dev/null; then
+  pass
+else
+  fail "並びの比較が区別できていない"
+fi
+
+it "同じ版更新表の判定が、行の有無で結果を変える（意図的な負例）"
+# history_has_row は上でも負例を通しているが、**条件 2 の判定経路そのもの**が
+# 効いていることをここで固定する。常に真へ変える変異はここで赤になる。
+FX4="$(mktemp "${TMPDIR:-/tmp}/hist.XXXXXX")"
+printf '%s\n' '| devcontainer-bootstrap | v1.0.0 | 2026-01-01 | 要点 |' > "$FX4"
+if [[ -n "$(history_has_row "$FX4" 'devcontainer-bootstrap' 'v1.0.0')" ]] \
+  && [[ -z "$(history_has_row "$FX4" 'devcontainer-bootstrap' 'v2.0.0')" ]]; then
+  pass
+else
+  fail "版更新表の判定が行の有無で変わらない"
+fi
+rm -f "$FX4"
 
 exit_with_result
