@@ -45,6 +45,11 @@ concurrency:
 # 読み取りに留める。
 permissions:
   contents: read
+  # artifact attestation の発行に要る 2 つ。id-token は OIDC でこの実行を名乗るため、
+  # attestations は発行結果を書き込むため。**どちらもこのリポジトリが public で
+  # なければ使えない**（private では発行そのものが拒否される。#189 の実測）。
+  id-token: write
+  attestations: write
 
 jobs:
   release:
@@ -135,6 +140,9 @@ jobs:
 
       - name: Run the release script
         env:
+          # 資産の digest をここへ書き出させ、次のステップが attestation の対象にする。
+          # 一時クローンの中身をステップから指さずに済む。
+          ATTEST_SUBJECTS_DIR: ${{ github.workspace }}/attest-subjects
           # gh CLI と、上で設定した credential helper の両方がこの値を読む。
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           # 一時クローンでの commit 名義（#189 の決定 4）。実行主体とコミット名義を
@@ -168,6 +176,38 @@ jobs:
       # release-packages.sh は最後に README の RELEASE_STATUS ブロックを更新するが、
       # その差分はランナー上のチェックアウトに残るだけで、ジョブ終了とともに消える。
       # 後追いでモノレポへ反映する必要があることを、実行者が見る場所に残す。
+      # ── attestation ───────────────────────────────────────────────────────
+      #
+      # **対象は SHA256SUMS 1 つ。** そこから RELEASE-MANIFEST.json → 各ファイルへ
+      # ハッシュチェーンが繋がる（README の 2 段検証）。
+      #
+      # **dry-run ではここへ来ない。** release-packages.sh は --execute が無ければ
+      # 資産生成より前に exit 0 するため、digest のファイルが作られない。
+      #
+      # **発行元はこのリポジトリになる。** 資産は配布リポジトリのリリースに置かれる
+      # ので、利用者は発行元の owner を指して検証する（README に手順がある）。
+      - name: Read the attestation subject
+        id: subject
+        run: |
+          set -euo pipefail
+          f="${ATTEST_SUBJECTS_DIR}/devcontainer-bootstrap.sha256"
+          if [[ -f "$f" ]]; then
+            digest="$(cat "$f")"
+            echo "digest=sha256:${digest}" >> "$GITHUB_OUTPUT"
+            echo "[attest] subject digest: sha256:${digest}"
+          else
+            echo "[attest] 対象がありません（DCB を公開していない実行）。発行を飛ばします。"
+          fi
+        env:
+          ATTEST_SUBJECTS_DIR: ${{ github.workspace }}/attest-subjects
+
+      - name: Attest the checksum file
+        if: steps.subject.outputs.digest != ''
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-name: SHA256SUMS
+          subject-digest: ${{ steps.subject.outputs.digest }}
+
       - name: Report the follow-up diff
         if: ${{ inputs.execute }}
         run: |

@@ -45,6 +45,24 @@ workflow は認証と identity をリポジトリ設定から解決する。値�
 - App は `ojos/devcontainer-bootstrap` と `ojos/ai-playbook` の 2 リポジトリへ install し、権限は `contents: write` のみを与える。Actions の `GITHUB_TOKEN` は自リポジトリにしかスコープが効かず、クロスリポジトリ push ができないため。
 - bot ユーザー ID は install 後に `gh api '/users/ojos-release-bot[bot]' --jq '.id'` で取得する。**App ID とは別番号**で、コミットを bot アカウントへ紐付けるのはこちら。
 
+### artifact attestation（#340）
+
+`release.yml` は `SHA256SUMS` へ artifact attestation（SLSA provenance）を発行する。**設定は要らない**（secret も variable も追加しない）。workflow の `permissions` に `id-token: write` と `attestations: write` があれば足りる。
+
+**このリポジトリが public でなければ発行できない。** private では拒否される（#189 の実測。`Feature not available for user-owned private repositories`）。
+
+発行の流れ:
+
+1. `release-packages.sh` が一時クローンで `SHA256SUMS` を作り、`ATTEST_SUBJECTS_DIR` が設定されていればその digest を `<package>.sha256` へ書く
+2. workflow が digest を読み、`actions/attest-build-provenance` へ `subject-digest` として渡す
+3. 対象が無い実行（playbook だけのリリース）では `if` で飛ばす
+
+**dry-run では発行されない。** `--execute` が無ければ資産生成より前に終了する。
+
+**発行元はこのリポジトリになる。** 資産は配布リポジトリのリリースに置かれるため、利用者は「配布リポジトリの owner」を指して検証する（同じ owner に属する attestation が引ける）。手順は DCB の README にある。
+
+配線は `tests/test-release-attestation.sh` が機械照合する。**実際に発行できることは検査しない**（リリースの実行を要するため）。#340 では使い捨てのワークフローで発行と検証を実測し、票へ記録した。
+
 ## 配布方式（パッケージごとに異なる）
 
 パッケージは消費モデルが異なるため、配布方式も異なる。均一の資産契約は課さない。

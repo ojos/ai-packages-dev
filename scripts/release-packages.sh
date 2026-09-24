@@ -400,6 +400,26 @@ generate_standard_assets() {
   done
   sha256sum "${SUMS_TARGETS[@]}" > SHA256SUMS  # bsd-ok: リリース実行は Actions（Linux）でしか行わない
 
+  # attestation の対象を呼び出し側へ渡す。
+  #
+  # **対象は SHA256SUMS 1 つで足りる。** RELEASE-MANIFEST.json が SHA256SUMS の
+  # ハッシュを持ち、SHA256SUMS が各ファイルのハッシュを持つため、ここを起点に
+  # 配布物全体まで辿れる（README の 2 段検証）。
+  #
+  # **資産は一時クローンの中にあり、この関数を抜けると呼び出し側からは辿れない。**
+  # そのため digest をファイルへ書き出し、workflow 側が subject-digest として
+  # attest-build-provenance へ渡す。パスではなく digest を渡すのは、Actions の
+  # ステップから一時クローンの中身を指さなくて済むからである。
+  #
+  # **環境変数が無ければ何もしない。** 手元の dry-run やテストは Actions の外で
+  # 走るので、この仕組みを前提にしない（dry-run はここへ到達しないが、将来
+  # 到達する経路が増えても壊れないようにしておく）。
+  if [[ -n "${ATTEST_SUBJECTS_DIR:-}" ]]; then
+    mkdir -p "$ATTEST_SUBJECTS_DIR"
+    sha256sum SHA256SUMS | awk '{print $1}' > "$ATTEST_SUBJECTS_DIR/$pkg_name.sha256"  # bsd-ok: リリース実行は Actions（Linux）でしか行わない
+    echo "[release] attestation subject: $pkg_name SHA256SUMS $(cat "$ATTEST_SUBJECTS_DIR/$pkg_name.sha256")"
+  fi
+
   # RELEASE-MANIFEST.json
   local archive_sha
   archive_sha=$(sha256sum PACKAGE_ARCHIVE.tar.gz | awk '{print $1}')  # bsd-ok: リリース実行は Actions（Linux）でしか行わない
