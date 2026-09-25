@@ -161,7 +161,7 @@ gh CLI の認証はコンテナ内で行い、その状態を named volume に�
 
 共通規範「レビューワークフロー」（`.ai-playbook/review-workflow.md`）のクロスモデル二段ゲートと、「ループ運用」（`.ai-playbook/loop-workflow.md`）のローカル事前ゲートを、このリポジトリで具体化します。
 
-3 段の手前に、共通規範「品質整理（任意の前段）」（`.ai-playbook/review-workflow.md`）を置けます。位置・回数・非ゲートの制約は同節に従い、ここでは起動手段と対象範囲だけを定めます。
+下記 1 の主レビューの前に、共通規範「品質整理（任意の前段）」（`.ai-playbook/review-workflow.md`）を置けます。ここでいう「受け入れ条件を満たした後」は、手元で `scripts/verify.sh` が緑になった後を指します。下記 2 の受け入れ検証は、整理後の差分に対して `loop-gate.sh` が改めて通します。位置・回数・非ゲートの制約は同節に従い、ここでは起動手段と対象範囲だけを定めます。
 
 - **起動手段**: Claude Code の `/simplify` を、受け入れ条件を満たした後・主レビューの前に 1 回だけ実行します。`loop-gate.sh` には含めません。
 - **対象はコードに限ります。** このリポジトリでは `*.sh`（`scripts/` / `tests/` / `packages/` / `.ai-playbook/templates/` 配下を含む）と、`.github/workflows/` の YAML が該当します。
