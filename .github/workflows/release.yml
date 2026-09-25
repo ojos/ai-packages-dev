@@ -133,7 +133,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           SHA: ${{ github.sha }}
         run: |
-          runs="$(gh api \
+          # **--paginate を付ける。** per_page だけでは 1 ページ目しか見ない。
+          # ci.yml は workflow_dispatch を持つので、同じ SHA に対して実行が
+          # 100 件を超えうる。そのとき古い in_progress が落ちると、「未完了が
+          # 1 件でもあれば止める」という判定の契約が成立しなくなる。
+          runs="$(gh api --paginate \
             "repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${SHA}&per_page=100" \
             --jq '.workflow_runs[]
                   | select(.path == ".github/workflows/ci.yml")

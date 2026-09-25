@@ -175,6 +175,12 @@ assert_eq "$(yml_has 'actions: read')" "yes" "permissions"
 it "判定は execute: true のときだけ走る（dry-run は任意のブランチで回せる）"
 assert_eq "$(yml_has 'if: inputs.execute')" "yes" "if 条件"
 
+it "実行の一覧は、配ろうとしているコミットに絞って取る"
+assert_eq "$(yml_has 'actions/runs?head_sha=${SHA}')" "yes" "API の絞り込み"
+
+it "実行の一覧は全ページを取る（1 ページ目だけを見ない）"
+assert_eq "$(yml_has 'gh api --paginate')" "yes" "ページ送り"
+
 it "判定は ci.yml の実行だけを対象にする"
 assert_eq "$(yml_has 'select(.path == ".github/workflows/ci.yml")')" "yes" "jq の絞り込み"
 
