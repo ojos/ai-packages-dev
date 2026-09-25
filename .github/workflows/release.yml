@@ -50,6 +50,9 @@ permissions:
   # なければ使えない**（private では発行そのものが拒否される。#189 の実測）。
   id-token: write
   attestations: write
+  # 配るコミットの CI の結論を読むために要る。実行の一覧は contents では
+  # 読めない。書き込みは要らないので read に留める。
+  actions: read
 
 jobs:
   release:
@@ -105,6 +108,38 @@ jobs:
           exit $fail
 
       - uses: actions/checkout@v4
+
+      # ── 配るコミットが検証済みであることを確かめる ──────────────────────
+      #
+      # 上の Validate inputs は「main から起動したか」までしか見ない。**その
+      # コミットの CI が緑かは、これまでどこでも確かめていなかった。**
+      #
+      # checkout は ref を渡していないので、配るのは起動時点の main の head で
+      # ある。ci.yml は push: branches: [main] で走るため、マージで生まれた
+      # コミットには新しい実行が作られる——ruleset の必須チェックは PR の head
+      # に対する評価であって、squash で生まれたコミットを見たわけではない。
+      # したがって「マージ直後、その実行が終わる前に起動する」窓が開く。
+      #
+      # **チェックアウトの後に置くのは、判定スクリプトがこのリポジトリにある
+      # ためである。** 外部状態へ触れるのはトークン発行から先なので、ここで
+      # 落ちれば副作用には到達しない。
+      #
+      # **event では絞らない。** ci.yml は契機のイベントが届かなかったときの
+      # ために workflow_dispatch を持っており、その復旧経路で回した緑を
+      # 弾いてしまう。見たいのは「このコミットに対する ci.yml の結論」である。
+      - name: Require a green CI run on the commit being released
+        if: inputs.execute
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.sha }}
+        run: |
+          runs="$(gh api \
+            "repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${SHA}&per_page=100" \
+            --jq '.workflow_runs[]
+                  | select(.path == ".github/workflows/ci.yml")
+                  | "\(.id) \(.status) \(.conclusion // "-")"')"
+          echo "[release] 対象のコミット: ${SHA}"
+          printf '%s\n' "$runs" | bash scripts/check-release-commit-verified.sh
 
       # クロスリポジトリ push の権限は、実行ごとに発行する短命の install トークンで得る
       # （#189 の決定 1）。secret に残るのは App の秘密鍵だけで、長命の push 権限を
