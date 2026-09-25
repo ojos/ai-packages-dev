@@ -138,6 +138,22 @@ dry-run（`execute: false`）が `[plan]` 行として出力する。
 DCB は規範パッケージの `templates/` を配布するため、DCB リリース時は `packages/devcontainer-bootstrap/` に加えて `.ai-playbook/` 側も検査される。
 リンク切れやアンカー切れがあると、リリース対象のコード差分が無くても preflight は落ちる。
 
+## workflow 側のゲート（preflight より前）
+
+**上の表は `scripts/release-packages.sh` の preflight である。それより前に、workflow 自身が 1 つ検査する。**
+
+| 検査 | 実行条件 | 実装 |
+|---|---|---|
+| 配るコミットに対する `ci.yml` の実行が、success で完了している | `execute: true` のときだけ | `scripts/check-release-commit-verified.sh` |
+
+**なぜ preflight ではなく workflow 側か。** preflight は手元のツリーを見る検査で、`ci.yml` の結論は GitHub 側にしかない。判定に API が要るため、置き場所が分かれる。
+
+**何を止めるか。** `release.yml` の `actions/checkout` は ref を渡さないので、配るのは**起動時点の `main` の head** である。`ci.yml` は `push: branches: [main]` で走るため、マージで生まれたコミットには新しい実行が作られる——ruleset の必須チェックは PR の head に対する評価であって、squash で生まれたコミットを見たわけではない。したがって「マージ直後、その実行が終わる前に起動する」窓が開く。
+
+**判定できないときは配らない。** 実行が 1 件も無い（契機のイベントが届かない状態は実在する）、完了していない実行がある、のいずれも赤にする。実行が複数あれば、**すべて完了していることを確かめたうえで最新の実行の結論**を見る（再実行で緑にした場合は通し、再実行で赤くなった場合は止める）。
+
+**この検査が見ないこと。** 起動してから配り終えるまでの間に `main` が進む場合は対象外である。配るのは起動時点の head のままで、それは別の問題である。
+
 ## 不変性
 
 **公開済みバージョンは不変。** 同じバージョンでの再リリースは preflight で失敗し、副作用は出ない。
@@ -242,6 +258,8 @@ GitHub の Actions 画面から `Run workflow` で起動してもよい。実行
 gh workflow run release.yml --ref main \
   -f dcb-version=v0.7.4 -f playbook-version=v0.1.6 -f execute=true
 ```
+
+**配るコミットの `ci.yml` が緑で完了していなければ、ここで落ちる**（「workflow 側のゲート（preflight より前）」節）。マージ直後に起動して実行がまだ終わっていない場合も同じく落ちるので、CI の完了を待ってから起動する。
 
 preflight がもう一度すべて走る。dry-run 通過後に `main` や公開側の状態が変わっていれば、ここで落ちる。
 

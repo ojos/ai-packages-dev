@@ -28,6 +28,7 @@
 | `scripts/check-control-chars.sh` | 追跡ファイルへの表示されない制御文字（C0 制御文字と DEL。TAB / LF / CR は除く）混入の検知ゲート。`acceptance.sh` が呼ぶ。 |
 | `scripts/check-shell-portability.sh` | 「この環境では通るが BSD 系（macOS）では落ちる」綴りの検知ゲート。追跡している `*.sh` と `*.md`（フェンス内）を走査し、`# bsd-ok: 理由` を逃げ道とする。`acceptance.sh` が呼ぶ。 |
 | `scripts/check-table-breaks.sh` | Markdown の表の途中へ段落が差し込まれ、続く行が表として描画されなくなっていないかの検知ゲート。`acceptance.sh` が呼ぶ。 |
+| `scripts/check-release-commit-verified.sh` | 配ろうとしているコミットの CI が緑で完了しているかを、実行の一覧から決定的に判定する。`release.yml` が副作用へ到達する前に呼ぶ。標準入力を受けるだけで API は叩かない。 |
 | `scripts/loop-gate.sh` | push / PR 前のローカル事前ゲート。commit identity 検証・`verify.sh`・第二意見を直列化する単一入口（`GATE_PASS`）。 |
 | `scripts/verify-commit-identity.sh` | コミット履歴の identity 検証（email のみで判定）。CI（identity-guard）と手元で共用。 |
 | `scripts/update-release-status.sh` | README のリリース状況更新。 |
