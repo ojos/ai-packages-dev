@@ -36,7 +36,7 @@
 | `loop-workflow.md` | ループコーディング運用の規範（受け入れ検証の機械ゲート化・verify ランナー契約・収束） |
 | `loop-coding-guide.md` | ループコーディングの解説ガイド（従来ワークフローとの違い・考え方。`loop-workflow.md` の解説版） |
 | `intake/` | intake テンプレート、相談テンプレート、判定 reason code |
-| `templates/` | 導入用の雛形 11 種（`entry.md` 実行環境の入口ファイル / `project-ai-rules.md` プロジェクト共通ルール / `second-opinion-review.sh` 第二意見レビューの実装例 / `copilot-review.yml` リモート最終ゲートの要求側の実装例 / `review-gate.yml` リモート最終ゲートの確認側の実装例 / `review-usable.sh` 確認側が使う「読まれたか」の判定本体 / `check-review-usable.sh` 上記の表駆動の自己検査 / `claude-skill-intake.md` Claude Code の intake 起点スキル / `claude-skill-land.md` Claude Code の PR 確認・マージ起点スキル / `claude-agent-explorer.md`・`claude-agent-implementer.md` Claude Code の委譲先エージェント定義） |
+| `templates/` | 導入用の雛形 14 種（`entry.md` 実行環境の入口ファイル / `project-ai-rules.md` プロジェクト共通ルール / `second-opinion-review.sh` 第二意見レビューの実装例 / `second-opinion-record.sh` 第二意見の記録・投稿の実装例 / `second-opinion-gate-exempt.sh` 記録を求めない PR の判定本体 / `second-opinion-gate.yml` 第二意見が回されたことの確認側の実装例 / `copilot-review.yml` リモート最終ゲートの要求側の実装例 / `review-gate.yml` リモート最終ゲートの確認側の実装例 / `review-usable.sh` 確認側が使う「読まれたか」の判定本体 / `check-review-usable.sh` 上記の表駆動の自己検査 / `claude-skill-intake.md` Claude Code の intake 起点スキル / `claude-skill-land.md` Claude Code の PR 確認・マージ起点スキル / `claude-agent-explorer.md`・`claude-agent-implementer.md` Claude Code の委譲先エージェント定義） |
 | `.gitignore` | このパッケージを開発するときの追跡除外設定。規範ではないため配布・取り込みの対象外（`shared-ai-rules.md` 14 章） |
 
 共通ルールの補足として、AI からの質問は一問ずつ行い、各質問には意図を添え、回答は選択肢優先で提示します。
@@ -186,6 +186,22 @@ chmod +x scripts/second-opinion-review.sh
 
 この雛形は認証手段の違う 2 つの CLI から選べます（`--engine gemini|antigravity`。既定は `gemini`）。どの CLI をどう導入するかはプロジェクト層が決めます。判定ロジックはエンジンによらず 1 か所に集約してあり、エンジンごとに違うのは CLI 名・認証・差分の渡し方だけです。
 
+#### 4a. 第二意見が回されたことを記録し、回し忘れを確認側で検出する（GitHub を使う場合・任意）
+
+第二意見は手元でしか走らないため、受け入れ検証（verify.sh）のように CI が再実行して確かめることができません。**回したかどうかを機構で確かめなければ、回し忘れても何も起きません。** `scripts/loop-gate.sh` が push 前に出力を記録し、確認側が head SHA に紐づく記録の有無を別の契機（PR 更新・定期実行）から確かめます。
+
+```bash
+mkdir -p .github/workflows scripts
+cp .ai-playbook/templates/second-opinion-record.sh scripts/second-opinion-record.sh
+cp .ai-playbook/templates/second-opinion-gate-exempt.sh scripts/second-opinion-gate-exempt.sh
+cp .ai-playbook/templates/second-opinion-gate.yml .github/workflows/second-opinion-gate.yml
+chmod +x scripts/second-opinion-record.sh scripts/second-opinion-gate-exempt.sh
+```
+
+**3 本で 1 組です。** `second-opinion-record.sh` が記録を作って PR へ投稿し、`second-opinion-gate.yml` がその記録を別の契機（PR 更新・定期実行）から確認します（規範「要求されたことを別の契機で確認する」）。要求はしません——第二意見を回すかどうかは利用者側の判断のままです（規範「確認側は要求しません」）。`second-opinion-gate-exempt.sh` は、回す著者が最初からいない PR（Dependabot 等）を記録の対象外にする判定本体です。
+
+雛形は 1 つの実装例です。偽造（記録を作らずレビューを回したことにする）までは防げません——検出できるのは失念であって、迂回ではありません。`review-gate.yml` と同じく required check にはしません。
+
 ### 5. Claude Code 向けスキルを配線する（Claude Code を使う場合・任意）
 
 入口ファイルは「読まれる」だけで「起動する」機構を持ちません。Claude Code では skill が起点になるため、規範を参照するだけの薄いスキルを置きます。
@@ -244,6 +260,7 @@ chmod +x scripts/review-usable.sh scripts/check-review-usable.sh
 | 2. 3 層構造を配線する | 実施する（`.github/project-ai-rules.md` と入口ファイル 2 種） |
 | 3. プロジェクト固有の値を埋める | **実施しない。** 内容の判断が必要で自動化できないため、生成後に手で埋める |
 | 4. 第二意見レビューを用意する | 実施する（`scripts/second-opinion-review.sh` を実行可能属性付きで配置） |
+| 4a. 第二意見の記録・確認側を配線する | 実施する（装備の選択によらず、4 と同時に配置する） |
 | 5. Claude Code 向けスキルを配線する | Claude Code の装備を選んだ場合のみ実施する（intake 起点・land 起点とも） |
 | 6. リモート最終ゲートを配線する | 該当のレビュー機構を選んだ場合のみ実施する |
 

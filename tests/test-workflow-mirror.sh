@@ -50,7 +50,8 @@ README="$REPO_ROOT/.ai-playbook/README.md"
 
 # 一致を必須にする雛形。写しとバイト一致すべきで、ずれたら追随漏れ。
 MIRRORED_YMLS='copilot-review.yml
-review-gate.yml'
+review-gate.yml
+second-opinion-gate.yml'
 
 # 検査対象外にする雛形。
 #

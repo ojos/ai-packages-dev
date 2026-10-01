@@ -29,7 +29,9 @@
 | `scripts/check-shell-portability.sh` | 「この環境では通るが BSD 系（macOS）では落ちる」綴りの検知ゲート。追跡している `*.sh` と `*.md`（フェンス内）を走査し、`# bsd-ok: 理由` を逃げ道とする。`acceptance.sh` が呼ぶ。 |
 | `scripts/check-table-breaks.sh` | Markdown の表の途中へ段落が差し込まれ、続く行が表として描画されなくなっていないかの検知ゲート。`acceptance.sh` が呼ぶ。 |
 | `scripts/check-release-commit-verified.sh` | 配ろうとしているコミットの CI が緑で完了しているかを、実行の一覧から決定的に判定する。`release.yml` が副作用へ到達する前に呼ぶ。標準入力を受けるだけで API は叩かない。 |
-| `scripts/loop-gate.sh` | push / PR 前のローカル事前ゲート。commit identity 検証・`verify.sh`・第二意見を直列化する単一入口（`GATE_PASS`）。 |
+| `scripts/loop-gate.sh` | push / PR 前のローカル事前ゲート。commit identity 検証・`verify.sh`・第二意見を直列化する単一入口（`GATE_PASS`）。第二意見の出力は `second-opinion-record.sh` へ記録を残す。 |
+| `scripts/second-opinion-record.sh` | 第二意見の生の出力を記録し、head SHA 付きの PR コメントとして投稿する。`loop-gate.sh` が push 前に呼ぶ。正本は `.ai-playbook/templates/second-opinion-record.sh`。 |
+| `scripts/second-opinion-gate-exempt.sh` | 第二意見の記録を求めない PR（Dependabot 等）かを判定する本体。`.github/workflows/second-opinion-gate.yml` が呼ぶ。正本は `.ai-playbook/templates/second-opinion-gate-exempt.sh`（`tests/test-second-opinion-gate-exempt.sh` が表で確かめる）。 |
 | `scripts/verify-commit-identity.sh` | コミット履歴の identity 検証（email のみで判定）。CI（identity-guard）と手元で共用。 |
 | `scripts/update-release-status.sh` | README のリリース状況更新。 |
 | `scripts/measure-agent-usage.sh` | サブエージェントの役割別トークン使用量を集計するレポート（合否判定はしない）。親セッションとサブエージェントの両方の記録を読み、全体内とサブエージェント内の 2 つの分母で比率を出す。 |
