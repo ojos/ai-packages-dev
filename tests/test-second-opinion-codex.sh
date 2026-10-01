@@ -30,6 +30,14 @@ set -uo pipefail
 
 echo "test-second-opinion-codex"
 
+# second-opinion-review.sh は load-project-env.sh を通じて **このリポジトリ自身の
+# .env を、ホスト env より優先して**読む（.env に SECOND_OPINION_RUNS=3 /
+# SECOND_OPINION_ENGINE=antigravity がある。実測）。host env をここで unset しても
+# .env の値には勝てないため、下の各検査は**実行回数（RUNS）が 1 以外であることを
+# 前提にしない**（例: 完了行の検査は正規表現で先頭一致を見るだけで、N/M の値は
+# 問わない）。--runs を明示指定する検査だけが、その値を確実に使う。
+unset SECOND_OPINION_ENGINE SECOND_OPINION_RUNS SECOND_OPINION_MODEL
+
 REVIEW="$REPO_ROOT/scripts/second-opinion-review.sh"
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/test-second-opinion-codex.XXXXXX")"
@@ -122,6 +130,16 @@ chmod +x "$FAKE_BIN/codex"
 
 run_review() {
   # 被検査側を、仕込みを先に見る PATH で走らせる。標準出力と標準エラーを分けて取る。
+  # 加えて、両方を結合した記録（$WORK/both）も残す。loop-gate.sh の
+  # record_second_opinion は `second-opinion-review.sh 2>&1 | tee` で両方を
+  # 1 つの捕捉ファイルへ混ぜて読むため（完了行の一部は stderr へ出る）、
+  # stdout だけを見るテストでは記録の契機を正しく確かめられない。
+  #
+  # 関数の戻り値は被検査側の終了コードにする。末尾に別のコマンド（cat）を
+  # 置くと、関数の戻り値がそちらに差し替わり、呼び出し側が rc を取り違える
+  # （実際に踏んだ：`cat ... || true` を末尾に置いた結果、全呼び出しが rc=0
+  # を返すようになり、以降の失敗系の検査がすべて偽の緑になった）。
+  local rc
   rm -f "$RECORD/calls"
   (
     cd "$REPO" || exit 1
@@ -130,6 +148,9 @@ run_review() {
       bash "$REVIEW" --engine codex "$@" \
         > "$WORK/out" 2> "$WORK/err"
   )
+  rc=$?
+  cat "$WORK/out" "$WORK/err" > "$WORK/both" 2>/dev/null || true
+  return "$rc"
 }
 
 # ---- 1. 差分が加工されずに、プロンプトより前へ届くこと ----
@@ -140,11 +161,32 @@ rc=0
 FAKE_CODEX_ANSWER='VERDICT: LGTM' run_review || rc=$?
 if [[ "$rc" -eq 0 ]]; then pass; else fail "exit $rc: $(cat "$WORK/err")"; fi
 
+it "LGTM の回では loop-gate.sh が記録の契機にする完了行が出る"
+# scripts/loop-gate.sh の record_second_opinion は、出力の中に次の 3 つの
+# いずれかが行頭で現れたときだけ「判定に到達した」として記録する
+# （`^\[second-opinion\] LGTM \(` / `findings reported by ` /
+# `[0-9]+/[0-9]+ chunks reported findings`）。codex は常に単一チャンクなので、
+# ここでは 1 つ目の形を確かめる。綴りを変えると、codex 経路だけ記録されなくなる。
+if grep -qE '^\[second-opinion\] LGTM \(' "$WORK/both" 2>/dev/null; then
+  pass
+else
+  fail "完了行が出ていない: $(cat "$WORK/both")"
+fi
+
+it "FINDINGS の回では findings reported by で始まる完了行が出る"
+rc=0
+FAKE_CODEX_ANSWER='VERDICT: FINDINGS' run_review || rc=$?
+if [[ "$rc" -eq 1 ]] && grep -qE '^\[second-opinion\] findings reported by ' "$WORK/both" 2>/dev/null; then
+  pass
+else
+  fail "exit=$rc, 完了行: $(cat "$WORK/both")"
+fi
+
 it "codex が標準入力を受け取っている"
 if [[ -f "$RECORD/stdin" ]]; then pass; else fail "差分の渡し方が壊れています（stdin が記録されていない）"; fi
 
 it "標準入力の先頭が差分である（プロンプトが先に来ていない）"
-if head -n 1 "$RECORD/stdin" 2>/dev/null | grep -q '^diff --git'; then
+if [[ "$(sed -n 1p "$RECORD/stdin" 2>/dev/null)" == 'diff --git'* ]]; then
   pass
 else
   fail "先頭が差分でない: $(head -n 1 "$RECORD/stdin" 2>/dev/null)"

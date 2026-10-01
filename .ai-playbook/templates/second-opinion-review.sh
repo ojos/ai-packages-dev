@@ -257,7 +257,7 @@ stderr_file="$work_dir/stderr"
 trap 'rm -rf "$work_dir"' EXIT
 printf '%s\n' "$diff_text" > "$diff_file"
 
-# codex 専用の受け渡し口。他の 2 エンジンは使わないため /dev_null 相当のまま残す。
+# codex 専用の受け渡し口。他の 2 エンジンは使わないため /dev/null のまま残す。
 #
 # stdin_file: codex exec へ渡す標準入力の指し先。run のループが
 #   `<"$stdin_file"` で開くため、空にしない（空だとリダイレクトそのものが失敗する）。
