@@ -125,4 +125,26 @@ rc=0
 ) || rc=$?
 assert_eq "$rc" "0" "exit code"
 
+it "issue 番号を含む枝で gh が失敗しても、文脈なしで続行する（レビュー自体は落とさない）"
+# 上の検査は番号の無い枝なので gh が呼ばれない。こちらは番号付きの枝で回し、
+# 仕込んだ失敗する gh が実際に呼ばれたうえで続行することを確かめる。
+git -C "$REPO" checkout -q -b feat/77-gh-fails
+printf 'gh fails\n' > "$REPO/gh-fails.txt"
+git -C "$REPO" add gh-fails.txt
+rc=0
+(
+  cd "$REPO"
+  PATH="$failing_gh_bin:$FAKE_BIN:$PATH" \
+  GEMINI_API_KEY="dummy-for-selftest" \
+  FAKE_GEMINI_RECORD="$RECORD" \
+  FAKE_GEMINI_ANSWER='VERDICT: LGTM' \
+    bash "$REVIEW" --engine gemini > "$WORK/out" 2> "$WORK/err"
+) || rc=$?
+if [[ "$rc" -eq 0 ]] && grep -q 'issue #77 を引けませんでした（文脈なしでレビューします）' "$WORK/err"; then
+  pass
+else
+  fail "gh 失敗時の続行を確かめられない: exit=$rc, err: $(cat "$WORK/err")"
+fi
+git -C "$REPO" checkout -q -
+
 exit_with_result
