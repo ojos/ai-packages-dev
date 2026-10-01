@@ -252,9 +252,23 @@ image_supports_platform() {
   return 0
 }
 
+# ベースイメージの候補は版の名前（コードネーム）で固定する。`base:ubuntu` /
+# `base:debian` のような浮動タグは、上流が指す版を無告知で進める。上流が
+# フロートの指す先を 26.04 へ進めたことで、26.04 に無い apt-key を使う feature
+# （gcloud CLI など）の導入が exit 127 で落ちた実績があり、版の名前へ固定することで
+# 生成物が上流の都合で追随しないようにする。
+#
+# Ubuntu は noble（24.04 LTS）。Debian は着手時点で `base:debian` が指す先
+# （trixie=13）を実際に --with-gcp 付きで devcontainer build し、同じ apt-key
+# 欠落で exit 127 になることを確認した。1 つ前の安定版 bookworm（12）は apt-key を
+# 持ち、同じ構成でビルドが通ることも確認済みのため、こちらを候補にした。版を
+# 上げるときは、features がすべて新しい版で入ることを確かめてから候補を
+# 差し替えること（浮動タグが指す先が壊れていても、固定した候補まで無条件には
+# 追随しない）。
+BASE_IMAGE_CANDIDATES="mcr.microsoft.com/devcontainers/base:noble mcr.microsoft.com/devcontainers/base:bookworm"
+
 select_base_image() {
   local platform os arch
-  local candidates
   local image
 
   if [[ -n "$BASE_IMAGE_OVERRIDE" ]]; then
@@ -267,10 +281,8 @@ select_base_image() {
   os="${platform%/*}"
   arch="${platform#*/}"
 
-  candidates="mcr.microsoft.com/devcontainers/base:ubuntu mcr.microsoft.com/devcontainers/base:debian"
-
   if command -v docker >/dev/null 2>&1; then
-    for image in $candidates; do
+    for image in $BASE_IMAGE_CANDIDATES; do
       if image_supports_platform "$image" "$os" "$arch"; then
         BASE_IMAGE="$image"
         echo "[bootstrap] base-image=auto:$BASE_IMAGE ($os/$arch)"
@@ -279,7 +291,7 @@ select_base_image() {
     done
   fi
 
-  BASE_IMAGE="mcr.microsoft.com/devcontainers/base:ubuntu"
+  BASE_IMAGE="${BASE_IMAGE_CANDIDATES%% *}"
   echo "[bootstrap] WARN: no compatible manifest check result; fallback base-image=$BASE_IMAGE ($os/$arch)" >&2
 }
 
@@ -417,6 +429,9 @@ TMPL
       cat <<'TMPL'
 services:
   app:
+    # 版の名前（コードネーム）で固定している。浮動タグ（ubuntu / debian / latest /
+    # タグ無し）へ戻さないこと。版を上げるときは、features がすべて新しい版で
+    # 入ることを確かめてから変えること。
     image: __BASE_IMAGE__
     volumes:
       - ..:/workspaces/__PROJECT_NAME__:cached

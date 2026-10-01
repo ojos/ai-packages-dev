@@ -1,6 +1,9 @@
 services:
   app:
-    image: mcr.microsoft.com/devcontainers/base:ubuntu
+    # 版の名前（コードネーム）で固定している。浮動タグ（ubuntu / debian / latest /
+    # タグ無し）へ戻さないこと。版を上げるときは、features がすべて新しい版で
+    # 入ることを確かめてから変えること。
+    image: mcr.microsoft.com/devcontainers/base:noble
     volumes:
       - ..:/workspaces/ojos-ai-packages-dev:cached
       # docker-outside-of-docker feature 用（compose 利用時は feature 側の mounts が適用されないため明示）

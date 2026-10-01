@@ -41,7 +41,7 @@
 
 `doctor.sh` は `jq` を使います（`devcontainer.json` の JSON 妥当性検査と `dockerComposeFile` の読み取り）。
 
-`docker` は**任意**です。あればベースイメージの `os/arch` 適合を実際のマニフェストで判定し、無ければ既定の `mcr.microsoft.com/devcontainers/base:ubuntu` へフォールバックします（警告のみで停止しません）。
+`docker` は**任意**です。あればベースイメージの `os/arch` 適合を実際のマニフェストで判定し、無ければ既定の `mcr.microsoft.com/devcontainers/base:noble` へフォールバックします（警告のみで停止しません）。候補は版の名前（コードネーム）で固定しており、`ubuntu` / `debian` のような浮動タグは使いません（上流が指す版を無告知で進め、features の導入が壊れることがあるため）。
 
 ## 公開リリースからの利用
 
@@ -679,7 +679,7 @@ OAuth トークン（`CLAUDE_CODE_OAUTH_TOKEN`）を `remoteEnv` へ注入する
 1. `languages` には少なくとも 1 つの対応言語（node|go|python|php|rust|ruby）を含めること
 2. 指定した各言語に対応する feature を devcontainer.json に追加すること
 3. `remoteEnv` は `LOCAL_WORKSPACE_FOLDER` のみを持つこと（ホスト資格情報の注入経路を作らない）
-4. ベースイメージは Docker サーバーの `os/arch` から自動判定（既定: `mcr.microsoft.com/devcontainers/base:ubuntu`、必要に応じて `--base-image` で上書き可能）
+4. ベースイメージは Docker サーバーの `os/arch` から自動判定（候補は版の名前で固定、既定: `mcr.microsoft.com/devcontainers/base:noble`、必要に応じて `--base-image` で上書き可能）
 
 ## 期待される出力
 
