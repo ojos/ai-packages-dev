@@ -130,7 +130,7 @@ CI が緑でも、Copilot の指摘が 0 件でも、読まずにマージしま
 
 - `gh pr diff N` を読み、`pr-review.md` の順に確認します（受け入れ条件との対応、次に高リスクの観点）。
 - **その差分がこの PR のものか確かめます。** 直前のブランチに居たまま `git checkout -b` すると、前の PR のコミットが相乗りします。この場合、レビューも CI も緑のまま通ってしまいます。`commits` の見出しと `gh pr diff N --name-only`（変更したファイルの一覧）が、PR の主題と合っているかを見ます。
-- 本文に `Closes #NNN` があるか確かめます。書かれていないと、マージしても issue が open のまま残ります。
+- 本文またはコミットメッセージのいずれかに `Closes #NNN` があるか確かめます（`commits` の `messageHeadline` / `messageBody` も見ます）。どちらにも書かれていないと、マージしても issue が open のまま残ります。コミットメッセージ側にも書く理由は `.ai-playbook/shared-ai-rules.md`「6. コミットメッセージ規約」のとおりです（PR 本文の `Closes` を GitHub が認識しないことがあるための保険）。
 
 ### 5. マージの前提を確かめる
 
