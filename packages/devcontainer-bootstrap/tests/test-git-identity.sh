@@ -30,6 +30,7 @@ out="$(new_workdir)/p"
 run_bootstrap "$out" >/dev/null 2>&1
 SETUP="$out/scripts/setup-git-identity.sh"
 VERIFY="$out/scripts/verify-commit-identity.sh"
+SELFTEST="$out/scripts/verify-commit-identity-selftest.sh"
 WF="$out/.github/workflows/identity-guard.yml"
 
 # ── ヘルパー ──────────────────────────────────────────────────────────────────
@@ -63,12 +64,23 @@ commit_as() {
         git commit --allow-empty -q -m "$msg" )
 }
 
+# commit_as に加えて Co-authored-by trailer を 1 つ足す。
+commit_as_with_coauthor() {
+  local dir="$1" ae="$2" ce="$3" msg="$4" coemail="$5"
+  ( cd "$dir" &&
+    env GIT_AUTHOR_NAME=A GIT_AUTHOR_EMAIL="$ae" GIT_COMMITTER_NAME=C GIT_COMMITTER_EMAIL="$ce" \
+        git commit --allow-empty -q -m "$msg"$'\n\n'"Co-authored-by: someone <${coemail}>" )
+}
+
 # ── 生成物の存在 ──────────────────────────────────────────────────────────────
 it "setup-git-identity.sh が生成される"
 assert_file_exists "$SETUP"
 
 it "verify-commit-identity.sh が生成される"
 assert_file_exists "$VERIFY"
+
+it "verify-commit-identity-selftest.sh が生成される"
+assert_file_exists "$SELFTEST"
 
 it "identity-guard.yml が生成される"
 assert_file_exists "$WF"
@@ -78,6 +90,9 @@ if bash -n "$SETUP" 2>/dev/null; then pass; else fail "syntax error"; fi
 
 it "verify-commit-identity.sh の構文が正しい"
 if bash -n "$VERIFY" 2>/dev/null; then pass; else fail "syntax error"; fi
+
+it "verify-commit-identity-selftest.sh の構文が正しい"
+if bash -n "$SELFTEST" 2>/dev/null; then pass; else fail "syntax error"; fi
 
 # ── on-attach 連携 ────────────────────────────────────────────────────────────
 it "on-attach.sh が setup-git-identity.sh を呼ぶ"
@@ -312,6 +327,49 @@ else
   fail "committer が GitHub でないのに noreply 形 author を通した (exit $vrc)"
 fi
 
+# ── GitHub 由来コミット（co-author への拡張） ─────────────────────────────────
+# マージした人と PR の作者が違う squash merge で、GitHub は作者を Co-authored-by に
+# 足す。author と同じ is_github_authored で co-author にも許可を広げる。
+it "committer が noreply@github.com なら noreply 形の co-author を通す"
+vr13="$(new_workdir)/vr13"; mk_repo "$vr13" verify-commit-identity.sh
+commit_as_with_coauthor "$vr13" "allowed@example.com" "noreply@github.com" gh4 \
+  "12345+someone@users.noreply.github.com"
+vo="$(cd "$vr13" && env ALLOWED_AUTHOR_EMAILS="allowed@example.com" \
+    bash scripts/verify-commit-identity.sh --full 2>&1)"; vrc=$?
+if [[ "$vrc" -eq 0 ]]; then
+  assert_contains "$vo" "IDENTITY_PASS" "noreply 経路の co-author 許可"
+else
+  fail "GitHub 由来の co-author が弾かれた (exit $vrc): $(printf '%s' "$vo" | tail -1)"
+fi
+
+it "co-author のローカル部に @ を含む noreply 形は拒否する"
+vr14="$(new_workdir)/vr14"; mk_repo "$vr14" verify-commit-identity.sh
+commit_as_with_coauthor "$vr14" "allowed@example.com" "noreply@github.com" gh5 \
+  "x@evil.com@users.noreply.github.com"
+vo="$(cd "$vr14" && env ALLOWED_AUTHOR_EMAILS="allowed@example.com" \
+    bash scripts/verify-commit-identity.sh --full 2>&1)"; vrc=$?
+if [[ "$vrc" -eq 1 ]]; then
+  assert_contains "$vo" "IDENTITY_FAIL" "co-author の @ 二重混入の拒否"
+else
+  fail "@ を 2 つ持つ co-author を通した (exit $vrc)"
+fi
+
+it "ローカルで作ったコミットの noreply 形 co-author は拒否する（広げすぎない）"
+# committer が許可 author email（= ローカルで作ったコミット）のとき、co-author だけ
+# noreply 形にして広げようとしても通ってはいけない。is_github_authored を co-author
+# へ適用する際、committer 条件を co-author ではなく「そのコミットの committer」に
+# 正しく縛れていることを確かめる。
+vr15="$(new_workdir)/vr15"; mk_repo "$vr15" verify-commit-identity.sh
+commit_as_with_coauthor "$vr15" "allowed@example.com" "allowed@example.com" gh6 \
+  "12345+someone@users.noreply.github.com"
+vo="$(cd "$vr15" && env ALLOWED_AUTHOR_EMAILS="allowed@example.com" \
+    bash scripts/verify-commit-identity.sh --full 2>&1)"; vrc=$?
+if [[ "$vrc" -eq 1 ]]; then
+  assert_contains "$vo" "IDENTITY_FAIL" "ローカルコミットへの拡張拒否"
+else
+  fail "ローカルで作ったコミットの noreply 形 co-author を通した (exit $vrc)"
+fi
+
 # ── ドメイン一括許可 ──────────────────────────────────────────────────────────
 it "'@example.com' 形のドメイン許可が効く"
 vr7="$(new_workdir)/vr7"; mk_repo "$vr7" verify-commit-identity.sh
@@ -407,6 +465,17 @@ else
   fail "完全一致の許可エントリが接尾辞一致として働いた (exit $vrc)"
 fi
 
+# ── 自己試験（verify-commit-identity-selftest.sh） ────────────────────────────
+it "生成された自己試験が、生成された verify-commit-identity.sh に対して exit 0 を返す"
+# 判定スクリプトが自分の置き場所のリポジトリへ cd する前提（$HERE/.. へ cd）なので、
+# scripts/ の 1 階層上に git リポジトリが要る。生成物ツリーそのものがそれを満たす。
+so="$(cd "$out" && bash scripts/verify-commit-identity-selftest.sh 2>&1)"; src=$?
+if [[ "$src" -eq 0 ]]; then
+  assert_contains "$so" "IDENTITY_SELFTEST_PASS" "自己試験の出力"
+else
+  fail "自己試験が非ゼロ終了 (exit $src): $(printf '%s' "$so" | tail -5)"
+fi
+
 # ── CI ワークフロー ───────────────────────────────────────────────────────────
 it "identity-guard.yml が pull_request と push(main) の 2 系統を張る"
 if grep -q 'pull_request:' "$WF" && grep -q 'push:' "$WF" && grep -q 'branches: \[main\]' "$WF"; then
@@ -421,8 +490,20 @@ if grep -q 'ALLOWED_AUTHOR_EMAILS: ${{ vars.ALLOWED_AUTHOR_EMAILS }}' "$WF"; the
 it "ワークフローは判定をシェルへ委譲する（verify-commit-identity.sh を呼ぶだけ）"
 if grep -q 'bash scripts/verify-commit-identity.sh' "$WF"; then pass; else fail "スクリプト呼び出しがない"; fi
 
+it "ワークフローは commit identity の検証より前に自己試験を回す"
+# grep -n の行番号を比べる。順序を強制するのは、判定ロジックが壊れた状態で
+# 検証ジョブへ入ることを防ぐため（自己試験が先でなければ、壊れた判定のまま
+# 本物の履歴を検査してしまう）。
+selftest_line="$(grep -n 'bash scripts/verify-commit-identity-selftest.sh' "$WF" | head -1 | cut -d: -f1)"
+verify_line="$(grep -n 'bash scripts/verify-commit-identity.sh' "$WF" | head -1 | cut -d: -f1)"
+if [[ -n "$selftest_line" && -n "$verify_line" && "$selftest_line" -lt "$verify_line" ]]; then
+  pass
+else
+  fail "自己試験の呼び出しが検証より後ろ、または見つからない (selftest=$selftest_line verify=$verify_line)"
+fi
+
 it "生成物に固有 email が焼き込まれていない"
-if grep -Eq '@(ojos|bascule)' "$SETUP" "$VERIFY" "$WF"; then
+if grep -Eq '@(ojos|bascule)' "$SETUP" "$VERIFY" "$SELFTEST" "$WF"; then
   fail "固有ドメインの email が生成物に含まれる"
 else
   pass

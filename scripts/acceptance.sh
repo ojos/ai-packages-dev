@@ -179,6 +179,12 @@ bash scripts/check-neutrality.sh
 #
 #   fail-closed のため、許可 email が解決できなければ落ちる。ローカルでは .env の
 #   GIT_IDENTITY_EMAIL が、CI ではリポジトリ変数 ALLOWED_AUTHOR_EMAILS が供給元。
+#
+# identity-guard.yml と同じく、判定そのものの自己試験を検証の前に回す。本物の
+# 履歴だけでは、落ちるべき形（squash merge で GitHub が足す Co-authored-by 等）が
+# ほとんど現れない。
+echo "[acceptance] (identity) commit identity selftest"
+bash scripts/verify-commit-identity-selftest.sh
 echo "[acceptance] (identity) commit identity guard"
 bash scripts/verify-commit-identity.sh
 

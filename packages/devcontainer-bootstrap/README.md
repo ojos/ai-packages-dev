@@ -596,9 +596,12 @@ VS Code は接続のたびにコンテナの `~/.docker/config.json` へ `credsS
   - committer には `noreply@github.com`（GitHub の squash merge / web UI）、Co-Authored-By には加えて `noreply@anthropic.com`（AI コーディング規約の trailer）を許可します。
   - 許可エントリには `@example.com` / `*@example.com` の形でドメイン一括指定を書けます。**この 2 形だけ**をドメイン指定として解釈し、それ以外は完全一致です（任意の glob を許すと、設定ミスの `*` 1 文字で全 email が通り検知層が無効化されるため）。`*` 単体は何も許可しません。ローカル部が 1 文字以上あり、かつ `@` を含まないことを要求します（`@example.com` という email そのものや、`attacker@untrusted.com@example.com` の形を通さないため）。
   - committer が `noreply@github.com` のコミットに限り、author が `<login>@users.noreply.github.com` の形であれば許可します。GitHub 側で「メールアドレスを非公開にする」を有効にしている利用者の PR マージ・web UI 編集に対応するためで、許可を committer に縛ることでローカルで作ったコミットには適用されません（ローカルの identity 適用漏れは従来どおり検知します）。
+  - 同じ条件（`is_github_authored`）を `Co-Authored-By` にも適用します。マージした人と PR の作者が違う squash merge では、GitHub がマージの瞬間に作者を `Co-authored-by` として足します。PR の検査（マージ前）では見えず、`push(main)` の全履歴検査で初めて現れる形です。
   - 使い方: 既定は `origin/main..HEAD`、範囲指定可、`--full` で HEAD の全履歴（`git rev-list --all` にはしない）。
+- `scripts/verify-commit-identity-selftest.sh`（判定の自己試験。CI と手元で共用）
+  - `verify-commit-identity.sh` の判定そのものが壊れていないかを、1 コミットだけの仕込みのリポジトリで確かめます。**本物の履歴だけでは、落ちるべき形（squash merge で足される `Co-authored-by` 等）がほとんど現れず、許可を広げすぎて「何でも通る」になっても気づけません。** `.github/workflows/identity-guard.yml` は `verify-commit-identity.sh` の検証より前にこれを呼びます。
 - `.github/workflows/identity-guard.yml`（CI）
-  - `pull_request`（PR の全コミット）と `push`（`main` の全履歴）の 2 系統で `verify-commit-identity.sh` を呼びます。直接 push こそが混入の原因なので `push(main)` を省略しません。判定はスクリプト側にあり、ワークフローは呼ぶだけです。
+  - `pull_request`（PR の全コミット）と `push`（`main` の全履歴）の 2 系統で、自己試験 → `verify-commit-identity.sh` の順に呼びます。直接 push こそが混入の原因なので `push(main)` を省略しません。判定はスクリプト側にあり、ワークフローは呼ぶだけです。
 
 ### 利用側の設定手順（許可 author email）
 
@@ -686,7 +689,7 @@ OAuth トークン（`CLAUDE_CODE_OAUTH_TOKEN`）を `remoteEnv` へ注入する
 - `scripts/load-project-env.sh`（プロジェクト `.env` の優先読み込み。下記参照）
 - `scripts/on-attach.sh`
 - `scripts/post-rebuild-check.sh`（永続 volume の実マウント検査を含む）
-- `scripts/setup-git-identity.sh` / `scripts/verify-commit-identity.sh`（git identity ガード。下記参照）
+- `scripts/setup-git-identity.sh` / `scripts/verify-commit-identity.sh` / `scripts/verify-commit-identity-selftest.sh`（git identity ガード。下記参照）
 - `.github/workflows/identity-guard.yml`（コミット identity の検証 CI。下記参照）
 - `scripts/verify.sh` / `scripts/acceptance.sh` / `scripts/loop-gate.sh`（ループコーディング支援。下記参照）
 - `scripts/check-no-secrets.sh`（機密混入の検知ゲート。`verify.sh` が受け入れ条件の手前で呼ぶ。下記参照）
@@ -889,6 +892,7 @@ github/gitignore のテンプレートは言語・OS・エディタの生成物�
 | `scripts/on-attach.sh` | そのまま書き出す | — |
 | `scripts/setup-git-identity.sh` | そのまま書き出す | — |
 | `scripts/verify-commit-identity.sh` | そのまま書き出す | — |
+| `scripts/verify-commit-identity-selftest.sh` | そのまま書き出す | — |
 | `scripts/verify.sh` | そのまま書き出す | — |
 | `scripts/acceptance-remote.sh` | そのまま書き出す（`--with-aws` / `--with-gcp` 選択時のみ配置） | — |
 | `scripts/acceptance.sh` | 生成時に展開 | 選択言語のマニフェストに応じた検証行。**生成後はプロジェクトが所有・編集します** |

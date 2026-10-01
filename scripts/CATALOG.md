@@ -32,6 +32,7 @@
 | `scripts/second-opinion-record.sh` | 第二意見の生の出力を記録し、head SHA 付きの PR コメントとして投稿する。`loop-gate.sh` が push 前に呼ぶ。正本は `.ai-playbook/templates/second-opinion-record.sh`。 |
 | `scripts/second-opinion-gate-exempt.sh` | 第二意見の記録を求めない PR（Dependabot 等）かを判定する本体。`.github/workflows/second-opinion-gate.yml` が呼ぶ。正本は `.ai-playbook/templates/second-opinion-gate-exempt.sh`（`tests/test-second-opinion-gate-exempt.sh` が表で確かめる）。 |
 | `scripts/verify-commit-identity.sh` | コミット履歴の identity 検証（email のみで判定）。CI（identity-guard）と手元で共用。 |
+| `scripts/verify-commit-identity-selftest.sh` | `verify-commit-identity.sh` の判定そのものを、仕込みのリポジトリで確かめる自己試験。`identity-guard.yml` / `acceptance.sh` が検証の前に呼ぶ。 |
 | `scripts/update-release-status.sh` | README のリリース状況更新。 |
 | `scripts/measure-agent-usage.sh` | サブエージェントの役割別トークン使用量を集計するレポート（合否判定はしない）。親セッションとサブエージェントの両方の記録を読み、全体内とサブエージェント内の 2 つの分母で比率を出す。 |
 | `scripts/confirm-merge-hook.sh` | マージ実行の前に確認を挟む PreToolUse フック（`.claude/settings.json` から `--with-claude` 連動で配線）。`gh pr merge` / REST の merge エンドポイントへの PUT / `mergePullRequest` を検知し `ask` を返す。既定の merge 方針（手動承認）を、呼びかけではなく機構で担保する。 |

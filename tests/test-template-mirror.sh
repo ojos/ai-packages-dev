@@ -108,6 +108,13 @@ BOOTSTRAP="$REPO_ROOT/packages/devcontainer-bootstrap/bootstrap.sh"
 #   同一であり、置換プレースホルダを 1 つも持たない。加えて、このリポジトリ自身の
 #   scripts/acceptance.sh がこの写しを呼ぶため、正本と写しがずれると「配布物では
 #   落ちるが手元では通る」壊れ方が生まれる。
+#
+#   verify-commit-identity-selftest.sh を MIRRORED に入れる理由: 判定対象
+#   （verify-commit-identity.sh の挙動）と同じく、検査する場合分けは生成条件に
+#   依らず全構成で同一であり、置換プレースホルダを 1 つも持たない。加えて、
+#   このリポジトリ自身の scripts/acceptance.sh がこの写しを呼ぶため、正本と
+#   写しがずれると「配布物では自己試験が壊れを検知するが手元では検知しない」
+#   状態が生まれる。
 MIRRORED_RELS='scripts/check-control-chars.sh
 scripts/check-no-secrets.sh
 scripts/check-shell-portability.sh
@@ -118,6 +125,7 @@ scripts/loop-gate.sh
 scripts/on-attach.sh
 scripts/setup-git-identity.sh
 scripts/verify-commit-identity.sh
+scripts/verify-commit-identity-selftest.sh
 scripts/verify.sh'
 
 # 検査対象外にする写し。すべて「正本が置換プレースホルダを持つ」ことが理由で、
