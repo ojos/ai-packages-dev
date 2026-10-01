@@ -149,11 +149,22 @@ cmd_save() {
     *) fail "--scope は staged か range:A..B です: $scope" ;;
   esac
 
-  cat > "$dir/output"
-  [[ -s "$dir/output" ]] || fail "第二意見の出力が空です。記録しても意味が無いため失敗させます。"
+  # **一時ファイルへ書いて確かめてから置き換える。** 既存の記録へ直接書くと、入力が空の
+  # ときや書き込みに失敗したときに、古い meta と空（または途中まで）の output の組が残る。
+  # 古い紐づけがまだ HEAD と一致していれば、`post` がその壊れた記録を投稿してしまう。
+  local tmp_output="$dir/output.tmp" tmp_meta="$dir/meta.tmp"
+  rm -f "$tmp_output" "$tmp_meta"
+  if ! cat > "$tmp_output"; then
+    rm -f "$tmp_output"
+    fail "第二意見の出力を書けません（$tmp_output）。既存の記録は変えていません。"
+  fi
+  if [[ ! -s "$tmp_output" ]]; then
+    rm -f "$tmp_output"
+    fail "第二意見の出力が空です。記録しても意味が無いため失敗させます。既存の記録は変えていません。"
+  fi
 
   # メタは KEY=VALUE の 1 行 1 項目。値に改行を含めない。
-  {
+  if ! {
     printf 'engine=%s\n' "$engine"
     printf 'verdict=%s\n' "$verdict"
     printf 'scope=%s\n' "$scope"
@@ -161,7 +172,16 @@ cmd_save() {
     printf 'bind_kind=%s\n' "$bind_kind"
     printf 'bind_value=%s\n' "$bind_value"
     printf 'saved_at=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  } > "$dir/meta"
+  } > "$tmp_meta"; then
+    rm -f "$tmp_output" "$tmp_meta"
+    fail "記録のメタを書けません（$tmp_meta）。既存の記録は変えていません。"
+  fi
+
+  # 置き換えは meta を先に消してから行う。途中で止まっても「meta が無い」側に倒れ、
+  # load_meta が「記録がありません」として扱う（古い meta と新しい output の組を作らない）。
+  rm -f "$dir/meta"
+  mv -f "$tmp_output" "$dir/output" || fail "記録を置き換えられません（output）。"
+  mv -f "$tmp_meta" "$dir/meta" || fail "記録を置き換えられません（meta）。"
 
   printf '[second-opinion-record] 記録しました: %s（%s=%s）\n' "$scope" "$bind_kind" "${bind_value:0:12}"
 }

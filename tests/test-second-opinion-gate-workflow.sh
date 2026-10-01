@@ -11,7 +11,8 @@
 #           記録するだけ
 #   sleep … 何もしない（猶予の 300 秒を待たない）
 #
-# 回すのは pull_request の経路だけである。掃き寄せも同じ judge を呼ぶ。
+# 回すのは pull_request の経路と、掃き寄せ（schedule）の経路である。掃き寄せは同じ judge を
+# 呼ぶので、ここで見るのは「判定するか、見送るか」の分かれ目（push の時刻の採り方）だけ。
 
 set -uo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
@@ -64,6 +65,8 @@ if [ "$method" = "POST" ]; then
   exit 0
 fi
 case "$path" in
+  */pulls\?*) file=pulls.json ;;
+  */commits/*/check-runs) file=checkruns.json ;;
   */pulls/*/commits) file=commits.json ;;
   */pulls/*) file=pr.json ;;
   */issues/*/comments) file=comments.json ;;
@@ -135,5 +138,40 @@ if [[ "$got" == failure ]]; then
 else
   fail "want=failure got=$(echo "$got" | tr '\n' ' ')"
 fi
+
+# ── 掃き寄せ（schedule）──────────────────────────────────────────────────────
+# sweep_case <名前> <期待する status> <check-run の開始時刻（無しは空）> <PR の更新時刻>
+# 記録は付けない。判定されれば failure、見送られれば none になる。
+sweep_case() {
+  local name="$1" want="$2" started="$3" updated="$4" fx="$WORK/fx" got
+  rm -rf "$fx"; mkdir -p "$fx"
+  printf '[{"number":1,"draft":false,"updated_at":"%s","head":{"sha":"%s","repo":{"full_name":"o/r"}}}]' \
+    "$updated" "$SHA" > "$fx/pulls.json"
+  if [[ -n "$started" ]]; then
+    printf '{"check_runs":[{"started_at":"%s"}]}' "$started" > "$fx/checkruns.json"
+  else
+    printf '{"check_runs":[]}' > "$fx/checkruns.json"
+  fi
+  printf '{"user":{"login":"someone"},"draft":false,"head":{"sha":"%s"}}' "$SHA" > "$fx/pr.json"
+  printf '[%s]' "$(commit someone someone false)" > "$fx/commits.json"
+  printf '[{"body":"関係ないコメント"}]' > "$fx/comments.json"
+  ( cd "$REPO_ROOT" && PATH="$WORK/bin:$PATH" FIXTURES="$fx" GH_TOKEN=x REPO=o/r EVENT=schedule \
+      PR_NUMBER= TRIGGER_SHA= RUN_URL=u bash "$WORK/run.sh" ) >/dev/null 2>&1 || true
+  got="$(cat "$fx/statuses" 2>/dev/null || echo none)"
+  it "$name"
+  if [[ "$got" == "$want" ]]; then
+    pass
+  else
+    fail "want=$want got=$(echo "$got" | tr '\n' ' ')"
+  fi
+}
+
+OLD_TIME="$(date -u -d '-1 hour' +%Y-%m-%dT%H:%M:%SZ)"
+NOW_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+sweep_case "掃き寄せ: check-run が猶予より前に始まっていれば判定する" failure "$OLD_TIME" "$OLD_TIME"
+# CI の無いプロジェクトや [skip ci] の push では check-run が 1 つも付かない。飛ばし続けると、
+# 掃き寄せが永久に判定しない（PR #365 の Copilot の指摘）。
+sweep_case "掃き寄せ: check-run が無くても、PR の更新が猶予より前なら判定する" failure "" "$OLD_TIME"
+sweep_case "掃き寄せ: check-run が無く、PR の更新が直近なら見送る" none "" "$NOW_TIME"
 
 exit_with_result

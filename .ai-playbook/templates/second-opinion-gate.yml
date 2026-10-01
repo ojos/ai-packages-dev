@@ -312,7 +312,7 @@ jobs:
             if ! prs="$(gh api --paginate "repos/${REPO}/pulls?state=open&per_page=100" \
               --jq '.[] | select(.head.repo != null and .head.repo.full_name == env.REPO)
                     | select(.draft == false)
-                    | "\(.number) \(.head.sha)"' 2>/dev/null)"; then
+                    | "\(.number) \(.head.sha) \(.updated_at)"' 2>/dev/null)"; then
               echo "::error::open な PR の一覧を取得できませんでした。1 本も判定していません。"
               exit 1
             fi
@@ -321,7 +321,7 @@ jobs:
               exit 0
             fi
             # while read はパイプの右に置かない（サブシェルで failed が残らない）。
-            while read -r pr sha; do
+            while read -r pr sha updated_at; do
               [ -n "$pr" ] || continue
               # push の時刻を、check-run の最も早い開始時刻から採る。
               # **`select(. != null)` を外さない。** queued や skipped の check-run は
@@ -336,9 +336,18 @@ jobs:
                 failed=1
                 continue
               fi
+              # **check-run が 1 つも無いときは、PR の更新時刻で代える。** 飛ばし続けると、
+              # CI の無いプロジェクトや `[skip ci]` の push では、掃き寄せが永久に判定しない
+              # （pull_request の契機を取りこぼした PR を拾う、という役目を果たせない）。
+              # 更新時刻は push の時刻より後にしかならない（push で必ず更新され、コメント等で
+              # さらに進む）ので、**判定が遅れることはあっても、猶予より早まることはない。**
               if [ -z "$pushed_at" ]; then
-                echo "PR #${pr}: head（${sha:0:7}）に check-run がまだありません。掃き寄せでは判定しません。"
-                continue
+                if [ -z "$updated_at" ]; then
+                  echo "PR #${pr}: head（${sha:0:7}）の check-run も PR の更新時刻も読めません。掃き寄せでは判定しません。"
+                  continue
+                fi
+                echo "PR #${pr}: head（${sha:0:7}）に check-run がありません。PR の更新時刻（${updated_at}）を push の時刻の代わりに使います。"
+                pushed_at="$updated_at"
               fi
               age=$(( now - $(date -u -d "$pushed_at" +%s) ))
               if [ "$age" -lt "$GRACE_SEC" ]; then

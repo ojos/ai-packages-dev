@@ -219,10 +219,15 @@ resolve_review_range() {
 # **レビューしていない head が「レビュー済み」として通る。**
 #
 # **判定が出たことは、出力の中の完了の行で見る。** second-opinion-review.sh は
-# 終わりに必ず `[second-opinion] LGTM (...)` か、どちらかの語順で「findings」と
-# 「reported」を含む行（`findings reported by ...` / `... reported findings`。
-# チャンク分割の有無で語順が変わる）を出す。どちらも無ければ、途中で落ちたという
-# ことなので記録しない。
+# 終わりに必ず最終集計の行を 1 つ出す。形は次の 3 つで、チャンク分割の有無で変わる。
+#   `[second-opinion] LGTM (...)`
+#   `[second-opinion] findings reported by N/M runs ...`（分割なし）
+#   `[second-opinion] N/M chunks reported findings ...`（分割あり）
+# どれも無ければ、途中で落ちたということなので記録しない。
+#
+# **行頭に固定し、チャンクごとの集計行に一致させない。** 分割時は各チャンクの後に
+# `[second-opinion] chunk i/N: findings reported by ...` が出る。これを完了とみなすと、
+# 後続のチャンクで CLI が落ちた未完了のレビューでも記録が残り、確認側が緑になる。
 #
 # **完了の行を要求するのは既定の reviewer のときだけである。** 差し替えた reviewer
 # （LOOP_GATE_REVIEW_CMD）は当然この綴りを出さないので、要求すると**正常に終わった
@@ -244,7 +249,11 @@ record_second_opinion() {
   [[ -f "$HERE/second-opinion-record.sh" ]] || return 0
 
   if [[ "$require_marker" -eq 1 ]] \
-    && ! grep -q -e '\[second-opinion\] LGTM ' -e 'findings reported' -e 'reported findings' "$capture"; then
+    && ! grep -q -E \
+      -e '^\[second-opinion\] LGTM \(' \
+      -e '^\[second-opinion\] findings reported by ' \
+      -e '^\[second-opinion\] [0-9]+/[0-9]+ chunks reported findings' \
+      "$capture"; then
     echo "[loop-gate] 第二意見は判定に到達しませんでした（実行失敗）。記録は残しません。" >&2
     echo "[loop-gate] 記録が無いので、push すると確認側が赤を出します。原因を直してから回し直してください。" >&2
     return 0
