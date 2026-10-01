@@ -26,8 +26,10 @@
 #   3. 落ちたときに直す先が違う。あちらは bootstrap.sh、こちらは規範パッケージの雛形と
 #      .github/workflows/。テスト名で切り分けられるほうが次に踏んだ人を遠回りさせない。
 #
-# 対象を .yml に限る理由: 規範パッケージの雛形のうち、採用側が編集しないまま完成品と
-# して使うのはこの 2 本だけである。他の雛形（entry.md / project-ai-rules.md /
+# 対象は .yml と、MIRRORED_SCRIPTS に挙げたスクリプトに限る。規範パッケージの雛形の
+# うち、採用側が編集しないまま完成品として使うのはこれらだけである（第二意見の記録と、
+# 記録を求めない PR の判定。どちらも確認側のワークフローと対で動くので、片方だけ
+# 古いと判定が食い違う。#361）。他の雛形（entry.md / project-ai-rules.md /
 # claude-skill-intake.md / second-opinion-review.sh）は導入先が自分の事情で書き換える前提で、
 # 逐語一致は原理的に成立しない。実例として scripts/second-opinion-review.sh の写しは CLI の
 # 導入手段を案内する 1 行だけ雛形と異なる（雛形側は特定の導入手段を持たないため）。
@@ -50,7 +52,14 @@ README="$REPO_ROOT/.ai-playbook/README.md"
 
 # 一致を必須にする雛形。写しとバイト一致すべきで、ずれたら追随漏れ。
 MIRRORED_YMLS='copilot-review.yml
-review-gate.yml'
+review-gate.yml
+second-opinion-gate.yml'
+
+# 一致を必須にするスクリプトの雛形。.yml と同じく、README の導入手順が示す置き先の写しと
+# バイト一致すべきもの。second-opinion-review.sh は導入先が書き換える前提なので含めない
+# （冒頭の注記）。
+MIRRORED_SCRIPTS='second-opinion-record.sh
+second-opinion-gate-exempt.sh'
 
 # 検査対象外にする雛形。
 #
@@ -179,6 +188,40 @@ for name in $MIRRORED_YMLS; do
   it "$name の正本と $dest_rel がバイト一致する"
   if [[ ! -s "$src" ]]; then
     fail "前段で正本の検査に失敗しているため照合できない"
+  elif cmp -s "$src" "$copy"; then
+    pass
+  else
+    detail="$(diff "$src" "$copy" | head -n 12 | tr '\n' '/')"
+    fail "雛形と写しが食い違う（両方を同時に直す）: $detail"
+  fi
+done
+
+for name in $MIRRORED_SCRIPTS; do
+  src="$TEMPLATES_DIR/$name"
+
+  it "$name の正本がシェルスクリプトの形をしている"
+  if [[ ! -s "$src" ]]; then
+    fail "正本が見つからないか空: $src"
+  elif [[ "$(sed -n 1p "$src")" != '#!'* ]]; then
+    fail "正本の先頭に shebang が無い（シェルスクリプトではない可能性）: $src"
+  else
+    pass
+  fi
+
+  it "$name の置き先を README の導入手順から一意に取れる"
+  dest_rel="$(readme_dest "$name")"
+  if [[ -n "$dest_rel" ]]; then
+    pass
+  else
+    fail "README の導入手順から 'cp .ai-playbook/templates/$name <置き先>' を一意に取れない（手順が消えたか、置き先が複数ある）"
+    continue
+  fi
+
+  copy="$REPO_ROOT/$dest_rel"
+
+  it "$name の正本と $dest_rel がバイト一致する"
+  if [[ ! -f "$copy" ]]; then
+    fail "README の導入手順が示す置き先に写しが無い: $copy"
   elif cmp -s "$src" "$copy"; then
     pass
   else
