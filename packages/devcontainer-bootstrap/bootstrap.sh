@@ -7299,6 +7299,7 @@ playbook_installed_rel_paths() {
       'CLAUDE.md' \
       '.github/copilot-instructions.md' \
       'scripts/second-opinion-review.sh' \
+      'scripts/second-opinion-schema.json' \
       'scripts/second-opinion-record.sh' \
       'scripts/second-opinion-gate-exempt.sh' \
       '.github/workflows/second-opinion-gate.yml'
@@ -7361,6 +7362,12 @@ install_playbook_rules() {
   if [[ -f "$OUTPUT_DIR/scripts/second-opinion-review.sh" ]]; then
     chmod +x "$OUTPUT_DIR/scripts/second-opinion-review.sh"
   fi
+
+  # JSON スキーマ方式で判定するエンジン（antigravity / codex）が読む回答の形。
+  # second-opinion-review.sh と対で配置する——片方だけ置くと、スキーマを探して
+  # 落ちる経路だけが残る。実行属性は不要（JSON であり実行対象ではない）。
+  tpl="$(require_playbook_template second-opinion-schema.json)"
+  apply_file_with_policy "$tpl" "$OUTPUT_DIR/scripts/second-opinion-schema.json"
 
   # 第二意見を配置するときは、回したことの記録と、回し忘れを確認する側もあわせて
   # 配置する。片方だけ置くと「第二意見はあるが、回したか誰も確かめていない」状態が

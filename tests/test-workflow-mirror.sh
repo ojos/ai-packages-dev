@@ -59,6 +59,11 @@ MIRRORED_YMLS='second-opinion-gate.yml'
 MIRRORED_SCRIPTS='second-opinion-record.sh
 second-opinion-gate-exempt.sh'
 
+# 一致を必須にする JSON の雛形。second-opinion-review.sh（JSON スキーマ方式で判定する
+# エンジン）が読む回答の形そのものなので、.sh と同じく導入先が書き換える前提ではない
+# ——内容が 1 文字でもずれれば、判定基準（category の enum）が雛形と写しで食い違う。
+MIRRORED_JSONS='second-opinion-schema.json'
+
 # 検査対象外にする雛形。
 #
 # 除外が成立する条件は 1 つだけ:「このリポジトリがその workflow を採用していない」
@@ -205,6 +210,44 @@ for name in $MIRRORED_SCRIPTS; do
     fail "正本が見つからないか空: $src"
   elif [[ "$(sed -n 1p "$src")" != '#!'* ]]; then
     fail "正本の先頭に shebang が無い（シェルスクリプトではない可能性）: $src"
+  else
+    pass
+  fi
+
+  it "$name の置き先を README の導入手順から一意に取れる"
+  dest_rel="$(readme_dest "$name")"
+  if [[ -n "$dest_rel" ]]; then
+    pass
+  else
+    fail "README の導入手順から 'cp .ai-playbook/templates/$name <置き先>' を一意に取れない（手順が消えたか、置き先が複数ある）"
+    continue
+  fi
+
+  copy="$REPO_ROOT/$dest_rel"
+
+  it "$name の正本と $dest_rel がバイト一致する"
+  if [[ ! -f "$copy" ]]; then
+    fail "README の導入手順が示す置き先に写しが無い: $copy"
+  elif cmp -s "$src" "$copy"; then
+    pass
+  else
+    detail="$(diff "$src" "$copy" | head -n 12 | tr '\n' '/')"
+    fail "雛形と写しが食い違う（両方を同時に直す）: $detail"
+  fi
+done
+
+for name in $MIRRORED_JSONS; do
+  src="$TEMPLATES_DIR/$name"
+
+  it "$name の正本が JSON スキーマの形をしている"
+  # .json には shebang の検査が当てはまらない（MIRRORED_SCRIPTS 用の検査はシェル
+  # スクリプト前提）。代わりに「jq で読める」ことと「JSON Schema の最低限の形
+  # （type と properties を持つ）」を見る。空ファイルや別物を掴んだまま照合へ
+  # 進むと、「空と空を比べて緑」や「別物同士が一致している」で通ってしまう。
+  if [[ ! -s "$src" ]]; then
+    fail "正本が見つからないか空: $src"
+  elif ! jq -e '.type == "object" and has("properties")' "$src" >/dev/null 2>&1; then
+    fail "正本が JSON スキーマの形をしていない（jq で読めない、または type/properties が無い）: $src"
   else
     pass
   fi
