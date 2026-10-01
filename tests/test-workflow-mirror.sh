@@ -51,9 +51,7 @@ TEMPLATES_DIR="$REPO_ROOT/.ai-playbook/templates"
 README="$REPO_ROOT/.ai-playbook/README.md"
 
 # 一致を必須にする雛形。写しとバイト一致すべきで、ずれたら追随漏れ。
-MIRRORED_YMLS='copilot-review.yml
-review-gate.yml
-second-opinion-gate.yml'
+MIRRORED_YMLS='second-opinion-gate.yml'
 
 # 一致を必須にするスクリプトの雛形。.yml と同じく、README の導入手順が示す置き先の写しと
 # バイト一致すべきもの。second-opinion-review.sh は導入先が書き換える前提なので含めない
@@ -68,9 +66,12 @@ second-opinion-gate-exempt.sh'
 # なるはずで、バイト一致を免れる理由が無い。下の検査がこの条件を機械で守るので、
 # 「採用しているが一致させたくない」ものをここへ入れても通らない。
 #
-# 現時点で該当は無い。追加するときは上記の条件を満たすことを確かめ、理由をここへ
-# 併記する。除外は「検査していない」ではなく「検査対象外と判断した」ことを示す。
-EXCLUDED_YMLS=''
+# copilot-review.yml / review-gate.yml: リモート最終ゲートを任意の層へ改めた
+# （ojos/ai-packages-dev#364）ことに合わせ、このリポジトリ自身は Copilot code
+# review を撤退した。雛形としては opt-in のまま残るが、この開発リポジトリの
+# .github/workflows/ には写しが無いので、一致必須の対象から外す。
+EXCLUDED_YMLS='copilot-review.yml
+review-gate.yml'
 
 # ── 抽出 ──────────────────────────────────────────────────────────────────────
 

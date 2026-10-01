@@ -100,7 +100,7 @@ fi
 
 # ── 文書の主張と workflow の実態を突き合わせる ────────────────────────────────
 #
-# CONTRIBUTING.md は「fork からの PR で CI は通り、review-gate / copilot-review は
+# CONTRIBUTING.md は「fork からの PR で CI は通り、second-opinion-gate は
 # 落ちる」と述べている。**その根拠は workflow の宣言である**（fork からの PR には
 # 読み取り専用のトークンしか渡らず、secrets も渡らない）。
 #
@@ -155,9 +155,9 @@ else
   pass
 fi
 
-it "落ちるという主張の根拠: review-gate / copilot-review が書き込み権限を要する"
+it "落ちるという主張の根拠: second-opinion-gate が書き込み権限を要する"
 MISSING_WRITE=""
-for wf in review-gate.yml copilot-review.yml; do
+for wf in second-opinion-gate.yml; do
   if [[ ! -f "$WF_DIR/$wf" ]]; then
     MISSING_WRITE="$MISSING_WRITE $wf(無い)"
   elif [[ -z "$(declares_write "$WF_DIR/$wf")" ]]; then
@@ -172,11 +172,11 @@ fi
 
 it "同じ判定が、書き込み権限を宣言するものとしないものを区別する（対照群）"
 # 「常に空」でも「常に当たる」でも上の 2 件は通ってしまう形にしないための対照群。
-# ci.yml は宣言しない側、review-gate.yml は宣言する側で、同じ関数を通す。
-if [[ -z "$(declares_write "$WF_DIR/ci.yml")" ]] && [[ -n "$(declares_write "$WF_DIR/review-gate.yml")" ]]; then
+# ci.yml は宣言しない側、second-opinion-gate.yml は宣言する側で、同じ関数を通す。
+if [[ -z "$(declares_write "$WF_DIR/ci.yml")" ]] && [[ -n "$(declares_write "$WF_DIR/second-opinion-gate.yml")" ]]; then
   pass
 else
-  fail "判定が区別できていない（ci.yml と review-gate.yml で同じ結果になった）"
+  fail "判定が区別できていない（ci.yml と second-opinion-gate.yml で同じ結果になった）"
 fi
 
 # fork からの PR に secrets が渡らない前提そのものを固定する。
