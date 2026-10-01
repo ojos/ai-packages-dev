@@ -151,6 +151,42 @@ it "上流のままなら他ブランチの成果を巻き込むことを、同�
 names="$(cd "$repo" && git diff --name-only origin/feat..HEAD | tr '\n' ',')"
 assert_contains "$names" "main-only.txt" "上流起点の差分"
 
+# ── 上流が既定ブランチで、ゲートの最中に既定ブランチが進んだ ────────────────
+
+it "上流（既定ブランチ）が分岐点より先へ進んだら、範囲の起点を分岐点の SHA にする"
+# `git checkout -b feat --track origin/main` のように既定ブランチを上流にして切った
+# ブランチで、別の PR が既定ブランチへ入った状態。upstream..HEAD は `git diff` では
+# 両端のツリーの差になり、既定ブランチ側の新しい変更を取り消す差分が混ざる。
+# `git log` の意味では上流に無いコミットはこのブランチの分だけなので、
+# range_includes_base_commits はこれを検出できない。
+repo="$(new_workdir)/upstream-advanced"
+mk_repo "$repo" "$(new_workdir)/origin.git" main
+in_repo "$repo" "git remote set-head origin main"
+in_repo "$repo" "git checkout -q -b feat --track origin/main && printf 'own\n' > own.txt && git add own.txt && git $GIT_AUTHOR commit -q -m own"
+# 別の PR が既定ブランチへ入る（このブランチは取り込んでいない）。
+in_repo "$repo" "git checkout -q main && printf 'other\n' > main-new.txt && git add main-new.txt && git $GIT_AUTHOR commit -q -m other && git push -q origin main && git checkout -q feat"
+out_txt="$(run_resolve "$repo")"
+mb="$(cd "$repo" && git merge-base origin/main HEAD)"
+assert_eq "$(field "$out_txt" RANGE)" "$mb..HEAD" "上流が進んだときの範囲"
+
+it "上流が進んだために起点を変えた理由を出力する"
+assert_contains "$(field "$out_txt" REASON)" "has advanced beyond the merge-base" "範囲変更の理由"
+
+it "分岐点起点なら、既定ブランチ側だけの変更が差分に入らず、自分の変更は残る"
+names="$(cd "$repo" && git diff --name-only "$(field "$out_txt" RANGE)" | tr '\n' ',')"
+if printf '%s' "$names" | grep -q 'main-new.txt'; then
+  fail "既定ブランチ側だけの変更が範囲へ混ざっている: $names"
+elif printf '%s' "$names" | grep -q 'own.txt'; then
+  pass
+else
+  fail "このブランチ自身の変更が範囲から落ちている: $names"
+fi
+
+it "上流の先端のままなら、既定ブランチ側の変更を取り消す差分が混ざることを、同じ状態で確認する"
+# 修正前の挙動の対照。ここが混ざらないなら、上のケースは「たまたま」通っている。
+names="$(cd "$repo" && git diff --name-only origin/main..HEAD | tr '\n' ',')"
+assert_contains "$names" "main-new.txt" "上流の先端起点の差分"
+
 # ── 上流あり・fast-forward で取り込み済み（マージコミットが無い） ─────────────
 
 it "fast-forward で取り込んだ場合も汚染として扱う"
