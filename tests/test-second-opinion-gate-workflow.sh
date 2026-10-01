@@ -83,26 +83,51 @@ SHA=0123456789abcdef0123456789abcdef01234567
 # commit <author> <committer> <verified>
 commit() { printf '{"author":{"login":"%s"},"committer":{"login":"%s"},"commit":{"verification":{"verified":%s}}}' "$1" "$2" "$3"; }
 
-# case <名前> <期待する status（無しは none）> <PR の著者> <記録があるか yes/no> <コミットの JSON...>
+# record_comment <login> <author_association> [sha]
+# 記録のコメントは本物の API と同じく、書き手の login と author_association を持つ（#370）。
+record_comment() { printf '{"user":{"login":"%s"},"author_association":"%s","body":"<!-- second-opinion sha=%s -->\\nLGTM"}' "$1" "$2" "${3:-$SHA}"; }
+
+# case <名前> <期待する status（無しは none）> <PR の著者> <記録があるか> <コミットの JSON...>
+#
+# <記録があるか> は次のいずれか:
+#   no           … 記録が無い
+#   yes          … PR の作者自身の記録がある
+#   stranger     … 無関係な人（author_association=NONE）の印つきコメントだけがある
+#   collaborator … PR の作者ではない協力者（author_association=COLLABORATOR）の
+#                  印つきコメントだけがある（#370: 数えるのは作者自身の記録だけ）
+#   both         … stranger の印つきコメントと、作者自身の記録が混在する
 case_() {
   local name="$1" want="$2" author="$3" recorded="$4"; shift 4
   local fx="$WORK/fx" got
   rm -rf "$fx"; mkdir -p "$fx"
   printf '{"user":{"login":"%s"},"draft":false,"head":{"sha":"%s"}}' "$author" "$SHA" > "$fx/pr.json"
   local IFS=,; printf '[%s]' "$*" > "$fx/commits.json"; unset IFS
-  if [[ "$recorded" == yes ]]; then
-    printf '[{"body":"<!-- second-opinion sha=%s -->\\nLGTM"}]' "$SHA" > "$fx/comments.json"
-  else
-    printf '[{"body":"関係ないコメント"}]' > "$fx/comments.json"
-  fi
+  case "$recorded" in
+    yes) printf '[%s]' "$(record_comment "$author" OWNER)" > "$fx/comments.json" ;;
+    stranger) printf '[%s]' "$(record_comment mallory NONE)" > "$fx/comments.json" ;;
+    collaborator) printf '[%s]' "$(record_comment helper COLLABORATOR)" > "$fx/comments.json" ;;
+    both) printf '[%s,%s]' "$(record_comment mallory NONE)" "$(record_comment "$author" OWNER)" > "$fx/comments.json" ;;
+    *) printf '[{"user":{"login":"%s"},"author_association":"OWNER","body":"関係ないコメント"}]' "$author" > "$fx/comments.json" ;;
+  esac
   ( cd "$REPO_ROOT" && PATH="$WORK/bin:$PATH" FIXTURES="$fx" GH_TOKEN=x REPO=o/r EVENT=pull_request \
-      PR_NUMBER=1 TRIGGER_SHA="$SHA" RUN_URL=u bash "$WORK/run.sh" ) >/dev/null 2>&1 || true
+      PR_NUMBER=1 TRIGGER_SHA="$SHA" RUN_URL=u bash "$WORK/run.sh" ) >"$fx/out" 2>&1 || true
   got="$(cat "$fx/statuses" 2>/dev/null || echo none)"
   it "$name"
   if [[ "$got" == "$want" ]]; then
     pass
   else
     fail "want=$want got=$(echo "$got" | tr '\n' ' ')"
+  fi
+  # 作者以外が書いた印つきコメントがあるときは、判定が変わらなくても ::warning:: が出る
+  # （#370。stranger / collaborator / both のいずれも、数えない印が存在する）。
+  local want_warn=no got_warn=no
+  case "$recorded" in stranger|collaborator|both) want_warn=yes ;; esac
+  grep -q '以外が書いたもの、または書き手の立場が COLLABORATOR 未満' "$fx/out" && got_warn=yes
+  it "$name（作者以外の印の警告）"
+  if [[ "$got_warn" == "$want_warn" ]]; then
+    pass
+  else
+    fail "警告 want=$want_warn got=$got_warn"
   fi
 }
 
@@ -121,6 +146,15 @@ case_ "Dependabot 名義でも署名が無ければ failure" failure "$DEP" no \
 case_ "Dependabot 名義で committer が web-flow でも未検証なら failure" failure "$DEP" no \
   "$(commit "$DEP" web-flow false)"
 
+# 記録の書き手（#370）。public なので誰でも印つきのコメントを書ける。数えるのは
+# PR の作者自身の記録だけである。
+case_ "PR の作者以外（無関係な人）が書いた印だけなら failure" failure someone stranger \
+  "$(commit someone someone false)"
+case_ "PR の作者以外の協力者が書いた印だけでも failure（作者自身の記録だけを数える）" failure someone collaborator \
+  "$(commit someone someone false)"
+case_ "作者自身の記録があれば、他人の印が混ざっていても success" success someone both \
+  "$(commit someone someone false)"
+
 # SHA が変わったら古いコメントで通らないこと（#361 の受け入れ条件）。記録の印は
 # 直前の head（OLD_SHA）に紐づいており、いまの head（SHA）とは一致しない。
 OLD_SHA=fedcba9876543210fedcba9876543210fedcba9
@@ -129,7 +163,9 @@ fx="$WORK/fx"
 rm -rf "$fx"; mkdir -p "$fx"
 printf '{"user":{"login":"someone"},"draft":false,"head":{"sha":"%s"}}' "$SHA" > "$fx/pr.json"
 printf '[%s]' "$(commit someone someone false)" > "$fx/commits.json"
-printf '[{"body":"<!-- second-opinion sha=%s -->\\nLGTM"}]' "$OLD_SHA" > "$fx/comments.json"
+# 書き手は PR の作者自身（someone/OWNER）にする。ここで見たいのは SHA の不一致だけで、
+# 作者の条件（#370）に引っかけて意図とは別の理由で failure にしない。
+printf '[%s]' "$(record_comment someone OWNER "$OLD_SHA")" > "$fx/comments.json"
 ( cd "$REPO_ROOT" && PATH="$WORK/bin:$PATH" FIXTURES="$fx" GH_TOKEN=x REPO=o/r EVENT=pull_request \
     PR_NUMBER=1 TRIGGER_SHA="$SHA" RUN_URL=u bash "$WORK/run.sh" ) >/dev/null 2>&1 || true
 got="$(cat "$fx/statuses" 2>/dev/null || echo none)"
