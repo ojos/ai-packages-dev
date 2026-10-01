@@ -130,7 +130,7 @@ CI が緑でも、Copilot の指摘が 0 件でも、読まずにマージしま
 
 - `gh pr diff N` を読み、`pr-review.md` の順に確認します（受け入れ条件との対応、次に高リスクの観点）。
 - **その差分がこの PR のものか確かめます。** 直前のブランチに居たまま `git checkout -b` すると、前の PR のコミットが相乗りします。この場合、レビューも CI も緑のまま通ってしまいます。`commits` の見出しと `gh pr diff N --name-only`（変更したファイルの一覧）が、PR の主題と合っているかを見ます。
-- 本文に `Closes #NNN` があるか確かめます。書かれていないと、マージしても issue が open のまま残ります。
+- 本文とコミットメッセージ（`commits` の `messageHeadline` / `messageBody`）の**両方**に `Closes #NNN` があるか確かめます。本文に無ければ、マージしても issue が open のまま残ります。コミットメッセージ側は、PR 本文の `Closes` を GitHub が認識しないことがあるための保険です（`.ai-playbook/shared-ai-rules.md`「6. コミットメッセージ規約」）。**コミットメッセージ側に無ければ、8 で squash の本文に `Closes #NNN` を足してマージします。** 保険のためだけにコミットを積み直して CI をやり直すことはしません。
 
 ### 5. マージの前提を確かめる
 
@@ -181,6 +181,8 @@ gh pr merge N --squash --match-head-commit "$sha"
 
 該当する行が出たら、その指示を除いた本文をファイルに書き、`gh pr merge N --squash --match-head-commit "$sha" --body-file <そのファイル>` で本文を差し替えてマージします。
 
+4 でコミットメッセージ側に `Closes #NNN` が無かった場合も、同じく `--body-file` で本文を差し替えます。本文には `Closes #NNN` の行を足します（CI を飛ばす指示があれば、それも除きます）。squash の本文をどう組み立てる設定であっても、`--body-file` で渡した本文がマージコミットのメッセージになるため、そこから issue が閉じます。
+
 - **確認が、この手順での承認です。** マージ実行の前に確認を挟む機構（`.ai-playbook/role-contracts/closer.md`「手動承認は機構で保証する」）がマージの直前に確認を挟みます。承認されればマージが実行されます。
 - **head が動いていたためにマージが失敗したら、新しい SHA で打ち直しません。** 確かめていないコミットが入ったということなので、止めて報告します。
 - **拒否されたら、再試行しません。REST や GraphQL といった別の経路も使いません。** そこで止めて、理由を聞きます。
@@ -189,7 +191,7 @@ gh pr merge N --squash --match-head-commit "$sha"
 
 ### 9. マージ後を確かめる
 
-- `closingIssuesReferences` に挙がっている issue が閉じたかを見ます。
+- `closingIssuesReferences` に挙がっている issue と、本文・コミットメッセージの `Closes #NNN` に書かれた issue の**両方**が閉じたかを見ます。GitHub が `Closes` を認識しなかったときは `closingIssuesReferences` が空になるため、それだけを見ると、閉じていない issue を確かめないまま通り抜けます。閉じていなければ、マージコミットを示すコメントを付けて手で閉じ、報告に書きます。
 - main で走る CI の実行を、**マージコミットの SHA で特定してから**、最後まで見届けます。「main の最新の実行」で選ぶと、直後に入った別のマージの実行を見てしまい、この PR の反映を確かめたことになりません。対象の workflow ファイル名はプロジェクト層で定義します（例: `ci.yml`）。
 
   ```bash
