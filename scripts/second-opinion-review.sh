@@ -350,7 +350,7 @@ resolve_issue_context() {
     echo "[second-opinion] gh が無いため issue #$num を引けません（文脈なしでレビューします）" >&2
     return 0
   fi
-  if ! body="$(gh issue view "$num" --json title,body --jq '"# issue #" + (.title) + "\n\n" + .body' 2>/dev/null)"; then
+  if ! body="$(gh issue view "$num" --json title,body --jq '"# issue #" + (.title // "") + "\n\n" + (.body // "")' 2>/dev/null)"; then
     echo "[second-opinion] issue #$num を引けませんでした（文脈なしでレビューします）" >&2
     return 0
   fi

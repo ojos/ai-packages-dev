@@ -126,8 +126,8 @@ MAX_ARG_BYTES=$(( $(getconf PAGE_SIZE 2>/dev/null || getconf PAGESIZE 2>/dev/nul
 
 # antigravity は JSON スキーマ方式で判定する（判定トークンではなく、回答の
 # .structured_output.findings の category から落とす）。$2 は呼び出し元の
-# 可読性のために残すが、"LGTM"（互換の既定値）と "FINDINGS"（落とす category を
-# 1 件持つ回答）の 2 値だけを実際の応答へ変換する。
+# 応答の種類を選ぶ。"fail" は落とす category を 1 件持つ回答、それ以外（既定の
+# "pass"）は findings が空の回答を返す。
 # antigravity 用の単発 JSON stub。mk_cli_stub と同じ記録ファイル（`.argv` /
 # `.stdin` / `.count`、連番ではなく毎回上書き）を使うが、応答は judgement 方式が
 # JSON スキーマであることに合わせ、包み（`.structured_output`）付きの JSON を返す。

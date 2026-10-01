@@ -506,6 +506,9 @@ exit 1
 FAILGH
 chmod +x "$failing_gh_bin/gh"
 
+# **issue 番号を含む枝で回す。** 番号が無い枝では gh がそもそも呼ばれず、仕込んだ
+# 失敗する gh が実行されないまま通ってしまう（検査が空振りする）。
+git -C "$REPO" checkout -q -b feat/77-gh-fails
 rm -f "$RECORD/stdin"
 printf 'hello\nworld\nagain\n' > "$REPO/sample.txt"
 git -C "$REPO" add sample.txt
@@ -517,10 +520,12 @@ rc=0
   FAKE_CODEX_ANSWER='{"findings":[]}' \
     bash "$REVIEW" --engine codex > "$WORK/out" 2> "$WORK/err"
 ) || rc=$?
-if [[ "$rc" -eq 0 ]] && [[ -f "$RECORD/stdin" ]]; then
+if [[ "$rc" -eq 0 ]] && [[ -f "$RECORD/stdin" ]] \
+  && grep -q 'issue #77 を引けませんでした（文脈なしでレビューします）' "$WORK/err"; then
   pass
 else
-  fail "gh 失敗時にレビューそのものが止まった: exit=$rc, err: $(cat "$WORK/err")"
+  fail "gh 失敗時の続行を確かめられない: exit=$rc, err: $(cat "$WORK/err")"
 fi
+git -C "$REPO" checkout -q -
 
 exit_with_result
