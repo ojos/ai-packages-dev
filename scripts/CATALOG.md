@@ -11,7 +11,7 @@
 
 | ファイル | 概要 |
 |---|---|
-| `scripts/second-opinion-review.sh` | 別ベンダーのモデルによる第二意見（クロスモデル二段ゲートの2段目）。`--engine` で実行 CLI（gemini / antigravity）を選ぶ。 |
+| `scripts/second-opinion-review.sh` | 別ベンダーのモデルによる第二意見（クロスモデル二段ゲートの2段目）。`--engine` で実行 CLI（gemini / antigravity / codex）を選ぶ。 |
 | `scripts/fix-mount-owner.sh` | 永続 volume のマウント先を remoteUser 所有へ戻す（postCreate の先頭）。 |
 | `scripts/install-ai-tools.sh` | AI CLI ツール導入（claude / gemini は npm、agy は配布元のインストーラ）。あわせて agy のテレメトリを既定で無効化する。 |
 | `scripts/load-project-env.sh` | プロジェクト .env を source せず安全にパースして export（ホスト env を後勝ちで上書き）。 |

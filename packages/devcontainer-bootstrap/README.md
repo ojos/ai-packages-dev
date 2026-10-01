@@ -223,6 +223,7 @@ fi
 | `--with-claude` | Claude Code CLI（`@anthropic-ai/claude-code`）+ `anthropic.claude-code` 拡張 + `~/.claude` 永続化 + マージ確認フック（下記） |
 | `--with-gemini` | Gemini CLI（`@google/gemini-cli`）+ `Google.gemini-cli-vscode-ide-companion` 拡張 + `~/.gemini` 永続化 |
 | `--with-antigravity` | Antigravity CLI（`agy`）+ `~/.gemini` 永続化 + テレメトリ無効化。**VS Code 拡張は入りません**。**OAuth のみ**で初回に対話ログインが要ります（下記） |
+| `--with-codex` | Codex CLI（`@openai/codex`）+ `~/.codex` 永続化。**VS Code 拡張は入りません**。**ChatGPT アカウントの OAuth または API キー**で初回に対話ログインが要ります（下記）。版の下限があり、下回っていれば入れ替えます |
 | `--with-copilot` | GitHub Copilot CLI（`@github/copilot`）+ `github.copilot` / `github.copilot-chat` 拡張 + `~/.copilot` 永続化 |
 | `--with-copilot-review` | リモート最終ゲートのワークフロー 2 本（`.github/workflows/copilot-review.yml` / `.github/workflows/review-gate.yml`）と、確認側が判定に使うスクリプト 2 本（`scripts/review-usable.sh` / `scripts/check-review-usable.sh`）。**ローカルの装備は一切入りません。** 規範の配置が前提（下記） |
 
@@ -231,6 +232,7 @@ fi
 - **Terraform は cloud 随伴**: `--with-aws` または `--with-gcp` のいずれかを指定すると、Terraform feature + `hashicorp.terraform` 拡張が **1 回だけ** 同梱されます（両指定でも 1 回、cloud 無指定なら入りません）。
 - **AI ツールは明示 opt-in のみ**: `--with-<ai>` を指定したときだけ、CLI 導入・VS Code 拡張・設定ディレクトリの永続化（compose named volume）を行います。トークン有無による自動導入は行いません。
 - **`--with-gemini` と `--with-antigravity` は永続 volume を共有**: `agy` は資格情報を `~/.gemini/antigravity-cli/` に置くため、両者は同じ `~/.gemini` を使います。**どちらか一方でも指定すれば `gemini-storage` が 1 つだけ**作られ、両方指定しても重複しません。認証手段が違う（API キー / OAuth）ので、フラグは束ねず独立にしてあります。片方だけ使う構成をそのまま表現できます。
+- **`--with-codex` は専用の永続 volume**: Codex CLI は資格情報を `~/.codex/auth.json` に置くため、`gemini` / `antigravity` とは別の `codex-storage` を使います。認証手段（ChatGPT アカウントの OAuth または API キー）も設定ディレクトリも他の AI CLI と独立なので、既存のどの装備とも共有しません。
 - **資格情報はホストから注入しません**: `remoteEnv` が運ぶのは作業ディレクトリのパス（`LOCAL_WORKSPACE_FOLDER`）だけです。認証はコンテナ内で行い、その状態を named volume に残します。唯一の例外は GitHub CLI で、PAT を `.env` の `GH_TOKEN` へ置けます（下記「[資格情報の扱い](#資格情報の扱い)」）。
 
 ### オプション入力
@@ -305,9 +307,11 @@ fi
 bash scripts/fix-mount-owner.sh && bash scripts/install-ai-tools.sh
 ```
 
-導入するのは `--with-claude` / `--with-gemini` / `--with-antigravity` / `--with-copilot` で**明示選択した AI CLI のみ**です。トークン有無での自動導入は行いません（明示 opt-in）。何も選択しなければ AI CLI は導入されません。
+導入するのは `--with-claude` / `--with-gemini` / `--with-antigravity` / `--with-codex` / `--with-copilot` で**明示選択した AI CLI のみ**です。トークン有無での自動導入は行いません（明示 opt-in）。何も選択しなければ AI CLI は導入されません。
 
 `--with-antigravity` だけは npm 配布ではないため、配布元のインストーラを取得して `~/.local/bin/agy` へ置きます。あわせて**テレメトリを無効化**します（下記）。
+
+`--with-codex` は npm 配布（`@openai/codex`）ですが、**版の下限を検査します**。第二意見レビューの既定モデルを引ける版より古い CLI が既に入っている場合は、「在るから飛ばす」ではなく入れ替えます。認証は ChatGPT アカウントの OAuth または API キーで、導入だけでは使えません。初回は対話で `codex login` を通してください。
 
 ## ループコーディング支援
 

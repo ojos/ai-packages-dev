@@ -79,6 +79,7 @@ options:
   --with-claude               Install Claude Code CLI + extension (persisted)
   --with-gemini               Install Gemini CLI + extension (persisted)
   --with-antigravity          Install Antigravity CLI (agy; OAuth only, persisted)
+  --with-codex                Install Codex CLI (ChatGPT OAuth or API key; persisted)
   --with-copilot              Install GitHub Copilot CLI + extensions (persisted)
   --with-copilot-review       Place the remote review-gate workflows only
                               (requires rules placement; no local tooling)
@@ -137,6 +138,11 @@ while [[ $# -gt 0 ]]; do
     # 使いたい構成が実在する。束ねると使わない CLI が必ず入る。永続 volume だけは
     # 共有する（agy は資格情報を ~/.gemini/antigravity-cli/ へ置くため）。
     --with-antigravity) WITH_SET+=("antigravity"); shift ;;
+    # codex も npm 配布だが版の下限があり install_if_missing の同型に乗らない
+    # （antigravity と同じ理由で独立フラグにする。下記 build_codex_block）。
+    # 認証は OAuth（ChatGPT アカウント）または API キーで、永続 volume は専用に切る
+    # （~/.codex。gemini / antigravity の ~/.gemini とは別の資格情報置き場のため）。
+    --with-codex)        WITH_SET+=("codex"); shift ;;
     --with-copilot)     WITH_SET+=("copilot"); shift ;;
     # ローカル装備（--with-copilot）とは別のフラグにする。両者は性質が違い
     # （手元の開発ツール / リモートのレビュー機構）、片方だけ欲しい構成が実在する。
@@ -689,6 +695,7 @@ install_if_missing() {
 }
 
 __AGY_FUNCTION_LINES__
+__CODEX_FUNCTION_LINES__
 __AI_INSTALL_LINES__
 echo "[install-ai-tools] done"
 TMPL
@@ -6079,6 +6086,10 @@ ai_config_dir() {
     # gemini と同じディレクトリを共有する。専用の volume を切ると
     # ~/.gemini と ~/.gemini/antigravity-cli の入れ子マウントになる。
     antigravity) printf '/home/vscode/.gemini' ;;
+    # codex は資格情報（~/.codex/auth.json）を専用のディレクトリへ置く。
+    # gemini / antigravity とは別の認証手段（ChatGPT アカウントの OAuth または
+    # API キー）なので、既存のどの装備とも設定ディレクトリを共有しない。
+    codex)   printf '/home/vscode/.codex' ;;
     *)       printf '' ;;
   esac
 }
@@ -6097,10 +6108,11 @@ ai_storage_name() {
 }
 
 # with-set のうち AI ツールだけを選択順に列挙する。
-# antigravity は末尾に置く。既存構成の生成結果（install 行の並び）を変えないため。
+# antigravity / codex は末尾に置く。既存構成の生成結果（install 行の並び）を変えない
+# ため（codex は antigravity よりも後に足した装備なので、さらに末尾へ置く）。
 selected_ai_tools() {
   local t
-  for t in claude gemini copilot antigravity; do
+  for t in claude gemini copilot antigravity codex; do
     has_with "$t" && printf '%s\n' "$t"
   done
 }
@@ -6459,11 +6471,46 @@ build_with_extensions_block() {
 # .env.example の __SECOND_OPINION_ENGINE_LINES__。第二意見のエンジン選択。
 #
 # 既定は gemini で、指定しなければ挙動は変わらない。したがってこの記入欄が要るのは
-# antigravity を選べる構成だけで、--with-antigravity のときだけ出す。
-# 常時出すと、agy を導入していない生成物に「選べないエンジン」の記入欄が残る。
+# antigravity / codex を選べる構成だけで、どちらかを --with-* で選んだときだけ出す。
+# 常時出すと、それらを導入していない生成物に「選べないエンジン」の記入欄が残る。
 build_second_opinion_engine_block() {
-  has_with antigravity || { printf ''; return; }
-  cat <<'ENGTMPL'
+  has_with antigravity || has_with codex || { printf ''; return; }
+
+  if has_with antigravity && has_with codex; then
+    cat <<'ENGTMPL'
+
+# 第二意見レビューのエンジン（gemini | antigravity | codex）。既定は gemini。
+#
+# antigravity（Antigravity CLI）は Google アカウントの OAuth 認証で、API キーに
+# 対応しない。初回は対話で `agy` を起動してログインすること。
+#
+# codex（Codex CLI）は ChatGPT アカウントの OAuth 認証（または API キー）。初回は
+# 対話で `codex login` を通すこと。
+#
+# いずれも GEMINI_API_KEY は使わないため、gemini 以外へ寄せる場合は空のままでよい。
+SECOND_OPINION_ENGINE=
+
+# 第二意見のモデル（空なら各エンジンの既定）。codex の既定は gpt-6-sol
+# （scripts/second-opinion-review.sh が持つ）。gemini / antigravity は空のままで
+# 各 CLI の既定。
+SECOND_OPINION_MODEL=
+ENGTMPL
+  elif has_with codex; then
+    cat <<'ENGTMPL'
+
+# 第二意見レビューのエンジン（gemini | codex）。既定は gemini。
+#
+# codex（Codex CLI）は ChatGPT アカウントの OAuth 認証（または API キー）。初回は
+# 対話で `codex login` を通すこと。GEMINI_API_KEY は使わないため、codex へ寄せる
+# 場合は空のままでよい。
+SECOND_OPINION_ENGINE=
+
+# 第二意見のモデル（空なら各エンジンの既定）。codex の既定は gpt-6-sol
+# （scripts/second-opinion-review.sh が持つ）。gemini は空のままで CLI の既定。
+SECOND_OPINION_MODEL=
+ENGTMPL
+  else
+    cat <<'ENGTMPL'
 
 # 第二意見レビューのエンジン（gemini | antigravity）。既定は gemini。
 #
@@ -6472,10 +6519,16 @@ build_second_opinion_engine_block() {
 # 使わないため、こちらへ寄せる場合は空のままでよい。
 SECOND_OPINION_ENGINE=
 ENGTMPL
+  fi
 }
 
 # agy は npm 配布ではないため install_if_missing の同型に乗らない。専用の関数
 # （__AGY_FUNCTION_LINES__ が展開する）を呼ぶ。呼び出しは導入とオプトアウトの 2 つ。
+#
+# codex は npm 配布だが、第二意見の既定モデルを引ける版の下限があり、同じく
+# install_if_missing の同型に乗らない（専用の関数は __CODEX_FUNCTION_LINES__ が
+# 展開する build_codex_block）。呼び出しは導入の 1 つだけ（agy のテレメトリ無効化に
+# 相当するものは codex には無い）。
 build_ai_install_block() {
   local tool spec cmd pkg out=""
   while IFS= read -r tool; do
@@ -6483,6 +6536,10 @@ build_ai_install_block() {
     if [[ "$tool" == "antigravity" ]]; then
       out+="install_agy_if_missing"$'\n'
       out+="disable_agy_telemetry"$'\n'
+      continue
+    fi
+    if [[ "$tool" == "codex" ]]; then
+      out+="install_codex_if_missing"$'\n'
       continue
     fi
     spec="$(ai_cli_spec "$tool")"
@@ -6604,6 +6661,75 @@ disable_agy_telemetry() {
 AGYTMPL
 }
 
+# install-ai-tools.sh の __CODEX_FUNCTION_LINES__。codex の導入（版の下限つき）の
+# 関数定義。--with-codex が無ければ空を返し、生成物に codex 関連は 1 行も入らない。
+#
+# 内容は開発リポジトリの scripts/install-ai-tools.sh と同じ性質を持たせる
+# （tests/test-codex-install-mirror.sh が関数本体のバイト一致を照合する）。
+build_codex_block() {
+  has_with codex || { printf ''; return; }
+  cat <<'CODEXTMPL'
+# codex（Codex CLI）は npm 配布だが、install_if_missing の同型には乗らない。
+#
+# 版が要件になる。第二意見レビューの既定モデル gpt-6-sol は、ある版から CLI の
+# 一覧に出るようになった綴りで、それより古い CLI は引けない。install_if_missing は
+# 「PATH に codex が在れば飛ばす」ので、古い版が先に入っている環境は更新されず、
+# レビューのたびに失敗する。だから在るときも版を見る。
+#
+# 認証は ChatGPT アカウントの OAuth（または API キー）で、導入だけでは使えない。
+# 初回に対話で `codex login` を通す必要がある。資格情報は ~/.codex/auth.json に
+# 置かれ、この devcontainer では ~/.codex が named volume（codex-storage）なので
+# rebuild しても消えない。
+CODEX_MIN_VERSION="0.156.0"
+
+# 版の比較。`sort -V` は BSD 系に無い版があるので使わない。3 つの数へ分けて
+# 桁ごとに比べる。
+#
+# 読めない綴りは「古い」として扱う（fail-closed）。入れ替えは冪等で副作用が
+# 小さい一方、読めないまま通すと、要件を満たさない CLI で回り続けることになる。
+codex_version_is_old() {
+  local have="$1" want="$2"
+  awk -v have="$have" -v want="$want" '
+    function num(s, part) { split(s, a, "."); return a[part] + 0 }
+    BEGIN {
+      if (have !~ /^[0-9]+\.[0-9]+\.[0-9]+$/) { exit 0 }   # 読めない → 古い扱い
+      for (i = 1; i <= 3; i++) {
+        h = num(have, i); w = num(want, i)
+        if (h > w) { exit 1 }
+        if (h < w) { exit 0 }
+      }
+      exit 1
+    }'
+}
+
+install_codex_if_missing() {
+  local have=""
+  if command -v codex >/dev/null 2>&1; then
+    # `codex --version` は "codex-cli <版>" の形。数だけを取る。
+    have="$(codex --version 2>/dev/null | tr ' ' '\n' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | head -1 || true)"
+    if ! codex_version_is_old "$have" "$CODEX_MIN_VERSION"; then
+      echo "[install-ai-tools] codex ${have} already installed (>= $CODEX_MIN_VERSION), skipping"
+      return 0
+    fi
+    echo "[install-ai-tools] codex ${have:-（版を読めません）} は $CODEX_MIN_VERSION 未満です。入れ替えます ..."
+  else
+    echo "[install-ai-tools] installing @openai/codex ..."
+  fi
+
+  npm install -g "@openai/codex@latest"
+
+  have="$(codex --version 2>/dev/null | tr ' ' '\n' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | head -1 || true)"
+  if codex_version_is_old "$have" "$CODEX_MIN_VERSION"; then
+    echo "[install-ai-tools] error: 導入後も codex の版が $CODEX_MIN_VERSION 未満です（実際: ${have:-不明}）" >&2
+    echo "                   第二意見の既定のモデル gpt-6-sol を引けません。" >&2
+    return 1
+  fi
+  echo "[install-ai-tools] codex installed: $(command -v codex) (${have})"
+  echo "[install-ai-tools] codex は認証が別です。初回は対話で 'codex login' を通してください。"
+}
+CODEXTMPL
+}
+
 # 永続 volume のマウント先の所有権修復行を生成する
 # （fix-mount-owner.sh の __MOUNT_OWNER_LINES__）。空の named volume を root:root で
 # 初回マウントした際の書き込み不能を復旧する。対象は AI ツールに限らない。
@@ -6667,6 +6793,7 @@ build_with_check_block() {
   has_with gemini  && checks+="gemini "
   has_with copilot && checks+="copilot "
   has_with antigravity && checks+="agy "
+  has_with codex && checks+="codex "
   for cmd in $checks; do
     out+="command -v $cmd >/dev/null 2>&1 && echo \"[check] $cmd OK\" || echo \"[check] $cmd missing\""$'\n'
   done
@@ -6701,6 +6828,7 @@ render_content() {
   subst_block __MOUNT_OWNER_LINES__ "$(build_mount_owner_block)"
   subst_block __SECOND_OPINION_ENGINE_LINES__ "$(build_second_opinion_engine_block)"
   subst_block __AGY_FUNCTION_LINES__ "$(build_agy_block)"
+  subst_block __CODEX_FUNCTION_LINES__ "$(build_codex_block)"
   subst_block __AI_INSTALL_LINES__ "$(build_ai_install_block)"
   subst_block __VOLUME_MOUNTS__ "$(build_volume_mounts_block)"
   subst_block __VOLUME_SECTION__ "$(build_volume_section_block)"

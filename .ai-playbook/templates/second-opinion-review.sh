@@ -9,18 +9,21 @@
 #   bash scripts/second-opinion-review.sh                      # ステージ済み差分をレビュー
 #   bash scripts/second-opinion-review.sh --range main..HEAD
 #   bash scripts/second-opinion-review.sh --engine antigravity
+#   bash scripts/second-opinion-review.sh --engine codex
 #   SECOND_OPINION_RUNS=3 bash scripts/second-opinion-review.sh
 #
 # エンジン:
-#   認証手段の違う 2 つの CLI から選べる。判定ロジックは 1 か所に集約し、エンジン
+#   認証手段の違う 3 つの CLI から選べる。判定ロジックは 1 か所に集約し、エンジン
 #   ごとに複製しない。複製すると、判定の修正が片側にしか効かない状態が生まれる。
 #   エンジンごとに違うのは「CLI の名前」「認証」「差分の渡し方」の 3 点だけである。
 #
 #   gemini       gemini CLI。API キー認証（GEMINI_API_KEY）。既定
 #   antigravity  Antigravity CLI（agy）。Google アカウントの OAuth 認証。API キー非対応
+#   codex        Codex CLI（codex exec）。ChatGPT アカウントの OAuth 認証（または
+#                API キー）。費用の形が他と違い、固定の月額契約内に収まる
 #
 # 判定のぶれについて:
-#   このレビューは非決定的で、同じ差分でも実行のたびに結果が変わる。どちらの CLI にも
+#   このレビューは非決定的で、同じ差分でも実行のたびに結果が変わる。いずれの CLI にも
 #   temperature / seed に相当するオプションは無く、フラグでは決定化できない。
 #   1 回だけ実行して LGTM を通過とみなすと、見落としをそのまま通す。
 #
@@ -98,7 +101,7 @@ usage: bash scripts/second-opinion-review.sh [options]
 
 options:
   --range <git-range>   レビュー対象の差分範囲（既定: ステージ済み差分）
-  --engine <name>       レビューを実行する CLI（gemini | antigravity。既定: gemini。
+  --engine <name>       レビューを実行する CLI（gemini | antigravity | codex。既定: gemini。
                         SECOND_OPINION_ENGINE でも指定可）
   --model <name>        使用モデル（既定: 各 CLI の既定。SECOND_OPINION_MODEL でも指定可）
   --runs <n>            実行回数（既定: 1。SECOND_OPINION_RUNS でも指定可）
@@ -108,6 +111,8 @@ options:
 engines:
   gemini       gemini CLI。API キー認証（GEMINI_API_KEY）
   antigravity  Antigravity CLI（agy）。Google アカウントの OAuth 認証。API キー非対応
+  codex        Codex CLI（codex exec）。ChatGPT アカウントの OAuth 認証（または API キー）。
+               モデルの既定は gpt-6-sol（--model / SECOND_OPINION_MODEL で上書き可）
 EOF
 }
 
@@ -172,8 +177,31 @@ case "$ENGINE" in
     # agy は OAuth のみで API キーに対応しない。鍵の有無は検査しない。資格情報は
     # CLI が自身の保存先に持つため、このスクリプトからは可視でも制御対象でもない。
     ;;
+  codex)
+    command -v codex >/dev/null 2>&1 || {
+      echo "error: codex (Codex CLI) not found. codex を導入してログインしてから再実行してください（導入手段はプロジェクト層で定義します）" >&2
+      exit 1
+    }
+    # codex は OAuth（ChatGPT アカウント）と API キーの両方を受けるため、どちらで
+    # 入っているかを問わず、資格情報の有無だけを見る。`codex login status` が
+    # 有無を終了コードで返す。
+    #
+    # ここで見ないと失敗が遅い。未ログインのまま exec へ進むと、CLI は再接続を
+    # 試したうえで認証エラーで落ちる。レビューの前段で時間を捨て、しかも
+    # 出てくるのは「回答が空」に近い形なので、ログインしていないことが読み取りにくい。
+    codex login status >/dev/null 2>&1 || {
+      echo "error: codex にログインしていません。'codex login' を対話で 1 度通してから再実行してください" >&2
+      exit 1
+    }
+    # モデルの既定を CLI に任せない。CLI 既定のモデルは Plus 等の低い枠に当たりやすく、
+    # 既定のまま回すと、枠に当たって初めて分かる。gpt-6-sol は同じ契約でも枠が広い
+    # （プロジェクト層で確かめた既定値）。
+    if [[ -z "$MODEL" ]]; then
+      MODEL="gpt-6-sol"
+    fi
+    ;;
   *)
-    echo "error: unknown engine: $ENGINE（gemini | antigravity）" >&2
+    echo "error: unknown engine: $ENGINE（gemini | antigravity | codex）" >&2
     exit 1
     ;;
 esac
@@ -219,22 +247,33 @@ EOF
 
 echo "[second-opinion] reviewing $scope (engine=$ENGINE, runs=$RUNS)"
 
-# 一時領域は両エンジンで使う。gemini は差分の受け渡しに、antigravity は分割した
-# チャンクの置き場に、両者とも stderr の退避に。テンプレートを明示する。BSD 系
-# （macOS）の mktemp はテンプレート無しの呼び出しを受け付けず、この雛形は
-# Linux 以外へ配布されうる。
+# 一時領域は全エンジンで使う。gemini は差分の受け渡しに、antigravity は分割した
+# チャンクの置き場に、codex は標準入力へ流すファイルと -o の回答先に、全エンジンとも
+# stderr の退避に。テンプレートを明示する。BSD 系（macOS）の mktemp はテンプレート
+# 無しの呼び出しを受け付けず、この雛形は Linux 以外へ配布されうる。
 work_dir="$(mktemp -d "${TMPDIR:-/tmp}/second-opinion.XXXXXX")"
 diff_file="$work_dir/review.diff"
 stderr_file="$work_dir/stderr"
 trap 'rm -rf "$work_dir"' EXIT
 printf '%s\n' "$diff_text" > "$diff_file"
 
-# 差分の渡し方はエンジンごとに違う。**どちらも「差分が加工されずモデルへ届くこと」を
-# 実測で確かめたうえで選んでいる。** 片方の作法をもう片方へ流用しない。
+# codex 専用の受け渡し口。他の 2 エンジンは使わないため /dev_null 相当のまま残す。
 #
-# chunk_paths は「1 回の CLI 呼び出しへ渡す差分の単位」の一覧。gemini は常に
-# 1 要素（差分全体を指す一時ファイル）で、分割の対象外（ファイル参照で渡すため
-# 引数長の制限を受けない）。antigravity だけが複数要素になりうる。
+# stdin_file: codex exec へ渡す標準入力の指し先。run のループが
+#   `<"$stdin_file"` で開くため、空にしない（空だとリダイレクトそのものが失敗する）。
+# answer_file: codex の「最後のメッセージ」（-o の出力）の置き場所。空なら未使用。
+#   消すのは run のループの側（build_args 相当の組み立ては 1 チャンクに 1 回しか
+#   走らないため、ここで消すだけでは --runs 2 以上のときに前の回の回答を読む）。
+stdin_file="/dev/null"
+answer_file=""
+
+# 差分の渡し方はエンジンごとに違う。**いずれも「差分が加工されずモデルへ届くこと」を
+# 実測で確かめたうえで選んでいる。** 1 つの作法を他へ流用しない。
+#
+# chunk_paths は「1 回の CLI 呼び出しへ渡す差分の単位」の一覧。gemini と codex は
+# 常に 1 要素（差分全体を指す一時ファイル）で、分割の対象外（gemini はファイル参照、
+# codex は標準入力で渡すため、どちらも引数長の制限を受けない）。antigravity だけが
+# 複数要素になりうる。
 chunk_paths=()
 case "$ENGINE" in
   gemini)
@@ -447,6 +486,20 @@ case "$ENGINE" in
       fi
     fi
     ;;
+  codex)
+    # codex exec は `-` を指定すると、指示文そのものを標準入力から読む。差分と
+    # プロンプトを「差分が先・プロンプトが後」の順で 1 つのファイルへまとめ、
+    # それを丸ごと標準入力へ流す（gemini / antigravity と同じ並びを保つ）。
+    #
+    # プロンプトを引数に置いて差分だけ stdin へ流す形は採らない。codex は
+    # プロンプトが引数にもあり stdin も渡されていると、stdin を後ろへ追記して
+    # 扱う作りのため、それだと並びが逆になり、プロンプト冒頭の「上記は git の
+    # 差分です」が指す先が無くなる。
+    #
+    # 引数に載せないので単一引数の上限を受けない。分割しない（1 チャンク）。
+    CLI="codex"
+    chunk_paths=("$diff_file")
+    ;;
 esac
 
 # 通過判定は「出力の最後の行に置かれた判定トークン」で行う。
@@ -544,6 +597,30 @@ $PROMPT")
 $PROMPT")
       [[ -n "$MODEL" ]] && args=(--model "$MODEL" "${args[@]}")
       ;;
+    codex)
+      # 判定に使う入力を -o（最後のメッセージ）へ固定する。stdout の形には頼らない
+      # ——codex exec は見出し・設定・受け取ったプロンプトの復唱を stderr へ出すが、
+      # 回答を stdout のどこへ何行で書くかは CLI の版で変わりうる。-o は
+      # 「エージェントの最後のメッセージ」を書く明示の口なので、ここを読む。
+      #
+      # 失敗すれば -o のファイルは作られない。run の呼び出しが終了コードで先に
+      # 落ちるため、無いファイルを読んで「回答が空」と報告する経路には入らない。
+      answer_file="$work_dir/codex-answer.txt"
+
+      # 分割なし（chunk_path が diff_file 本体）のときは $diff_text をそのまま使う。
+      chunk_text="$diff_text"
+      [[ "$chunk_path" == "$diff_file" ]] || {
+        IFS= read -r -d '' chunk_text < "$chunk_path" || true
+      }
+      stdin_file="$work_dir/codex-input.txt"
+      printf '%s\n\n%s\n' "$chunk_text" "$PROMPT" > "$stdin_file"
+
+      # --sandbox read-only: モデルにツール実行は要らない（プロンプトでも禁じている）。
+      #   既定に頼らず明示する。
+      # --color never: ANSI のエスケープが混じると、判定トークンの行が一致しなくなる。
+      args=(exec - --sandbox read-only --color never -o "$answer_file")
+      [[ -n "$MODEL" ]] && args+=(--model "$MODEL")
+      ;;
   esac
 
   findings=0
@@ -551,16 +628,34 @@ $PROMPT")
   while [[ "$run" -lt "$RUNS" ]]; do
     run=$((run + 1))
 
+    # 回答のファイルは呼び出しの直前に消す。args の組み立ては 1 チャンクに 1 回しか
+    # 走らないので、そこで消すだけでは --runs 2 以上のときに 2 回目が 1 回目の回答を
+    # 読む——0 で終わりながら -o を書かなかった回が、前の回の判定で通ってしまう。
+    [[ "$ENGINE" == "codex" && -n "$answer_file" ]] && rm -f "$answer_file"
+
     # CLI の警告や進捗表示は「回答」ではない。判定へ混ぜると、警告が 1 行出ただけで
     # LGTM が指摘ありに化け、ゲートが常に赤くなる（実測: 端末の色数や ripgrep 不在の
-    # 警告が stderr に出る）。判定はモデルの回答（stdout）だけで行い、stderr は失敗
-    # したときの診断に回す。標準入力は渡さない（差分は引数で渡している）。
-    output="$($CLI "${args[@]}" </dev/null 2>"$stderr_file")" || {
+    # 警告が stderr に出る）。判定はモデルの回答だけで行い、stderr は失敗したときの
+    # 診断に回す。gemini / antigravity は差分を引数で渡すため標準入力は渡さない。
+    # codex は標準入力に流す（stdin_file は codex 以外のとき /dev/null のまま）。
+    output="$($CLI "${args[@]}" <"$stdin_file" 2>"$stderr_file")" || {
       echo "error: second opinion failed (engine=$ENGINE, run $run/$RUNS$( [[ "$chunk_count" -gt 1 ]] && echo ", chunk $chunk_idx/$chunk_count" ))" >&2
       cat "$stderr_file" >&2
       printf '%s\n' "$output" >&2
       exit 1
     }
+
+    # codex は回答を stdout ではなく -o のファイルへ取る（上の args 組み立ての注記）。
+    # 無ければ失敗させる。0 で終わったのにファイルが無いのは判定の入力が無いという
+    # ことで、「回答が空」として指摘あり側へ倒すと理由が読めなくなる。
+    if [[ "$ENGINE" == "codex" ]]; then
+      if [[ ! -f "$answer_file" ]]; then
+        echo "error: codex が最後のメッセージを書きませんでした（-o のファイルが無い。engine=$ENGINE, run $run/$RUNS$( [[ "$chunk_count" -gt 1 ]] && echo ", chunk $chunk_idx/$chunk_count" )）" >&2
+        cat "$stderr_file" >&2
+        exit 1
+      fi
+      output="$(cat "$answer_file")"
+    fi
 
     # 回答が空でも終了コードが 0 になる経路がある。実測では、agy がツールの実行許可を
     # 求めて非対話では承認できず自動拒否し、「回答なし」を stderr へ書いて 0 で終えた。
