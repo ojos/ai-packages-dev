@@ -15,14 +15,18 @@ set -uo pipefail
 echo "test-second-opinion-review"
 
 REVIEW="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)/.ai-playbook/templates/second-opinion-review.sh"
+SCHEMA="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)/.ai-playbook/templates/second-opinion-schema.json"
 
 LOADER="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)/scripts/load-project-env.sh"
 
 # レビュー対象の差分を持つ一時リポジトリを作る。scripts/ の 1 階層上がルート。
+# second-opinion-schema.json も対で置く——JSON スキーマ方式で判定するエンジン
+# （antigravity / codex）は、これが無いと CLI を呼ぶ前に止まる。
 mk_review_repo() {
   local dir="$1"
   mkdir -p "$dir/scripts"
   cp "$REVIEW" "$dir/scripts/second-opinion-review.sh"
+  cp "$SCHEMA" "$dir/scripts/second-opinion-schema.json"
   (
     cd "$dir" && git init -q \
       && printf 'base\n' > a.txt && git add a.txt \
@@ -120,16 +124,61 @@ STUB
 # 連番ファイル（.argv.<n>）へ残す専用の stub を使う。
 MAX_ARG_BYTES=$(( $(getconf PAGE_SIZE 2>/dev/null || getconf PAGESIZE 2>/dev/null || echo 4096) * 32 - 1 ))
 
-mk_agy_history_stub() {
-  local bindir="$1" verdict="${2:-LGTM}"
+# antigravity は JSON スキーマ方式で判定する（判定トークンではなく、回答の
+# .structured_output.findings の category から落とす）。$2 は呼び出し元の
+# 応答の種類を選ぶ。"fail" は落とす category を 1 件持つ回答、それ以外（既定の
+# "pass"）は findings が空の回答を返す。
+# antigravity 用の単発 JSON stub。mk_cli_stub と同じ記録ファイル（`.argv` /
+# `.stdin` / `.count`、連番ではなく毎回上書き）を使うが、応答は judgement 方式が
+# JSON スキーマであることに合わせ、包み（`.structured_output`）付きの JSON を返す。
+# 複数呼び出しをまたいだ検証（チャンク分割等）には mk_agy_history_stub を使う。
+mk_agy_json_stub() {
+  local bindir="$1" kind="${2:-pass}" structured_output
   mkdir -p "$bindir"
+  case "$kind" in
+    fail) structured_output='{"findings":[{"category":"bug","file":"a.ts","line":1,"what":"x","why":"y"}]}' ;;
+    *)    structured_output='{"findings":[]}' ;;
+  esac
+  cat > "$bindir/agy" <<STUB
+#!/usr/bin/env bash
+printf '%s\n' "\$@" > "$bindir/.argv"
+cat > "$bindir/.stdin" 2>/dev/null || true
+n=\$(cat "$bindir/.count" 2>/dev/null || echo 0)
+n=\$((n + 1))
+echo "\$n" > "$bindir/.count"
+printf '{"conversation_id":"x","status":"SUCCESS","response":"...","structured_output":%s}\n' '$structured_output'
+exit 0
+STUB
+  chmod +x "$bindir/agy"
+  rm -f "$bindir/.count" "$bindir/.argv" "$bindir/.stdin"
+}
+
+mk_agy_history_stub() {
+  local bindir="$1" verdict="${2:-LGTM}" structured_output
+  mkdir -p "$bindir"
+  case "$verdict" in
+    FINDINGS) structured_output='{"findings":[{"category":"bug","file":"a.ts","line":1,"what":"x","why":"y"}]}' ;;
+    *)        structured_output='{"findings":[]}' ;;
+  esac
+  # 記録するのは「-p」の次に渡された引数（chunk_text + 改行 1 + PROMPT）の値
+  # そのものだけで、"-p" 自身や、antigravity が追加で渡す
+  # --output-format / json / --json-schema / スキーマの絶対パス（一時ディレクトリ
+  # 名の長さに依存して環境ごとにバイト数が変わる）は含めない。\$@ をまるごと
+  # 記録すると、呼び出し側のバイト数計算（チャンク分割の境界検査）がこれらの
+  # 可変長バイトを抱き込み、環境依存でずれる（実際に踏んだ）。
   cat > "$bindir/agy" <<STUB
 #!/usr/bin/env bash
 n=\$(cat "$bindir/.count" 2>/dev/null || echo 0)
 n=\$((n + 1))
 echo "\$n" > "$bindir/.count"
-printf '%s\n' "\$@" > "$bindir/.argv.\$n"
-echo "$verdict"
+prev=""
+for a in "\$@"; do
+  if [[ "\$prev" == "-p" ]]; then
+    printf '%s' "\$a" > "$bindir/.argv.\$n"
+  fi
+  prev="\$a"
+done
+printf '{"conversation_id":"x","status":"SUCCESS","response":"...","structured_output":%s}\n' '$structured_output'
 exit 0
 STUB
   chmod +x "$bindir/agy"
@@ -188,21 +237,56 @@ extract_chunk_diff() {
   printf '%s' "${content%%"$marker"*}"
 }
 
-# second-opinion-review.sh 自身の PROMPT が何バイトかを、実装のヒアドキュメントを
-# 読み込んで求める。値をこのファイルへ複製すると、プロンプトの文面を変えたときに
-# 乖離したまま気づけない。
+# antigravity の $PROMPT が何バイトかを、実際に 1 回実行して測る。
 #
-# 実装は `read -r -d '' PROMPT <<'EOF' ... EOF`（IFS を空にしていない）でヒアドキュメント
-# 本文を読む。IFS が既定のままだと、read は単一変数への読み込みで前後の IFS
-# 空白（改行を含む）を落とす。ここも `read` そのものへ通すことで、その削ぎ落としを
-# 複製せず実装と同じ結果を得る（awk/sed で真似ると挙動がずれる余地がある）。
-script_prompt_bytes() {
-  local review_file="$1" body_file prompt
-  body_file="$(new_workdir)/prompt-body.txt"
-  sed -n "/^read -r -d '' PROMPT <<'EOF' || true\$/,/^EOF\$/p" "$review_file" \
-    | sed '1d;$d' > "$body_file"
-  read -r -d '' prompt < "$body_file" || true
-  LC_ALL=C printf '%s' "$prompt" | wc -c
+# second-opinion-review.sh は PROMPT をエンジンごとの分岐で組み立て（JSON スキーマ
+# 方式の導入で、単一のヒアドキュメントから if/elif/else の代入へ変わった）、
+# ヒアドキュメントの固定アンカーで静的に抜き出す手段はもう無い。実装の組み立て方
+# （ヒアドキュメントか代入か）に依存しない測り方として、既知のバイト数を持つ最小の
+# 差分で実際に agy を 1 回呼び、「-p」の次に渡された引数（chunk_text + "\n" +
+# PROMPT）だけをそのまま控える専用 stub で、差分本文と区切りの改行 1 個を
+# 差し引いて逆算する。
+#
+# $@ をまるごと記録する方式（mk_agy_history_stub）は使わない。antigravity には
+# --output-format / --json-schema とスキーマファイルの絶対パスも渡るため、
+# それらのバイト数（一時ディレクトリ名の長さに依存して環境ごとに変わる）が
+# 混ざり、合計バイト数から逆算した PROMPT の値が環境依存でずれる（実際に
+# このテストを書く過程で踏んだ）。
+measured_antigravity_prompt_bytes() {
+  local review_file="$1" mdir mbin combined_bytes diff_text diff_bytes
+  mdir="$(new_workdir)/promptmeasure"
+  mbin="$(new_workdir)/promptmeasure-bin"
+  mkdir -p "$mdir/scripts" "$mbin"
+  cp "$review_file" "$mdir/scripts/second-opinion-review.sh"
+  cp "$(dirname "$review_file")/second-opinion-schema.json" "$mdir/scripts/second-opinion-schema.json"
+  (
+    cd "$mdir" && git init -q \
+      && printf 'base\n' > a.txt && git add a.txt \
+      && git -c user.name=T -c user.email=t@example.com commit -q -m c1 \
+      && printf 'changed\n' > a.txt && git add a.txt
+  ) >/dev/null 2>&1
+  cat > "$mbin/agy" <<'STUB'
+#!/usr/bin/env bash
+prev=""
+for a in "$@"; do
+  if [[ "$prev" == "-p" ]]; then
+    printf '%s' "$a" > "$AGY_COMBINED_OUT"
+  fi
+  prev="$a"
+done
+printf '{"conversation_id":"x","status":"SUCCESS","response":"...","structured_output":{"findings":[]}}\n'
+exit 0
+STUB
+  chmod +x "$mbin/agy"
+  (
+    cd "$mdir" \
+      && PATH="$mbin:/usr/bin:/bin" AGY_COMBINED_OUT="$mbin/.combined" \
+        bash scripts/second-opinion-review.sh --engine antigravity --runs 1
+  ) >/dev/null 2>&1
+  combined_bytes="$(wc -c < "$mbin/.combined")"
+  diff_text="$(cd "$mdir" && git diff --cached)"
+  diff_bytes="$(LC_ALL=C printf '%s' "$diff_text" | wc -c)"
+  echo $(( combined_bytes - diff_bytes - 1 ))
 }
 
 # @ を含む差分をステージする。メールアドレス・シェルの配列展開・パターンの 3 形。
@@ -600,7 +684,7 @@ if [[ "$bad" -eq 0 ]]; then pass; else fail "未知のエンジンが fail-close
 
 it "--engine antigravity は agy を呼び、判定は共通ロジックを通る"
 d="$(new_workdir)/r"; b="$(new_workdir)/bin"
-mk_review_repo "$d"; mk_cli_stub "$b" agy "N"
+mk_review_repo "$d"; mk_agy_json_stub "$b" pass
 out="$( cd "$d" && PATH="$b:$MIN_PATH" bash scripts/second-opinion-review.sh --engine antigravity 2>&1 )"; rc=$?
 bad=0
 [[ "$rc" -eq 0 ]] || { echo "  判定トークン付きなのに落ちた (exit $rc): $out"; bad=1; }
@@ -612,7 +696,7 @@ it "--engine antigravity は API キーを要求しない"
 # agy は OAuth のみで API キーに対応しない。gemini 側の前提検査を流用すると、
 # 鍵を持たない利用者がこのエンジンを選べなくなる。
 d="$(new_workdir)/r"; b="$(new_workdir)/bin"
-mk_review_repo "$d"; mk_cli_stub "$b" agy "L"
+mk_review_repo "$d"; mk_agy_json_stub "$b" pass
 out="$( cd "$d" && PATH="$b:$MIN_PATH" bash scripts/second-opinion-review.sh --engine antigravity 2>&1 )"; rc=$?
 if [[ "$rc" -eq 0 ]]; then pass; else fail "API キー無しで落ちた (exit $rc): $out"; fi
 
@@ -621,7 +705,7 @@ it "antigravity では差分をプロンプトへ直接載せる"
 # （実測）。gemini 側の「一時ファイル + @ 参照」を流用すると、モデルは差分を
 # 見ないまま「差分が空だ」と答える。
 d="$(new_workdir)/r"; b="$(new_workdir)/bin"
-mk_review_repo "$d"; mk_cli_stub "$b" agy "L"
+mk_review_repo "$d"; mk_agy_json_stub "$b" pass
 stage_at_diff "$d"
 ( cd "$d" && PATH="$b:$MIN_PATH" bash scripts/second-opinion-review.sh --engine antigravity ) >/dev/null 2>&1
 argv="$(cat "$b/.argv" 2>/dev/null || true)"
@@ -632,7 +716,7 @@ if [[ "$bad" -eq 0 ]]; then pass; else fail "antigravity への差分の渡し�
 
 it "SECOND_OPINION_ENGINE 環境変数でもエンジンを切り替えられる"
 d="$(new_workdir)/r"; b="$(new_workdir)/bin"
-mk_review_repo "$d"; mk_cli_stub "$b" agy "L"
+mk_review_repo "$d"; mk_agy_json_stub "$b" pass
 out="$( cd "$d" && PATH="$b:$MIN_PATH" SECOND_OPINION_ENGINE=antigravity bash scripts/second-opinion-review.sh 2>&1 )"; rc=$?
 if [[ "$rc" -eq 0 ]]; then
   assert_contains "$out" "engine=antigravity" "環境変数でのエンジン指定"
@@ -685,7 +769,7 @@ it "境界: ちょうど budget に達するチャンクでも、実際に渡す
 # にくくなるため、mk_git_diff_stub で crafted diff を厳密なバイト数に合わせる。
 d="$(new_workdir)/r"; b="$(new_workdir)/bin"; g="$(new_workdir)/gitstub"
 mk_review_repo "$d"
-prompt_bytes="$(script_prompt_bytes "$REVIEW")"
+prompt_bytes="$(measured_antigravity_prompt_bytes "$REVIEW")"
 chunk_budget=$(( MAX_ARG_BYTES - prompt_bytes - 1 ))
 
 header=$'diff --git a/boundary.txt b/boundary.txt\nindex 0000000..1111111 100644\n--- a/boundary.txt\n+++ b/boundary.txt\n@@ -0,0 +1,1 @@\n+'
@@ -718,7 +802,7 @@ if [[ "$chunk_count" -ne 1 ]]; then
   bad=1
 fi
 if [[ "$chunk_count" -eq 1 ]]; then
-  combined_bytes=$(( $(wc -c < "$b/.argv.1") - 4 ))
+  combined_bytes="$(wc -c < "$b/.argv.1")"
   if [[ "$combined_bytes" -ne "$MAX_ARG_BYTES" ]]; then
     echo "  境界に達していない（combined_bytes=$combined_bytes, 期待値=$MAX_ARG_BYTES）"
     bad=1
@@ -755,11 +839,9 @@ recon_file="$(new_workdir)/recon.diff"
 : > "$recon_file"
 i=1
 while [[ "$i" -le "$chunk_count" ]]; do
-  # argv ファイルは "-p\n<本文>\n" の形。本文の実バイト数は、記録ファイルの
-  # バイト数から "-p\n"（3 バイト）と printf が末尾へ足す改行（1 バイト）を
-  # 引いたもの。これが実際に CLI へ渡る 1 引数のバイト数そのもの。
-  argv_bytes="$(wc -c < "$b/.argv.$i")"
-  combined_bytes=$((argv_bytes - 4))
+  # argv ファイルには mk_agy_history_stub が「-p」の次の引数（本文そのもの）を
+  # 加工なしで書く。これが実際に CLI へ渡る 1 引数のバイト数そのもの。
+  combined_bytes="$(wc -c < "$b/.argv.$i")"
   if [[ "$combined_bytes" -gt "$MAX_ARG_BYTES" ]]; then
     echo "  chunk $i の引数が上限を超えている: $combined_bytes > $MAX_ARG_BYTES"
     bad=1
@@ -906,7 +988,7 @@ if locale -a 2>/dev/null | grep -i '^C\.utf8$\|^C\.UTF-8$' >/dev/null; then
   fi
   i=1
   while [[ "$i" -le "$chunk_count" ]]; do
-    combined_bytes=$(( $(wc -c < "$b/.argv.$i") - 4 ))
+    combined_bytes="$(wc -c < "$b/.argv.$i")"
     if [[ "$combined_bytes" -gt "$MAX_ARG_BYTES" ]]; then
       echo "  chunk $i の引数が上限を超えている: $combined_bytes > $MAX_ARG_BYTES"
       bad=1

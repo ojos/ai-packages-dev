@@ -721,6 +721,7 @@ OAuth トークン（`CLAUDE_CODE_OAUTH_TOKEN`）を `remoteEnv` へ注入する
 - `.github/project-ai-rules.md`
 - `CLAUDE.md` / `.github/copilot-instructions.md`
 - `scripts/second-opinion-review.sh`（第二意見レビュー。`scripts/loop-gate.sh` が存在を検出して自動で直列化します。上記「ループコーディング支援」参照）
+- `scripts/second-opinion-schema.json`（JSON スキーマ方式で判定するエンジン（antigravity / codex）が読む回答の形。`second-opinion-review.sh` と対で配置します）
 - `scripts/second-opinion-record.sh` / `scripts/second-opinion-gate-exempt.sh` / `.github/workflows/second-opinion-gate.yml`（第二意見が回されたことの記録と確認側。`--with-copilot-review` の有無に関わらず配置します。上記「ループコーディング支援」参照）
 - `.github/workflows/copilot-review.yml` / `.github/workflows/review-gate.yml` / `scripts/review-usable.sh` / `scripts/check-review-usable.sh`（`--with-copilot-review` を併せて選択した場合のみ。4 本で 1 組。下記参照）
 - `.claude/skills/intake/SKILL.md`（`--with-claude` を併せて指定した場合のみ。intake 起点スキル）
