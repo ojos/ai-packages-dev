@@ -86,6 +86,9 @@ permissions:
   issues: read
   # commit status を書く。これが判定の出力先である。
   statuses: write
+  # 掃き寄せで、push の時刻として check-run の開始時刻を読む。public リポジトリでは
+  # 宣言が無くても読めるが、private では宣言しないと 403 になり、掃き寄せが毎回落ちる。
+  checks: read
 
 concurrency:
   group: second-opinion-gate-${{ github.event.pull_request.number || github.ref }}
