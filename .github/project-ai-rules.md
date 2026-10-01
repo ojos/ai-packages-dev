@@ -127,7 +127,7 @@ gh CLI の認証はコンテナ内で行い、その状態を named volume に�
   | issue の起票・コメント | Issues: Read and write |
   | `.github/workflows/` を含む push | Workflows: Read and write |
   | `gh run list` 等の CI 状態確認 | Actions: Read |
-  | `review-gate` の commit status 確認 | Commit statuses: Read |
+  | `second-opinion-gate` の commit status 確認 | Commit statuses: Read |
   | （必須・自動付与） | Metadata: Read |
 
 - **`GH_TOKEN` を設定しているあいだ `gh auth login` を実行しません。** gh 2.96.0 で実測したところ、値が設定されているあいだ gh はログインを拒否します（`--with-token` / `--web` のいずれでも `The value of the GH_TOKEN environment variable is being used for authentication.` で終了し、通信もしません）。危ないのはその先で、拒否メッセージ（`first clear the value from the environment`）に従って値を空にしてログインすると上限枠を 1 つ消費し、上限に達していれば他環境のトークンが 1 本失効します。この拒否は制約ではなく安全装置として扱います。
@@ -191,7 +191,7 @@ bash scripts/loop-gate.sh
 
 事実誤認の指摘を却下する条件と記録要件は `.ai-playbook/review-workflow.md`「指摘の却下」に従います。このリポジトリでの具体化は次のとおりです。
 
-- **記録の置き先は PR 本文またはその PR へのコメント**です。主レビュー・第二意見・リモート最終ゲートのいずれの指摘でも同じ場所へ残します。差分と却下の判断を同じ画面で追えるようにするためです。
+- **記録の置き先は PR 本文またはその PR へのコメント**です。主レビュー・第二意見のいずれの指摘でも同じ場所へ残します。差分と却下の判断を同じ画面で追えるようにするためです。
 - 記録には、実行したコマンドと出力をそのまま含めます。要約だけを書きません。
 - **第二意見を却下したうえで `GATE_PASS` を得るときは、記録を残してから `LOOP_GATE_REVIEW_CMD=` で無効化して回します。**
 
@@ -241,29 +241,20 @@ bash scripts/second-opinion-review.sh --engine antigravity     # エンジン切
 - **`antigravity` で `--model` に `claude` 系を選ばないでください。** このプロジェクトの実装モデルは Claude で、同じベンダーのモデルで第二意見を取ると「別ベンダーで独立にクロスチェックする」という前提が壊れます（`.ai-playbook/review-workflow.md`）。`agy models` には `claude-*` も並びます。
 - このレビューは非決定的です。1 回の `LGTM` は重大な指摘が無いことの証明ではなく、主レビューを省略してよい根拠にもなりません。
 
-### リモート最終ゲート
+### リモート最終ゲート（置かない）
 
-push / PR 作成後の最終ゲートを、このリポジトリで具体化します（`.ai-playbook/review-workflow.md`「リモート最終ゲート」）。
+push / PR 作成後のリモート最終ゲートは、このリポジトリでは**置きません**（`.ai-playbook/review-workflow.md`「リモート最終ゲート（任意の層）」）。以前は要求側 `.github/workflows/copilot-review.yml` と確認側 `.github/workflows/review-gate.yml` の 2 本を採用していましたが、撤退しました。
 
-- 手段: `.github/workflows/copilot-review.yml` が、PR 作成時に `copilot-pull-request-reviewer[bot]` をレビュアーとして自動で要求します（`gh api --method POST repos/<repo>/pulls/<number>/requested_reviewers`）。
-- **要求は 1 回だけ**: 契機を `pull_request` の `types: [opened]` に限定し、PR 更新（`synchronize`）では再要求しません。これが「1 回だけ」を運用者の記憶に頼らず機構で保証している実体です。
-- **fork からの PR はスキップ**: `github.event.pull_request.head.repo.full_name == github.repository` のときだけジョブを実行します。fork の PR は書き込みトークンを持たないためです。
-- **トークンのフォールバック**: `secrets.COPILOT_REVIEW_TOKEN || secrets.GITHUB_TOKEN`。既定の `GITHUB_TOKEN` で要求できない場合、リポジトリ Secrets に `COPILOT_REVIEW_TOKEN`（pull-requests 書き込み権限を持つ PAT）を設定すれば自動で切り替わります。
-- **前提**: リポジトリ所有者の Copilot サブスクリプションで「Copilot code review」が有効であること。無効だと reviewers 要求が 422 で失敗します。失敗時は `::error::` で切り分け手順（所有者側の有効化 / `COPILOT_REVIEW_TOKEN` の設定 / 規範側の方針変更）を出し、実行を落とします。**握り潰してスキップにしません。** ゲートが実行されていないのに緑を出すと、偽の緑と通過の区別が付かなくなるためです。
+- 代わりに、下記「第二意見（クロスモデル）」の記録と確認側（`.github/workflows/second-opinion-gate.yml`）、および CI（`ci.yml` / `identity-guard.yml`）の受け入れ検証の再実行を、標準の機構層とします。
+- **失う性質**は、著者の操作なしに記録が作られること・記録を著者が消せないこと・内容が著者を通らないことの 3 つです（`.ai-playbook/review-workflow.md`「リモート最終ゲート（任意の層）」の表）。このリポジトリは外部からの PR を受け付けない方針（`CONTRIBUTING.md`）で、既定ブランチへ入るコミットの author は常に許可した identity に限られるため、この妥協を受け入れます。
+- **push のたびに、記録を投稿します。** `scripts/loop-gate.sh` が第二意見の実行直後に記録（`save`）を自動で残しますが、PR へ投稿する `post` は push が終わってからでないと打てません（記録は head SHA に紐づくため）。
+
+  ```bash
+  bash scripts/second-opinion-record.sh post
+  ```
+
+  修正を push し直したら、そのたびに `post` も打ち直します。`.claude/skills/land/SKILL.md` の 2・7 がこれを手順に含めています。
 - 指摘の打ち切りは `.ai-playbook/review-workflow.md` の収束規則に従います。2 巡目以降の軽微な指摘は人間が却下し、AI 同士を往復させません。
-
-#### 要求されたことの確認（`review-gate.yml`）
-
-- 手段: `.github/workflows/review-gate.yml`。**要求はせず、要求されたことを確かめるだけです。** 要求と確認を分けるのは、確認側も要求すると「1 回だけ」が 2 か所から壊れるためです。
-- **`pull_request` の `opened` は届かないことがあります。** 届かなければ `copilot-review.yml` は起動せず、`::error::` も出ず、CI は緑なので、**最終ゲートだけが黙って抜けます。**
-- **`opened` を見る 2 本目のワークフローでは塞げません。** 届いていないのはイベントそのものなので、同じ契機を見る側も同じように起動しません。`review-gate.yml` が `opened` / `synchronize` / `reopened` / `ready_for_review` に加えて**20 分ごとの定期実行**を持つのはこのためです。
-- 判定は head SHA への commit status（`review-gate`）として出します。定期実行から見た PR にはジョブの成否が紐づかないため、status でなければ PR 上に何も現れません。
-- `opened` の契機だけ、要求が届くまで 120 秒待ってから判定します。同時に走るため、待たないと必ず「要求されていない」になります。
-- 確かめられなかった場合（GitHub API から読めない）は status を付けず、次の定期実行へ判定を持ち越します。読めなかったことを「要求されていない」と同じに扱いません。
-- **required check にはしません。** Copilot 側の遅延や障害でマージが止まる副作用があるためで、ここで止めたいのは「要求されていないことに気づかないまま通ること」だけです。
-- 判定材料は REST の 3 つです。`/pulls/{n}/requested_reviewers`（要求中）、`/pulls/{n}/reviews`（投稿済み）、`/issues/{n}/timeline`（要求されたという出来事）。前の 2 つはどちらも「いまの状態」で、**Copilot がレビューを開始してから投稿するまでの間は両方が空になります**（実運用では要求の 7 秒後に `requested_reviewers` から消え、投稿までの約 3 分間そのままでした）。この窓は `GRACE_SEC` を延ばしても塞げません。猶予が待つのは要求が出る**前**で、窓は要求が出た**後**にあるためです。
-- timeline は取り消しを勘定に入れます。同じ相手について最後の 1 件が `review_requested` のときだけ、要求が生きているとみなします。要求を出して消すだけでゲートが外れる経路を残さないためです。`permissions` に `issues: read` を宣言しているのは、この 3 つ目を読むためです。
-- 注意: `gh pr view --json reviewRequests` には Copilot が出ません。要求の有無は上記 REST で確認します。
 
 ### ドキュメント分離運用
 
