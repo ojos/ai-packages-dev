@@ -122,7 +122,7 @@
 # issue / PR の文脈:
 #   ブランチ名が issue 番号を含む形（`feat/123-...` 等）なら、その issue の本文
 #   （scope・acceptance を含む）をプロンプトへ載せる。加えて、差分の追加行と
-#   コミットメッセージが参照する `#番号`（リポジトリの持ち主が作成したものに限り、
+#   コミットメッセージが参照する `#番号`（リポジトリへの書き込み権を持つ人が作成したものに限り、
 #   上限件数まで）についても、状態と（issue なら）acceptance の節を取得して載せる。
 #   いずれも `gh` 経由で、取得できなくても止めない（ゲートではないため）。
 #
@@ -367,8 +367,10 @@ resolve_issue_context
 # 絞り方:
 #   - 拾うのは**差分の追加行とコミットメッセージだけ**。削除行や文脈行の番号は、
 #     この変更が主張していることではない
-#   - **作成者がリポジトリの持ち主のものだけ**。public なので部外者の文が
-#     プロンプトへ入りうる
+#   - **作成者の author_association が OWNER / MEMBER / COLLABORATOR のものだけ**。
+#     public なので部外者の文がプロンプトへ入りうる。「リポジトリの持ち主の login と
+#     一致するか」で絞らない——組織所有のリポジトリでは持ち主は組織名で、個人の
+#     login と一致することがなく、すべての参照が除外される
 #   - issue は「状態・タイトル・acceptance の節」、PR は「状態・タイトル」だけ。
 #     本文全体は載せない（消費と、古い本文による誤検出を抑える）
 #   - **上限は REFERENCED_LIMIT 本。超えた分は捨てたと出す**
@@ -404,7 +406,7 @@ extract_acceptance() {
 }
 
 resolve_referenced_context() {
-  local refs nums n kept dropped rejected unreadable json owner author title state acc
+  local refs nums n kept dropped rejected unreadable json association title state acc
   # コミットメッセージを先に置く。「(#123)」のように、変更が名指しした番号が
   # 先頭に来る。**範囲（A..B）のときだけ**ログを読む。単独のリビジョンに git log を
   # 当てると履歴の全部を読むことになる。
@@ -431,12 +433,16 @@ $(printf '%s\n' "$diff_text" | awk '/^\+/ && !/^\+\+\+ / { print substr($0, 2) }
     # issues の API は PR も返す（`.pull_request` の有無で分かれる。`merged_at` も
     # 同じ API に入っている）。1 番号 1 呼び出し。
     if ! json="$(gh api "repos/{owner}/{repo}/issues/$n" 2>/dev/null)" \
-        || ! owner="$(printf '%s' "$json" | jq -er '.repository_url | split("/") | .[-2]' 2>/dev/null)"; then
+        || ! association="$(printf '%s' "$json" | jq -er '.author_association' 2>/dev/null)"; then
       unreadable="$unreadable#$n "
       continue
     fi
-    author="$(printf '%s' "$json" | jq -r '.user.login // ""')"
-    if [[ "$author" != "$owner" ]]; then
+    # 書き込み権を持つ人（持ち主・組織のメンバー・共同編集者）が書いたものだけを載せる。
+    case "$association" in
+      OWNER|MEMBER|COLLABORATOR) ;;
+      *) association="" ;;
+    esac
+    if [[ -z "$association" ]]; then
       rejected="$rejected#$n "
       continue
     fi
@@ -468,7 +474,7 @@ $(printf '%s\n' "$acc" | sed 's/^/    /')"
     echo "[second-opinion] 上限 $REFERENCED_LIMIT 本を超えたため載せません: ${dropped% }"
   fi
   if [[ -n "$rejected" ]]; then
-    echo "[second-opinion] 作成者がリポジトリの持ち主でないため載せません: ${rejected% }"
+    echo "[second-opinion] 作成者がリポジトリへの書き込み権を持たないため載せません: ${rejected% }"
   fi
   if [[ -n "$unreadable" ]]; then
     echo "[second-opinion] 引けなかったため載せません: ${unreadable% }" >&2

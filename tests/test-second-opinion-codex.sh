@@ -413,26 +413,26 @@ git -C "$REPO" checkout -q -
 
 # ---- 9. 参照された issue / PR の文脈（差分の追加行・コミットメッセージの #N） ----
 
-it "参照された issue の acceptance と、PR の状態をプロンプトへ載せる（上限・持ち主判定も守る）"
+it "参照された issue の acceptance と、PR の状態をプロンプトへ載せる（上限・書き込み権の判定も守る）"
 gh_dir="$WORK/gh"
 mkdir -p "$gh_dir"
 owner_url='https://api.github.com/repos/owner1/repo1'
 cat > "$gh_dir/11.json" <<EOF
-{"repository_url":"$owner_url","user":{"login":"owner1"},"state":"open","state_reason":null,"title":"コミットで名指しした票",
+{"repository_url":"$owner_url","user":{"login":"owner1"},"author_association":"OWNER","state":"open","state_reason":null,"title":"コミットで名指しした票",
  "body":"## intake\n\n\`\`\`yaml\ngoal: g\nacceptance:\n  - REF-ACCEPTANCE-MARKER\npriority: 中\n\`\`\`\nREF-OUTSIDE-ACCEPTANCE-MARKER"}
 EOF
 cat > "$gh_dir/12.json" <<EOF
-{"repository_url":"$owner_url","user":{"login":"owner1"},"state":"closed","title":"追加行の PR",
+{"repository_url":"$owner_url","user":{"login":"member1"},"author_association":"MEMBER","state":"closed","title":"追加行の PR",
  "pull_request":{"merged_at":"2026-09-29T00:00:00Z"},"body":"acceptance:\n  - PRBODY-MARKER"}
 EOF
 cat > "$gh_dir/13.json" <<EOF
-{"repository_url":"$owner_url","user":{"login":"owner1"},"state":"open","title":"REF-REMOVED-MARKER","body":""}
+{"repository_url":"$owner_url","user":{"login":"owner1"},"author_association":"OWNER","state":"open","title":"REF-REMOVED-MARKER","body":""}
 EOF
 cat > "$gh_dir/14.json" <<EOF
-{"repository_url":"$owner_url","user":{"login":"stranger"},"state":"open","title":"REF-STRANGER-MARKER","body":"acceptance:\n  - REF-STRANGER-MARKER"}
+{"repository_url":"$owner_url","user":{"login":"stranger"},"author_association":"NONE","state":"open","title":"REF-STRANGER-MARKER","body":"acceptance:\n  - REF-STRANGER-MARKER"}
 EOF
 cat > "$gh_dir/22.json" <<EOF
-{"repository_url":"$owner_url","user":{"login":"owner1"},"state":"open","title":"REF-OVER-LIMIT-MARKER","body":""}
+{"repository_url":"$owner_url","user":{"login":"owner1"},"author_association":"OWNER","state":"open","title":"REF-OVER-LIMIT-MARKER","body":""}
 EOF
 # #15〜#21 は JSON を置かない（引けない番号。止めずに続けることを見る）。
 
@@ -466,10 +466,13 @@ detail=""
 [[ -f "$RECORD/stdin" ]] || detail="${detail}codex が呼ばれていない "
 if [[ -z "$detail" ]]; then
   grep -q 'REF-ACCEPTANCE-MARKER' "$RECORD/stdin" || detail="${detail}参照 issue の acceptance が無い "
+  # 組織所有のリポジトリでは、作成者の login は持ち主（組織名）と一致しない。
+  # author_association（MEMBER）で判定していれば載る。
+  grep -q '#12（PR・merged）追加行の PR' "$RECORD/stdin" || detail="${detail}組織のメンバーが書いた PR が載っていない "
   grep -q 'REF-OUTSIDE-ACCEPTANCE-MARKER' "$RECORD/stdin" && detail="${detail}acceptance の外まで載っている "
   grep -q 'PRBODY-MARKER' "$RECORD/stdin" && detail="${detail}PR の本文が載っている "
   grep -q 'REF-REMOVED-MARKER' "$RECORD/stdin" && detail="${detail}削除行のみの参照が載っている "
-  grep -q 'REF-STRANGER-MARKER' "$RECORD/stdin" && detail="${detail}持ち主以外の参照が載っている "
+  grep -q 'REF-STRANGER-MARKER' "$RECORD/stdin" && detail="${detail}書き込み権の無い人の参照が載っている "
   grep -q 'REF-OVER-LIMIT-MARKER' "$RECORD/stdin" && detail="${detail}上限超過の参照が載っている "
 fi
 if [[ -f "$RECORD/gh-calls" ]]; then
@@ -479,9 +482,9 @@ fi
 
 if [[ -z "$detail" ]]; then pass; else fail "$detail"; fi
 
-it "上限超過・持ち主以外・引けなかった旨が出力に出る"
+it "上限超過・書き込み権の無い作成者・引けなかった旨が出力に出る"
 if grep -q '上限 10 本を超えたため載せません: #22' "$WORK/out" \
-  && grep -q '作成者がリポジトリの持ち主でないため載せません: #14' "$WORK/out" \
+  && grep -q '作成者がリポジトリへの書き込み権を持たないため載せません: #14' "$WORK/out" \
   && grep -q '引けなかったため載せません: #15' "$WORK/err"; then
   pass
 else
