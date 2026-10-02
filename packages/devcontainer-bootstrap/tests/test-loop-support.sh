@@ -540,6 +540,77 @@ else
   fail "対象が無いだけなのに exit 非 0: $out_txt"
 fi
 
+# ── LOOP_GATE_REVIEW_CMD（差し替え）の範囲解決と記録（ojos/ai-packages-dev#402） ──
+#
+# 差し替えた reviewer が範囲を知らないまま空のステージ済み差分を見て「対象なし」で
+# 0 を返しても、loop-gate.sh が scope=staged の記録を作ると、確認側が偽の緑を出す。
+# 記録の有無は、記録スクリプトを stub に差し替えて観測する。
+mk_custom_gate_repo() {
+  local out="$1" acc="$2"
+  run_bootstrap "$out" >/dev/null 2>&1
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$acc"
+  cat > "$out/scripts/second-opinion-record.sh" <<'STUB'
+#!/usr/bin/env bash
+echo "RECORD_SAVED:$*"
+cat >/dev/null
+STUB
+  # 既定の reviewer 相当。範囲を渡されなければステージ済み差分を見て、空なら対象なしで 0。
+  cat > "$out/scripts/fake-review.sh" <<'STUB'
+#!/usr/bin/env bash
+if [[ -n "${1-}" ]]; then
+  echo "REVIEWED_RANGE:$1 lines=$(git diff "$1" | wc -l | tr -d ' ')"
+  echo "[second-opinion] LGTM (engine=fake, runs=1)"
+  exit 0
+fi
+if git diff --cached --quiet; then
+  echo "[second-opinion] no diff to review (staged)"
+  exit 0
+fi
+echo "REVIEWED_STAGED"
+exit 0
+STUB
+  chmod +x "$out/scripts/second-opinion-record.sh" "$out/scripts/fake-review.sh"
+  make_tracked_repo "$out"
+}
+
+it "LOOP_GATE_REVIEW_CMD が範囲を使わず「対象なし」を返したときは、記録を作らない"
+out="$(new_workdir)/p"; acc="$(new_workdir)/acc.sh"
+mk_custom_gate_repo "$out" "$acc"
+out_txt="$(cd "$out" && ALLOWED_AUTHOR_EMAILS="$ALLOWED_EMAIL" LOOP_GATE_REVIEW_CMD='bash scripts/fake-review.sh' VERIFY_ACCEPTANCE="$acc" bash scripts/loop-gate.sh 2>&1)"
+if ! printf '%s' "$out_txt" | grep -q 'RECORD_SAVED'; then
+  pass
+else
+  fail "レビューしていないのに記録が作られた: $out_txt"
+fi
+
+it "LOOP_GATE_REVIEW_CMD へ解決済みの範囲が LOOP_GATE_REVIEW_RANGE で渡り、その範囲の記録が残る"
+out="$(new_workdir)/p"; acc="$(new_workdir)/acc.sh"
+mk_custom_gate_repo "$out" "$acc"
+if out_txt="$(cd "$out" && ALLOWED_AUTHOR_EMAILS="$ALLOWED_EMAIL" LOOP_GATE_REVIEW_CMD='bash scripts/fake-review.sh ${LOOP_GATE_REVIEW_RANGE:+"$LOOP_GATE_REVIEW_RANGE"}' VERIFY_ACCEPTANCE="$acc" bash scripts/loop-gate.sh 2>&1)"; then
+  lines="$(printf '%s' "$out_txt" | sed -n 's/^REVIEWED_RANGE:.* lines=//p')"
+  if [[ -n "$lines" && "$lines" -gt 0 ]] \
+     && printf '%s' "$out_txt" | grep -q 'RECORD_SAVED:.*--scope range:' \
+     && printf '%s' "$out_txt" | grep -q 'GATE_PASS'; then
+    pass
+  else
+    fail "範囲が渡っていない、または記録の scope が範囲でない (lines=${lines:-none}): $out_txt"
+  fi
+else
+  fail "exit 非 0: $out_txt"
+fi
+
+it "ステージ済み差分があるときは範囲を渡さず、scope=staged で記録する"
+out="$(new_workdir)/p"; acc="$(new_workdir)/acc.sh"
+mk_custom_gate_repo "$out" "$acc"
+( cd "$out" && printf 'x\n' > staged-new.txt && git add staged-new.txt ) >/dev/null 2>&1
+if out_txt="$(cd "$out" && ALLOWED_AUTHOR_EMAILS="$ALLOWED_EMAIL" LOOP_GATE_REVIEW_CMD='bash scripts/fake-review.sh ${LOOP_GATE_REVIEW_RANGE:+"$LOOP_GATE_REVIEW_RANGE"}' VERIFY_ACCEPTANCE="$acc" bash scripts/loop-gate.sh 2>&1)" \
+   && printf '%s' "$out_txt" | grep -q 'REVIEWED_STAGED' \
+   && printf '%s' "$out_txt" | grep -q 'RECORD_SAVED:.*--scope staged'; then
+  pass
+else
+  fail "ステージ済みの経路が変わった: $out_txt"
+fi
+
 # ── 外部層の受け入れ条件（acceptance-remote.sh） ───────────────────────────────
 #
 # 受け入れ条件はローカル層（acceptance.sh）と外部層（acceptance-remote.sh）に分かれる。
