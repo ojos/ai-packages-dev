@@ -142,16 +142,7 @@ done < <(grep -o '`scripts/[^`]*`' scripts/CATALOG.md | tr -d '`')
 [[ "$catalog_fail" -eq 0 ]] || exit 1
 
 echo "[acceptance] (docs) relative markdown links resolve"
-link_fail=0
-while IFS= read -r f; do
-  d="$(dirname "$f")"
-  while IFS= read -r l; do
-    [[ -n "$l" ]] || continue
-    case "$l" in http*) continue ;; esac
-    [[ -f "$d/$l" ]] || [[ -f "$l" ]] || { echo "[acceptance] dangling link: $f -> $l" >&2; link_fail=1; }
-  done < <(grep -oE '\]\([^)#:]+\.md[)#]' "$f" | sed 's/^](//; s/[)#]$//')
-done < <(git ls-files '*.md')
-[[ "$link_fail" -eq 0 ]] || exit 1
+bash scripts/check-doc-links.sh
 
 # ── CI: Package neutrality ───────────────────────────────────────────────────
 # 検査対象・除外条件の正本は scripts/check-neutrality.sh。CI の同名ジョブも同じ

@@ -117,17 +117,11 @@ jobs:
           done
           exit $fail
 
+      # 判定の正本は scripts/check-doc-links.sh（追跡ファイルの集合で実在を見る。
+      # .md 以外へのリンク・リポジトリの外へ出るリンクも見る）。ローカルの
+      # scripts/acceptance.sh も同じスクリプトを呼ぶ。
       - name: Relative markdown links resolve
-        run: |
-          fail=0
-          for f in $(git ls-files '*.md'); do
-            d=$(dirname "$f")
-            for l in $(grep -oE '\]\([^)#:]+\.md[)#]' "$f" | sed 's/^](//; s/[)#]$//'); do
-              case "$l" in http*) continue ;; esac
-              [ -f "$d/$l" ] || [ -f "$l" ] || { echo "dangling link: $f -> $l"; fail=1; }
-            done
-          done
-          exit $fail
+        run: bash scripts/check-doc-links.sh
 
   neutrality:
     name: Package neutrality
