@@ -23,15 +23,15 @@ systemd を持たない OS（macOS や、systemd を使わない Linux ディス
 `ssh_config` で使えます。
 
 **ネイティブ Linux の Docker Engine でワークスペースへ書き込めない場合**は、
-devcontainer-bootstrap（DCB）の README の
-[「ネイティブ Linux の Docker でのワークスペースの所有者」](../devcontainer-bootstrap/README.md#ネイティブ-linux-の-docker-でのワークスペースの所有者)
-に従ってください。`updateRemoteUserUID` が既定で UID/GID を揃えるため、devhost 側で
-追加の対処はしません。
+devcontainer-bootstrap（DCB）の README の「ネイティブ Linux の Docker でのワークスペースの所有者」に
+従ってください。`updateRemoteUserUID` が既定で UID/GID を揃えるため、devhost 側で追加の対処はしません
+（devhost は DCB のリリースへ同梱されて配布されるため、この README と DCB の README は配布先で
+階層が変わります。相対リンクにはしません）。
 
 **ネイティブ Linux の Docker Engine では、コンテナの中で codex のサンドボックスが動かない
 ことがあります（未確認）。** Docker がコンテナに当てる AppArmor の既定のプロファイル
 （`docker-default`）が mount を禁じ、codex が使う bwrap が `Permission denied` で失敗する、
-という報告があります（game-forge #874）。Docker Desktop（macOS）には AppArmor が無いので
+という報告が取り込み元にあります。Docker Desktop（macOS）には AppArmor が無いので
 起きません。compose に `security_opt: [apparmor=unconfined]` を足すと避けられるとされますが、
 コンテナの隔離を弱めるうえ、それだけで足りるかはまだ実機で確かめていません。そのため
 DCB が生成する compose には入れていません。困った場合は、第二意見のエンジンを codex 以外へ
@@ -51,6 +51,33 @@ DCB が生成する compose には入れていません。困った場合は、�
 
 ## 外部の機械への導入
 
+### devhost を入手する
+
+devhost は独立したリリースを持たず、**devcontainer-bootstrap（DCB）のリリースに同梱されています。**
+`RELEASE-MANIFEST.json` と `PACKAGE_ARCHIVE.tar.gz` を取得し、マニフェストが記録した archive のハッシュと照合してから取り出します。
+手順の詳細と検証の意味は DCB の README の「devhost」の節を参照してください。
+
+```bash
+TAG=vX.Y.Z   # DCB の最新安定リリース。devhost を同梱した最初の版以降（DCB の README と CHANGELOG.md を参照）
+BASE="https://github.com/ojos/devcontainer-bootstrap/releases/download/${TAG}"
+
+curl -sSL "${BASE}/RELEASE-MANIFEST.json" -o RELEASE-MANIFEST.json
+curl -sSL "${BASE}/PACKAGE_ARCHIVE.tar.gz" -o PACKAGE_ARCHIVE.tar.gz
+
+# sha256sum は GNU coreutils のコマンドで、macOS には無い。shasum へ分岐する。
+if command -v sha256sum >/dev/null 2>&1; then sha256c="sha256sum"; else sha256c="shasum -a 256"; fi
+# マニフェストの checksums には SHA256SUMS の行もあるが、devhost に要るのは archive だけ。
+# その行だけを抜き出して照合する（SHA256SUMS を取得していないので、全行を渡すと落ちる）。
+jq -r '.checksums["PACKAGE_ARCHIVE.tar.gz"] + "  PACKAGE_ARCHIVE.tar.gz"' RELEASE-MANIFEST.json | $sha256c -c -
+
+# archive の中の名前は ./devhost/... なので、./ を付けて指定する（GNU tar は devhost/ だと一致しない）。
+tar -xzf PACKAGE_ARCHIVE.tar.gz ./devhost
+ls devhost/
+```
+
+以降の手順は、この `devhost/` を取り出したディレクトリで実行します
+（リポジトリを取り込んでいる場合は `packages/devhost/` を同じ意味で読んでください）。
+
 ### devcontainer CLI を入れる
 
 公式の導入スクリプトを使います。**Node.js を同梱して `~/.devcontainers/` に入る**ので、外部の機械に
@@ -69,9 +96,9 @@ npm の `@devcontainers/cli` でも動きますが、外部の機械に Node 20 
 ### dev を置く
 
 ```bash
-install -D -m 0755 packages/devhost/dev.sh ~/.local/bin/dev
+install -D -m 0755 devhost/dev.sh ~/.local/bin/dev
 mkdir -p ~/.config/dev
-cp packages/devhost/projects.example ~/.config/dev/projects   # 名前と絶対パスを書く
+cp devhost/projects.example ~/.config/dev/projects   # 名前と絶対パスを書く
 ~/.local/bin/dev ls
 ```
 
@@ -81,7 +108,7 @@ cp packages/devhost/projects.example ~/.config/dev/projects   # 名前と絶対�
 ### ユニットを入れる
 
 ```bash
-install -D -m 0644 packages/devhost/dev-up@.service ~/.config/systemd/user/dev-up@.service
+install -D -m 0644 devhost/dev-up@.service ~/.config/systemd/user/dev-up@.service
 systemctl --user daemon-reload
 sudo loginctl enable-linger "$USER"        # ログインしていない間も、起動時からユーザーのユニットを動かす
 systemctl --user enable --now dev-up@<名前>.service
@@ -217,7 +244,7 @@ grep -cF '<見分けの付く名前>' ~/.ssh/authorized_keys     # 0 である�
 ## 試験
 
 ```bash
-bash packages/devhost/selftest.sh   # DEVHOST_SELFTEST_PASS
+bash devhost/selftest.sh   # DEVHOST_SELFTEST_PASS
 ```
 
 偽の devcontainer / docker / tmux / systemctl を PATH に置き、組み立てるコマンド・未登録の名前の拒否・

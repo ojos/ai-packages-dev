@@ -97,6 +97,12 @@ DCB の `SHA256SUMS` は、README がダウンロードさせるファイル（`
 検証する人が手元に持たないファイルを列挙すると `sha256sum -c` が失敗するため。
 ai-playbook はリリース資産を持たない。DCB の `--playbook-from` も git 由来の `archive/refs/tags/` tarball を使う。
 
+**devhost（`packages/devhost/.`）は DCB の `PACKAGE_ARCHIVE.tar.gz` に `devhost/` として同梱する（#376）。**
+個別の Release 資産としては添付しない。複数ファイル・サブディレクトリ（`devhost/termux/`）を持ち、
+`SHA256SUMS` / `RELEASE-MANIFEST.json` の資産名は単一ファイル名の前提（`is_plain_asset_name`、監査側）で
+階層を持てないため。完全性は `PACKAGE_ARCHIVE.tar.gz` のハッシュ（`RELEASE-MANIFEST.json` の `checksums`）
+で守る。導入手順は `packages/devhost/README.md`。
+
 ### 配布リポジトリのルートへ載せるファイル
 
 両パッケージ共通で、配布リポジトリのルートへ次を載せる。正本は開発リポジトリ側にあり、配布はその写しになる。
@@ -111,6 +117,9 @@ dry-run（`execute: false`）が `[plan]` 行として出力する。
 配布先には `docs/` 階層が存在しないため、リリースノートはルートで解決できる `CHANGELOG.md` へ改名して配る。
 同じ理由で、リリースノート本文にリポジトリ内の相対リンクを書かない（配布先で解決できないリンクになる）。
 `LICENSE` / `CHANGELOG.md` は規範ではないため、DCB の `--with-playbook` による取り込み対象からは外れる。
+
+**DCB だけ、上の共通ファイルに加えて `devhost/`（`packages/devhost/.`）をルート直下へ載せる。**
+ai-playbook には devhost を載せない（devhost は DCB のリリースにのみ同梱する設計、上記「配布方式」参照）。
 
 外部からの貢献は受け付けない。配布リポジトリはリリースのたびに全置換されるため、直接の PR は次のリリースで失われる。
 この方針は両パッケージの README に明記する（CONTRIBUTING ファイルは置かない）。
