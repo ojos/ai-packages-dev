@@ -32,7 +32,7 @@ tmp="$(mktemp -d "${TMPDIR:-/tmp}/test-check-repo-security.XXXXXX")"
 trap 'rm -rf "$tmp"' EXIT
 mkdir -p "$tmp/bin"
 
-# 偽物の gh。応答は $FAKE_GH_DIR/<パスの / を _ にした名前> に「状態コード」「本文」の 2 行で置く。
+# 偽物の gh。応答は $FAKE_GH_DIR/<パスの / を _ にした名前> に、1 行目に状態コード、2 行目以降に本文を置く。
 # ファイルが無いパスは、応答なし（到達できない）として何も出さずに失敗する。
 cat >"$tmp/bin/gh" <<'EOF'
 #!/usr/bin/env bash
@@ -44,7 +44,7 @@ if [[ "${1:-}" == "api" && "${2:-}" == "-i" && -n "${3:-}" ]]; then
   file="$FAKE_GH_DIR/$(printf '%s' "$3" | tr '/' '_')"
   [[ -f "$file" ]] || exit 1
   status="$(sed -n 1p "$file")"
-  body="$(sed -n 2p "$file")"
+  body="$(sed -n '2,$p' "$file")"
   printf 'HTTP/2.0 %s X\r\nContent-Type: application/json\r\n\r\n' "$status"
   [[ -n "$body" ]] && printf '%s' "$body"
   case "$status" in 2*) exit 0 ;; *) echo "gh: (HTTP $status)" >&2; exit 1 ;; esac
@@ -156,6 +156,13 @@ it "管理者権限が無ければ前提の不成立として 2"
 setup_all_enabled
 respond "repos/$REPO" 200 '{"permissions":{"admin":false}}'
 expect 2 "管理者権限がありません" "FAIL"
+
+# gh は端末へ出すとき JSON を複数行に整形する。最後の行（`}`）だけを読んで落ちないこと。
+it "本文が複数行に整形されていても読める"
+setup_all_enabled
+respond "repos/$REPO" 200 "$(printf '{\n  "permissions": {\n    "admin": true\n  }\n}')"
+respond "repos/$REPO/private-vulnerability-reporting" 200 "$(printf '{\n  "enabled": false\n}')"
+expect 1 "FAIL  Private vulnerability reporting が無効です" "前提の不成立"
 
 it "無効と読めないが混ざれば 2（読めない項目は確かめられていない）"
 setup_all_enabled

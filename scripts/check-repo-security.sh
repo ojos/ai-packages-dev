@@ -54,14 +54,17 @@ fi
 
 # 状態コードと本文を両方取る。gh api は 2xx 以外で非 0 を返すが、-i の出力には状態行が
 # 残るので、終了コードではなく状態行で読み分ける（vulnerability-alerts は無効を 404 で返す）。
-# 結果は STATUS（数字。取れなければ空）と BODY（最後の行）に入れる。
+# 結果は STATUS（数字。取れなければ空）と BODY（ヘッダの後の空行より後ろ全部）に入れる。
+# 本文は最後の行だけを取らない。JSON が複数行で来ると、最後の行は `}` だけになる。
+# gh は端末へ出すとき（GH_FORCE_TTY を含む）、JSON を整形して色付けの制御文字も混ぜるので、
+# GH_FORCE_TTY を外し、NO_COLOR を立てて呼ぶ。
 STATUS="" BODY=""
 fetch() {
   local out
-  out="$(gh api -i "$1" 2>/dev/null)" || true
+  out="$(env -u GH_FORCE_TTY NO_COLOR=1 gh api -i "$1" 2>/dev/null)" || true
   out="$(printf '%s\n' "$out" | tr -d '\r')"
   STATUS="$(printf '%s\n' "$out" | awk 'NR == 1 && $1 ~ /^HTTP\// { print $2 }')"
-  BODY="$(printf '%s\n' "$out" | awk 'NF { last = $0 } END { print last }')"
+  BODY="$(printf '%s\n' "$out" | awk 'in_body { print; next } /^$/ { in_body = 1 }')"
 }
 
 drift=0
