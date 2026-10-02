@@ -30,6 +30,8 @@ check_mounted() {
 check_mounted "/home/vscode/.config/gh" "gh-storage"
 check_mounted "/home/vscode/.claude" "claude-storage"
 check_mounted "/home/vscode/.gemini" "gemini-storage"
+check_mounted "/home/vscode/.codex" "codex-storage"
 command -v node >/dev/null 2>&1 && echo "[check] node OK" || echo "[check] node missing"
 command -v claude >/dev/null 2>&1 && echo "[check] claude OK" || echo "[check] claude missing"
 command -v gemini >/dev/null 2>&1 && echo "[check] gemini OK" || echo "[check] gemini missing"
+command -v codex >/dev/null 2>&1 && echo "[check] codex OK" || echo "[check] codex missing"

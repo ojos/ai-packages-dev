@@ -13,8 +13,10 @@ services:
       - gh-storage:/home/vscode/.config/gh
       - claude-storage:/home/vscode/.claude
       - gemini-storage:/home/vscode/.gemini
+      - codex-storage:/home/vscode/.codex
     command: sleep infinity
 volumes:
   gh-storage:
   claude-storage:
   gemini-storage:
+  codex-storage:
