@@ -330,7 +330,7 @@ Markdown ファイルの命名は、文書の役割に応じて以下の規則�
 | 雛形 | 配置先 |
 |---|---|
 | `templates/project-ai-rules.md` | `.github/project-ai-rules.md`（2 層目: プロジェクト共通ルール） |
-| `templates/entry.md` | 実行環境ごとの入口ファイル（例: `CLAUDE.md`, `.github/copilot-instructions.md`）（3 層目） |
+| `templates/entry.md` | 実行環境ごとの入口ファイル（例: `CLAUDE.md`, `AGENTS.md`, `.github/copilot-instructions.md`）（3 層目） |
 | `templates/claude-agent-*.md` | 委譲先エージェント定義（実行環境が読む位置。`model` / `tools` を機構で固定する） |
 
 `README.md` を取り込まない経路（上記）でも、この表だけで 3 層構造を配線できます。

@@ -6,6 +6,12 @@
 >
 > 同じ理由で、issue 参照は `ojos/ai-packages-dev#NNN` の形で書いてください。裸の `#NNN` は GitHub のオートリンクが**配布先リポジトリの issue** として解決するため、配布後は存在しない issue や無関係な issue を指します。
 
+## 未リリース
+
+### Summary
+- **「規範は中立、機構は Claude Code を優先する」を README に明記し、実行環境ごとの対応範囲を表にした**（ojos/ai-packages-dev#397）。入口ファイル・スキル・委譲先エージェント・フック・第二意見のエンジンを、Claude Code・GitHub Copilot・`AGENTS.md` を読む実行環境（Codex など）ごとに示す。
+- **`templates/entry.md` の例示に `AGENTS.md` を足した。** 雛形は実行環境に中立なので、内容は変えていない。雛形は 15 種のまま。
+
 ## v0.6.0
 
 ### Summary

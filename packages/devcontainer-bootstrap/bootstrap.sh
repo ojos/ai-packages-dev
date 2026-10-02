@@ -7825,6 +7825,7 @@ playbook_installed_rel_paths() {
     printf '%s\n' \
       '.github/project-ai-rules.md' \
       'CLAUDE.md' \
+      'AGENTS.md' \
       '.github/copilot-instructions.md' \
       'scripts/second-opinion-review.sh' \
       'scripts/second-opinion-schema.json' \
@@ -7883,6 +7884,7 @@ install_playbook_rules() {
   # 入口ファイルは実行環境ごとに 1 つ。内容は同一で、雛形も 1 つ。
   tpl="$(require_playbook_template entry.md)"
   apply_file_with_policy "$tpl" "$OUTPUT_DIR/CLAUDE.md"
+  apply_file_with_policy "$tpl" "$OUTPUT_DIR/AGENTS.md"
   apply_file_with_policy "$tpl" "$OUTPUT_DIR/.github/copilot-instructions.md"
 
   tpl="$(require_playbook_template second-opinion-review.sh)"

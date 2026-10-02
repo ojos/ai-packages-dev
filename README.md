@@ -58,6 +58,20 @@ ai-packages-dev/
 **DCB = 配布機構 / ai-playbook = 正本**という分担です。DCB は規範の内容を定義せず、配置のみを担います。
 規範は実行基盤・状態面・ベンダーの選択を強制しません。
 
+### 規範は中立、機構は Claude Code を優先する
+
+規範（ai-playbook の文書）は特定の実行環境に依存しません。一方、規範を実行環境で動かす機構（スキル・委譲先エージェント・フック）は、Claude Code 向けだけを用意しています。主な利用者が Claude Code を使うためで、ほかの実行環境向けの機構は現時点では用意していません。実行環境ごとの対応範囲は次のとおりです（配布機構 devcontainer-bootstrap で規範を配置したときの生成物）。
+
+| 実行環境 | 入口ファイル | スキル | 委譲先エージェント | フック | 第二意見のエンジン |
+|---|---|---|---|---|---|
+| Claude Code | `CLAUDE.md` | あり（`.claude/skills/intake` / `land`。`--with-claude` 指定時） | あり（`.claude/agents/explorer.md` / `implementer.md`。`--with-claude` 指定時） | あり（マージ前の確認フック。`--with-claude` 指定時） | 実行環境とは独立（下記） |
+| GitHub Copilot | `.github/copilot-instructions.md` | なし | なし | なし | 実行環境とは独立（下記） |
+| `AGENTS.md` を読む実行環境（Codex など） | `AGENTS.md` | なし | なし | なし | 実行環境とは独立（下記） |
+
+- 入口ファイルは 3 つとも同じ雛形（`templates/entry.md`）の写しで、プロジェクト共通ルールを経由して 3 層構造へつながります。規範を置かない生成では、どれも作りません。
+- 第二意見のエンジンは、実行環境ではなく `scripts/second-opinion-review.sh --engine` で選びます（`gemini`（既定）/ `antigravity` / `codex`）。第二意見は主レビューと別ベンダーのモデルで取る仕組みなので、どの実行環境から使っても同じです。
+- GitHub Copilot のリモートレビュー要求（`--with-copilot-review`）は、リモート最終ゲートの選択制の機構です。入口ファイルの有無とは別です。
+
 ## 経緯: Agent Swarm Framework の退役
 
 このリポジトリはかつて 3 パッケージ体制で、Agent Swarm Framework (ASF) がマルチエージェント実行基盤を担っていました。

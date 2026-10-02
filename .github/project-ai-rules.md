@@ -12,7 +12,7 @@
 - ループ運用（受け入れ検証の機械ゲート化・収束）: `.ai-playbook/loop-workflow.md`
 - intake 規律・判定根拠: `.ai-playbook/intake/`
 
-実行環境の入口ファイル（`CLAUDE.md` / `.github/copilot-instructions.md`）はこのファイルを参照し、最小差分のみを記述します。
+実行環境の入口ファイル（`CLAUDE.md` / `AGENTS.md` / `.github/copilot-instructions.md`）はこのファイルを参照し、最小差分のみを記述します。
 
 ## 常時適用
 
