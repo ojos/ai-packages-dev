@@ -3,7 +3,7 @@
 #
 # verify.sh がこのスクリプトを実行し、終了コードで合否を判定する。
 #
-# このリポジトリは CI（.github/workflows/ci.yml）の 6 ジョブ
+# このリポジトリは CI（.github/workflows/ci.yml）の 7 ジョブ
 # + .github/workflows/identity-guard.yml を完全ミラーする。
 # 「ローカルが緑なら CI も緑」を保つのが目的で、部分ミラーは push してから CI で
 # 落ちる経路を残すため採らない。
@@ -190,6 +190,12 @@ bash tests/run-tests.sh
 # ここへ到達する前に落として反復を短くする。
 echo "[acceptance] (dcb) tests"
 bash packages/devcontainer-bootstrap/tests/run-tests.sh
+
+# ── CI: devhost tests ─────────────────────────────────────────────────────────
+# 偽の devcontainer / docker / tmux / systemctl で dev.sh を回す自己試験。外部依存は
+# bash 本体だけで、秒で終わる。
+echo "[acceptance] (devhost) selftest"
+bash packages/devhost/selftest.sh
 
 if [[ "$ran_any" -eq 0 ]]; then
   echo "[acceptance] 受け入れ条件が未定義です。検証対象が 1 つも見つかりません。" >&2

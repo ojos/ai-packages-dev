@@ -89,6 +89,15 @@ jobs:
       - name: Run tests
         run: bash packages/devcontainer-bootstrap/tests/run-tests.sh
 
+  devhost-tests:
+    name: devhost tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run selftest
+        run: bash packages/devhost/selftest.sh
+
   consistency:
     name: Docs and catalog consistency
     runs-on: ubuntu-latest
