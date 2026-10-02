@@ -41,6 +41,20 @@ assert_file_exists "$rel/devhost/dev.sh"
 it "配布ツリーに devhost のサブディレクトリ（termux/）が保たれる"
 assert_file_exists "$rel/devhost/termux/shortcut.example"
 
+it "packages/devhost/ で追跡しているファイルがすべて配布ツリーに入る"
+# DCB_DISTRIBUTED_FILES はファイルを 1 つずつ列挙するので、packages/devhost/ に
+# ファイルを足して一覧への追加を忘れると、黙って配布から漏れる。ここで捕まえる。
+missing=""
+while IFS= read -r f; do
+  [[ -n "$f" ]] || continue
+  [[ -f "$rel/devhost/${f#packages/devhost/}" ]] || missing="${missing} ${f}"
+done < <(git -C "$REPO_ROOT" ls-files packages/devhost)
+if [[ -z "$missing" ]]; then
+  pass
+else
+  fail "配布ツリーに無い（scripts/release-packages.sh の DCB_DISTRIBUTED_FILES へ足す）:${missing}"
+fi
+
 it "配布ツリーの devhost/README.md が DCB の README.md と衝突しない"
 # devhost/README.md と DCB 自身の README.md はどちらも配布ツリーに存在し、
 # 別パスとして共存すること（フラットな Release 資産と違い、配布ツリーは
