@@ -250,6 +250,7 @@ fi
 - **AI ツールは明示 opt-in のみ**: `--with-<ai>` を指定したときだけ、CLI 導入・VS Code 拡張・設定ディレクトリの永続化（compose named volume）を行います。トークン有無による自動導入は行いません。
 - **`--with-gemini` と `--with-antigravity` は永続 volume を共有**: `agy` は資格情報を `~/.gemini/antigravity-cli/` に置くため、両者は同じ `~/.gemini` を使います。**どちらか一方でも指定すれば `gemini-storage` が 1 つだけ**作られ、両方指定しても重複しません。認証手段が違う（API キー / OAuth）ので、フラグは束ねず独立にしてあります。片方だけ使う構成をそのまま表現できます。
 - **`--with-codex` は専用の永続 volume**: Codex CLI は資格情報を `~/.codex/auth.json` に置くため、`gemini` / `antigravity` とは別の `codex-storage` を使います。認証手段（ChatGPT アカウントの OAuth または API キー）も設定ディレクトリも他の AI CLI と独立なので、既存のどの装備とも共有しません。
+- **`--with-codex` はコンテナの AppArmor と seccomp の既定の制限を外します**: codex のサンドボックスがコンテナの中で動くように、生成物の `compose.yaml` へ `security_opt: [apparmor=unconfined, seccomp=unconfined]` を入れます。`--with-codex` を選ばない構成には入りません（下記「[コンテナの中での codex のサンドボックス](#コンテナの中での-codex-のサンドボックス)」）。
 - **資格情報はホストから注入しません**: `remoteEnv` が運ぶのは作業ディレクトリのパス（`LOCAL_WORKSPACE_FOLDER`）だけです。認証はコンテナ内で行い、その状態を named volume に残します。唯一の例外は GitHub CLI で、PAT を `.env` の `GH_TOKEN` へ置けます（下記「[資格情報の扱い](#資格情報の扱い)」）。
 
 ### オプション入力
@@ -516,6 +517,27 @@ gcloud auth login             # --with-gcp のとき（gcloud-storage）
 - 生成物の `devcontainer.json` は `updateRemoteUserUID` を書きません（既定に任せます）。**`false` にしないでください。** 上の付け替えが止まり、ネイティブ Linux のホストで書き込めなくなります（`tests/test-update-remote-user-uid.sh` が、生成物が無効にしていないことを確かめます）。
 - **効かない構成があります。** CLI が macOS や Windows の上で動き、Docker だけが別の Linux にある場合（`DOCKER_HOST` で遠くの Docker Engine を使う場合など）は、CLI が付け替えを行いません。その Linux へ Remote - SSH で入り、そこでコンテナを開いてください。CLI がその Linux の上で動くので、付け替えが働きます。
 - 付け替えはコンテナを作るときだけ行われます。ホストの利用者を変えた場合は、コンテナを作り直してください（Rebuild Container）。
+
+## コンテナの中での codex のサンドボックス
+codex は、コマンドを読み取り専用などのサンドボックスの中で動かすために bubblewrap（bwrap）を使います。bwrap は namespace を作り、その中で mount します。Docker はコンテナに既定で次の制限を当てていて、どちらもこれを止めます。
+
+| 制限 | 当たる環境 | 止めるもの | 外さないときの失敗 |
+|---|---|---|---|
+| seccomp（Docker の既定のプロファイル） | ネイティブ Linux の Docker Engine と Docker Desktop（macOS）の両方 | `CAP_SYS_ADMIN` を持たないプロセスの namespace の作成 | `bwrap: No permissions to create new namespace` |
+| AppArmor（`docker-default`） | ネイティブ Linux の Docker Engine（AppArmor が有効なとき） | mount | `bwrap: Failed to make / slave: Permission denied` |
+
+先に止めるのは seccomp なので、**AppArmor だけを外しても動きません。** そのため `--with-codex` の生成物は、`compose.yaml` の `app` に次を入れます。
+
+```yaml
+    security_opt:
+      - apparmor=unconfined
+      - seccomp=unconfined
+```
+
+- **実測した環境**: Ubuntu 26.04.1（カーネル 7.0.0-38、AppArmor 有効、`kernel.apparmor_restrict_unprivileged_userns = 1`）のネイティブの Docker Engine と、codex 0.160.0。既定と AppArmor だけ外した場合は `codex sandbox -- git status` が上の表の 1 行目で失敗し、2 つとも外すと通りました。ホストの `apparmor_restrict_unprivileged_userns` は、この失敗に関わっていませんでした。Docker Desktop（macOS）でも、既定のままでは同じ 1 行目で失敗し、2 つを外すと user namespace の作成と mount が通ることを確かめています。
+- **代償**: コンテナの中のプロセスが namespace を作り、mount できるようになります。Docker がコンテナに既定で掛けている隔離の 2 層を外すことになるので、`--with-codex` を選んだ構成に限っています。codex を使わなくなったら、`compose.yaml` からこの 3 行を消してください。
+- **`systempaths=unconfined` は入れていません。** bwrap は `/proc` を新しく mount しようとして、Docker が `/proc` の一部を隠していることで拒まれますが、codex はこの失敗を自分で避けて動きます。外す範囲を広げずに済むので入れていません。
+- **Docker Desktop（macOS）** には AppArmor がなく、`apparmor=unconfined` は効き目がないだけで害はありません。止めているのは seccomp なので、Mac でもこの設定が要ります。
 
 ## 資格情報の扱い
 

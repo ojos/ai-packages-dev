@@ -427,6 +427,7 @@ TMPL
       # 永続 volume は構成に応じて条件配線する（__VOLUME_MOUNTS__ /
       # __VOLUME_SECTION__ を render_content が置換）。gh は常時、cloud と AI ツールは
       # 選択時のみ。docker socket は常に明示。
+      # security_opt（__SECURITY_OPT__）は --with-codex のときだけ出す（build_security_opt_block）。
       cat <<'TMPL'
 services:
   app:
@@ -440,6 +441,7 @@ services:
       - /var/run/docker.sock:/var/run/docker-host.sock
 __VOLUME_MOUNTS__
     command: sleep infinity
+__SECURITY_OPT__
 __VOLUME_SECTION__
 TMPL
       ;;
@@ -7365,6 +7367,29 @@ build_volume_section_block() {
   printf 'volumes:\n%s' "$defs"
 }
 
+# compose の app.security_opt（__SECURITY_OPT__）。--with-codex のときだけ出す。
+#
+# codex のサンドボックスは bwrap で namespace を作り mount する。Docker の既定の seccomp が
+# namespace の作成を止め（ネイティブ Linux の Docker Engine でも Docker Desktop でも）、
+# ネイティブ Linux ではさらに AppArmor の docker-default が mount を止める（#392 で実測。
+# 止める順は seccomp → AppArmor なので、AppArmor だけ外しても足りない）。Docker Desktop
+# には AppArmor が無く、apparmor=unconfined は効き目が無いだけで害は無い。
+# systempaths=unconfined は要らない（codex は /proc の mount の失敗を自分で避ける）。
+# 隔離を弱めるので、サンドボックスを使う codex を選んだ構成に限る。
+build_security_opt_block() {
+  has_with codex || { printf ''; return; }
+  cat <<'BLK'
+    # codex のサンドボックス（bwrap）のために、AppArmor と seccomp の既定の制限を外す。
+    # Docker の既定の seccomp が namespace の作成を止め（Docker Desktop でも同じ）、
+    # ネイティブ Linux ではさらに AppArmor が mount を止める（片方だけ外しても動かない）。
+    # コンテナの中から namespace の作成や mount ができるようになり、隔離が弱まる。
+    # codex を使わなくなったら消してよい。
+    security_opt:
+      - apparmor=unconfined
+      - seccomp=unconfined
+BLK
+}
+
 # post-rebuild-check.sh の __VOLUME_CHECK_LINES__。永続 volume が実際にマウント
 # されているかを検査する。定義しただけでマウントされない（compose の編集ミス、
 # devcontainer.json が別サービスを指している等）と、ログイン状態は毎回消えるのに
@@ -7429,6 +7454,7 @@ render_content() {
   subst_block __AI_INSTALL_LINES__ "$(build_ai_install_block)"
   subst_block __VOLUME_MOUNTS__ "$(build_volume_mounts_block)"
   subst_block __VOLUME_SECTION__ "$(build_volume_section_block)"
+  subst_block __SECURITY_OPT__ "$(build_security_opt_block)"
   subst_block __VOLUME_CHECK_LINES__ "$(build_volume_check_block)"
   subst_block __WITH_CHECK_LINES__ "$(build_with_check_block)"
 
