@@ -5624,6 +5624,12 @@ main() {
     # のように受ける。**受けなければ、commit 済みのブランチで空のステージ済み差分を
     # 見て「対象なし」で終わる**ので、その出力を見たときは記録しない（下記）。
     #
+    # **限界: loop-gate が「レビューしていない」と判定できるのは、差し替えたコマンドが
+    # `[second-opinion] no diff to review` を出力したときだけである。** 範囲を使わず、この
+    # 文言も出さない任意のコマンド（例: `true`）は、何もレビューしていなくても GATE_PASS と
+    # 記録が出る。差し替えるコマンドは、範囲を `LOOP_GATE_REVIEW_RANGE` で受け取るか、
+    # 自分で範囲を決めて自分で記録を残すこと。
+    #
     # **scope は、範囲が解決できたら `range:<範囲>`、そうでなければ `staged` とみなす。**
     # 差し替えた側が何をレビューしたかは、ここからは分からない。**別の範囲を
     # レビューする reviewer を差し替えるなら、記録も自分で残すこと**
@@ -5635,7 +5641,7 @@ main() {
     #     「対象なし」と出力した（範囲を受けていない）: レビューされていないので
     #     GATE_FAIL にし、記録も作らない。通すと手元のゲートが偽の緑になる。
     resolve_review_range
-    local cmd_capture cmd_ok=0 cmd_scope="staged" cmd_unreviewed=0
+    local cmd_capture cmd_ok=0 cmd_scope="staged" cmd_unreviewed=0 cmd_skip=0
     if [[ -n "$REVIEW_RANGE" ]]; then
       if [[ -n "$REVIEW_RANGE_REASON" ]]; then
         echo "[loop-gate] $REVIEW_RANGE_REASON"
@@ -5643,11 +5649,16 @@ main() {
       echo "[loop-gate] staged diff is empty; passing range $REVIEW_RANGE to the reviewer (LOOP_GATE_REVIEW_RANGE)"
       cmd_scope="range:$REVIEW_RANGE"
     elif [[ "$REVIEW_NO_TARGET" -eq 1 ]]; then
+      # 対象が本当に無いときは、既定の経路と同じく差し替えたコマンドを実行しない。
+      # 実行すると、対象が無いのにコマンドの終了コード次第で GATE_FAIL になる。
       echo "[loop-gate] no reviewable diff; second opinion has nothing to review"
       cmd_scope=""
+      cmd_skip=1
     fi
     cmd_capture="$(mktemp "${TMPDIR:-/tmp}/loop-gate-second-opinion.XXXXXX")"
-    LOOP_GATE_REVIEW_RANGE="$REVIEW_RANGE" bash -c "$LOOP_GATE_REVIEW_CMD" 2>&1 | tee "$cmd_capture" || cmd_ok=1
+    if [[ "$cmd_skip" -eq 0 ]]; then
+      LOOP_GATE_REVIEW_RANGE="$REVIEW_RANGE" bash -c "$LOOP_GATE_REVIEW_CMD" 2>&1 | tee "$cmd_capture" || cmd_ok=1
+    fi
     if [[ -n "$cmd_scope" ]] && grep -q -E '^\[second-opinion\] no diff to review' "$cmd_capture"; then
       echo "[loop-gate] 差し替えた第二意見は「レビュー対象なし」と出力しましたが、レビュー対象は実在します。レビューされていないので失敗とし、記録も残しません。" >&2
       echo "[loop-gate] 範囲を LOOP_GATE_REVIEW_RANGE で受け取ってください（規則「レビューの起動方法」参照）。" >&2

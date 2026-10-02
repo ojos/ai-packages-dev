@@ -585,11 +585,11 @@ else
   fail "レビューしていないのに通過した、または記録が作られた: $out_txt"
 fi
 
-it "レビュー対象が本当に無いときは、差し替えたコマンドでも記録なしで通過する"
+it "レビュー対象が本当に無いときは、差し替えたコマンドを実行せず記録なしで通過する（LOOP_GATE_REVIEW_CMD=false でも）"
 out="$(new_workdir)/p"; acc="$(new_workdir)/acc.sh"
 mk_custom_gate_repo "$out" "$acc"
 ( cd "$out" && git init -q --bare ../origin402.git && git remote add origin ../origin402.git && git push -q -u origin main && git remote set-head origin main ) >/dev/null 2>&1
-if out_txt="$(cd "$out" && ALLOWED_AUTHOR_EMAILS="$ALLOWED_EMAIL" LOOP_GATE_REVIEW_CMD='bash scripts/fake-review.sh' VERIFY_ACCEPTANCE="$acc" bash scripts/loop-gate.sh 2>&1)" \
+if out_txt="$(cd "$out" && ALLOWED_AUTHOR_EMAILS="$ALLOWED_EMAIL" LOOP_GATE_REVIEW_CMD='false' VERIFY_ACCEPTANCE="$acc" bash scripts/loop-gate.sh 2>&1)" \
    && printf '%s' "$out_txt" | grep -q 'no reviewable diff' \
    && printf '%s' "$out_txt" | grep -q 'GATE_PASS' \
    && ! printf '%s' "$out_txt" | grep -q 'RECORD_SAVED'; then
