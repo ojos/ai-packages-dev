@@ -10,7 +10,7 @@
 # cloudflared は各 OS のパッケージ管理から入れる（Termux なら `pkg install cloudflared`）。
 # **公開範囲は Access のポリシーが決める。** sshd 自体はインターネットへ出さず、Cloudflare の
 # エッジだけがトンネルの出口を持つ。Access の認証が切れていると、ssh の代わりに cloudflared が
-# URL を出して待つので、ブラウザで承認してから続ける（README.md「Access の認証」）。
+# URL を出して待つので、ブラウザで承認してから続ける（README.md「ssh の入口とショートカット」）。
 #
 # 構築手順（Tunnel の作成、Access ポリシーの設定）は公式文書に従う。この道具一式は
 # ProxyCommand の呼び出し方だけを決める。

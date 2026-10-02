@@ -28,6 +28,15 @@ devcontainer-bootstrap（DCB）の README の
 に従ってください。`updateRemoteUserUID` が既定で UID/GID を揃えるため、devhost 側で
 追加の対処はしません。
 
+**ネイティブ Linux の Docker Engine では、コンテナの中で codex のサンドボックスが動かない
+ことがあります（未確認）。** Docker がコンテナに当てる AppArmor の既定のプロファイル
+（`docker-default`）が mount を禁じ、codex が使う bwrap が `Permission denied` で失敗する、
+という報告があります（game-forge #874）。Docker Desktop（macOS）には AppArmor が無いので
+起きません。compose に `security_opt: [apparmor=unconfined]` を足すと避けられるとされますが、
+コンテナの隔離を弱めるうえ、それだけで足りるかはまだ実機で確かめていません。そのため
+DCB が生成する compose には入れていません。困った場合は、第二意見のエンジンを codex 以外へ
+切り替えて回避してください。
+
 ## 層と、この道具が戻すもの
 
 | 層 | 落ちたとき | 戻し方 |

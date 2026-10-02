@@ -107,6 +107,9 @@ load_projects() {
     if [[ "$path" != /* ]]; then
       usage_error "$file:$lineno: パスは絶対パスで書きます（~ や \$HOME は展開しません）: $path"
     fi
+    # 末尾の / を外す。devcontainer はラベル（devcontainer.local_folder）に / の無い形を
+    # 書くので、/ 付きのまま照合すると、動いているコンテナを「無い」と取り違える。
+    while [[ "$path" == */ && "$path" != / ]]; do path="${path%/}"; done
     for ((i = 0; i < ${#P_NAMES[@]}; i++)); do
       [[ "${P_NAMES[$i]}" == "$name" ]] && usage_error "$file:$lineno: 名前が重複しています: $name"
     done

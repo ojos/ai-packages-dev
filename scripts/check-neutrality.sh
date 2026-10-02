@@ -27,7 +27,8 @@ FORBIDDEN='bascule|ojos|dev01'
 
 raw="$(grep -rniE "$FORBIDDEN" packages/ .ai-playbook/ \
   --include='*.sh' --include='*.md' --include='*.json' \
-  --include='*.yml' --include='*.yaml' --exclude-dir=tests || true)"
+  --include='*.yml' --include='*.yaml' --include='*.example' --include='*.service' \
+  --exclude-dir=tests || true)"
 
 # 除外は「行ごと捨てる」のではなく「許可された配布先だけを番兵へ置き換えてから
 # 再判定する」。行単位の grep -v だと、同一行に禁止語と許可 URL が共存したとき
