@@ -9,13 +9,15 @@
 
 | パッケージ | リポジトリ | 現行バージョン | 配布形態 |
 |---|---|---|---|
-| devcontainer-bootstrap | `ojos/devcontainer-bootstrap` | v0.12.0 | GitHub Release + 資産 5 点（配布スクリプト 2: `bootstrap.sh` / `doctor.sh`、生成物 3: `SHA256SUMS` / `RELEASE-MANIFEST.json` / `PACKAGE_ARCHIVE.tar.gz`） |
-| ai-playbook | `ojos/ai-playbook` | v0.4.0 | git タグのみ |
+| devcontainer-bootstrap | `ojos/devcontainer-bootstrap` | v0.13.0 | GitHub Release + 資産 5 点（配布スクリプト 2: `bootstrap.sh` / `doctor.sh`、生成物 3: `SHA256SUMS` / `RELEASE-MANIFEST.json` / `PACKAGE_ARCHIVE.tar.gz`） |
+| ai-playbook | `ojos/ai-playbook` | v0.5.0 | git タグのみ |
 
 ### 新世代の版更新
 
 | パッケージ | 版 | 公開日 | 要点 |
 |---|---|---|---|
+| devcontainer-bootstrap | v0.13.0 | 2026-10-02 | **ベースイメージを版の名前（`base:noble` / `base:bookworm`）で固定した**（#368）。`base:ubuntu` が 26.04 を指すようになり、`--with-gcp` の google-cloud-cli の feature が `apt-key` の欠落で落ちていた。**第二意見の記録と確認側を配置する**（#361 / #363。規範を配置する構成のとき、記録・確認側・除外判定・schema の 4 本）。**`--with-codex` を足した**（#362）。**identity-guard が squash merge の co-author（`users.noreply`）を許可し、判定の自己試験を配る**（#369。`push(main)` の全履歴検査が赤のままになっていた）。**文書の相対リンクの検査 `check-doc-links.sh` を配る**（#371）。**loop-gate のレビュー範囲から、他の PR を取り消す差分を除いた**（#382）。ネイティブ Linux の UID の食い違いは `updateRemoteUserUID` が吸収することを README に書いた（#372。取り込み元の「compose 方式には効かない」は実測で否定）。**この版は ai-playbook v0.5.0 以降を要求する**（雛形 4 本が必要）。既存フラグの挙動は変わらない |
+| ai-playbook | v0.5.0 | 2026-10-02 | **リモート最終ゲートを任意の層にした**（#364）。置かない場合は第二意見の記録と確認側、CI による受け入れ検証の再実行を標準の機構層とする。**第二意見の記録と確認側の雛形を足した**（#361 / #370。数える記録は PR の作者のものだけで、組織所有でも設定なしで動く）。**判定を JSON スキーマで強制し、`codex` エンジンを足した**（#363 / #362。落とすのは 4 分類だけ）。主レビューの前の品質整理の前段（#357）、`Closes` の保険と承認の根拠（#373）。雛形 11 種 → **15 種**（`second-opinion-record.sh` / `second-opinion-gate.yml` / `second-opinion-gate-exempt.sh` / `second-opinion-schema.json`）。追加と緩和のみで後方互換。章番号のずれは無い |
 | devcontainer-bootstrap | v0.12.0 | 2026-09-24 | **移植性の静的検査と衛生検査を配布物へ入れた**（#330 / #332 / #343 / #346 / #327）。「この環境では通るが BSD 系（macOS）では落ちる」綴りと、読めない制御文字・表崩れを機械で落とす。**マージ確認フックを配り迂回経路を 3 件塞いだ**（#312 / #315 / #318 / #320）。`npm ci` 忘れの検出（#334）、生成物の由来記録と doctor の乖離診断（#321）、`land` スキルの配布（#311）、ローカル事前ゲートの identity 検査（#302）。**README の保証範囲を訂正した**（#339）。v0.11.0 までの README は「`SHA256SUMS` は改ざんを検出する」と誤って約束していた。**リリース資産へ artifact attestation を発行するようにした**（#340）。この版から効く。**この版は ai-playbook v0.4.0 以降を要求する**（雛形 3 本が必要）。破壊的変更は無く、既存フラグの挙動は変わらない |
 | ai-playbook | v0.4.0 | 2026-09-24 | **レビュー運用の穴を 4 件塞いだ**（#301 / #303 / #306 / #308）。「Copilot が 1 行も読めていない PR」を緑で通す穴、大きい差分を拒否する制限、要求の間欠的な失敗、保証範囲の未明文化。**13 章へ「統合する側の実務」を足した**（#322。波及先の洗い出しを 3 方向で定義）。**`loop-workflow.md` へ「道具自体を見る検査の置き場所」を定めた**（#337）。**2 層目の雛形の空欄を既定値の提示へ書き直した**（#328。23 箇所のうち 11 を既定へ、12 は欄のまま残し既定の不在を宣言させる）。雛形 8 種 → **11 種**（`review-usable.sh` / `check-review-usable.sh` / `claude-skill-land.md`）。追加と明文化のみで後方互換 |
 | devcontainer-bootstrap | v0.11.0 | 2026-08-13 | **委譲先エージェント定義を生成物へ配布するようにした**（#259）。`--with-claude` 指定時だけ `.claude/agents/explorer.md` と `implementer.md` を置く。雛形は規範パッケージが持ち、DCB は置き先だけを決める（intake 起点スキルと同じ経路）。目的は**モデルとツールを実行環境が読む機構で固定すること**で、指示文による呼びかけは迂回できるが frontmatter は迂回できない。読み取り専用ロールからは編集系ツールを外す（ただし調査に要るコマンド実行を残す以上、リダイレクト経由の書き込みは塞げない。境目は各定義に明記）。**この版は ai-playbook v0.3.0 以降を要求する**（雛形と、判定の導線を定めた 13 章が必要）。生成物のテストは**規範側に導線が実在すること**まで検査する（定義だけでは役割が選ばれないため）。衝突ポリシーは既定 `skip` で既存の生成先は上書きしない。機能追加のみで既存フラグの挙動は変わらない |

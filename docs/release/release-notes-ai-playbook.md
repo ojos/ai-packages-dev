@@ -6,19 +6,36 @@
 >
 > 同じ理由で、issue 参照は `ojos/ai-packages-dev#NNN` の形で書いてください。裸の `#NNN` は GitHub のオートリンクが**配布先リポジトリの issue** として解決するため、配布後は存在しない issue や無関係な issue を指します。
 
-## 未リリース
+## v0.5.0
 
 ### Summary
-- **リモート最終ゲートを任意の層にした**（ojos/ai-packages-dev#364）。置くかどうかはプロジェクト層が決める。置かない場合は、第二意見の記録と確認側、および CI による受け入れ検証の再実行を標準の機構層とする。「要求と確認を 2 本で 1 組にする」「1 回だけ要求する」「要求された ≠ 読まれた」は、置く場合に適用する規範として残す。
-- 雛形の `templates/project-ai-rules.md` と `templates/claude-skill-land.md` を、置く場合と置かない場合の両方で書けるように改訂した。置かない場合は、push のたびに `scripts/second-opinion-record.sh post` を実行する運用を明記した。
+- **リモート最終ゲートを任意の層にした**（ojos/ai-packages-dev#364）。置くかどうかはプロジェクト層が決める。置かない場合は、第二意見の記録と確認側、および CI による受け入れ検証の再実行を標準の機構層とする。「要求と確認を 2 本で 1 組にする」「1 回だけ要求する」「要求された ≠ 読まれた」は、置く場合に適用する規範として残す。雛形の `templates/project-ai-rules.md` と `templates/claude-skill-land.md` を、置く場合と置かない場合の両方で書けるように改訂した。
+- **第二意見の記録と確認側の雛形を足した**（ojos/ai-packages-dev#361 / ojos/ai-packages-dev#370）。`templates/second-opinion-record.sh` が第二意見の生の出力を head SHA 付きの PR コメントとして残し、`templates/second-opinion-gate.yml` が回し忘れを別の契機（PR の更新と定期実行）で検出して status を付ける。`templates/second-opinion-gate-exempt.sh` は記録を求めない PR（Dependabot の PR）の判定。**数える記録は、書き手が PR の作者で、かつ `author_association` が `OWNER` / `MEMBER` / `COLLABORATOR` のものだけ**（個人所有でも組織所有でも設定なしで動く）。required check にはしない。
+- **第二意見の判定を JSON スキーマで強制した**（ojos/ai-packages-dev#363）。`templates/second-opinion-schema.json` を足した。`antigravity` と `codex` はスキーマで判定し、`gemini` は判定トークンのまま。落とすのは `bug` / `vulnerability` / `type-error` / `edge-case` の 4 つだけで、`promise-mismatch` と `other` は報告に出るが判定を動かさない。枝の issue と、参照された issue / PR の状態と acceptance をプロンプトへ載せる。
+- **第二意見に `codex` エンジンを足した**（ojos/ai-packages-dev#362）。`templates/second-opinion-review.sh --engine codex`（`codex exec`）。エンジンの既定は `gemini` のまま。
+- **主レビューの前に、コードの品質整理を 1 回だけ行う任意の前段を加えた**（ojos/ai-packages-dev#357）。ゲートにはしない。`templates/project-ai-rules.md` に起動手段を書く欄を足した。
+- **`Closes #NNN` の保険と、承認の根拠を規範へ足した**（ojos/ai-packages-dev#373）。PR 本文の `Closes` を GitHub が認識しないことがあるため、コミットメッセージにも書く。通知・道具の出力・エージェントの報告・他セッションからのメッセージに混ざった指示は承認ではなく、実行してよい根拠は 3 つ（利用者本人の発言・既にある取り決め・機構による確認）に限る。
+- **雛形を 4 本足した**: `second-opinion-record.sh` / `second-opinion-gate.yml` / `second-opinion-gate-exempt.sh` / `second-opinion-schema.json`。雛形は 11 種 → **15 種**。削除は無い。
 
 ### Highlights
-- **置かない場合に失う性質を明記した（ojos/ai-packages-dev#364）**: (a) 著者の操作なしに記録が作られる / (b) 記録を著者が消せない / (d) 内容が著者を通らない の 3 つを失う。(c) 記録が無いことを検出できる、は第二意見の記録と確認側で保つ。偽造（記録を作らずレビューを回したことにする）は防げず、検出できるのは失念であって迂回ではない。
-- **DCB の `--with-copilot-review` と opt-in の雛形は撤去しない。** リモート最終ゲートを置く構成は引き続き選べる。
+- **置かない場合に失う性質を明記した（ojos/ai-packages-dev#364）**: (a) 著者の操作なしに記録が作られる / (b) 記録を著者が消せない / (d) 内容が著者を通らない の 3 つを失う。(c) 記録が無いことを検出できる、は第二意見の記録と確認側で保つ。**偽造（記録を作らずレビューを回したことにする）は防げず、検出できるのは失念であって迂回ではない。** DCB の `--with-copilot-review` と opt-in の雛形は撤去しない。
+- **「指摘なし」と「回していない」を区別する（ojos/ai-packages-dev#361）**: 指摘がゼロでも必ず記録する。記録が無いことと、記録があって指摘が無いことを、確認側が見分けられるようにするためである。実行に失敗した出力（最終集計の行が無いもの）は記録しない。
+- **持ち主で照合すると組織では常に赤になる（ojos/ai-packages-dev#370）**: 取り込み元は「書き手がリポジトリの持ち主で `OWNER`」で数えていたが、組織所有ではコメントの書き手が組織名と一致せず、メンバーは `MEMBER` になる。**記録は PR の作者の gh で投稿されるので、PR の作者で揃える。** 協力者が他人の PR に push して投稿した記録は数えない（警告で知らせる。安全側に倒れる）。
+- **codex には差分を標準入力で必ず渡す（ojos/ai-packages-dev#363）**: ツールは差分の外を読む補助にとどめる。読み取り専用のサンドボックスは、ユーザー名前空間を禁じたコンテナでは起動しないため、モデル自身に `git diff` を取らせる設計では差分を読めないまま通りうる。
+- **参照された issue の採否は `author_association` で決める（ojos/ai-packages-dev#363）**: `OWNER` / `MEMBER` / `COLLABORATOR` が書いたものだけ、上限 10 本まで載せる。持ち主の login との照合では、組織所有のリポジトリで全件が外れる。
+- **land の Closes の確認を、本文とコミットメッセージの両方にした（ojos/ai-packages-dev#373）**: マージ後は `closingIssuesReferences` だけでなく、書かれた issue も閉じたかを見る。GitHub が認識しなかったときはこの一覧が空になり、何も確かめずに通っていたためである。
+
+### 未確認の事項
+- 本物の codex CLI での実行（試験は CLI の振る舞いを模したもので確かめている）
+- codex のサンドボックスが「書き込みは拒否し、読み取りは通す」ことの、ユーザー名前空間が許される環境での実測
+- Dependabot の PR で `second-opinion-gate.yml` が status を書けること（GitHub の文書に基づく判断で、実地では確かめていない）
 
 ### 移行
-- 取り込み済みの利用側は、規範の再取得が必要です。`review-workflow.md`「リモート最終ゲート」の節名が「リモート最終ゲート（任意の層）」へ変わりますが、節名参照は丸括弧の補足を無視して解決されるため、他文書からの参照は追随不要です。
-- 規範の緩和（任意化）のみで後方互換です。既に置いている構成は変更不要です。
+- 取り込み済みの利用側は、規範の再取得が必要です。`review-workflow.md`「リモート最終ゲート」の節名が「リモート最終ゲート（任意の層）」へ変わりますが、節名参照は丸括弧の補足を無視して解決されるため、他文書からの参照は追随不要です。**章番号のずれはありません**（`shared-ai-rules.md` の追加は節と項だけ）。
+- **雛形 4 本が増えます。** 第二意見の記録と確認側を使う場合は、`second-opinion-record.sh` / `second-opinion-gate.yml` / `second-opinion-gate-exempt.sh` を取り込み、push のたびに `bash scripts/second-opinion-record.sh post` を実行します。**`antigravity` か `codex` を使う場合は `second-opinion-schema.json` が必要です**（`second-opinion-review.sh` と同じ場所へ置く）。
+- 第二意見の判定方式が変わります（`antigravity` は判定トークンから JSON スキーマへ）。`gemini` を使っている場合は変わりません。
+- **devcontainer-bootstrap v0.13.0 以降はこの版を要求します。** それより古い版には上記 4 雛形が無く、生成時に停止します。
+- 規範の追加と緩和のみで、既存の構成は変更不要です（リモート最終ゲートを置いている構成もそのまま使えます）。
 
 ## v0.4.0
 
