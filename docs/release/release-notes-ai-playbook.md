@@ -6,6 +6,17 @@
 >
 > 同じ理由で、issue 参照は `ojos/ai-packages-dev#NNN` の形で書いてください。裸の `#NNN` は GitHub のオートリンクが**配布先リポジトリの issue** として解決するため、配布後は存在しない issue や無関係な issue を指します。
 
+## 未リリース
+
+### Summary
+- **差分を読めなかった第二意見を通過させず、記録も作らせない**（ojos/ai-packages-dev#386）。JSON スキーマ方式のエンジン（`--engine antigravity` / `--engine codex`）で、回答に必須の真偽値 `reviewed`（差分を実際に読んでレビューできたか）を加えた。`reviewed` が欠けた・真偽値でない回答は形の不一致として、`false` の回答は指摘の中身によらず落とす。このとき完了の行を出さないので、`loop-gate.sh` は記録を作らない。
+
+### Highlights
+- **「読めなかった」を指摘の 1 件として報告させるだけでは足りない（ojos/ai-packages-dev#386）**: ツールの実行が失敗して差分を読めなかった事実を、判定を動かさない種別の指摘として返した回答は、種別だけを見ると通過になり、読んでいないものがレビュー済みとして記録される。**読めたかどうかを回答の必須項目として答えさせ、指摘の中身を見る前に落とす。** `review-workflow.md`「第二意見の非決定性」へ一般化して書き足した。
+
+### 移行
+- **破壊的変更: `templates/second-opinion-schema.json` の必須項目に `reviewed` が加わった。** `--engine antigravity` / `--engine codex` を使っていて、`scripts/second-opinion-schema.json` を雛形から写して持っている場合は、`templates/second-opinion-review.sh` と合わせて写し直してください。片方だけを更新すると、回答が「形の不一致」で落ちます。`--engine gemini`（既定）だけを使っている場合は影響しません。
+
 ## v0.5.0
 
 ### Summary
