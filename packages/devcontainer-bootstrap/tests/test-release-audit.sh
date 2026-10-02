@@ -351,7 +351,9 @@ fi
 
 it "範囲内の 1 件でも改変されていれば監査が非ゼロで終了する"
 mkdir -p "$FIXTURE/releases/v0.0.13"
-cp "$BASE"/* "$FIXTURE/releases/v0.0.13"/
+# $BASE は devhost/ のようなディレクトリも含む（#376）。-R を付けないと cp が
+# ディレクトリをエラーで読み飛ばし、警告が出る（監査の判定自体には影響しない）。
+cp -R "$BASE"/* "$FIXTURE/releases/v0.0.13"/
 printf ' ' >> "$FIXTURE/releases/v0.0.13/bootstrap.sh"
 out="$(run_audit)"
 rc=$?

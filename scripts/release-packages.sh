@@ -466,12 +466,36 @@ JSON
 # 中身がルートへ展開され、DCB はごく少数のファイルがルートへ並ぶ）。そのため
 # リリースノートは配布先ルートで解決できる CHANGELOG.md という名前へ移して配る。
 # 変更履歴の正本は開発リポジトリの docs/release/ 側のままで、配布はその写しになる。
+#
+# devhost（packages/devhost/.）は配布先の devhost/ 配下へそのまま写す（#376）。
+# devhost は bootstrap.sh が生成するものではなく、利用者が外部の機械へ手で置く
+# 独立した道具一式だが、配布経路は DCB のリリースに同梱する（親 #374 が選んだ方式）。
+#
+# **SUMS_TARGETS（SHA256SUMS の対象）には devhost を加えない。** SHA256SUMS は
+# 「検証する人が個別に取得するファイル」だけを列挙する設計で、個々のファイル名が
+# 単一ファイル名であること（`is_plain_asset_name`）を監査側が前提にしている。
+# devhost は複数ファイルかつサブディレクトリ（devhost/termux/）を持つため、個別の
+# フラットな Release 資産として添付すると termux/shortcut.example の階層が失われ、
+# devhost/README.md は DCB の README.md と資産名が衝突する。そのため devhost は
+# PACKAGE_ARCHIVE.tar.gz（配布ツリー全体を固める既存の資産）だけに乗せ、完全性は
+# PACKAGE_ARCHIVE.tar.gz のハッシュ（RELEASE-MANIFEST.json → SHA256SUMS → …の
+# 既存の 2 段検証チェーンの根）で守る。bootstrap.sh / doctor.sh の配布先の名前と
+# 検証手順（SUMS_TARGETS）はこれまでどおり変えない。
 DCB_DISTRIBUTED_FILES=(
   "packages/devcontainer-bootstrap/bootstrap.sh:bootstrap.sh"
   "packages/devcontainer-bootstrap/doctor.sh:doctor.sh"
   "packages/devcontainer-bootstrap/README.md:README.md"
   "LICENSE:LICENSE"
   "docs/release/release-notes-devcontainer-bootstrap.md:CHANGELOG.md"
+  "packages/devhost/README.md:devhost/README.md"
+  "packages/devhost/dev.sh:devhost/dev.sh"
+  "packages/devhost/dev-up@.service:devhost/dev-up@.service"
+  "packages/devhost/projects.example:devhost/projects.example"
+  "packages/devhost/selftest.sh:devhost/selftest.sh"
+  "packages/devhost/ssh_config.plain.example:devhost/ssh_config.plain.example"
+  "packages/devhost/ssh_config.cloudflared.example:devhost/ssh_config.cloudflared.example"
+  "packages/devhost/ssh_config.tailscale.example:devhost/ssh_config.tailscale.example"
+  "packages/devhost/termux/shortcut.example:devhost/termux/shortcut.example"
 )
 
 # ai-playbook はツリー全体（.ai-playbook/.）を展開したうえで、開発リポジトリの
@@ -483,6 +507,10 @@ PLAYBOOK_DISTRIBUTED_FILES=(
 
 # 一覧に載っているのに実体が無い場合は落とす。黙って欠けたまま公開すると、
 # 配布先のルートからライセンスや変更履歴が消えたことに誰も気づかない。
+#
+# dst がサブディレクトリを含む場合（devhost/termux/shortcut.example 等）に備え、
+# 書き込み先のディレクトリを先に作る。mkdir -p は dst がルート直下の場合も
+# dirname が "." になるだけで無害（既に存在する）。
 copy_distributed_files() {
   local dir="$1"
   shift
@@ -494,6 +522,7 @@ copy_distributed_files() {
       echo "error: distribution source not found: $src" >&2
       exit 1
     }
+    mkdir -p "$dir/$(dirname "$dst")"
     cp "$src" "$dir/$dst"
   done
 }
