@@ -9,6 +9,7 @@
 ## 未リリース
 
 ### Summary
+- **`LOOP_GATE_REVIEW_CMD` で第二意見を差し替えても、レビューしていないものを通さず、記録もしないようにした**（ojos/ai-packages-dev#402）。差し替えた経路は commit 済み範囲への切り替えを通らず、空のステージ済み差分を見て「対象なし」で 0 を返したまま GATE_PASS と scope=staged の記録が出ていた（確認側も緑になる）。解決した範囲を環境変数 `LOOP_GATE_REVIEW_RANGE` で渡すようにし、レビュー対象が実在するのに差し替えたコマンドが「対象なし」と出力したときは GATE_FAIL とし記録も残さない。レビュー対象が本当に無いと解決したときは、差し替えたコマンドを実行せず、記録なしで通過する。
 - **devhost を新設し、DCB のリリースに同梱した**（ojos/ai-packages-dev#375 / ojos/ai-packages-dev#376）。SSH で届く外部の機械（自宅のラップトップ、社内のサーバーなど）の上で devcontainer を起こしたまま保ち、スマホやほかの端末から入って AI コーディングを続けるための道具一式 `devhost/`。bootstrap.sh が生成するものではなく、利用者が外部の機械へ手で置く独立した道具だが、配布は DCB のリリースの `PACKAGE_ARCHIVE.tar.gz` に `devhost/` として同梱する。個別の Release 資産（`SHA256SUMS` の対象）には加えず、完全性は `PACKAGE_ARCHIVE.tar.gz` のハッシュ（`RELEASE-MANIFEST.json`）で守る。導入手順は README の「devhost」の節と、同梱された `devhost/README.md` を参照。
 
 - **`--with-codex` の生成物で、codex のサンドボックスが動くようにした**（ojos/ai-packages-dev#392）。`compose.yaml` の `app` に `security_opt: [apparmor=unconfined, seccomp=unconfined]` を入れる。Docker の既定の seccomp が bwrap の namespace の作成を止め（ネイティブ Linux の Docker Engine でも Docker Desktop でも）、ネイティブ Linux ではさらに AppArmor の `docker-default` が mount を止めていた。**AppArmor だけ外しても動かない。** `--with-codex` を付けない生成物には入らない。

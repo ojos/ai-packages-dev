@@ -5261,6 +5261,8 @@ TMPL
 # 第二意見レビュー:
 #   既定で scripts/second-opinion-review.sh があれば実行する。
 #   LOOP_GATE_REVIEW_CMD で任意のコマンドへ差し替え可能。空文字でスキップする。
+#   差し替えたコマンドへは、解決した範囲を環境変数 LOOP_GATE_REVIEW_RANGE で渡す
+#   （ステージ済みがあるとき・対象が無いときは空）。
 #
 #   second-opinion-review.sh の既定対象はステージ済み差分で、空なら「レビュー対象なし」
 #   として 0 を返す。commit 後（ステージが空）にこのゲートを回すと、第二意見が
@@ -5617,18 +5619,61 @@ main() {
     # ローカルのゲートを通しても**確認側が必ず赤になる**——回したのに回していないと
     # 言われる形で、機構への信頼を壊す。
     #
-    # **scope は `staged` とみなす。** 差し替えた側が何をレビューしたかは、ここからは
-    # 分からない。既定の reviewer の既定が `staged` で、規範も「差分を渡して非対話で
-    # 実行する」と定めているので、その前提に揃える。**別の範囲をレビューする reviewer
-    # を差し替えるなら、記録も自分で残すこと**（`scripts/second-opinion-record.sh save`
-    # を呼ぶ）。
-    local cmd_capture cmd_ok=0
+    # **既定の reviewer と同じ範囲を解決し、環境変数 LOOP_GATE_REVIEW_RANGE で渡す。**
+    # ステージ済みが空のときだけ commit 済み範囲（`<from>..HEAD`）が入る。ステージ済み
+    # があるとき・対象が無いときは空。差し替えた側が範囲を使いたければ、例えば
+    # `bash scripts/second-opinion-review.sh --engine X ${LOOP_GATE_REVIEW_RANGE:+--range "$LOOP_GATE_REVIEW_RANGE"}`
+    # のように受ける。**受けなければ、commit 済みのブランチで空のステージ済み差分を
+    # 見て「対象なし」で終わる**ので、その出力を見たときは記録しない（下記）。
+    #
+    # **限界: loop-gate が「レビューしていない」と判定できるのは、差し替えたコマンドが
+    # `[second-opinion] no diff to review` を出力したときだけである。** 範囲を使わず、この
+    # 文言も出さない任意のコマンド（例: `true`）は、何もレビューしていなくても GATE_PASS と
+    # 記録が出る。差し替えるコマンドは、範囲を `LOOP_GATE_REVIEW_RANGE` で受け取るか、
+    # 自分で範囲を決めて自分で記録を残すこと。
+    #
+    # **scope は、範囲が解決できたら `range:<範囲>`、そうでなければ `staged` とみなす。**
+    # 差し替えた側が何をレビューしたかは、ここからは分からない。**別の範囲を
+    # レビューする reviewer を差し替えるなら、記録も自分で残すこと**
+    # （`scripts/second-opinion-record.sh save` を呼ぶ）。
+    #
+    # **レビューしていないものは、記録せず、通過もさせない。**
+    #   - 解決の結果が「対象が本当に無い」: 既定の経路と同じく、記録なしで通過する。
+    #   - 対象が実在する（範囲あり、またはステージ済みあり）のに、差し替えた側が
+    #     「対象なし」と出力した（範囲を受けていない）: レビューされていないので
+    #     GATE_FAIL にし、記録も作らない。通すと手元のゲートが偽の緑になる。
+    resolve_review_range
+    local cmd_capture cmd_ok=0 cmd_scope="staged" cmd_unreviewed=0 cmd_skip=0
+    if [[ -n "$REVIEW_RANGE" ]]; then
+      if [[ -n "$REVIEW_RANGE_REASON" ]]; then
+        echo "[loop-gate] $REVIEW_RANGE_REASON"
+      fi
+      echo "[loop-gate] staged diff is empty; passing range $REVIEW_RANGE to the reviewer (LOOP_GATE_REVIEW_RANGE)"
+      cmd_scope="range:$REVIEW_RANGE"
+    elif [[ "$REVIEW_NO_TARGET" -eq 1 ]]; then
+      # 対象が本当に無いときは、既定の経路と同じく差し替えたコマンドを実行しない。
+      # 実行すると、対象が無いのにコマンドの終了コード次第で GATE_FAIL になる。
+      echo "[loop-gate] no reviewable diff; second opinion has nothing to review"
+      cmd_scope=""
+      cmd_skip=1
+    fi
     cmd_capture="$(mktemp "${TMPDIR:-/tmp}/loop-gate-second-opinion.XXXXXX")"
-    bash -c "$LOOP_GATE_REVIEW_CMD" 2>&1 | tee "$cmd_capture" || cmd_ok=1
-    record_second_opinion "$cmd_capture" "staged" "$cmd_ok" 0
+    if [[ "$cmd_skip" -eq 0 ]]; then
+      LOOP_GATE_REVIEW_RANGE="$REVIEW_RANGE" bash -c "$LOOP_GATE_REVIEW_CMD" 2>&1 | tee "$cmd_capture" || cmd_ok=1
+    fi
+    if [[ -n "$cmd_scope" ]] && grep -q -E '^\[second-opinion\] no diff to review' "$cmd_capture"; then
+      echo "[loop-gate] 差し替えた第二意見は「レビュー対象なし」と出力しましたが、レビュー対象は実在します。レビューされていないので失敗とし、記録も残しません。" >&2
+      echo "[loop-gate] 範囲を LOOP_GATE_REVIEW_RANGE で受け取ってください（規則「レビューの起動方法」参照）。" >&2
+      cmd_scope=""
+      cmd_ok=1
+      cmd_unreviewed=1
+    fi
+    record_second_opinion "$cmd_capture" "$cmd_scope" "$cmd_ok" 0
     rm -f "$cmd_capture"
     if [[ "$cmd_ok" -ne 0 ]]; then
-      echo "[loop-gate] second opinion reported findings" >&2
+      if [[ "$cmd_unreviewed" -eq 0 ]]; then
+        echo "[loop-gate] second opinion reported findings" >&2
+      fi
       echo "GATE_FAIL"
       exit 1
     fi
