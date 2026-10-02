@@ -491,6 +491,15 @@ gcloud auth login             # --with-gcp のとき（gcloud-storage）
 - `--with-aws`: `amazonwebservices.aws-toolkit-vscode`。`--with-gcp`: `GoogleCloudTools.cloudcode`。いずれかの cloud 指定で `hashicorp.terraform`。
 - `--with-claude`: `anthropic.claude-code`。`--with-gemini`: `Google.gemini-cli-vscode-ide-companion`。`--with-copilot`: `github.copilot` / `github.copilot-chat`。`--with-antigravity` は拡張を追加しません（CLI のみ）。
 
+## ネイティブ Linux の Docker でのワークスペースの所有者
+コンテナの利用者は、ベースイメージの `vscode`（UID/GID 1000）です。ネイティブ Linux の Docker Engine は、bind mount の所有者を数値の UID のままコンテナへ通します。そのため、ホストの利用者の UID/GID が 1000 でないと、ワークスペースへ書き込めないように見えます（Docker Desktop for Mac はファイル共有層が所有者を写すので、この問題は起きません）。
+
+**生成物は何もしなくても、この食い違いを吸収します。** Dev Containers（devcontainer CLI。VS Code の Dev Containers 拡張も同じ CLI を使います）は、CLI が Linux の上で動くとき、コンテナを作る時点で `remoteUser` の UID/GID をホストの利用者に合わせたイメージ（名前の末尾が `-uid`）を作ります。これが `devcontainer.json` の `updateRemoteUserUID` で、既定で有効です。**生成物の `dockerComposeFile` 方式でも同じように働きます**（devcontainer CLI 0.89.0 で、UID 1001 の利用者が `devcontainer up` すると、コンテナの `vscode` が `uid=1001 gid=1001` になり、`/home/vscode` の所有者も揃うことを実測）。
+
+- 生成物の `devcontainer.json` は `updateRemoteUserUID` を書きません（既定に任せます）。**`false` にしないでください。** 上の付け替えが止まり、ネイティブ Linux のホストで書き込めなくなります（`tests/test-update-remote-user-uid.sh` が、生成物が無効にしていないことを確かめます）。
+- **効かない構成があります。** CLI が macOS や Windows の上で動き、Docker だけが別の Linux にある場合（`DOCKER_HOST` で遠くの Docker Engine を使う場合など）は、CLI が付け替えを行いません。その Linux へ Remote - SSH で入り、そこでコンテナを開いてください。CLI がその Linux の上で動くので、付け替えが働きます。
+- 付け替えはコンテナを作るときだけ行われます。ホストの利用者を変えた場合は、コンテナを作り直してください（Rebuild Container）。
+
 ## 資格情報の扱い
 
 **ホスト OS の資格情報をコンテナへ注入しません。** 生成される `remoteEnv` が運ぶのは作業ディレクトリのパス（`LOCAL_WORKSPACE_FOLDER`）だけです。
