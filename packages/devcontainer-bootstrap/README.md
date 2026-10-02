@@ -165,11 +165,12 @@ tar -xzf PACKAGE_ARCHIVE.tar.gz
 
 **SSH で届く外部の機械（自宅のラップトップ、社内のサーバーなど）の上で devcontainer を起動したまま保ち、
 スマホやほかの端末から入って AI コーディングを続けるための道具一式**です。`PACKAGE_ARCHIVE.tar.gz` の
-`devhost/` 配下に同梱されています（上の 2 段検証の対象に入ります。個別の URL は配っていません）。
+`devhost/` 配下に同梱されています（上の 1. で `RELEASE-MANIFEST.json` と照合する対象に入ります。個別の URL は配っていません）。
 
 ```bash
-# 上の 2 段検証を行った PACKAGE_ARCHIVE.tar.gz から取り出す
-tar -xzf PACKAGE_ARCHIVE.tar.gz devhost/
+# 上の 1. で照合した PACKAGE_ARCHIVE.tar.gz から取り出す。archive の中の名前は ./devhost/...
+# なので、./ を付けて指定する（GNU tar は devhost/ だと一致しない）。
+tar -xzf PACKAGE_ARCHIVE.tar.gz ./devhost
 ls devhost/
 ```
 

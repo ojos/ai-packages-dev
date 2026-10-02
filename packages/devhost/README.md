@@ -54,7 +54,7 @@ DCB が生成する compose には入れていません。困った場合は、�
 ### devhost を入手する
 
 devhost は独立したリリースを持たず、**devcontainer-bootstrap（DCB）のリリースに同梱されています。**
-`PACKAGE_ARCHIVE.tar.gz` を取得し、2 段検証（`RELEASE-MANIFEST.json` → `SHA256SUMS`）のあと展開します。
+`RELEASE-MANIFEST.json` と `PACKAGE_ARCHIVE.tar.gz` を取得し、マニフェストが記録した archive のハッシュと照合してから取り出します。
 手順の詳細と検証の意味は DCB の README の「devhost」の節を参照してください。
 
 ```bash
@@ -66,9 +66,12 @@ curl -sSL "${BASE}/PACKAGE_ARCHIVE.tar.gz" -o PACKAGE_ARCHIVE.tar.gz
 
 # sha256sum は GNU coreutils のコマンドで、macOS には無い。shasum へ分岐する。
 if command -v sha256sum >/dev/null 2>&1; then sha256c="sha256sum"; else sha256c="shasum -a 256"; fi
-jq -r '.checksums | to_entries[] | "\(.value)  \(.key)"' RELEASE-MANIFEST.json | $sha256c -c -
+# マニフェストの checksums には SHA256SUMS の行もあるが、devhost に要るのは archive だけ。
+# その行だけを抜き出して照合する（SHA256SUMS を取得していないので、全行を渡すと落ちる）。
+jq -r '.checksums["PACKAGE_ARCHIVE.tar.gz"] + "  PACKAGE_ARCHIVE.tar.gz"' RELEASE-MANIFEST.json | $sha256c -c -
 
-tar -xzf PACKAGE_ARCHIVE.tar.gz devhost/
+# archive の中の名前は ./devhost/... なので、./ を付けて指定する（GNU tar は devhost/ だと一致しない）。
+tar -xzf PACKAGE_ARCHIVE.tar.gz ./devhost
 ls devhost/
 ```
 

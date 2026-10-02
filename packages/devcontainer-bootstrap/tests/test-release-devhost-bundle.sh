@@ -79,6 +79,23 @@ else
   fail "PACKAGE_ARCHIVE.tar.gz が生成されていない"
 fi
 
+it "README に書いた取り出しのコマンド（tar -xzf ... ./devhost）で devhost を取り出せる"
+# 中の名前は ./devhost/... なので、GNU tar では devhost/ を指定すると一致しない。
+# README の手順がそのまま通ることを、生成した archive で確かめる。
+xdir="$(new_workdir)"
+if [[ -f "$rel/PACKAGE_ARCHIVE.tar.gz" ]] \
+   && (cd "$xdir" && tar -xzf "$rel/PACKAGE_ARCHIVE.tar.gz" ./devhost) >/dev/null 2>&1 \
+   && [[ -f "$xdir/devhost/dev.sh" && -f "$xdir/devhost/termux/shortcut.example" ]]; then
+  pass
+else
+  fail "tar -xzf PACKAGE_ARCHIVE.tar.gz ./devhost で devhost を取り出せない"
+fi
+for readme in "$PKG_DIR/README.md" "$REPO_ROOT/packages/devhost/README.md"; do
+  if grep -qE 'tar -xzf PACKAGE_ARCHIVE\.tar\.gz devhost/?$' "$readme"; then
+    fail "$readme が ./ の無い指定（devhost/）で取り出している"
+  fi
+done
+
 it "SHA256SUMS の対象は変えない（bootstrap.sh / doctor.sh のみ）"
 # devhost は個別の Release 資産として添付しないため、SHA256SUMS の対象に devhost を
 # 加えない設計を固定する。加えると is_plain_asset_name（監査側）が単一ファイル名
