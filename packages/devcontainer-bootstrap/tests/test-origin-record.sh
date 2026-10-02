@@ -88,10 +88,15 @@ assert_contains "$plan" "plan: $dry_out/.devcontainer/ORIGIN" "dry-run 出力"
 # ── 決定性 ────────────────────────────────────────────────────────────────────
 
 it "同じ版・同じフラグで生成し直すと記録が一致する（フラグの指定順が違っても）"
+# --base-image でベースイメージを固定する。指定が無いと bootstrap.sh はレジストリへ
+# 問い合わせて候補（noble → bookworm）から選ぶため、問い合わせが片方の生成だけ
+# 一時的に失敗すると compose.yaml の image: 行が変わり、記録のハッシュが食い違う（#398）。
+# この試験の目的はフラグの指定順に対する記録の一致であり、ベースイメージの選択ではない。
+PINNED_BASE_IMAGE="mcr.microsoft.com/devcontainers/base:noble"
 out1="$(new_workdir)/p"
 out2="$(new_workdir)/p"
-run_bootstrap "$out1" --with-claude --with-aws >/dev/null 2>&1
-run_bootstrap "$out2" --with-aws --with-claude >/dev/null 2>&1
+run_bootstrap "$out1" --base-image "$PINNED_BASE_IMAGE" --with-claude --with-aws >/dev/null 2>&1
+run_bootstrap "$out2" --base-image "$PINNED_BASE_IMAGE" --with-aws --with-claude >/dev/null 2>&1
 if diff -q "$out1$ORIGIN_REL" "$out2$ORIGIN_REL" >/dev/null 2>&1; then
   pass
 else
