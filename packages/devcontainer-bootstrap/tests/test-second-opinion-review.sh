@@ -136,8 +136,8 @@ mk_agy_json_stub() {
   local bindir="$1" kind="${2:-pass}" structured_output
   mkdir -p "$bindir"
   case "$kind" in
-    fail) structured_output='{"findings":[{"category":"bug","file":"a.ts","line":1,"what":"x","why":"y"}]}' ;;
-    *)    structured_output='{"findings":[]}' ;;
+    fail) structured_output='{"reviewed":true,"findings":[{"category":"bug","file":"a.ts","line":1,"what":"x","why":"y"}]}' ;;
+    *)    structured_output='{"reviewed":true,"findings":[]}' ;;
   esac
   cat > "$bindir/agy" <<STUB
 #!/usr/bin/env bash
@@ -157,8 +157,8 @@ mk_agy_history_stub() {
   local bindir="$1" verdict="${2:-LGTM}" structured_output
   mkdir -p "$bindir"
   case "$verdict" in
-    FINDINGS) structured_output='{"findings":[{"category":"bug","file":"a.ts","line":1,"what":"x","why":"y"}]}' ;;
-    *)        structured_output='{"findings":[]}' ;;
+    FINDINGS) structured_output='{"reviewed":true,"findings":[{"category":"bug","file":"a.ts","line":1,"what":"x","why":"y"}]}' ;;
+    *)        structured_output='{"reviewed":true,"findings":[]}' ;;
   esac
   # 記録するのは「-p」の次に渡された引数（chunk_text + 改行 1 + PROMPT）の値
   # そのものだけで、"-p" 自身や、antigravity が追加で渡す
@@ -274,7 +274,7 @@ for a in "$@"; do
   fi
   prev="$a"
 done
-printf '{"conversation_id":"x","status":"SUCCESS","response":"...","structured_output":{"findings":[]}}\n'
+printf '{"conversation_id":"x","status":"SUCCESS","response":"...","structured_output":{"reviewed":true,"findings":[]}}\n'
 exit 0
 STUB
   chmod +x "$mbin/agy"
