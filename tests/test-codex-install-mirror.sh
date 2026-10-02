@@ -105,7 +105,7 @@ it "コードを 1 行変えると赤になる（意図的な乖離フィクス�
 # 「一致した」が抽出の失敗や比較の空振りではないことを示す。正本の側は触らず、
 # 生成物の写しを作って 1 行だけ壊す。
 BROKEN="$TMP_ROOT/broken.sh"
-sed 's/CODEX_MIN_VERSION="0\.156\.0"/CODEX_MIN_VERSION="0.0.0"/' "$GENERATED" > "$BROKEN"
+sed 's/^CODEX_MIN_VERSION="[^"]*"/CODEX_MIN_VERSION="0.0.0"/' "$GENERATED" > "$BROKEN"
 broken_min="$(grep -E '^CODEX_MIN_VERSION=' "$BROKEN" | head -n 1)"
 canon_min="$(grep -E '^CODEX_MIN_VERSION=' "$CANON" | head -n 1)"
 if [[ -n "$broken_min" && "$broken_min" != "$canon_min" ]]; then
