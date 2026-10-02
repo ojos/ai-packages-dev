@@ -18,10 +18,11 @@ ai-packages-dev/
 │   ├── intake/                      # intake 規律・判定 reason code
 │   └── templates/                   # 導入用の雛形
 ├── packages/
-│   └── devcontainer-bootstrap/      # 環境生成と規範配布
-│       ├── bootstrap.sh             # メインスクリプト
-│       ├── doctor.sh                # 自己診断スクリプト
-│       └── tests/                   # 機能テスト
+│   ├── devcontainer-bootstrap/      # 環境生成と規範配布
+│   │   ├── bootstrap.sh             # メインスクリプト
+│   │   ├── doctor.sh                # 自己診断スクリプト
+│   │   └── tests/                   # 機能テスト
+│   └── devhost/                     # 外部の機械で devcontainer を保つ道具（独立配布せず DCB のリリースへ同梱）
 ├── docs/                            # ドキュメント
 │   ├── CATALOG.md                   # docs 配下の索引（正本）
 │   ├── release/                     # リリース実行手順・履歴・リリースノート
@@ -45,6 +46,9 @@ ai-packages-dev/
 |---|---|---|
 | ai-playbook | AI 運用規範の正本。ランタイムを持たない | ojos/ai-playbook |
 | devcontainer-bootstrap (DCB) | Dev Container 環境を 1 コマンドで生成し、規範を配置する | ojos/devcontainer-bootstrap |
+
+`packages/devhost/` は独立したパッケージではなく、SSH で届く外部の機械の上で devcontainer を保つための道具一式です。
+単独でタグ付けや配布は行わず、DCB のリリース資産（`PACKAGE_ARCHIVE.tar.gz` 内の `devhost/`）に同梱して配ります。
 
 **設計思想:**
 

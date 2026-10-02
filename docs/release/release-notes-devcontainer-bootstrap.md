@@ -6,6 +6,17 @@
 >
 > 同じ理由で、issue 参照は `ojos/ai-packages-dev#NNN` の形で書いてください。裸の `#NNN` は GitHub のオートリンクが**配布先リポジトリの issue** として解決するため、配布後は存在しない issue や無関係な issue を指します。
 
+## 未リリース
+
+### Summary
+- **devhost を新設し、DCB のリリースに同梱した**（ojos/ai-packages-dev#375 / ojos/ai-packages-dev#376）。SSH で届く外部の機械（自宅のラップトップ、社内のサーバーなど）の上で devcontainer を起こしたまま保ち、スマホやほかの端末から入って AI コーディングを続けるための道具一式 `devhost/`。bootstrap.sh が生成するものではなく、利用者が外部の機械へ手で置く独立した道具だが、配布は DCB のリリースの `PACKAGE_ARCHIVE.tar.gz` に `devhost/` として同梱する。個別の Release 資産（`SHA256SUMS` の対象）には加えず、完全性は `PACKAGE_ARCHIVE.tar.gz` のハッシュ（`RELEASE-MANIFEST.json`）で守る。導入手順は README の「devhost」の節と、同梱された `devhost/README.md` を参照。
+
+### 未確認の事項
+- **ネイティブ Linux の Docker Engine で codex のサンドボックスが動くか**（ojos/ai-packages-dev#392）。Docker がコンテナに当てる AppArmor の既定のプロファイルが mount を禁じ、codex が使う bwrap が `Permission denied` で失敗するという報告が取り込み元（game-forge）にある。Docker Desktop（macOS）には AppArmor が無いため起きない。devhost の README に注記しているが、実機での対処はまだ確かめていない。
+
+### 移行
+- **既存の生成物は無影響です。** devhost は bootstrap.sh の生成物に含まれず、既存の devcontainer 構成を変更しません。
+
 ## v0.13.0
 
 ### Summary
