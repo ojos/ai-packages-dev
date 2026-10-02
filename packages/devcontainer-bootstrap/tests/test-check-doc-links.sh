@@ -218,6 +218,47 @@ CHECK_OUT="$(cd "$repo" && DOC_LINKS_EXCLUDE="vendor/docs" bash scripts/check-do
 CHECK_RC=$?
 assert_fail "除外対象外の壊れたリンクは検知する" "also-missing.md"
 
+it "DOC_LINKS_EXCLUDE の末尾のスラッシュは畳んで扱う"
+repo="$(new_repo)"
+add_doc "$repo" "vendor/docs/c.md" '[broken](nope.md)
+'
+commit_repo "$repo" add-vendor-broken
+CHECK_OUT="$(cd "$repo" && DOC_LINKS_EXCLUDE="vendor/docs/" bash scripts/check-doc-links.sh 2>&1)"
+CHECK_RC=$?
+assert_pass "末尾スラッシュ付きの除外指定"
+
+# ── タイトル付きのリンク ─────────────────────────────────────────────────────
+
+it "タイトル付きのリンク（\"...\" / '...'）はリンク先だけを見る（対照群）"
+repo="$(new_repo)"
+add_doc "$repo" "docs/a.md" "[dq](b.md \"Title\")
+[sq](b.md 'Title')
+![img](b.md \"alt\")
+"
+add_doc "$repo" "docs/b.md" 'x
+'
+commit_repo "$repo" add-titled
+run_check "$repo"
+assert_pass "タイトル付きのリンク"
+
+it "タイトル付きでも、リンク先が無ければ検知する（陽性）"
+repo="$(new_repo)"
+add_doc "$repo" "docs/a.md" '[dq](gone.md "Title")
+'
+commit_repo "$repo" add-titled-broken
+run_check "$repo"
+assert_fail "タイトル付きの壊れたリンク" "gone.md"
+
+it "<...> で囲んだリンク先は中身を見る（対照群）"
+repo="$(new_repo)"
+add_doc "$repo" "docs/a.md" '[angle](<b.md> "Title")
+'
+add_doc "$repo" "docs/b.md" 'x
+'
+commit_repo "$repo" add-angle
+run_check "$repo"
+assert_pass "<...> で囲んだリンク先"
+
 # ── 検査が成立していないことを合格にしない ────────────────────────────────────
 
 it "git 管理外では落ちる（検査が成立していない）"

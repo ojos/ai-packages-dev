@@ -184,6 +184,15 @@ infence { next }
     raw = substr(line, RSTART + 2, RLENGTH - 3)
     line = substr(line, RSTART + RLENGTH)
     t = raw
+    # リンク先とタイトルを分ける（`[a](path "title")` / `[a](path 'title')`）。
+    # CommonMark では、リンク先は空白を含まないか `<...>` で囲む。囲みがあれば
+    # その中身を、無ければ最初の空白の手前までをリンク先とする。
+    sub(/^[ \t]+/, "", t)
+    if (substr(t, 1, 1) == "<") {
+      if (match(t, />/)) { t = substr(t, 2, RSTART - 2) }
+    } else if (match(t, /[ \t]/)) {
+      t = substr(t, 1, RSTART - 1)
+    }
     # スキーム付きは種類を列挙せずに弾く（CommonMark のスキームの綴り: 英字で
     # 始まり、英数と + . - が続き、コロンで終わる）。ファイルへの相対リンクでは
     # ないため、相対パスとして誤って扱わない。
@@ -303,6 +312,9 @@ is_excluded() {
   [ -n "${DOC_LINKS_EXCLUDE:-}" ] || return 1
   local IFS=:
   for prefix in $DOC_LINKS_EXCLUDE; do
+    # 末尾のスラッシュは畳む（`vendor/docs/` と書いても `vendor/docs` と同じに扱う）。
+    # 畳まないと `vendor/docs//*` になり、どの追跡パスにも一致しない。
+    prefix="${prefix%/}"
     [ -n "$prefix" ] || continue
     case "$md" in
       "$prefix"|"$prefix"/*) return 0 ;;
