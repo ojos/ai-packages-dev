@@ -76,5 +76,6 @@ fix_mount() {
 fix_mount "/home/vscode/.config/gh"
 fix_mount "/home/vscode/.claude"
 fix_mount "/home/vscode/.gemini"
+fix_mount "/home/vscode/.codex"
 log "done"
 exit 0

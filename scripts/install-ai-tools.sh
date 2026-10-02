@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# このリポジトリの開発環境へ AI CLI（claude / gemini）を導入する。
+# このリポジトリの開発環境へ AI CLI（claude / gemini / codex）を導入する。
 # 引数は取らず、未導入のものだけを無条件に導入する。
 # 導入対象を選べる --with-claude / --with-gemini / --with-copilot は、生成物側の
 # packages/devcontainer-bootstrap/bootstrap.sh のフラグであり、本スクリプトとは無関係。
@@ -118,8 +118,68 @@ disable_agy_telemetry() {
   echo "[install-ai-tools] agy telemetry disabled (enableTelemetry=false)"
 }
 
+# codex（Codex CLI）は npm 配布だが、install_if_missing の同型には乗らない。
+#
+# 版が要件になる。第二意見レビューの既定モデル gpt-6-sol は、ある版から CLI の
+# 一覧に出るようになった綴りで、それより古い CLI は引けない。install_if_missing は
+# 「PATH に codex が在れば飛ばす」ので、古い版が先に入っている環境は更新されず、
+# レビューのたびに失敗する。だから在るときも版を見る。
+#
+# 認証は ChatGPT アカウントの OAuth（または API キー）で、導入だけでは使えない。
+# 初回に対話で `codex login` を通す必要がある。資格情報は ~/.codex/auth.json に
+# 置かれ、この devcontainer では ~/.codex が named volume（codex-storage）なので
+# rebuild しても消えない。
+CODEX_MIN_VERSION="0.156.0"
+
+# 版の比較。`sort -V` は BSD 系に無い版があるので使わない。3 つの数へ分けて
+# 桁ごとに比べる。
+#
+# 読めない綴りは「古い」として扱う（fail-closed）。入れ替えは冪等で副作用が
+# 小さい一方、読めないまま通すと、要件を満たさない CLI で回り続けることになる。
+codex_version_is_old() {
+  local have="$1" want="$2"
+  awk -v have="$have" -v want="$want" '
+    function num(s, part) { split(s, a, "."); return a[part] + 0 }
+    BEGIN {
+      if (have !~ /^[0-9]+\.[0-9]+\.[0-9]+$/) { exit 0 }   # 読めない → 古い扱い
+      for (i = 1; i <= 3; i++) {
+        h = num(have, i); w = num(want, i)
+        if (h > w) { exit 1 }
+        if (h < w) { exit 0 }
+      }
+      exit 1
+    }'
+}
+
+install_codex_if_missing() {
+  local have=""
+  if command -v codex >/dev/null 2>&1; then
+    # `codex --version` は "codex-cli <版>" の形。数だけを取る。
+    have="$(codex --version 2>/dev/null | tr ' ' '\n' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | head -1 || true)"
+    if ! codex_version_is_old "$have" "$CODEX_MIN_VERSION"; then
+      echo "[install-ai-tools] codex ${have} already installed (>= $CODEX_MIN_VERSION), skipping"
+      return 0
+    fi
+    echo "[install-ai-tools] codex ${have:-（版を読めません）} は $CODEX_MIN_VERSION 未満です。入れ替えます ..."
+  else
+    echo "[install-ai-tools] installing @openai/codex ..."
+  fi
+
+  npm install -g "@openai/codex@latest"
+
+  have="$(codex --version 2>/dev/null | tr ' ' '\n' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | head -1 || true)"
+  if codex_version_is_old "$have" "$CODEX_MIN_VERSION"; then
+    echo "[install-ai-tools] error: 導入後も codex の版が $CODEX_MIN_VERSION 未満です（実際: ${have:-不明}）" >&2
+    echo "                   第二意見の既定のモデル gpt-6-sol を引けません。" >&2
+    return 1
+  fi
+  echo "[install-ai-tools] codex installed: $(command -v codex) (${have})"
+  echo "[install-ai-tools] codex は認証が別です。初回は対話で 'codex login' を通してください。"
+}
+
 install_if_missing claude "@anthropic-ai/claude-code"
 install_if_missing gemini "@google/gemini-cli"
 install_agy_if_missing
 disable_agy_telemetry
+install_codex_if_missing
 echo "[install-ai-tools] done"
