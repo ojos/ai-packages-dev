@@ -159,6 +159,26 @@ gh CLI の認証はコンテナ内で行い、その状態を named volume に�
 - やむを得ず手動で公開状態を変えた場合は、スクリプト側の前提（README の固定バージョン等）へ後追いで反映します
 - IaC ツール（Terraform 等）は現状使用しません。GitHub の状態はスクリプトで宣言的に扱います
 
+### 脆弱性の報告と通知
+
+公開リポジトリなので、脆弱性を見つけた人が非公開で知らせる窓口と、依存の脆弱性の通知を有効にしておきます（#394）。報告の宛先としての説明は、リポジトリ直下の `SECURITY.md` が持ちます。
+
+- 対象の設定は 3 つです: Private vulnerability reporting（非公開の報告窓口）、Dependabot alerts、Dependabot security updates
+- **この 3 つはスクリプトで宣言せず、手で有効にします。** リリースのスクリプトの関心（公開物の反映）とは別で、一度有効にすれば変える理由が無いためです。代わりに `scripts/check-repo-security.sh` で照合します。`SECURITY.md` が案内する窓口が閉じたまま、案内だけが残る状態を塞ぐためです
+- 有効にするにも照合するにも、リポジトリの管理者権限のトークンが要ります（fine-grained PAT なら Administration。読むだけなら read、有効にするなら write）。`.env` の `GH_TOKEN` に権限が無いときは、`env -u GH_TOKEN` で `gh auth login` 済みの資格情報を使います
+- 照合は CI のゲートに入れません。CI の `GITHUB_TOKEN` では Dependabot の 2 つを読めないためです。設定を変えたときと、リリースの前に持ち主が回します
+- Dependabot の version updates（`.github/dependabot.yml`）は入れていません。security updates は脆弱性があるときだけ PR を出します
+
+```bash
+# 有効にする（どれも冪等）
+gh api -X PUT repos/ojos/ai-packages-dev/private-vulnerability-reporting
+gh api -X PUT repos/ojos/ai-packages-dev/vulnerability-alerts
+gh api -X PUT repos/ojos/ai-packages-dev/automated-security-fixes   # alerts が有効でないと失敗する
+
+# 照合する（0 = 3 つとも有効 / 1 = 無効がある / 2 = 読めない＝前提の不成立）
+bash scripts/check-repo-security.sh
+```
+
 ## レビューの起動方法
 
 共通規範「レビューワークフロー」（`.ai-playbook/review-workflow.md`）のクロスモデル二段ゲートと、「ループ運用」（`.ai-playbook/loop-workflow.md`）のローカル事前ゲートを、このリポジトリで具体化します。
