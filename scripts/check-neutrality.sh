@@ -6,9 +6,10 @@
 # クイック検証は、いずれも条件を書き写さず本スクリプトを呼ぶ。
 # 3 箇所へ grep を複製すると、片方だけが古くなる形で必ずずれるため。
 #
-# game-forge / dev01 を見る理由（#375）: packages/devhost/ の取り込み元
-# （ojos/game-forge の tools/devhost/）固有の名前・機械名。取り込み元が持っていた
-# 同種の検査（check-devhost.sh）をここへ寄せ、2 本目の中立性検査を増やさない。
+# dev01 を見る理由（#375）: packages/devhost/ の取り込み元が使っていた機械名。
+# 取り込み元が持っていた同種の検査（check-devhost.sh）をここへ寄せ、2 本目の
+# 中立性検査を増やさない。取り込み元のリポジトリ名は禁止語にしない。取り込みの
+# 経緯は取り込み元の票番号で参照する（例: 「game-forge #873」）と決めているため。
 #
 # tests/ を除外する理由: 配布されない層であり、かつ「生成物に固有名詞が残らない
 # こと」を検証する都合上、検査対象語をリテラルで持つ必要があるため。ここで検査
@@ -22,7 +23,7 @@ set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
 
-FORBIDDEN='bascule|ojos|game[-_ ]?forge|dev01'
+FORBIDDEN='bascule|ojos|dev01'
 
 raw="$(grep -rniE "$FORBIDDEN" packages/ .ai-playbook/ \
   --include='*.sh' --include='*.md' --include='*.json' \
