@@ -28,14 +28,12 @@ devcontainer-bootstrap（DCB）の README の「ネイティブ Linux の Docker
 （devhost は DCB のリリースへ同梱されて配布されるため、この README と DCB の README は配布先で
 階層が変わります。相対リンクにはしません）。
 
-**ネイティブ Linux の Docker Engine では、コンテナの中で codex のサンドボックスが動かない
-ことがあります（未確認）。** Docker がコンテナに当てる AppArmor の既定のプロファイル
-（`docker-default`）が mount を禁じ、codex が使う bwrap が `Permission denied` で失敗する、
-という報告が取り込み元にあります。Docker Desktop（macOS）には AppArmor が無いので
-起きません。compose に `security_opt: [apparmor=unconfined]` を足すと避けられるとされますが、
-コンテナの隔離を弱めるうえ、それだけで足りるかはまだ実機で確かめていません。そのため
-DCB が生成する compose には入れていません。困った場合は、第二意見のエンジンを codex 以外へ
-切り替えて回避してください。
+**ネイティブ Linux の Docker Engine で codex のサンドボックスを使うには、コンテナの AppArmor と
+seccomp の既定の制限を両方外す必要があります**（seccomp は Docker Desktop でも止めます）。DCB の `--with-codex` の生成物は、`compose.yaml` に
+`security_opt: [apparmor=unconfined, seccomp=unconfined]` を入れてあるので、そのままで動きます。
+`--with-codex` を使わずに codex を後から入れた場合や、それより前の DCB で生成した場合は、
+DCB の README の「コンテナの中での codex のサンドボックス」に従って足してください。
+AppArmor だけを外しても、seccomp が先に止めるので動きません（Ubuntu 26.04 の実機で実測）。
 
 ## 層と、この道具が戻すもの
 

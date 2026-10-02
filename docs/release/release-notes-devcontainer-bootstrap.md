@@ -11,11 +11,20 @@
 ### Summary
 - **devhost を新設し、DCB のリリースに同梱した**（ojos/ai-packages-dev#375 / ojos/ai-packages-dev#376）。SSH で届く外部の機械（自宅のラップトップ、社内のサーバーなど）の上で devcontainer を起こしたまま保ち、スマホやほかの端末から入って AI コーディングを続けるための道具一式 `devhost/`。bootstrap.sh が生成するものではなく、利用者が外部の機械へ手で置く独立した道具だが、配布は DCB のリリースの `PACKAGE_ARCHIVE.tar.gz` に `devhost/` として同梱する。個別の Release 資産（`SHA256SUMS` の対象）には加えず、完全性は `PACKAGE_ARCHIVE.tar.gz` のハッシュ（`RELEASE-MANIFEST.json`）で守る。導入手順は README の「devhost」の節と、同梱された `devhost/README.md` を参照。
 
-### 未確認の事項
-- **ネイティブ Linux の Docker Engine で codex のサンドボックスが動くか**（ojos/ai-packages-dev#392）。Docker がコンテナに当てる AppArmor の既定のプロファイルが mount を禁じ、codex が使う bwrap が `Permission denied` で失敗するという報告が取り込み元（game-forge）にある。Docker Desktop（macOS）には AppArmor が無いため起きない。devhost の README に注記しているが、実機での対処はまだ確かめていない。
+- **`--with-codex` の生成物で、codex のサンドボックスが動くようにした**（ojos/ai-packages-dev#392）。`compose.yaml` の `app` に `security_opt: [apparmor=unconfined, seccomp=unconfined]` を入れる。Docker の既定の seccomp が bwrap の namespace の作成を止め（ネイティブ Linux の Docker Engine でも Docker Desktop でも）、ネイティブ Linux ではさらに AppArmor の `docker-default` が mount を止めていた。**AppArmor だけ外しても動かない。** `--with-codex` を付けない生成物には入らない。
+
+### Highlights
+- **取り込み元の対処は、たまたま足りていた（ojos/ai-packages-dev#392）**: 取り込み元（game-forge）は AppArmor だけを外して動いていたが、seccomp は Go の devcontainer feature（Go のデバッガのため）がすでに外していた。Ubuntu 26.04 のネイティブの Docker Engine と codex 0.160.0 で、既定・AppArmor だけ・両方の 3 通りを実測し、両方が要ることを確かめた。`systempaths=unconfined` は要らない（codex は `/proc` の mount の失敗を自分で避ける）。代償（コンテナの中で namespace の作成と mount ができるようになる）は README の「コンテナの中での codex のサンドボックス」に書いた。
 
 ### 移行
-- **既存の生成物は無影響です。** devhost は bootstrap.sh の生成物に含まれず、既存の devcontainer 構成を変更しません。
+- **devhost は既存の生成物に影響しません。** bootstrap.sh の生成物に含まれず、既存の devcontainer 構成を変更しません。
+- **以前の版で `--with-codex` を付けて生成した構成では、codex のサンドボックスが bwrap のエラーで失敗します**（`bwrap: No permissions to create new namespace`）。再生成するか、`.devcontainer/compose.yaml` の `app` に次の 3 行を足して、コンテナを作り直してください（Rebuild Container）。
+
+  ```yaml
+      security_opt:
+        - apparmor=unconfined
+        - seccomp=unconfined
+  ```
 
 ## v0.13.0
 

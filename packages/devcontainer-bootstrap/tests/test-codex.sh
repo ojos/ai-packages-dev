@@ -102,6 +102,38 @@ else
   fail "codex-storage が定義・マウントされていない"
 fi
 
+# ── security_opt: 単独 ────────────────────────────────────────────────────────
+#
+# codex のサンドボックス（bwrap）は、Docker の既定の seccomp（namespace の作成。Docker
+# Desktop でも）と、ネイティブ Linux では AppArmor の docker-default（mount）にも止められる
+# （#392 で実測）。片方だけでは動かないので、2 つがそろって app に入ることを見る。
+
+# app サービスの security_opt の要素を 1 行 1 件で返す（無ければ空）。
+security_opts_of() {
+  awk '
+    /^    security_opt:$/ { in_opt = 1; next }
+    in_opt && /^      - / { sub(/^      - /, ""); print; next }
+    { in_opt = 0 }
+  ' "$1" 2>/dev/null
+}
+
+it "単独指定で app に apparmor=unconfined と seccomp=unconfined がそろって入る"
+opts="$(security_opts_of "$cmp_cx" | sort | tr '\n' ' ')"
+if [[ "$opts" == "apparmor=unconfined seccomp=unconfined " ]]; then
+  pass
+else
+  fail "security_opt が期待と違う: [$opts]"
+fi
+
+it "security_opt は services.app の直下に置かれる（volumes: より前）"
+opt_line="$(grep -n '^    security_opt:$' "$cmp_cx" 2>/dev/null | head -n 1 | cut -d: -f1)"
+top_vol_line="$(grep -n '^volumes:$' "$cmp_cx" 2>/dev/null | head -n 1 | cut -d: -f1)"
+if [[ -n "$opt_line" && -n "$top_vol_line" && "$opt_line" -lt "$top_vol_line" ]]; then
+  pass
+else
+  fail "security_opt $opt_line / トップレベル volumes $top_vol_line の位置が不正"
+fi
+
 it "単独指定で所有権修復の対象に入る"
 if grep -q 'fix_mount "/home/vscode/\.codex"' "$OUT_CX/scripts/fix-mount-owner.sh" 2>/dev/null; then
   pass
@@ -165,6 +197,14 @@ else
   fail "gemini-storage=$n_gem codex-storage=$n_cdx"
 fi
 
+it "antigravity + codex でも security_opt は 1 つだけ入る"
+if [[ "$(grep -c '^    security_opt:$' "$cmp_ac" 2>/dev/null)" == "1" ]] \
+   && [[ "$(security_opts_of "$cmp_ac" | sort | tr '\n' ' ')" == "apparmor=unconfined seccomp=unconfined " ]]; then
+  pass
+else
+  fail "security_opt の数か中身が不正: $(grep -c '^    security_opt:$' "$cmp_ac")"
+fi
+
 it "antigravity + codex では両方の導入処理が入る"
 both_install="$OUT_AC/scripts/install-ai-tools.sh"
 if grep -q '^install_agy_if_missing$' "$both_install" 2>/dev/null \
@@ -206,6 +246,19 @@ if [[ -z "$hits" ]]; then
   pass
 else
   fail "codex 関連が残っている: $hits"
+fi
+
+it "codex を選ばない構成には security_opt が入らない（未指定・gemini・antigravity）"
+# 隔離を弱める設定なので、サンドボックスを使う codex を選んだ構成に限る（#392）。
+hits=""
+for o in "$OUT_NONE" "$OUT_GEM" "$OUT_AG"; do
+  [[ -n "$(security_opts_of "$(compose_of "$o")")" ]] && hits+="$o "
+  grep -q 'unconfined' "$(compose_of "$o")" 2>/dev/null && hits+="$o(unconfined) "
+done
+if [[ -z "$hits" ]]; then
+  pass
+else
+  fail "security_opt か unconfined が入っている: $hits"
 fi
 
 # ── 版の下限チェックの振る舞い（生成された install-ai-tools.sh を実行） ───────
