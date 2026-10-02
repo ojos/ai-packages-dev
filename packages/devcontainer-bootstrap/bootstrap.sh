@@ -5629,11 +5629,13 @@ main() {
     # レビューする reviewer を差し替えるなら、記録も自分で残すこと**
     # （`scripts/second-opinion-record.sh save` を呼ぶ）。
     #
-    # **レビューしていないものは記録しない。** 範囲が解決できたのに「対象なし」と
-    # 出力して終わった（範囲を受けていない）、または解決の結果が「対象なし」のとき。
-    # 記録すると確認側が偽の緑を出す。既定の経路の「レビュー対象が本当に無い」と同じ扱い。
+    # **レビューしていないものは、記録せず、通過もさせない。**
+    #   - 解決の結果が「対象が本当に無い」: 既定の経路と同じく、記録なしで通過する。
+    #   - 対象が実在する（範囲あり、またはステージ済みあり）のに、差し替えた側が
+    #     「対象なし」と出力した（範囲を受けていない）: レビューされていないので
+    #     GATE_FAIL にし、記録も作らない。通すと手元のゲートが偽の緑になる。
     resolve_review_range
-    local cmd_capture cmd_ok=0 cmd_scope="staged"
+    local cmd_capture cmd_ok=0 cmd_scope="staged" cmd_unreviewed=0
     if [[ -n "$REVIEW_RANGE" ]]; then
       if [[ -n "$REVIEW_RANGE_REASON" ]]; then
         echo "[loop-gate] $REVIEW_RANGE_REASON"
@@ -5647,14 +5649,18 @@ main() {
     cmd_capture="$(mktemp "${TMPDIR:-/tmp}/loop-gate-second-opinion.XXXXXX")"
     LOOP_GATE_REVIEW_RANGE="$REVIEW_RANGE" bash -c "$LOOP_GATE_REVIEW_CMD" 2>&1 | tee "$cmd_capture" || cmd_ok=1
     if [[ -n "$cmd_scope" ]] && grep -q -E '^\[second-opinion\] no diff to review' "$cmd_capture"; then
-      echo "[loop-gate] 差し替えた第二意見は「レビュー対象なし」と出力しました。記録は残しません。" >&2
-      echo "[loop-gate] 範囲を受け取るなら LOOP_GATE_REVIEW_RANGE を使ってください（規則「レビューの起動方法」参照）。" >&2
+      echo "[loop-gate] 差し替えた第二意見は「レビュー対象なし」と出力しましたが、レビュー対象は実在します。レビューされていないので失敗とし、記録も残しません。" >&2
+      echo "[loop-gate] 範囲を LOOP_GATE_REVIEW_RANGE で受け取ってください（規則「レビューの起動方法」参照）。" >&2
       cmd_scope=""
+      cmd_ok=1
+      cmd_unreviewed=1
     fi
     record_second_opinion "$cmd_capture" "$cmd_scope" "$cmd_ok" 0
     rm -f "$cmd_capture"
     if [[ "$cmd_ok" -ne 0 ]]; then
-      echo "[loop-gate] second opinion reported findings" >&2
+      if [[ "$cmd_unreviewed" -eq 0 ]]; then
+        echo "[loop-gate] second opinion reported findings" >&2
+      fi
       echo "GATE_FAIL"
       exit 1
     fi

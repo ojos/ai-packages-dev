@@ -204,14 +204,14 @@ bash scripts/loop-gate.sh
 - **`loop-gate.sh` は、上の 3 段の手前で commit identity の検証（`scripts/verify-commit-identity.sh`）を挟みます。** 許可外の identity が混じったコミットを、他のどの段よりも安く・早く（判定は数 ms）検知するためです。ここでいう「3 段」は規範が定める段（主レビュー / 受け入れ検証 / 第二意見）を指し、`loop-gate.sh` 内部の実行順（commit identity → verify → 第二意見という実装上の step 1/2/3）とは別の軸です。両者を混同しないでください。
 - 終了コード 0 = `GATE_PASS`（push 可） / 1 = `GATE_FAIL`（いずれかの段が未通過、または実行不能）。
 - 第二意見コマンドは環境変数 `LOOP_GATE_REVIEW_CMD` で差し替え（任意のコマンド）・無効化（空文字）できます。未設定のときは `scripts/second-opinion-review.sh` があれば実行し、無ければスキップします。
-- **`LOOP_GATE_REVIEW_CMD` で差し替えたコマンドへは、解決した範囲を環境変数 `LOOP_GATE_REVIEW_RANGE` で渡します。** ステージ済み差分が空のときだけ commit 済み範囲（`<起点>..HEAD`）が入り、ステージ済みがあるとき・レビュー対象が無いときは空です。差し替えたコマンドが範囲を受けないと、commit 済みのブランチでは空のステージ済み差分を見て「対象なし」で 0 を返します。`loop-gate.sh` はその出力（`[second-opinion] no diff to review`）を見たときも、レビュー対象が無いと解決したときも、**記録を残しません**（レビューしていないものを記録すると確認側が偽の緑を出すため）。
+- **`LOOP_GATE_REVIEW_CMD` で差し替えたコマンドへは、解決した範囲を環境変数 `LOOP_GATE_REVIEW_RANGE` で渡します。** ステージ済み差分が空のときだけ commit 済み範囲（`<起点>..HEAD`）が入り、ステージ済みがあるとき・レビュー対象が無いときは空です。差し替えたコマンドが範囲を受けないと、commit 済みのブランチでは空のステージ済み差分を見て「対象なし」で 0 を返します。`loop-gate.sh` は、レビュー対象が実在するのにその出力（`[second-opinion] no diff to review`）を見たときは、レビューされていないので **`GATE_FAIL` にし、記録も残しません**。レビュー対象が本当に無いと解決したときだけ、記録なしで通過します（既定の経路と同じ）。
 - **エンジンだけを変えたいときは、範囲を受ける形で `--engine` を CLI 引数で渡します。**
 
   ```bash
   LOOP_GATE_REVIEW_CMD='bash scripts/second-opinion-review.sh --engine antigravity ${LOOP_GATE_REVIEW_RANGE:+--range "$LOOP_GATE_REVIEW_RANGE"}' bash scripts/loop-gate.sh
   ```
 
-  - 範囲の受け口（`${LOOP_GATE_REVIEW_RANGE:+--range "$LOOP_GATE_REVIEW_RANGE"}`）を省くと、commit 済みのブランチでは何もレビューされず、記録も残りません（`GATE_PASS` は出ますが、push しても確認側は赤のままです）。
+  - 範囲の受け口（`${LOOP_GATE_REVIEW_RANGE:+--range "$LOOP_GATE_REVIEW_RANGE"}`）を省くと、commit 済みのブランチでは何もレビューされないため、`GATE_FAIL` になります。
   - **環境変数 `SECOND_OPINION_ENGINE=...` を前置する方法は使いません。** `scripts/second-opinion-review.sh` は `scripts/load-project-env.sh` 経由で `.env` を読み、`.env` の値が既存の環境変数を上書きします（優先順位は CLI 引数 > `.env` > 環境変数 > 既定）。`.env` に `SECOND_OPINION_ENGINE` があると、前置した値は無視されます。
   - 差し替えたコマンドが自分で範囲を決める場合は、従来どおり自分で記録を残します（`scripts/second-opinion-record.sh save`）。
 - ステージ済み差分が空のときは、`loop-gate.sh` が第二意見の対象を commit 済み範囲へ自動で切り替えます。commit 後にゲートを回すと第二意見が実質スキップされ、偽の緑が出るためです。
