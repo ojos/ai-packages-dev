@@ -47,6 +47,13 @@ for c in claude gemini agy npm curl; do
 done
 # 存在検査だけで skip される 3 つは、呼ばれない前提なので中身を空にしない
 # （呼ばれた場合に 97 で落ちて、skip の破れが検出できる）。
+# codex は存在だけでなく版も見る（CODEX_MIN_VERSION 未満なら入れ替える）ので、
+# --version にだけ下限の版を返し、それ以外の呼ばれ方は 97 で落とす。版は
+# scripts/install-ai-tools.sh の CODEX_MIN_VERSION から読み、下限が上がっても追随させる。
+codex_min="$(sed -n 's/^CODEX_MIN_VERSION="\(.*\)"$/\1/p' "$INSTALL")"
+# shellcheck disable=SC2016
+printf '#!/usr/bin/env bash\nif [[ "$1" == "--version" ]]; then echo "codex-cli %s"; exit 0; fi\necho "STUB $0 は呼ばれてはいけない" >&2\nexit 97\n' "$codex_min" > "$STUB_BIN/codex"
+chmod +x "$STUB_BIN/codex"
 
 run_install() {
   local home="$1"
@@ -161,7 +168,7 @@ minbin="$TMP_ROOT/minbin"
 mkdir -p "$minbin"
 # jq の検査へ到達するまでに要る外部コマンドだけを通す（それ以外は builtin）。
 ln -sf "$(command -v dirname)" "$minbin/dirname"
-for c in claude gemini agy; do
+for c in claude gemini agy codex; do
   cp "$STUB_BIN/$c" "$minbin/$c"
 done
 # bash は PATH ではなく絶対パスで起動する。PATH を絞る目的は jq を消すことで、
