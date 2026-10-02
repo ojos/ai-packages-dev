@@ -119,6 +119,13 @@
 #   category の回答は、いずれも「指摘なし」ではなく失敗として扱う。** 読めなかった
 #   ものを緑として報告すると、レビューしていないものを通すことになる。
 #
+#   **差分を読めなかったと答えた回答（`reviewed: false`）も、指摘の中身によらず
+#   同じ扱いにする。** `git diff` などの失敗を `other` の指摘 1 件で報告しただけの
+#   回答は、category だけを見ると判定を動かさないため LGTM になり、読んでいない
+#   ものがレビュー済みとして記録されてしまう（game-forge #873）。このときは
+#   完了の行（`[second-opinion] LGTM (...)` 等）を出さない。loop-gate.sh の記録は
+#   その行の有無で「判定に到達したか」を見るため、出さなければ記録も残らない。
+#
 # issue / PR の文脈:
 #   ブランチ名が issue 番号を含む形（`feat/123-...` 等）なら、その issue の本文
 #   （scope・acceptance を含む）をプロンプトへ載せる。加えて、差分の追加行と
@@ -525,6 +532,9 @@ read -r -d '' REPORT_RULES_JSON <<'EOF' || true
 出力:
 - **JSON だけを返してください。** 指摘が無ければ `findings` は空の配列です。
 - **通す / 落とすの判定は書かないでください。** `category` を見てこちらで決めます。
+- `reviewed` には、差分を実際に読んでレビューできたかを書いてください。コマンドが失敗した・
+  差分が空だったなどで**読めなかったときは `false`** にし、読めなかった理由を `other` の指摘で書いてください。
+  読めなかったのに `true` にしたり、指摘を空にして済ませたりしないでください。
 - 前置きや作業の説明は書かないでください。
 EOF
 
@@ -937,6 +947,7 @@ answer_is_valid() {
   allowed="$(printf '%s\n' "$ALL_CATEGORIES" | jq -R . | jq -s -c .)"
   printf '%s' "$1" | jq -e --argjson allowed "$allowed" '
     type == "object"
+    and (.reviewed | type == "boolean")
     and (.findings | type == "array")
     and (all(.findings[]; type == "object"
              and (.category | type == "string")
@@ -1100,6 +1111,22 @@ $PROMPT" --output-format json --json-schema "$SCHEMA_FILE")
         # 緑として報告することになる。
         echo "error: 回答を JSON として読めませんでした（engine=$ENGINE, run $run/$RUNS$( [[ "$chunk_count" -gt 1 ]] && echo ", chunk $chunk_idx/$chunk_count" )）。生の出力:" >&2
         printf '%s\n' "$output" >&2
+        if [[ -s "$stderr_file" ]]; then
+          echo "--- CLI の診断 ---" >&2
+          cat "$stderr_file" >&2
+        fi
+        exit 1
+      fi
+
+      # **差分を読めなかった回答は、指摘の中身によらず落とす**（game-forge #873）。
+      # `other` の指摘だけを返して LGTM になると、読んでいないものがレビュー済み
+      # として記録される。**ここで完了の行（LGTM / findings reported ...）を
+      # 出さない。** loop-gate.sh の second-opinion-record.sh への記録は、出力に
+      # その行があるかどうかで「判定に到達したか」を見ているため、出さずに exit
+      # すれば記録も残らない。
+      if [[ "$(printf '%s' "$answer_json" | jq -r '.reviewed')" != "true" ]]; then
+        echo "error: 第二意見が差分を読めなかったと答えました（engine=$ENGINE, run $run/$RUNS$( [[ "$chunk_count" -gt 1 ]] && echo ", chunk $chunk_idx/$chunk_count" )）。レビューは成立していません:" >&2
+        print_findings "$answer_json" >&2
         if [[ -s "$stderr_file" ]]; then
           echo "--- CLI の診断 ---" >&2
           cat "$stderr_file" >&2
