@@ -109,6 +109,13 @@ BOOTSTRAP="$REPO_ROOT/packages/devcontainer-bootstrap/bootstrap.sh"
 #   scripts/acceptance.sh がこの写しを呼ぶため、正本と写しがずれると「配布物では
 #   落ちるが手元では通る」壊れ方が生まれる。
 #
+#   check-doc-links.sh を MIRRORED に入れる理由（#371）: 判定（相対リンクが
+#   追跡対象として実在するか）は生成条件に依らず全構成で同一であり、置換
+#   プレースホルダを 1 つも持たない。加えて、このリポジトリ自身の
+#   scripts/acceptance.sh がこの写しを呼ぶため、正本と写しがずれると「配布物では
+#   落ちるが手元では通る」リンク切れが生まれる。除外設定（DOC_LINKS_EXCLUDE）は
+#   環境変数で渡すため写しの内容には現れず、プレースホルダと同じ扱いにはならない。
+#
 #   verify-commit-identity-selftest.sh を MIRRORED に入れる理由: 判定対象
 #   （verify-commit-identity.sh の挙動）と同じく、検査する場合分けは生成条件に
 #   依らず全構成で同一であり、置換プレースホルダを 1 つも持たない。加えて、
@@ -116,6 +123,7 @@ BOOTSTRAP="$REPO_ROOT/packages/devcontainer-bootstrap/bootstrap.sh"
 #   写しがずれると「配布物では自己試験が壊れを検知するが手元では検知しない」
 #   状態が生まれる。
 MIRRORED_RELS='scripts/check-control-chars.sh
+scripts/check-doc-links.sh
 scripts/check-no-secrets.sh
 scripts/check-shell-portability.sh
 scripts/check-table-breaks.sh
