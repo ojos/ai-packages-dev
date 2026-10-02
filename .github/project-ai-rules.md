@@ -243,12 +243,13 @@ bash scripts/second-opinion-review.sh                          # ステージ済
 bash scripts/second-opinion-review.sh --range main..HEAD       # 範囲指定
 bash scripts/second-opinion-review.sh --runs 3                 # 実行回数
 bash scripts/second-opinion-review.sh --engine antigravity     # エンジン切り替え
+bash scripts/second-opinion-review.sh --engine codex           # エンジン切り替え（codex）
 ```
 
 | オプション | 環境変数 | 既定 | 意味 |
 |---|---|---|---|
 | `--range <git-range>` | — | ステージ済み差分 | レビュー対象の差分範囲 |
-| `--engine <name>` | `SECOND_OPINION_ENGINE` | `gemini` | レビューを実行する CLI（`gemini` / `antigravity`） |
+| `--engine <name>` | `SECOND_OPINION_ENGINE` | `gemini` | レビューを実行する CLI（`gemini` / `antigravity` / `codex`） |
 | `--model <name>` | `SECOND_OPINION_MODEL` | 各 CLI の既定 | 使用モデル |
 | `--runs <n>` | `SECOND_OPINION_RUNS` | `1` | 実行回数（1 以上の整数。不正値は実行前に停止） |
 
@@ -256,11 +257,12 @@ bash scripts/second-opinion-review.sh --engine antigravity     # エンジン切
 - 環境変数の旧名 `GEMINI_REVIEW_MODEL` / `GEMINI_REVIEW_RUNS` も後方互換で受理します。新名が設定されていればそちらが勝ちます。
 - 判定は多数決です。指摘を報告した run が**過半数**（`floor(N/2)+1`）に達したときだけ落とします。既定の `1` では閾値も 1 で、従来と同じ挙動になります。
 - 過半数に届かなかった指摘も出力に残ります。誤検出とは限らないため、内容を確認して採否を判断します。
-- 通過判定は、モデル出力の**最後の行**に置かれた判定トークン `VERDICT: LGTM` で行います（`.ai-playbook/review-workflow.md`「第二意見の非決定性」）。前置き（作業ナレーション）が付いても判定は変わりません。判定トークンが無い出力は指摘あり扱いとし、その旨を出力へ明示します。
+- 通過判定はエンジンによって方式が違います。`gemini` は構造化出力を強制する旗を持たないため、モデル出力の**最後の行**に置かれた判定トークン `VERDICT: LGTM` で判定します（`.ai-playbook/review-workflow.md`「第二意見の非決定性」）。前置き（作業ナレーション）が付いても判定は変わりません。判定トークンが無い出力は指摘あり扱いとし、その旨を出力へ明示します。`antigravity` / `codex` は構造化出力を強制できるため、判定トークンの解析はせず **JSON スキーマ**（`scripts/second-opinion-schema.json`）で判定します。モデルには通過・不通過そのものを出させず、指摘の種別（`category`）が `bug` / `vulnerability` / `type-error` / `edge-case` のいずれかで 1 件以上あれば落とします。JSON として読めない回答・スキーマの形を満たさない回答・差分を読めなかったと答えた回答（`reviewed: false` または欠落）も、指摘の中身によらず同じ扱い（失敗）にします。読めなかったものを LGTM として通さないためです。
 - 終了コード 0 = `LGTM`（指摘を報告した run が閾値未満） / 1 = 重大な指摘あり、または実行不能。
-- エンジンごとに認証手段が違います。`gemini` は `GEMINI_API_KEY` が必要です（`scripts/load-project-env.sh` が `.env` から読み込みます）。`antigravity`（`agy`）は **OAuth のみ**で API キーに対応せず、`.env` へ資格情報を書き写す経路を持ちません。ログイン状態は `~/.gemini` 配下（named volume `gemini-storage`）に残るため rebuild しても消えません。どちらの CLI も `scripts/install-ai-tools.sh` が導入します。
+- エンジンごとに認証手段が違います。`gemini` は `GEMINI_API_KEY` が必要です（`scripts/load-project-env.sh` が `.env` から読み込みます）。`antigravity`（`agy`）は **OAuth のみ**で API キーに対応せず、`.env` へ資格情報を書き写す経路を持ちません。ログイン状態は `~/.gemini` 配下（named volume `gemini-storage`）に残るため rebuild しても消えません。`codex`（Codex CLI）は ChatGPT アカウントの OAuth 認証（または API キー）です。初回はコンテナの中で対話で `codex login` を通してください（資格情報をコンテナの外から注入する経路は持ちません）。ログイン状態は `~/.codex` 配下（named volume `codex-storage`）に残るため rebuild しても消えません。いずれの CLI も `scripts/install-ai-tools.sh` が導入します。
 - **`agy` のテレメトリはプロビジョニングで無効化します。** `scripts/install-ai-tools.sh` が `~/.gemini/antigravity-cli/settings.json` へ `"enableTelemetry": false` をマージするため、コンテナを作り直した直後からオプトアウト済みになります。環境変数によるオプトアウトは存在せず、この設定ファイルが唯一の手段です。**効くのは CLI だけです**（Antigravity IDE を使う場合は IDE 側に別途同等の設定があります）。既存コンテナへ後追いで適用する場合は `agy` を終了してから `bash scripts/install-ai-tools.sh` を実行してください（起動中の `agy` はセッション終了時に設定を書き戻すことがあります）。
 - **`antigravity` で `--model` に `claude` 系を選ばないでください。** このプロジェクトの実装モデルは Claude で、同じベンダーのモデルで第二意見を取ると「別ベンダーで独立にクロスチェックする」という前提が壊れます（`.ai-playbook/review-workflow.md`）。`agy models` には `claude-*` も並びます。
+- **`codex` は版の下限があります。** 第二意見の既定モデル `gpt-6-sol` は、ある版から CLI の一覧に出るようになったため、`scripts/install-ai-tools.sh` が導入時に版を見て、古ければ入れ替えます（`CODEX_MIN_VERSION`）。
 - このレビューは非決定的です。1 回の `LGTM` は重大な指摘が無いことの証明ではなく、主レビューを省略してよい根拠にもなりません。
 
 ### リモート最終ゲート（置かない）
