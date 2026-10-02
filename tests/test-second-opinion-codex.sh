@@ -13,6 +13,10 @@
 #      stdout を読む実装へ戻ると、見出しや進捗が判定へ混ざる。
 #   3. 判定がモデルの category 以外で決まる。知らない category や形の崩れた
 #      JSON を「指摘なし」へ倒すと、レビューしていないものを緑として報告する。
+#   4. 差分を読めなかったと答えた回答（`reviewed: false`）が、指摘の種別だけで
+#      通過する。`other` の指摘 1 件で「読めませんでした」と報告しただけの回答が
+#      LGTM になり、loop-gate.sh が読んでいないものを記録してしまう
+#      （game-forge #873）。
 #
 # いずれも本物の CLI を呼ばずに確かめられる。仕込みの codex / gh を PATH の先へ
 # 置き、受け取った標準入力と引数を記録させる。
@@ -127,7 +131,7 @@ if [[ -z "$answer" ]]; then
   exit 1
 fi
 
-printf '%s\n' "${FAKE_CODEX_ANSWER:-{\"findings\":[]\}}" > "$answer"
+printf '%s\n' "${FAKE_CODEX_ANSWER:-{\"reviewed\":true,\"findings\":[]\}}" > "$answer"
 
 # stdout へは回答を書かない。書くと、-o を読まない実装でもこの検査が通る。
 printf '%s\n' "${FAKE_CODEX_STDOUT:-}"
@@ -187,7 +191,7 @@ run_review() {
 it "指摘なしの回答で exit 0 になる"
 rm -f "$RECORD/stdin" "$RECORD/argv"
 rc=0
-FAKE_CODEX_ANSWER='{"findings":[]}' run_review || rc=$?
+FAKE_CODEX_ANSWER='{"reviewed":true,"findings":[]}' run_review || rc=$?
 if [[ "$rc" -eq 0 ]]; then pass; else fail "exit $rc: $(cat "$WORK/err")"; fi
 
 it "指摘なしの回では loop-gate.sh が記録の契機にする完了行が出る"
@@ -204,7 +208,7 @@ fi
 
 it "落とす指摘（bug）の回では findings reported by で始まる完了行が出る"
 rc=0
-FAKE_CODEX_ANSWER='{"findings":[{"category":"bug","file":"a.ts","line":1,"what":"x","why":"y"}]}' \
+FAKE_CODEX_ANSWER='{"reviewed":true,"findings":[{"category":"bug","file":"a.ts","line":1,"what":"x","why":"y"}]}' \
   run_review || rc=$?
 if [[ "$rc" -eq 1 ]] && grep -qE '^\[second-opinion\] findings reported by ' "$WORK/both" 2>/dev/null; then
   pass
@@ -272,7 +276,7 @@ assert_eq "$model_value" "gpt-6-sol" "既定モデル"
 it "--model を渡すとそちらが使われる"
 rm -f "$RECORD/argv"
 rc=0
-FAKE_CODEX_ANSWER='{"findings":[]}' run_review --model gpt-6-luna || rc=$?
+FAKE_CODEX_ANSWER='{"reviewed":true,"findings":[]}' run_review --model gpt-6-luna || rc=$?
 model_value="$(awk '$0 == "--model" { getline; print; exit }' "$RECORD/argv" 2>/dev/null)"
 if [[ "$rc" -eq 0 ]]; then
   assert_eq "$model_value" "gpt-6-luna" "--model の指定"
@@ -284,7 +288,7 @@ fi
 
 it "落とさない category（promise-mismatch・other）だけでは通過する"
 rc=0
-FAKE_CODEX_ANSWER='{"findings":[{"category":"promise-mismatch","file":"a.ts","line":1,"what":"x","why":"y"},{"category":"other","file":"a.ts","line":2,"what":"x","why":"y"}]}' \
+FAKE_CODEX_ANSWER='{"reviewed":true,"findings":[{"category":"promise-mismatch","file":"a.ts","line":1,"what":"x","why":"y"},{"category":"other","file":"a.ts","line":2,"what":"x","why":"y"}]}' \
   run_review || rc=$?
 if [[ "$rc" -eq 0 ]] && grep -q 'promise-mismatch' "$WORK/out"; then
   pass
@@ -295,7 +299,7 @@ fi
 for category in bug vulnerability type-error edge-case; do
   it "category=$category は落とす"
   rc=0
-  FAKE_CODEX_ANSWER="{\"findings\":[{\"category\":\"$category\",\"file\":\"a.ts\",\"line\":1,\"what\":\"x\",\"why\":\"y\"}]}" \
+  FAKE_CODEX_ANSWER="{\"reviewed\":true,\"findings\":[{\"category\":\"$category\",\"file\":\"a.ts\",\"line\":1,\"what\":\"x\",\"why\":\"y\"}]}" \
     run_review || rc=$?
   assert_eq "$rc" "1" "exit code"
 done
@@ -311,23 +315,23 @@ fi
 
 it "findings が配列でない回答は落とす"
 rc=0
-FAKE_CODEX_ANSWER='{"findings":"たくさん"}' run_review || rc=$?
+FAKE_CODEX_ANSWER='{"reviewed":true,"findings":"たくさん"}' run_review || rc=$?
 assert_eq "$rc" "1" "exit code"
 
 it "スキーマに無い category（綴り違い）は指摘なしへ倒さず落とす"
 rc=0
-FAKE_CODEX_ANSWER='{"findings":[{"category":"bugs","file":"a.ts","line":1,"what":"x","why":"y"}]}' \
+FAKE_CODEX_ANSWER='{"reviewed":true,"findings":[{"category":"bugs","file":"a.ts","line":1,"what":"x","why":"y"}]}' \
   run_review || rc=$?
 assert_eq "$rc" "1" "exit code"
 
 it "what / why が欠けた回答は落とす"
 rc=0
-FAKE_CODEX_ANSWER='{"findings":[{"category":"bug","file":"a.ts","line":1}]}' run_review || rc=$?
+FAKE_CODEX_ANSWER='{"reviewed":true,"findings":[{"category":"bug","file":"a.ts","line":1}]}' run_review || rc=$?
 assert_eq "$rc" "1" "exit code"
 
 it "file / line が欠けた回答は、検証（形）が理由で落ちる"
 rc=0
-FAKE_CODEX_ANSWER='{"findings":[{"category":"bug","what":"x","why":"y"}]}' run_review || rc=$?
+FAKE_CODEX_ANSWER='{"reviewed":true,"findings":[{"category":"bug","what":"x","why":"y"}]}' run_review || rc=$?
 if [[ "$rc" -eq 1 ]] && grep -q 'JSON として読めませんでした' "$WORK/err"; then
   pass
 else
@@ -336,7 +340,7 @@ fi
 
 it "line が数でない回答は、検証（形）が理由で落ちる"
 rc=0
-FAKE_CODEX_ANSWER='{"findings":[{"category":"bug","file":"a.ts","line":"3行目","what":"x","why":"y"}]}' \
+FAKE_CODEX_ANSWER='{"reviewed":true,"findings":[{"category":"bug","file":"a.ts","line":"3行目","what":"x","why":"y"}]}' \
   run_review || rc=$?
 if [[ "$rc" -eq 1 ]] && grep -q 'JSON として読めませんでした' "$WORK/err"; then
   pass
@@ -344,19 +348,103 @@ else
   fail "exit=$rc、または別の理由で落ちている（検証が効いていません）: $(cat "$WORK/err")"
 fi
 
+# ---- 3b. 差分を読めなかった回答は落とし、記録も残させないこと（game-forge #873） ----
+#
+# `other` の指摘 1 件で「読めませんでした」と報告しただけの回答は、category だけ
+# 見ると判定を動かさないため LGTM になり、loop-gate.sh が読んでいないものを記録
+# してしまう。reviewed を回答の必須項目にして塞ぐ。
+
+it "reviewed が欠けた回答は落とす（「欠け」を「読めた」に倒さない）"
+rc=0
+FAKE_CODEX_ANSWER='{"findings":[]}' run_review || rc=$?
+assert_eq "$rc" "1" "exit code"
+
+it "reviewed が真偽値でない回答は落とす"
+rc=0
+FAKE_CODEX_ANSWER='{"reviewed":"true","findings":[]}' run_review || rc=$?
+assert_eq "$rc" "1" "exit code"
+
+it "reviewed:false の回答は、指摘の中身によらず落とし、理由と CLI の診断を示す"
+# 実際に起きた形をそのまま当てる。codex がサンドボックスの失敗で git diff を
+# 叩けず、「レビューを実施できませんでした」を other の指摘 1 件として返した。
+rc=0
+FAKE_CODEX_ANSWER='{"reviewed":false,"findings":[{"category":"other","file":"","line":0,"what":"レビューを実施できませんでした。","why":"git diff が bwrap: Failed to make / slave: Permission denied で失敗しました。"}]}' \
+  run_review || rc=$?
+if [[ "$rc" -eq 1 ]] \
+  && grep -q '差分を読めなかったと答えました' "$WORK/err" \
+  && grep -q 'bwrap' "$WORK/err"; then
+  pass
+else
+  fail "exit=$rc、または理由・CLI の診断が出ていない: $(cat "$WORK/err")"
+fi
+
+it "reviewed:false の回答では完了の行（LGTM / findings reported）を出さない"
+# loop-gate.sh の record_second_opinion はこの行の有無で「判定に到達したか」を見て
+# 記録する。出してしまうと、落ちても findings の記録が作られ、確認側が緑になる。
+if grep -qE -e '^\[second-opinion\] LGTM \(' -e '^\[second-opinion\] findings reported by ' "$WORK/both" 2>/dev/null; then
+  fail "完了の行が出ている: $(cat "$WORK/both")"
+else
+  pass
+fi
+cp "$WORK/both" "$WORK/unreviewed-capture"
+
+it "対照: 指摘なしの出力には完了の行（LGTM）が出る（検査が空振りしていないことの前提）"
+rc=0
+FAKE_CODEX_ANSWER='{"reviewed":true,"findings":[]}' run_review || rc=$?
+if [[ "$rc" -eq 0 ]] && grep -qE '^\[second-opinion\] LGTM \(' "$WORK/both" 2>/dev/null; then
+  pass
+else
+  fail "exit=$rc、完了の行が出ていない: $(cat "$WORK/both")"
+fi
+cp "$WORK/both" "$WORK/lgtm-capture"
+
+# loop-gate.sh がこの出力から記録を作るかどうかは、綴りをここへ書き写さず
+# loop-gate.sh 自身の関数（record_second_opinion）で確かめる。書き写すと、
+# 片方だけ直ったときにこの検査が空振りする。
+#
+# second-opinion-record.sh は自分の置き場所（git リポジトリ）へ cd して記録する。
+# 本物（開発リポジトリ自身）を呼ぶと、この検査を回した worktree 自身の記録を
+# 上書きしてしまうため、使い捨ての $REPO へ写しを置いて呼ぶ。
+mkdir -p "$REPO/scripts"
+cp "$REPO_ROOT/scripts/loop-gate.sh" "$REPO_ROOT/scripts/second-opinion-record.sh" "$REPO/scripts/"
+record_after() {
+  (
+    cd "$REPO" || exit 1
+    rm -rf .git/second-opinion
+    # shellcheck source=scripts/loop-gate.sh
+    . "$REPO/scripts/loop-gate.sh"
+    record_second_opinion "$1" staged "$2" >/dev/null 2>&1
+    if [[ -f .git/second-opinion/meta ]]; then echo recorded; else echo none; fi
+  )
+}
+
+it "対照: LGTM の出力からは loop-gate.sh が記録を作る（記録の経路そのものは壊れていない）"
+if [[ "$(record_after "$WORK/lgtm-capture" 0)" == "recorded" ]]; then
+  pass
+else
+  fail "LGTM の出力から記録が作られませんでした（これが空振りすると下の検査も当てにならない）"
+fi
+
+it "reviewed:false の出力からは、loop-gate.sh が記録を作らない"
+if [[ "$(record_after "$WORK/unreviewed-capture" 1)" == "none" ]]; then
+  pass
+else
+  fail "差分を読めなかった出力から記録が作られました（確認側が緑になります）"
+fi
+
 # ---- 4. 判定は -o のファイルから取ること（stdout では判定しない） ----
 
 it "回答は指摘なし・stdout は落とす指摘でも exit 0（stdout で判定していない）"
 rc=0
-FAKE_CODEX_ANSWER='{"findings":[]}' \
-FAKE_CODEX_STDOUT='{"findings":[{"category":"bug","file":"a.ts","line":1,"what":"x","why":"y"}]}' \
+FAKE_CODEX_ANSWER='{"reviewed":true,"findings":[]}' \
+FAKE_CODEX_STDOUT='{"reviewed":true,"findings":[{"category":"bug","file":"a.ts","line":1,"what":"x","why":"y"}]}' \
   run_review || rc=$?
 assert_eq "$rc" "0" "exit code"
 
 it "回答は落とす指摘・stdout は指摘なしだと exit 1（-o を見落としていない）"
 rc=0
-FAKE_CODEX_ANSWER='{"findings":[{"category":"bug","file":"a.ts","line":1,"what":"x","why":"y"}]}' \
-FAKE_CODEX_STDOUT='{"findings":[]}' \
+FAKE_CODEX_ANSWER='{"reviewed":true,"findings":[{"category":"bug","file":"a.ts","line":1,"what":"x","why":"y"}]}' \
+FAKE_CODEX_STDOUT='{"reviewed":true,"findings":[]}' \
   run_review || rc=$?
 assert_eq "$rc" "1" "exit code"
 
@@ -384,7 +472,7 @@ assert_eq "$rc" "1" "exit code"
 
 it "--runs 2 で 2 回目が回答を書かなければ、前の回の回答を読まずに失敗する"
 rc=0
-FAKE_CODEX_WRITE_ANSWER=first FAKE_CODEX_ANSWER='{"findings":[]}' run_review --runs 2 || rc=$?
+FAKE_CODEX_WRITE_ANSWER=first FAKE_CODEX_ANSWER='{"reviewed":true,"findings":[]}' run_review --runs 2 || rc=$?
 assert_eq "$rc" "1" "exit code"
 
 # ---- 8. issue の文脈（枝の名前から番号を取り、scope / acceptance を載せる） ----
@@ -401,7 +489,7 @@ rc=0
   FAKE_GH_ISSUE_BODY='# issue #9999 仕込みの票
 scope.in:
   - 仕込みの目印 SELFTEST-ISSUE-MARKER' \
-  FAKE_CODEX_ANSWER='{"findings":[]}' \
+  FAKE_CODEX_ANSWER='{"reviewed":true,"findings":[]}' \
     bash "$REVIEW" --engine codex > "$WORK/out" 2> "$WORK/err"
 ) || rc=$?
 if [[ "$rc" -eq 0 ]] && grep -q 'SELFTEST-ISSUE-MARKER' "$RECORD/stdin" 2>/dev/null; then
@@ -457,7 +545,7 @@ rc=0
   FAKE_CODEX_RECORD="$RECORD" \
   FAKE_GH_RECORD="$RECORD/gh-calls" \
   FAKE_GH_DIR="$gh_dir" \
-  FAKE_CODEX_ANSWER='{"findings":[]}' \
+  FAKE_CODEX_ANSWER='{"reviewed":true,"findings":[]}' \
     bash "$REVIEW" --engine codex --range 'HEAD~1..HEAD' > "$WORK/out" 2> "$WORK/err"
 ) || rc=$?
 
@@ -517,7 +605,7 @@ rc=0
   cd "$REPO"
   PATH="$failing_gh_bin:$FAKE_BIN:$PATH" \
   FAKE_CODEX_RECORD="$RECORD" \
-  FAKE_CODEX_ANSWER='{"findings":[]}' \
+  FAKE_CODEX_ANSWER='{"reviewed":true,"findings":[]}' \
     bash "$REVIEW" --engine codex > "$WORK/out" 2> "$WORK/err"
 ) || rc=$?
 if [[ "$rc" -eq 0 ]] && [[ -f "$RECORD/stdin" ]] \

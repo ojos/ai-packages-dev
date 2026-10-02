@@ -70,7 +70,7 @@ if [[ "${FAKE_AGY_EMPTY:-0}" == "1" ]]; then
 fi
 
 printf '{"conversation_id":"x","status":"SUCCESS","response":"...","structured_output":%s}\n' \
-  "${FAKE_AGY_ANSWER:-{\"findings\":[]\}}"
+  "${FAKE_AGY_ANSWER:-{\"reviewed\":true,\"findings\":[]\}}"
 FAKE
 chmod +x "$FAKE_BIN/agy"
 
@@ -93,7 +93,7 @@ run_review() {
 it "指摘なしの回答で exit 0 になる"
 rm -f "$RECORD/argv"
 rc=0
-FAKE_AGY_ANSWER='{"findings":[]}' run_review || rc=$?
+FAKE_AGY_ANSWER='{"reviewed":true,"findings":[]}' run_review || rc=$?
 if [[ "$rc" -eq 0 ]]; then pass; else fail "exit $rc: $(cat "$WORK/err")"; fi
 
 it "指摘なしの回では loop-gate.sh が記録の契機にする完了行が出る"
@@ -107,7 +107,7 @@ fi
 
 it "落とす指摘（bug）の回では findings reported by で始まる完了行が出る"
 rc=0
-FAKE_AGY_ANSWER='{"findings":[{"category":"bug","file":"a.ts","line":1,"what":"x","why":"y"}]}' \
+FAKE_AGY_ANSWER='{"reviewed":true,"findings":[{"category":"bug","file":"a.ts","line":1,"what":"x","why":"y"}]}' \
   run_review || rc=$?
 if [[ "$rc" -eq 1 ]] && grep -qE '^\[second-opinion\] findings reported by ' "$WORK/both" 2>/dev/null; then
   pass
@@ -148,7 +148,7 @@ fi
 
 it "落とさない category（promise-mismatch）だけでは通過する"
 rc=0
-FAKE_AGY_ANSWER='{"findings":[{"category":"promise-mismatch","file":"a.ts","line":1,"what":"x","why":"y"}]}' \
+FAKE_AGY_ANSWER='{"reviewed":true,"findings":[{"category":"promise-mismatch","file":"a.ts","line":1,"what":"x","why":"y"}]}' \
   run_review || rc=$?
 if [[ "$rc" -eq 0 ]] && grep -q 'promise-mismatch' "$WORK/out"; then
   pass
@@ -159,7 +159,7 @@ fi
 for category in bug vulnerability type-error edge-case; do
   it "category=$category は落とす"
   rc=0
-  FAKE_AGY_ANSWER="{\"findings\":[{\"category\":\"$category\",\"file\":\"a.ts\",\"line\":1,\"what\":\"x\",\"why\":\"y\"}]}" \
+  FAKE_AGY_ANSWER="{\"reviewed\":true,\"findings\":[{\"category\":\"$category\",\"file\":\"a.ts\",\"line\":1,\"what\":\"x\",\"why\":\"y\"}]}" \
     run_review || rc=$?
   assert_eq "$rc" "1" "exit code"
 done
@@ -169,13 +169,49 @@ it "包みの外（status 等）を JSON として読もうとしない。.struc
 # status フィールドの存在で additionalProperties: false のスキーマ検証に失敗し、
 # 「読めなかった」側へ落ちる（findings が無いのに exit 1 になる）はずである。
 rc=0
-FAKE_AGY_ANSWER='{"findings":[]}' run_review || rc=$?
+FAKE_AGY_ANSWER='{"reviewed":true,"findings":[]}' run_review || rc=$?
 assert_eq "$rc" "0" "exit code"
 
 it "JSON として読めない回答（ツール拒否で応答なし）は落とす"
 rc=0
 FAKE_AGY_EMPTY=1 run_review || rc=$?
 assert_eq "$rc" "1" "exit code"
+
+# ---- 3b. 差分を読めなかった回答は落とし、記録も残させないこと（game-forge #873） ----
+#
+# `other` の指摘 1 件で「読めませんでした」と報告しただけの回答は、category だけ
+# 見ると判定を動かさないため LGTM になり、loop-gate.sh が読んでいないものを記録
+# してしまう。reviewed を回答の必須項目にして塞ぐ（codex と同じ判定ロジックを
+# 共有しているため、ここでは配線がエンジンをまたいで効くことだけを確かめる）。
+
+it "reviewed が欠けた回答は落とす（「欠け」を「読めた」に倒さない）"
+rc=0
+FAKE_AGY_ANSWER='{"findings":[]}' run_review || rc=$?
+assert_eq "$rc" "1" "exit code"
+
+it "reviewed が真偽値でない回答は落とす"
+rc=0
+FAKE_AGY_ANSWER='{"reviewed":"true","findings":[]}' run_review || rc=$?
+assert_eq "$rc" "1" "exit code"
+
+it "reviewed:false の回答は、指摘の中身によらず落とし、理由を示す"
+rc=0
+FAKE_AGY_ANSWER='{"reviewed":false,"findings":[{"category":"other","file":"","line":0,"what":"レビューを実施できませんでした。","why":"ツールの実行が拒否されました。"}]}' \
+  run_review || rc=$?
+if [[ "$rc" -eq 1 ]] && grep -q '差分を読めなかったと答えました' "$WORK/err"; then
+  pass
+else
+  fail "exit=$rc、または理由が出ていない: $(cat "$WORK/err")"
+fi
+
+it "reviewed:false の回答では完了の行（LGTM / findings reported）を出さない"
+# loop-gate.sh の record_second_opinion はこの行の有無で「判定に到達したか」を見て
+# 記録する。出してしまうと、落ちても findings の記録が作られ、確認側が緑になる。
+if grep -qE -e '^\[second-opinion\] LGTM \(' -e '^\[second-opinion\] findings reported by ' "$WORK/both" 2>/dev/null; then
+  fail "完了の行が出ている: $(cat "$WORK/both")"
+else
+  pass
+fi
 
 # ---- 4. 分割は従来どおり agy だけに残る（挙動は変えない） ----
 
@@ -191,7 +227,7 @@ awk 'BEGIN { for (i = 0; i < 80000; i++) printf "y"; printf "\n" }' > "$REPO/big
 git -C "$REPO" add big1.txt big2.txt
 rm -f "$RECORD/argv"
 rc=0
-FAKE_AGY_ANSWER='{"findings":[]}' run_review || rc=$?
+FAKE_AGY_ANSWER='{"reviewed":true,"findings":[]}' run_review || rc=$?
 if [[ "$rc" -eq 0 ]] && grep -q 'second-opinion.*chunk 1/2' "$WORK/out" && grep -q 'chunk 2/2' "$WORK/out"; then
   pass
 else
