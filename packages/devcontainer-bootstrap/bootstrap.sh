@@ -7943,7 +7943,7 @@ detect_playbook_dir() {
 }
 
 apply_file_with_policy() {
-  local src="$1" dest="$2" answer prev_mode is_link=false
+  local src="$1" dest="$2" answer prev_mode
 
   if [[ "$UPGRADE" == "true" ]]; then
     upgrade_apply_file "$dest" "$src"
@@ -7954,9 +7954,8 @@ apply_file_with_policy() {
   mkdir -p "$(dirname "$dest")"
 
   if [[ ! -e "$dest" && ! -L "$dest" ]]; then
-    cp "$src" "$dest"
     # 取得元は mktemp 由来（0600）。新規作成するファイルは他と同様に読めるようにする。
-    chmod 644 "$dest"
+    dcb_install_file "$src" "$dest" 644
     echo "write: $dest"
     return 0
   fi
@@ -7966,7 +7965,6 @@ apply_file_with_policy() {
   # のものを引き継がず、新規と同じ 644 にする。
   if [[ -L "$dest" ]]; then
     prev_mode=644
-    is_link=true
   else
     # 既存ファイルを上書きする場合は、そのモードを変えてはならない。
     prev_mode="$(file_mode_octal "$dest")"
@@ -7979,17 +7977,13 @@ apply_file_with_policy() {
       SKIPPED_DESTS="${SKIPPED_DESTS}${dest}"$'\n'
       ;;
     overwrite)
-      [[ "$is_link" == "true" ]] && rm -f "$dest"
-      cp "$src" "$dest"
-      chmod "$prev_mode" "$dest"
+      dcb_install_file "$src" "$dest" "$prev_mode"
       echo "write: $dest (overwrite)"
       ;;
     prompt)
       read -r -p "File exists: $dest. Overwrite? [y/N]: " answer
       if [[ "$answer" == "y" || "$answer" == "Y" ]]; then
-        [[ "$is_link" == "true" ]] && rm -f "$dest"
-        cp "$src" "$dest"
-        chmod "$prev_mode" "$dest"
+        dcb_install_file "$src" "$dest" "$prev_mode"
         echo "write: $dest (overwrite)"
       else
         echo "skip (declined): $dest"
@@ -8300,6 +8294,45 @@ dcb_guard_parent() {
   fi
 }
 
+# 書き込み先がディレクトリ（リンク経由を含む）なら、mv が「その中へ移す」ことになり
+# 出力先の外へ届きうるので、何も書かずに止める。
+dcb_refuse_dir_dest() {
+  if [[ -d "$1" ]]; then
+    echo "error: $1 はディレクトリです。書き込まずに止めます。" >&2
+    exit 1
+  fi
+}
+
+# src を dest へ、同じディレクトリの一時ファイル -> mv で置く。mv（rename）は dest が
+# リンクならリンク自体を置き換えるので、検査と書き込みのあいだにリンクを置き直されても
+# リンク先へは書かない。
+dcb_install_file() { # src dest mode
+  local tmp
+  dcb_refuse_dir_dest "$2"
+  tmp="$(mktemp "$2.XXXXXX")"
+  cp "$1" "$tmp"
+  chmod "$3" "$tmp"
+  mv -f "$tmp" "$2"
+}
+
+# 今回書く予定のすべての生成先について、親ディレクトリの実体が出力先の中かを、
+# 書き込みを始める前に検査する（途中まで書いてから止まらないようにする）。
+dcb_precheck_destinations() {
+  local rel
+  while IFS= read -r rel; do
+    [[ -n "$rel" ]] || continue
+    dcb_guard_parent "$OUTPUT_DIR/$rel"
+  done <<EOF2
+$(printf '%s\n' "$sorted_rels"
+  printf '%s\n' "$ORIGIN_REL_PATH"
+  [[ "$MANAGE_GITIGNORE" == "true" ]] && printf '%s\n' ".gitignore"
+  if should_install_playbook; then
+    playbook_installed_rel_paths
+    playbook_rules_rel_paths
+  fi)
+EOF2
+}
+
 # 新しい版を中身だけ書く。open 時に既存ファイルがあれば失敗させる（noclobber）ので、
 # リンクを張られた先へは書かない。
 upgrade_write_new() {
@@ -8478,15 +8511,16 @@ write_file() {
     return 0
   fi
   mkdir -p "$(dirname "$out")"
-  # --force でリンクを置き換えるときは、リンク自体を消す（jq の出力がリンク先へ届かない
-  # ように。mv はリンク自体を置き換えるので、非 json は元から安全）。
-  [[ -L "$out" ]] && rm -f "$out"
+  dcb_refuse_dir_dest "$out"
   tmp="$(mktemp "${TMPDIR:-/tmp}/dcb-render.XXXXXX")"
   render_content "$content" > "$tmp"
   if [[ "$out" == *.json ]]; then
     perl -0777 -i -pe 's/,\s*([}\]])/$1/g' "$tmp"
-    jq . "$tmp" > "$out"
+    # jq の出力も一時ファイルへ書いて mv で置く（リンクをたどって書かない）。
+    tmp2="$(mktemp "${TMPDIR:-/tmp}/dcb-render.XXXXXX")"
+    jq . "$tmp" > "$tmp2"
     rm -f "$tmp"
+    mv "$tmp2" "$out"
   else
     mv "$tmp" "$out"
   fi
@@ -8721,6 +8755,10 @@ fi
 # --with-* 条件ぶん（conditional_template_rel_paths）を 1 つの一覧へまとめる。ここで
 # 合流させるので、dry-run の計画と実際の書き込みは条件付きファイルでも一致する。
 sorted_rels="$( { template_rel_paths; conditional_template_rel_paths; } | sort)"
+
+# 書き込みを始める前に、すべての生成先の親ディレクトリを検査する（--dry-run と
+# --upgrade も同じ。1 つでも出力先の外を指していれば、何も書かずに止まる）。
+dcb_precheck_destinations
 
 if [[ "$DRY_RUN" == "true" && "$UPGRADE" != "true" ]]; then
   echo "[bootstrap] dry-run: no files will be written"

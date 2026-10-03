@@ -91,7 +91,7 @@ for kind in broken valid; do
   run "$out"
   msg="$(outside_intact "$outside" "$kind")" || true
   st="$(all_state "$out" L $ALL_RELS)" || true
-  if [[ -z "$msg" && -z "$st" ]] && printf '%s' "$RUN_OUT" | grep -q 'skip (exists): .*devcontainer.json'; then
+  if [[ "$RUN_RC" == "0" && -z "$msg" && -z "$st" ]] && printf '%s' "$RUN_OUT" | grep -q 'skip (exists): .*devcontainer.json'; then
     pass
   else fail "rc=$RUN_RC msg=$msg st=$st"; fi
 
@@ -104,7 +104,7 @@ for kind in broken valid; do
   # リンクのまま残る（既存の設計）。
   st="$(all_state "$out" R .devcontainer/devcontainer.json scripts/verify.sh .gitignore)" || true
   st2="$(all_state "$out" L $PB_RELS .devcontainer/ORIGIN)" || true
-  if [[ -z "$msg" && -z "$st" && -z "$st2" ]] && jq -e . "$out/.devcontainer/devcontainer.json" >/dev/null; then
+  if [[ "$RUN_RC" == "0" && -z "$msg" && -z "$st" && -z "$st2" ]] && jq -e . "$out/.devcontainer/devcontainer.json" >/dev/null; then
     pass
   else fail "rc=$RUN_RC msg=$msg st=$st st2=$st2"; fi
 
@@ -115,7 +115,7 @@ for kind in broken valid; do
   msg="$(outside_intact "$outside" "$kind")" || true
   st="$(all_state "$out" R $PB_RELS)" || true
   st2="$(all_state "$out" L $DCB_RELS .gitignore)" || true
-  if [[ -z "$msg" && -z "$st" && -z "$st2" ]]; then
+  if [[ "$RUN_RC" == "0" && -z "$msg" && -z "$st" && -z "$st2" ]]; then
     pass
   else fail "rc=$RUN_RC msg=$msg st=$st st2=$st2"; fi
 
@@ -133,7 +133,7 @@ w="$(new_workdir)"; out="$w/p"; outside="$w/outside"; mkdir -p "$outside" "$out/
 echo "KEEP" > "$outside/v.sh"
 ln -s "$outside/v.sh" "$out/scripts/verify.sh"
 run "$out" --force
-if [[ "$(cat "$outside/v.sh")" == "KEEP" && -f "$out/scripts/verify.sh" && ! -L "$out/scripts/verify.sh" ]]; then pass; else fail "rc=$RUN_RC"; fi
+if [[ "$RUN_RC" == "0" && "$(cat "$outside/v.sh")" == "KEEP" && -f "$out/scripts/verify.sh" && ! -L "$out/scripts/verify.sh" ]]; then pass; else fail "rc=$RUN_RC"; fi
 
 # 親ディレクトリが出力先の外を指す: 何も書かずに止まる。
 for opt in "" "--force" "--playbook-conflict-policy overwrite"; do
@@ -149,6 +149,29 @@ for opt in "" "--force" "--playbook-conflict-policy overwrite"; do
   done
 done
 
+# 外を指す親が「後に並ぶ」生成先にあるとき、先に並ぶ生成先にも何も書かれない。
+# .github は規範経由のファイル（後段）の親。.devcontainer などは先に生成される。
+for opt in "" "--force" "--dry-run" "--playbook-conflict-policy overwrite"; do
+  it "後段の生成先(.github)の親が外を指す [${opt:-既定}]: 先の生成先にも何も書かず exit 1"
+  w="$(new_workdir)"; out="$w/p"; outside="$w/outside"; mkdir -p "$outside" "$out"
+  ln -s "$outside" "$out/.github"
+  # shellcheck disable=SC2086
+  run "$out" $opt
+  rest="$(find "$out" -mindepth 1 ! -name .github | wc -l | tr -d ' ')"
+  if [[ "$RUN_RC" == "1" && "$rest" == "0" && -z "$(ls -A "$outside")" ]]; then pass; else fail "rc=$RUN_RC 出力先に残った数=$rest"; fi
+done
+
+it "--upgrade でも前検査: 親が外を指すなら、先の生成先を更新せず exit 1"
+w="$(new_workdir)"; out="$w/p"; outside="$w/outside"; mkdir -p "$outside"
+run "$out"
+echo "# mine" >> "$out/scripts/verify.sh"
+rm -f "$out/.github/project-ai-rules.md"
+rm -rf "$out/.github"; ln -s "$outside" "$out/.github"
+before="$(cat "$out/.devcontainer/devcontainer.json")"
+bash "$BOOTSTRAP" --upgrade --output-dir "$out" --playbook-from "$PLAYBOOK_SRC" >/dev/null 2>&1; UP_RC=$?
+if [[ "$UP_RC" == "1" && -z "$(ls -A "$outside")" && ! -e "$out/scripts/verify.sh.dcb-new" ]] \
+  && [[ "$before" == "$(cat "$out/.devcontainer/devcontainer.json")" ]]; then pass; else fail "rc=$UP_RC"; fi
+
 it "親ディレクトリが外を指す（外にファイルあり）: 外のファイルが無傷"
 w="$(new_workdir)"; out="$w/p"; outside="$w/outside"; mkdir -p "$outside" "$out"
 echo "orig" > "$outside/verify.sh"
@@ -163,6 +186,6 @@ echo "# edit" >> "$out/scripts/verify.sh"
 run "$out"
 kept="$(grep -c '# edit' "$out/scripts/verify.sh")"
 run "$out" --force
-if [[ "$kept" == "1" ]] && ! grep -q '# edit' "$out/scripts/verify.sh"; then pass; else fail "kept=$kept"; fi
+if [[ "$RUN_RC" == "0" && "$kept" == "1" ]] && ! grep -q '# edit' "$out/scripts/verify.sh"; then pass; else fail "kept=$kept"; fi
 
 exit_with_result
