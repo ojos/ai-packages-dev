@@ -7772,6 +7772,19 @@ upsert_gitignore() {
   block="$(build_gitignore_block)"
   tmp="$(mktemp "${TMPDIR:-/tmp}/dcb-gitignore-block.XXXXXX")"
 
+  dcb_guard_parent "$gitignore_path"
+  # （--upgrade の経路は従来どおり: リンクは mv が置き換える）
+  # シンボリックリンクの .gitignore は「既存のファイル」として扱い、たどらない。
+  # 既定では温存する。--force のときはリンク自体を置き換える（中身は引き継がない）。
+  if [[ "$UPGRADE" != "true" && -L "$gitignore_path" ]]; then
+    if [[ "$FORCE" != "true" ]]; then
+      rm -f "$tmp"
+      echo "skip (exists): $gitignore_path"
+      return 0
+    fi
+    rm -f "$gitignore_path"
+  fi
+
   [[ -f "$gitignore_path" ]] && prev_mode="$(file_mode_octal "$gitignore_path")"
 
   if [[ -f "$gitignore_path" ]]; then
@@ -7930,16 +7943,17 @@ detect_playbook_dir() {
 }
 
 apply_file_with_policy() {
-  local src="$1" dest="$2" answer prev_mode
+  local src="$1" dest="$2" answer prev_mode is_link=false
 
   if [[ "$UPGRADE" == "true" ]]; then
     upgrade_apply_file "$dest" "$src"
     return 0
   fi
 
+  dcb_guard_parent "$dest"
   mkdir -p "$(dirname "$dest")"
 
-  if [[ ! -f "$dest" ]]; then
+  if [[ ! -e "$dest" && ! -L "$dest" ]]; then
     cp "$src" "$dest"
     # 取得元は mktemp 由来（0600）。新規作成するファイルは他と同様に読めるようにする。
     chmod 644 "$dest"
@@ -7947,9 +7961,17 @@ apply_file_with_policy() {
     return 0
   fi
 
-  # 既存ファイルを上書きする場合は、そのモードを変えてはならない。
-  prev_mode="$(file_mode_octal "$dest")"
-  prev_mode="${prev_mode:-644}"
+  # シンボリックリンク（切れたものを含む）は「既存のファイル」として扱い、たどらない。
+  # 置き換えるときはリンク自体を消してから書く（リンク先は触らない）。モードはリンク先
+  # のものを引き継がず、新規と同じ 644 にする。
+  if [[ -L "$dest" ]]; then
+    prev_mode=644
+    is_link=true
+  else
+    # 既存ファイルを上書きする場合は、そのモードを変えてはならない。
+    prev_mode="$(file_mode_octal "$dest")"
+    prev_mode="${prev_mode:-644}"
+  fi
 
   case "$PLAYBOOK_CONFLICT_POLICY" in
     skip)
@@ -7957,6 +7979,7 @@ apply_file_with_policy() {
       SKIPPED_DESTS="${SKIPPED_DESTS}${dest}"$'\n'
       ;;
     overwrite)
+      [[ "$is_link" == "true" ]] && rm -f "$dest"
       cp "$src" "$dest"
       chmod "$prev_mode" "$dest"
       echo "write: $dest (overwrite)"
@@ -7964,6 +7987,7 @@ apply_file_with_policy() {
     prompt)
       read -r -p "File exists: $dest. Overwrite? [y/N]: " answer
       if [[ "$answer" == "y" || "$answer" == "Y" ]]; then
+        [[ "$is_link" == "true" ]] && rm -f "$dest"
         cp "$src" "$dest"
         chmod "$prev_mode" "$dest"
         echo "write: $dest (overwrite)"
@@ -8267,6 +8291,15 @@ upgrade_parent_inside_output() {
   [[ "$real" == "$root" || "$real" == "$root"/* ]]
 }
 
+# 従来の経路（--upgrade を付けない再実行・--force・規範の配置）の書き込み先の検査。
+# 親ディレクトリの実体が出力先の外なら、何も書かずに止める（--upgrade の経路と同じ判定）。
+dcb_guard_parent() {
+  if ! upgrade_parent_inside_output "$1"; then
+    echo "error: $1 の親ディレクトリが出力先の外を指しています（シンボリックリンク）。書き込まずに止めます。" >&2
+    exit 1
+  fi
+}
+
 # 新しい版を中身だけ書く。open 時に既存ファイルがあれば失敗させる（noclobber）ので、
 # リンクを張られた先へは書かない。
 upgrade_write_new() {
@@ -8405,6 +8438,8 @@ upgrade_collect_leftover() {
 # （既存ファイルのモードを変えない。新規は upgrade_apply_file が整える）。
 dcb_chmod_exec() {
   [[ "$UPGRADE" == "true" ]] && return 0
+  # 温存したシンボリックリンクは、たどってリンク先のモードを変えない。
+  [[ -L "$1" ]] && return 0
   chmod +x "$1"
 }
 
@@ -8435,12 +8470,17 @@ write_file() {
     rm -f "$tmp"
     return 0
   fi
-  if [[ -e "$out" && "$FORCE" != "true" ]]; then
+  dcb_guard_parent "$out"
+  # 切れたシンボリックリンクも「既存のファイル」として扱う（-e だけでは無いと判定する）。
+  if [[ ( -e "$out" || -L "$out" ) && "$FORCE" != "true" ]]; then
     echo "skip (exists): $out"
     SKIPPED_DESTS="${SKIPPED_DESTS}${out}"$'\n'
     return 0
   fi
   mkdir -p "$(dirname "$out")"
+  # --force でリンクを置き換えるときは、リンク自体を消す（jq の出力がリンク先へ届かない
+  # ように。mv はリンク自体を置き換えるので、非 json は元から安全）。
+  [[ -L "$out" ]] && rm -f "$out"
   tmp="$(mktemp "${TMPDIR:-/tmp}/dcb-render.XXXXXX")"
   render_content "$content" > "$tmp"
   if [[ "$out" == *.json ]]; then
@@ -8564,7 +8604,8 @@ origin_playbook_source() {
 # --playbook-conflict-policy overwrite）で明示的に再生成すること。
 write_origin_record() {
   local dest="$OUTPUT_DIR/$ORIGIN_REL_PATH" tmp rel h flags_csv origin_rels skipped_rel="" languages_csv pb_src pb_ref prev_mode
-  if [[ -e "$dest" && "$FORCE" != "true" && "$UPGRADE" != "true" ]]; then
+  dcb_guard_parent "$dest"
+  if [[ ( -e "$dest" || -L "$dest" ) && "$FORCE" != "true" && "$UPGRADE" != "true" ]]; then
     echo "skip (exists): $dest"
     return 0
   fi
