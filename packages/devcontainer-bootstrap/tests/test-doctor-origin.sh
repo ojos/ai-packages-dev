@@ -384,4 +384,20 @@ echo new > "$out/scripts/verify.sh.dcb-new"
 bash "$DOCTOR" --target-dir "$out" --strict >/dev/null 2>&1
 assert_eq "$?" "2" "strict 終了コード"
 
+it "読めないディレクトリがあっても、doctor は最後まで走り、探索の失敗を WARN で出す（OK と言わない）"
+if [[ "$(id -u)" == "0" ]]; then
+  echo "  skip (root では chmod が効かない)"
+  pass
+else
+  out="$(base_out)"
+  mkdir -p "$out/locked/inner"
+  chmod 000 "$out/locked"
+  output="$(bash "$DOCTOR" --target-dir "$out" 2>&1)"; code=$?
+  chmod 755 "$out/locked"
+  if [[ $code -eq 0 ]] && printf '%s' "$output" | grep -q '\[WARN\] \*\.dcb-new を一部探索できませんでした' \
+    && printf '%s' "$output" | grep -q 'Summary:' \
+    && ! printf '%s' "$output" | grep -q 'no \*\.dcb-new left behind'; then pass; else fail "終了コード=$code
+$output"; fi
+fi
+
 exit_with_result

@@ -304,9 +304,17 @@ check_origin_record() {
 # WARN で報告する。探し方は bootstrap.sh の upgrade_collect_leftover と揃える
 # （.git と node_modules は除外し、シンボリックリンクはたどらない）。
 check_dcb_new_leftover() {
-  local found
-  found="$(find "$TARGET_DIR" \( -name .git -o -name node_modules \) -prune -o -name '*.dcb-new' -print 2>/dev/null | sort)"
+  local found err_file find_rc=0 find_err=""
+  err_file="$(mktemp "${TMPDIR:-/tmp}/dcb-doctor-find.XXXXXX")"
+  found="$(find "$TARGET_DIR" \( -name .git -o -name node_modules \) -prune -o -name '*.dcb-new' -print 2>"$err_file")" || find_rc=$?
+  found="$(printf '%s\n' "$found" | sed '/^$/d' | sort)"
+  find_err="$(head -3 "$err_file")"
+  rm -f "$err_file"
+  if [[ "$find_rc" -ne 0 ]]; then
+    warn "*.dcb-new を一部探索できませんでした（find が終了コード $find_rc）: ${find_err:-理由不明}"
+  fi
   if [[ -z "$found" ]]; then
+    [[ "$find_rc" -eq 0 ]] || return 0
     ok "no *.dcb-new left behind"
     return 0
   fi
