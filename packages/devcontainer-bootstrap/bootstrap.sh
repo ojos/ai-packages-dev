@@ -7817,9 +7817,8 @@ resolve_playbook_source_or_die() {
 # 一覧が挙げる規範経由の出力であり、記録に無いため doctor.sh が診断できなかった
 # （実測）。
 #
-# .ai-playbook/** 配下（規範ファイル本体・VERSION）は対象外のまま。あちらは
-# --playbook-conflict-policy と .ai-playbook/VERSION が別に担っており、二重に
-# 記録すると片方だけ更新されたときにどちらが正本か読めなくなる。
+# .ai-playbook/** 配下（規範ファイル本体・VERSION）はここに含めない。そちらは
+# playbook_rules_rel_paths が挙げ、由来記録は両方を記録する。
 playbook_installed_rel_paths() {
   if should_install_playbook; then
     printf '%s\n' \
@@ -8068,16 +8067,129 @@ EOF
   printf '%s' "$out"
 }
 
+# >>> dcb-origin-io（試験が sed で切り出して読み込む。外側の変数に依存させないこと）
+#
+# ORIGIN の値の符号化。1 行 1 値の key=value 形式を保つため、値の中の改行・復帰・
+# % だけを %0A / %0D / %25 へ置き換える。カンマ・空白・= はそのまま書く（読み出しは
+# 「最初の = までがキー」なので値に = があっても壊れない。空白は行頭行末も含めて保つ）。
+dcb_origin_encode() {
+  local v="$1" pct='%' nl=$'\n' cr=$'\r'
+  v="${v//"$pct"/%25}"
+  v="${v//"$nl"/%0A}"
+  v="${v//"$cr"/%0D}"
+  printf '%s' "$v"
+}
+
+dcb_origin_decode() {
+  local v="$1" pct='%' nl=$'\n' cr=$'\r'
+  v="${v//%0A/$nl}"
+  v="${v//%0D/$cr}"
+  v="${v//%25/$pct}"
+  printf '%s' "$v"
+}
+
+# key=<符号化した値> を 1 行出力する。
+dcb_origin_line() {
+  printf '%s=%s\n' "$1" "$(dcb_origin_encode "$2")"
+}
+
+# ORIGIN から key（接頭辞を含む完全名。例: input:project-name）の値を復号して出す。
+# 無ければ 1 を返す（値が空の行は 0 で空を出す。「無い」と「空」を区別する）。
+dcb_origin_get() {
+  local file="$1" key="$2" raw
+  raw="$(awk -v k="$key=" 'index($0, k) == 1 { print substr($0, length(k) + 1); found = 1; exit } END { exit !found }' "$file")" || return 1
+  dcb_origin_decode "$raw"
+}
+
+# ORIGIN から、生成結果を左右する入力を取り出して ORIGIN_IN_* へ入れる（--upgrade が
+# 同じ入力で生成し直すために使う）。入力の記録が無い古い ORIGIN、または必須の行が
+# 欠けている ORIGIN では 1 を返す（その場合 ORIGIN_IN_* は信用しないこと）。
+#
+# ORIGIN_IN_BASE_IMAGE は mode が override のときだけ値を持つ（auto の値は生成時の
+# 環境の選択結果で、再現すべき入力ではない）。ORIGIN_IN_PLAYBOOK_REF は source が
+# tag / url で、かつ記録した（秘密や相対パスになりうる値は記録しない）ときだけ値を持つ。
+dcb_origin_load_inputs() {
+  local file="$1" mode
+  ORIGIN_IN_PROJECT_NAME="" ORIGIN_IN_LANGUAGES="" ORIGIN_IN_FLAGS=""
+  ORIGIN_IN_BASE_IMAGE_MODE="" ORIGIN_IN_BASE_IMAGE=""
+  ORIGIN_IN_MANAGE_GITIGNORE="" ORIGIN_IN_GITIGNORE_TARGETS=""
+  ORIGIN_IN_PLAYBOOK="" ORIGIN_IN_PLAYBOOK_SOURCE="" ORIGIN_IN_PLAYBOOK_REF=""
+  [[ -f "$file" ]] || return 1
+  dcb_origin_get "$file" inputs-format >/dev/null || return 1
+  ORIGIN_IN_PROJECT_NAME="$(dcb_origin_get "$file" input:project-name)" || return 1
+  ORIGIN_IN_LANGUAGES="$(dcb_origin_get "$file" input:languages)" || return 1
+  ORIGIN_IN_FLAGS="$(dcb_origin_get "$file" flags)" || return 1
+  mode="$(dcb_origin_get "$file" input:base-image-mode)" || return 1
+  ORIGIN_IN_BASE_IMAGE_MODE="$mode"
+  if [[ "$mode" == "override" ]]; then
+    ORIGIN_IN_BASE_IMAGE="$(dcb_origin_get "$file" input:base-image)" || return 1
+  fi
+  ORIGIN_IN_MANAGE_GITIGNORE="$(dcb_origin_get "$file" input:manage-gitignore)" || return 1
+  ORIGIN_IN_GITIGNORE_TARGETS="$(dcb_origin_get "$file" input:gitignore-targets)" || return 1
+  ORIGIN_IN_PLAYBOOK="$(dcb_origin_get "$file" input:playbook)" || return 1
+  if [[ "$ORIGIN_IN_PLAYBOOK" == "installed" ]]; then
+    ORIGIN_IN_PLAYBOOK_SOURCE="$(dcb_origin_get "$file" input:playbook-source)" || return 1
+    ORIGIN_IN_PLAYBOOK_REF="$(dcb_origin_get "$file" input:playbook-ref)" || ORIGIN_IN_PLAYBOOK_REF=""
+  fi
+  return 0
+}
+# <<< dcb-origin-io
+
+# 規範経由で .ai-playbook/** へ置くファイル（規範本体の .md と VERSION）の相対パス。
+# install_playbook_rules の配置対象と同じ規則（README.md / CHANGELOG.md は除く）で
+# 数える。規範を配置しない構成では何も出さない。
+playbook_rules_rel_paths() {
+  local src rel
+  should_install_playbook || return 0
+  while IFS= read -r src; do
+    [[ -n "$src" ]] || continue
+    rel="${src#"$PLAYBOOK_DIR"/}"
+    [[ "$rel" == "README.md" || "$rel" == "CHANGELOG.md" ]] && continue
+    printf '%s\n' "$PLAYBOOK_REL_ROOT/$rel"
+  done < <(find "$PLAYBOOK_DIR" -type f -name '*.md' | sort)
+  printf '%s\n' "$PLAYBOOK_REL_ROOT/VERSION"
+}
+
+# 規範の取得元の記録（source と ref。2 行で出す）を決める。
+#   tag      --playbook-version（ref = タグ）
+#   url      URL 形式の --playbook-from（ref = URL。ただし @ ? # を含む URL は
+#            資格情報や署名を含みうるので ref を記録しない）
+#   local    ローカルのパス（ref を記録しない。絶対パスは利用側リポジトリへコミット
+#            されると困るうえ、相対パスは実行した場所が変わると意味が変わる）
+#   adjacent --with-playbook だけで、隣接チェックアウトを使った場合
+origin_playbook_source() {
+  if [[ -n "$PLAYBOOK_VERSION" ]]; then
+    printf 'tag\n%s\n' "$PLAYBOOK_VERSION"
+  elif [[ -z "$PLAYBOOK_FROM" ]]; then
+    printf 'adjacent\n\n'
+  elif [[ "$PLAYBOOK_FROM" =~ ^https?:// ]]; then
+    if [[ "$PLAYBOOK_FROM" == *[@?#]* ]]; then
+      printf 'url\n\n'
+    else
+      printf 'url\n%s\n' "$PLAYBOOK_FROM"
+    fi
+  else
+    printf 'local\n\n'
+  fi
+}
+
 # .devcontainer/ORIGIN を生成する。DCB の版・使った --with-* フラグ・各生成物の
 # ハッシュを記録し、doctor.sh が生成後の乖離（生成時からの変更・上流の更新）を
 # 診断するために使う。.ai-playbook/VERSION と同じ、機械可読な
 # key=value 形式にする。
 #
-# ハッシュの対象は sorted_rels（DCB 自身のテンプレート）と
-# playbook_installed_rel_paths（規範経由の非 .ai-playbook 出力）の和集合。
-# .ai-playbook/** 本体と .ai-playbook/VERSION は対象外（あちらは
-# --playbook-conflict-policy と .ai-playbook/VERSION が別に担う。二重に記録すると
-# 片方だけ更新されたときにどちらが正本か読めなくなる）。
+# ハッシュの対象は sorted_rels（DCB 自身のテンプレート）、
+# playbook_installed_rel_paths（規範経由の非 .ai-playbook 出力）、
+# playbook_rules_rel_paths（規範経由で置く .ai-playbook/** の本体と VERSION）の和集合。
+# .ai-playbook/VERSION は取得元の記録でもあるが、現物のハッシュも記録する
+# （--upgrade が「手を入れていないか」を判定するため。役割の分担は README で述べる）。
+#
+# ハッシュのほかに、生成結果を左右する入力（project-name / languages / with-* /
+# base-image / gitignore / 規範の取得元）を input: 行で記録する。--upgrade が
+# 同じ入力で生成し直すためで、読み戻しは dcb_origin_load_inputs が担う。
+# --playbook-conflict-policy は「既存ファイルへの対処」であって生成結果を決める
+# 入力ではない（--upgrade は自分の振り分けで決める）ので記録しない。--force /
+# --output-dir / --dry-run も同様に記録しない（出力先の絶対パスを残さない）。
 #
 # 記録は「今回の実行で確実に生成された」ことが分かる場合にだけ作る。対象のうち
 # 1 つでも skip（既存を温存）されていれば、その現物の由来を今回の実行は保証
@@ -8095,13 +8207,13 @@ EOF
 # 生成物を直したときと同じく --force（および必要なら
 # --playbook-conflict-policy overwrite）で明示的に再生成すること。
 write_origin_record() {
-  local dest="$OUTPUT_DIR/$ORIGIN_REL_PATH" tmp rel h flags_csv origin_rels skipped_rel=""
+  local dest="$OUTPUT_DIR/$ORIGIN_REL_PATH" tmp rel h flags_csv origin_rels skipped_rel="" languages_csv pb_src pb_ref
   if [[ -e "$dest" && "$FORCE" != "true" ]]; then
     echo "skip (exists): $dest"
     return 0
   fi
 
-  origin_rels="$( { printf '%s\n' "$sorted_rels"; playbook_installed_rel_paths; } | sort -u)"
+  origin_rels="$( { printf '%s\n' "$sorted_rels"; playbook_installed_rel_paths; playbook_rules_rel_paths; } | sort -u)"
 
   while IFS= read -r rel; do
     [[ -n "$rel" ]] || continue
@@ -8125,6 +8237,34 @@ EOF
     echo "# doctor.sh はこの記録と現物を突き合わせて乖離を診断する。手で編集しないこと。"
     echo "version=$DCB_VERSION"
     echo "flags=$flags_csv"
+    echo "inputs-format=1"
+    dcb_origin_line input:project-name "$PROJECT_NAME"
+    languages_csv=""
+    for rel in "${LANGUAGES[@]}"; do
+      if [[ -z "$languages_csv" ]]; then languages_csv="$rel"; else languages_csv="$languages_csv,$rel"; fi
+    done
+    dcb_origin_line input:languages "$languages_csv"
+    if [[ -n "$BASE_IMAGE_OVERRIDE" ]]; then
+      echo "input:base-image-mode=override"
+    else
+      echo "input:base-image-mode=auto"
+    fi
+    # auto のときの値は、生成時の環境（docker の有無・アーキテクチャ・レジストリの
+    # 応答）で決まった選択結果。再現すべき入力ではなく、観測記録として残す。
+    dcb_origin_line input:base-image "$BASE_IMAGE"
+    echo "input:manage-gitignore=$MANAGE_GITIGNORE"
+    dcb_origin_line input:gitignore-targets "$GITIGNORE_TARGETS"
+    if should_install_playbook; then
+      echo "input:playbook=installed"
+      pb_src="$(origin_playbook_source)"
+      dcb_origin_line input:playbook-source "$(printf '%s\n' "$pb_src" | sed -n 1p)"
+      pb_ref="$(printf '%s\n' "$pb_src" | sed -n 2p)"
+      if [[ -n "$pb_ref" ]]; then
+        dcb_origin_line input:playbook-ref "$pb_ref"
+      fi
+    else
+      echo "input:playbook=none"
+    fi
     while IFS= read -r rel; do
       [[ -n "$rel" ]] || continue
       h="$(dcb_file_sha256 "$OUTPUT_DIR/$rel")"
