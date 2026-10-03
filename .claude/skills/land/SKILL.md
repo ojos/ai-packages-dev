@@ -41,21 +41,36 @@ gh pr view N --json number,title,state,isDraft,mergeable,headRefName,headRefOid,
 
 **利用者の入力を、再開のきっかけにしません。** これまでは PR を作った時点でターンを終えていたため、利用者が指示するまで確認そのものが始まりませんでした。このスキルが解消したいのはその点です。待つときは、終わると通知が来て自動で再開する形（Bash の `run_in_background`）を使います。起動したら、実在を確かめてから離れます（上記「`run_in_background` で待ちを起こしたら、実在を確かめてから離れます」）。
 
-**先に、確かめたいコミットにチェックが付いたことを確かめます。** push の直後に `gh pr checks` を叩くと、**前のコミットの結果が返ることがあります。** 実測では、push の直後に前の head の全緑が終了コード 0 で返り、その 3 秒後に新しいコミットの pending へ変わりました。`--watch` は前者を見て即座に抜けるので、7 で直して戻ってきたときに偽の緑で通り抜けます。
+**CI の確認には、Checks の権限を使わない API だけを使います。** `gh pr checks` と `commits/<sha>/check-runs` は Checks の権限を要りますが、fine-grained PAT にはその権限がなく、非公開リポジトリでは 403 になります（公開リポジトリでは読めます）。そのため、Actions の権限で読める `actions/runs` と、Commit statuses の権限で読める `commits/<sha>/status` で判定します。保存済みの認証（`gh auth login`）でも、公開リポジトリでも同じ手順で動きます。
+
+**先に、確かめたいコミットに CI の実行が付いたことを確かめます。** push の直後は、前のコミットの結果が見えることがあります（実測では、`gh pr checks` が前の head の全緑を返し、3 秒後に新しいコミットの pending へ変わりました）。前のコミットの緑で通り抜けると、7 で直して戻ってきたときに偽の緑になります。そこで、実行は `head_sha` で対象のコミットに固定して読みます。
+
+**絞り込みの条件は 2 つです。** `event=pull_request` と、実行の `pull_requests[].number` が `N` であること。同じ SHA を持つ別の PR の実行を拾わないためです。**ただし `pull_requests` が空になる実行があります。** 実測では、フォークからの PR（`isCrossRepository` が true）と、ブランチを消したあとの PR で空でした。この手順は open の PR を対象にするので後者には当たりませんが、前者は当たります。フォークからの PR では、`pull_requests` が空の実行のうち、**実行の `head_repository.full_name` と `head_branch` がこの PR の head と一致するもの**だけを対象に含めます。PR 番号の代わりに、head のリポジトリとブランチで照合するということです（同じフォークの同じブランチから、ベースの違う別の PR も出している場合だけは区別できません。`pull_requests` が空の実行には、どの PR のものかを示す情報が無いためです）。
+
+**この段のコードブロック（実行が付いたことの確認・完了の待ちと判定・commit status の確認）は、上から順に、1 回の Bash 呼び出しへつなげて実行します。** 前のブロックで決めた変数（`url`、`sel` など）を後のブロックが使うためです。別々の呼び出しに分けると、変数が引き継がれず、待ちが成り立ちません。
 
 `sha` には、最初に来たときは 1 で読んだ `headRefOid` を、7 から戻ってきたときは push したコミット（`git rev-parse HEAD`）を入れます。`headRefName`（ブランチ名）と取り違えると、比較が必ず外れて時間切れになります。
 
 ```bash
+cross="$(gh pr view N --json isCrossRepository --jq .isCrossRepository)"
+# head のリポジトリとブランチ（jq の文字列リテラルとして埋め込むため @json で引用する）
+repo="$(gh pr view N --json headRepositoryOwner,headRepository --jq '"\(.headRepositoryOwner.login)/\(.headRepository.name)" | @json')"
+branch="$(gh pr view N --json headRefName --jq '.headRefName | @json')"
+# 対象の実行: この PR の番号を持つもの。フォークからの PR だけ、pull_requests が空で head が一致するものも含める
+sel=".workflow_runs[] | select(any(.pull_requests[]; .number == N) or ($cross and (.pull_requests | length == 0) and .head_repository.full_name == $repo and .head_branch == $branch))"
+url="repos/{owner}/{repo}/actions/runs?head_sha=$sha&event=pull_request&per_page=100"
+attached=0
 for _ in $(seq 60); do  # 5 秒 × 60 回 = 5 分
   head="$(gh pr view N --json headRefOid --jq .headRefOid)" || head=""
-  runs="$(gh api "repos/{owner}/{repo}/commits/$sha/check-runs" --jq .total_count)" || runs=0
-  [ "$head" = "$sha" ] && [ "${runs:-0}" -gt 0 ] && { echo CHECKS_ATTACHED; exit 0; }
+  runs="$(gh api --paginate "$url" --jq "$sel | .id" | wc -l)" || runs=0  # 全ページを数える
+  [ "$head" = "$sha" ] && [ "${runs:-0}" -gt 0 ] && { attached=1; break; }
   sleep 5
 done
-echo CHECKS_NOT_ATTACHED; exit 1
+[ "$attached" = 1 ] || { echo CHECKS_NOT_ATTACHED; exit 1; }
+echo CHECKS_ATTACHED
 ```
 
-`CHECKS_ATTACHED` が出てから watch します。`CHECKS_NOT_ATTACHED` なら、止めて報告します。
+`CHECKS_ATTACHED` が出たら、続けて実行の完了を待ちます。`CHECKS_NOT_ATTACHED` なら、そこで終わるので、止めて報告します。
 
 **`CHECKS_NOT_ATTACHED` は「CI が落ちた」ではありません。「実行が作られていない」です。** 両者を取り違えると、走ってもいない CI を「まだ終わっていない」と思って待ち続けることになります。
 
@@ -72,11 +87,66 @@ echo CHECKS_NOT_ATTACHED; exit 1
 
 **あわせて、CI のワークフローに `workflow_dispatch` を持たせておくことを勧めます。** 手動の口が無いと、契機が届かないときに打つ手がありません。
 
-**check run だけを数えれば足りるかどうかは、プロジェクトの CI 構成によります。** パスフィルタで絞ったワークフローがあると、差分の内容によっては対象コミットに check run が 1 件も付きません。また、check run を出さない外部 CI を使っている場合は、それだけを見ても待ち条件を満たせません。この段では「対象コミットに 1 件以上の check run が付くこと」を待ち条件としていますが、これで足りるかはプロジェクト層で確認し、足りなければ確認方法を補ってください。
+**実行だけを数えれば足りるかどうかは、プロジェクトの CI 構成によります。** パスフィルタで絞ったワークフローがあると、差分の内容によっては対象コミットに実行が 1 件も付きません。また、Actions の実行を出さない外部 CI を使っている場合は、それだけを見ても待ち条件を満たせません。この段では「対象コミットに 1 件以上の実行が付くこと」を待ち条件としていますが、これで足りるかはプロジェクト層で確認し、足りなければ確認方法を補ってください。想定するワークフローを YAML から推定することは、この手順では行いません。
+
+付いた実行が完了するまで待ち、`conclusion` で成否を判定します。**待ちには `gh run watch` を使わず、上と同じ `actions/runs` を読み直します。** `gh run watch` は実行中のジョブを表示するときに annotations（Checks の API）を読むことがあり、Checks の権限を持たないトークンでの動きを確かめられていないためです。読み直すたびに一覧を取るので、待っているあいだに増えた実行も対象に入ります。
+
+判定の対象は、次の 2 点で絞ります。
+
+- **完了を 2 回続けて見るまで待ちます。** ワークフローごとに実行が作られる時刻はずれるため、先に作られた実行が完了した時点では、後の実行がまだ一覧に無いことがあります。30 秒あけて読んだ一覧が前の回と同じで、すべて完了していれば抜けます。この間隔を超えて遅れる実行までは拾えません。
+- **ワークフローごとに、最新の実行 1 件だけを見ます。** `reopened` などで同じ SHA に実行が重なると、古い失敗が一覧に残るためです。一覧は全ページを読みます（`--paginate`）。
+- **commit status を出すワークフロー（`second-opinion-gate`、`review-gate`）は、実行の成否では判定しません。** 下の commit status で判定します。たとえば `second-opinion-gate` は、記録が無いうちに起動した実行が失敗のまま残り、記録を投稿したあとの緑は、別の契機（掃き寄せ）が付ける status として出ます。実行の成否で判定すると、投稿しても緑になりません。除くワークフローの名前（`gates`）は、プロジェクトの構成に合わせて直してください。
 
 ```bash
-gh pr checks N --watch --interval 30
+gates='second-opinion-gate|review-gate'
+latest() (  # 対象の実行を、ワークフローごとに最新の 1 件だけ出す（全ページ）
+  set -o pipefail
+  gh api --paginate "$url" --jq "$sel | [.workflow_id, .run_number, .status, (.conclusion // \"-\"), .name] | @tsv" \
+    | sort -t "$(printf '\t')" -k1,1 -k2,2nr | awk -F '\t' '!seen[$1]++'
+)
+listed=0; prev=""
+for _ in $(seq 120); do  # 30 秒 × 120 回 = 60 分
+  if all="$(latest)"; then listed=1; else listed=0; all=""; fi
+  runs="$(printf '%s\n' "$all" | awk -F '\t' -v g="^($gates)\$" 'NF && $5 !~ g')"
+  # 読めていて、ゲート以外に未完了が 1 件も無く、一覧が前の回と同じなら抜ける。
+  # 2 回続けて同じ一覧を見るのは、後から作られる実行を取りこぼさないため
+  # （awk に最後まで読ませ、終了コードで判定する。空行は数えない）。
+  if [ "$listed" = 1 ] && [ -n "$all" ] && printf '%s\n' "$all" | awk -F '\t' 'NF && $3 != "completed" { p = 1 } END { exit p }'; then
+    [ "$all" = "$prev" ] && break
+    prev="$all"
+  else
+    prev=""
+  fi
+  sleep 30
+done
+echo "-- 実行（判定の対象）"; printf '%s\n' "$runs"
+echo "-- ゲートの実行（参考。成否は commit status で判定する）"; printf '%s\n' "$all" | awk -F '\t' -v g="^($gates)\$" 'NF && $5 ~ g'
+printf '%s\n' "$runs" | awk -F '\t' -v listed="$listed" '
+  NF { n++; if ($3 != "completed" || $4 !~ /^(success|skipped|neutral)$/) bad = 1 }
+  END { if (listed != 1) print "RUNS_UNKNOWN"; else if (n == 0) print "RUNS_NONE"; else print bad ? "RUNS_NOT_GREEN" : "RUNS_GREEN" }'
 ```
+
+判定の出力は 4 通りです。
+
+- `RUNS_GREEN`: ゲート以外の実行がすべて通っています。
+- `RUNS_NOT_GREEN`: 「実行（判定の対象）」の一覧（4 列目が `conclusion`）を読み、失敗した実行（`failure`、`cancelled`、`timed_out` など）を止めて報告します。60 分で終わらなかった場合もここに入ります。その場合は失敗でなく時間切れなので、3 列目（`status`）を見て、止めて報告します。
+- `RUNS_NONE`: ゲート以外の実行がありません（付いていたのはゲートの実行だけ）。CI の成否は、下の commit status だけで判定します。
+- `RUNS_UNKNOWN`: 一覧を読めませんでした。「通った」とも「落ちた」とも扱わず、止めて報告します。
+
+「ゲートの実行」の一覧は、判定には使いませんが、status が付かない理由を切り分けるときに読みます（下の「置いている場合」の、ジョブだけが失敗する形）。
+
+`second-opinion-gate` や `review-gate` のように **commit status で出るもの**は、実行ではなく Commit statuses の権限で読みます。`pending` のあいだは待ち、`success` で通過、`failure` と `error` は失敗です。このエンドポイント（combined status）は、**context ごとに最新の 1 件だけ**を返します。同じ context に status が積み重なっても（例: 記録を投稿して `failure` から `success` へ変わった）、過去の結果は並びません（実測で確認済み）。
+
+```bash
+for _ in $(seq 60); do  # 30 秒 × 60 回 = 30 分。ゲートの status が付き、pending でなくなるまで待つ
+  st="$(gh api "repos/{owner}/{repo}/commits/$sha/status" --jq '.statuses[] | [.context, .state, .description] | @tsv')" || st=""
+  printf '%s\n' "$st" | awk -F '\t' -v g="^($gates)\$" '$1 ~ g { n++; if ($2 == "pending") p = 1 } END { exit (n > 0 && !p) ? 0 : 1 }' && break
+  sleep 30
+done
+printf '%s\n' "$st"
+```
+
+ゲートの status が 30 分たっても付かない、または `pending` のままなら、最後に出した一覧をもとに止めて報告します（下の「置いている場合」「置いていない場合」の、status が付かないときの扱いに従います）。
 
 **ここから先は、このプロジェクトがリモート最終ゲートを置いているかどうかで分かれます（`.github/project-ai-rules.md`「リモート最終ゲート」）。**
 
@@ -85,12 +155,12 @@ gh pr checks N --watch --interval 30
 - `review-gate` は、opened のときは 120 秒の猶予を置いてから判定します。すぐに出なくても異常ではありません。
 - 失敗の形は 2 つあり、**扱いが違います。**
   - **status の `review-gate` が failure**（説明文が `Copilot code review was never requested`）: Copilot のレビューが要求されていません。**ジョブのエラー文に書かれている手順どおりに、1 回だけ手で要求します。**
-  - **ジョブの `check` だけが失敗し、status の `review-gate` が failure でない**: レビューの有無を API から読めなかっただけです（`review-gate.yml` はこのとき status を付けません）。**要求しません。** 要求済みのレビューを二重に要求すると、「1 回だけ要求する」が壊れます。3 のループで待ち、届かなければ止めて報告します。
+  - **ジョブの `check` だけが失敗し、status の `review-gate` が failure でない**（上の「ゲートの実行」の一覧で、`review-gate` の実行が `failure` になっている）: レビューの有無を API から読めなかっただけです（`review-gate.yml` はこのとき status を付けません）。**要求しません。** 要求済みのレビューを二重に要求すると、「1 回だけ要求する」が壊れます。3 のループで待ち、届かなければ止めて報告します。
 - 待てたら 3 へ進みます。
 
 **置いていない場合**:
 
-- `second-opinion-gate` の status を確認します。**`failure`**（説明文が `no second-opinion record for this head`）なら、push 後に記録を投稿していません。`bash scripts/second-opinion-record.sh post` を実行してから、もう一度 `gh pr checks N --watch` で待ち直します。ローカルに記録が残っていない場合（別セッションが push した等）は、このブランチで第二意見を回し直す必要があるため、止めて報告します。
+- `second-opinion-gate` の status を、上の `commits/<sha>/status` で確認します。**`failure`**（説明文が `no second-opinion record for this head`）なら、push 後に記録を投稿していません。`bash scripts/second-opinion-record.sh post` を実行してから、もう一度、上の実行の完了の待ちと commit status の確認をやり直します。ローカルに記録が残っていない場合（別セッションが push した等）は、このブランチで第二意見を回し直す必要があるため、止めて報告します。
 - status が付かない（確かめられなかった）場合は、「記録が無い」と同じに扱いません。しばらく待ってから読み直します。
 - **3 は行いません。4 へ進みます。**
 
@@ -196,13 +266,25 @@ gh pr merge N --squash --match-head-commit "$sha"
 
   ```bash
   sha="$(gh pr view N --json mergeCommit --jq .mergeCommit.oid)"
-  run="$(gh run list --workflow <ワークフローファイル名> --commit "$sha" --event push --json databaseId --jq '.[0].databaseId // empty')"
-  gh run watch "$run" --exit-status
+  for _ in $(seq 120); do  # 30 秒 × 120 回 = 60 分
+    # 実行がまだ作られていなければ空になるので、毎回取り直す
+    run="$(gh run list --workflow <ワークフローファイル名> --commit "$sha" --event push --json databaseId --jq '.[0].databaseId // empty')" || run=""
+    st=""
+    [ -n "$run" ] && { st="$(gh api "repos/{owner}/{repo}/actions/runs/$run" --jq '"\(.status) \(.conclusion)"')" || st=""; }
+    case "$st" in "completed "*) break ;; esac
+    sleep 30
+  done
+  case "$st" in
+    "completed success") echo MAIN_CI_GREEN ;;
+    *) echo "MAIN_CI_NOT_GREEN: ${st:-unknown}"; exit 1 ;;  # 失敗・時間切れ・読めなかった
+  esac
   ```
+
+  待ちには、2 と同じ理由で `gh run watch` を使いません。
 
   **本番配備など、マージ後に外部状態を変えるジョブがある場合は、そのジョブが緑になったことまで確かめます。** ジョブ名や、緑と見なす条件はプロジェクト層で定義してください。そうしたジョブが無い構成では、この確認は不要です。
 
-  実行がまだ作られていなければ `run` は空になります。その場合は少し待って取り直します。**空のまま watch しません。** `// empty` は外しません。`gh` の版によっては `--jq` が null を空として出しますが、単体の `jq` は `null` という文字列を出すことがあります（実測でどちらも確認済み）。後者で動かすと空チェックをすり抜け、`gh run watch null` になります。
+  実行がまだ作られていなければ `run` は空になります。上のループは、その場合は読まずに次の回で取り直します。**空のまま読みません。** `// empty` は外しません。`gh` の版によっては `--jq` が null を空として出しますが、単体の `jq` は `null` という文字列を出すことがあります（実測でどちらも確認済み）。後者で動かすと空チェックをすり抜け、`actions/runs/null` を読み続けます。
 
 ## 報告
 

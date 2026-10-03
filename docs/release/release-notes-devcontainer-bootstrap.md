@@ -9,6 +9,8 @@
 ## 未リリース
 
 ### Summary
+- **`scripts/check-doc-links.sh` が、括弧を含むリンク先（例: `docs/foo(bar).md`）を最初の `)` で切らず、1 つのリンク先として検査するようにした**（ojos/ai-packages-dev#415）。タイトルや `<...>` の中の括弧は数えず、対応が取れないときは従来どおり最初の `)` で切るため、従来検査できていたリンクを漏らさない。
+- **README「資格情報の扱い」に、fine-grained PAT の権限の例を足した**（ojos/ai-packages-dev#416）。Checks は fine-grained PAT では選べず、非公開リポジトリでは `check-runs` と `gh pr checks` が 403 になる。同梱の `/land` スキル（ai-playbook の雛形）は、Actions と Commit statuses の権限だけで CI を待つ。
 - **規範を置くとき、入口ファイルに `AGENTS.md` を加えた**（ojos/ai-packages-dev#397）。Codex など `AGENTS.md` を読む実行環境が、規範の入口から 3 層構造へたどれる。`CLAUDE.md` / `.github/copilot-instructions.md` と同じ雛形（`templates/entry.md`）の写しで、既存の `AGENTS.md` は `--playbook-conflict-policy` に従う。`--without-playbook` など規範を置かない生成では作らない。由来記録（`.devcontainer/ORIGIN`）のハッシュの記録の対象にも含まれる。
 - README に、実行環境ごとの対応範囲の表を足した。機構（スキル・委譲先エージェント・フック）は Claude Code 向けだけで、この方針は変わらない。
 - **`bootstrap.sh --upgrade` を追加した**（ojos/ai-packages-dev#396）。生成したプロジェクトが、1 コマンドで新しい版の DCB の生成物と規範へ追従できる。`.devcontainer/ORIGIN` に記録した入力で生成し直し、引数で渡したものだけを上書きする。対象は DCB 自身のテンプレートと、規範経由で置くファイル（規範本体・入口ファイル・`.ai-playbook/VERSION`・第二意見のスクリプトなど）の両方。

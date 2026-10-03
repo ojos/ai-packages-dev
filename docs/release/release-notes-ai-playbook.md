@@ -9,6 +9,7 @@
 ## 未リリース
 
 ### Summary
+- **`templates/claude-skill-land.md` の CI 待ちを、Checks の権限なしで成り立たせた**（ojos/ai-packages-dev#416）。fine-grained PAT には Checks の権限が無く、非公開リポジトリでは `commits/<sha>/check-runs` と `gh pr checks` が 403 になって CI 待ちが成り立たなかった。`actions/runs`（Actions: Read）と `commits/<sha>/status`（Commit statuses: Read）で判定し、同じ SHA を持つ別 PR の実行は PR 番号で除く。完了の待ちも `gh run watch` を使わず `actions/runs` の読み直しにした（実行中のジョブの annotations で Checks の API を読むことがあるため）。`templates/project-ai-rules.md` に、Checks は fine-grained PAT では選べない旨の注記を足した。雛形は 15 種のまま。
 - **レビュー往復の打ち切りは、重大でない指摘に限ると明記した**（ojos/ai-packages-dev#414）。「CI がすべて通っている」を OR で並べた解決済みの条件が、セキュリティやデータ破壊の指摘にも読めてしまい、CI が緑なら直さずにマージできる形になっていた。致命バグ・脆弱性・データ破壊・正しさに関わる指摘は、直すか、「指摘の却下」に従って実測で却下するまでマージしない。`review-workflow.md`「リモート最終ゲート」と `role-contracts/closer.md`「レビュー往復の打ち切り」を揃え、`templates/claude-skill-land.md` の指摘の判定から、同節のこの扱いを参照するようにした（条件は書き写さない）。雛形は 15 種のまま。
 - **「規範は中立、機構は Claude Code を優先する」を README に明記し、実行環境ごとの対応範囲を表にした**（ojos/ai-packages-dev#397）。入口ファイル・スキル・委譲先エージェント・フック・第二意見のエンジンを、Claude Code・GitHub Copilot・`AGENTS.md` を読む実行環境（Codex など）ごとに示す。
 - **`templates/entry.md` の例示に `AGENTS.md` を足した。** 雛形は実行環境に中立なので、内容は変えていない。雛形は 15 種のまま。
