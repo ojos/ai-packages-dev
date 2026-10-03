@@ -131,6 +131,7 @@ scripts/confirm-merge-hook.sh
 scripts/load-project-env.sh
 scripts/loop-gate.sh
 scripts/on-attach.sh
+scripts/session-ledger.sh
 scripts/setup-git-identity.sh
 scripts/verify-commit-identity.sh
 scripts/verify-commit-identity-selftest.sh

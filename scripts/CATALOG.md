@@ -38,4 +38,5 @@
 | `scripts/update-release-status.sh` | README のリリース状況更新。 |
 | `scripts/measure-agent-usage.sh` | サブエージェントの役割別トークン使用量を集計するレポート（合否判定はしない）。親セッションとサブエージェントの両方の記録を読み、全体内とサブエージェント内の 2 つの分母で比率を出す。 |
 | `scripts/confirm-merge-hook.sh` | マージ実行の前に確認を挟む PreToolUse フック（`.claude/settings.json` から `--with-claude` 連動で配線）。`gh pr merge` / REST の merge エンドポイントへの PUT / `mergePullRequest` を検知し `ask` を返す。既定の merge 方針（手動承認）を、呼びかけではなく機構で担保する。 |
+| `scripts/session-ledger.sh` | 同じホストで並行して動く AI セッションの共有台帳（claim / release / list / check）。置き場所は `git rev-parse --git-common-dir` の配下で、セッションごとに別ファイルへ追記する。衝突を種類ごとに警告・拒否として返し、持ち主の PID が消えた登録は失効させる。実行環境には依存しない（規範は `.ai-playbook/shared-ai-rules.md`「セッション間の協調」。`packages/devcontainer-bootstrap/tests/test-session-ledger.sh` が確かめる）。 |
 | `scripts/CATALOG.md` | `scripts/` 配下の索引（本ファイル）。 |
