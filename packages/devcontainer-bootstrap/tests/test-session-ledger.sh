@@ -347,6 +347,64 @@ else
   fail "出力: $OUT"
 fi
 
+it "git: 明示した作業ツリーのパスを実体の絶対パスへ揃える（. や末尾の / や symlink 経由でも同じ作業ツリー）"
+run s-a "$repo" claim git
+run s-b "$repo" check git .
+n1="$(first_line)"
+run s-b "$repo" check git "$repo/./"
+n2="$(first_line)"
+ln -s "$repo" "$(dirname "$repo")/repo-link"
+run s-b "$repo" check git "$(dirname "$repo")/repo-link"
+n3="$(first_line)"
+run s-b "$wt2" check git "$repo/../repo"
+n4="$(first_line)"
+run s-a "$repo" release
+if [[ "$n1" == "LEDGER_DENY" && "$n2" == "LEDGER_DENY" && "$n3" == "LEDGER_DENY" && "$n4" == "LEDGER_DENY" ]]; then pass; else fail ". =$n1 /./=$n2 symlink=$n3 ..=$n4"; fi
+
+it "doc: . と .. を含む表記を正規化して照合する（存在しないファイルでも）"
+run s-a "$repo" claim doc docs/norm.md
+run s-b "$repo" check doc docs/sub/../norm.md
+d1="$(first_line)"
+run s-b "$repo" check doc ./docs/./norm.md
+d2="$(first_line)"
+run s-b "$repo" check doc "$repo/docs/../docs/norm.md"
+d3="$(first_line)"
+run s-b "$repo" check doc docs/other.md
+d4="$(first_line)"
+run s-a "$repo" release
+if [[ "$d1" == "LEDGER_WARN" && "$d2" == "LEDGER_WARN" && "$d3" == "LEDGER_WARN" && "$d4" == "LEDGER_OK" ]]; then pass; else fail "$d1 $d2 $d3 $d4"; fi
+
+it "release: 解放の行を書けなかったときは警告し、解放済みと表示せず、残っていることを示す"
+mkdir "$DIR/s-rel.tsv"
+run s-rel "$repo" release
+rel_out="$OUT"
+rel_rc="$RC"
+rmdir "$DIR/s-rel.tsv"
+if [[ "$rel_rc" -eq 0 ]] && printf '%s' "$rel_out" | grep -q 'WARN' && printf '%s' "$rel_out" | grep -q 'release-failed' \
+   && ! printf '%s' "$rel_out" | grep -q 'released:'; then
+  pass
+else
+  fail "rc=$rel_rc out=$rel_out"
+fi
+
+it "PID の再利用: 同じ PID でも開始時刻が違う登録は失効する。一致する登録は生きている"
+lstart_a="$(ps -o lstart= -p "$PID_A")"
+key_a="$(printf "%s" "$lstart_a" | cksum | cut -d" " -f1)"
+now_t="$(date +%s)"
+printf '%s\tclaim\tmerge\t-\t%s\t%s\t%s\n' "$now_t" "$PID_A" "$repo" "$((key_a + 1))" > "$DIR/s-reuse.tsv"
+run s-b "$repo" check merge
+reuse_stale="$(first_line)"
+printf '%s\tclaim\tmerge\t-\t%s\t%s\t%s\n' "$now_t" "$PID_A" "$repo" "$key_a" > "$DIR/s-reuse.tsv"
+run s-b "$repo" check merge
+reuse_live="$(first_line)"
+rm -f "$DIR/s-reuse.tsv"
+if [[ "$reuse_stale" == "LEDGER_OK" && "$reuse_live" == "LEDGER_DENY" ]]; then pass; else fail "違う開始時刻=$reuse_stale 一致=$reuse_live"; fi
+
+it "既定の識別子に持ち主の開始時刻が入る（pid-<PID>-<cksum>）"
+OUT="$(cd "$repo" && SESSION_LEDGER_PID="$PID_A" bash "$LEDGER" claim issue 780 2>&1)"
+assert_contains "$OUT" "session=pid-$PID_A-$key_a" "出力"
+OUT="$(cd "$repo" && SESSION_LEDGER_PID="$PID_A" bash "$LEDGER" release 2>&1)"
+
 it "不明な種類と不明なサブコマンドは使い方の誤り（終了コード 2）"
 run s-a "$repo" claim nothing
 rc1="$RC"

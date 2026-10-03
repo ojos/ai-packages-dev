@@ -32,7 +32,10 @@
 #   SESSION_LEDGER_ID があればそれを使う（英数字と ._- 以外は _ になる）。無ければ
 #   pid-<持ち主の PID>。持ち主の PID は SESSION_LEDGER_PID があればそれ、無ければ祖先の
 #   プロセスをたどって、最初に現れるシェル以外のプロセス（セッションを動かしている
-#   本体）。見つからなければ親プロセス。
+#   本体）。見つからなければ親プロセス。識別子は pid-<PID>-<開始時刻の cksum> で、
+#   PID が再利用されても別のセッションとして扱う。
+#   人がシェルから直接使うときは、同じ端末から起動した複数のシェルが同じ持ち主に
+#   なりうるので、SESSION_LEDGER_ID を明示する。
 #
 # 失効:
 #   次のどちらかなら、その登録は失効したものとして無視する。
@@ -130,13 +133,27 @@ owner_pid() {
 
 # 持ち主を特定できないときは SELF_ID を空にし、登録・確認を警告して通す（fail-open）。
 # SESSION_LEDGER_ID を明示した場合は、PID を特定できなくても親プロセスを使う。
+# プロセスの開始時刻の cksum。PID が再利用されたとき、別のプロセスと見分けるために使う。
+# 取れないときは - を返す（従来の PID だけの判定に落ちる）。
+proc_start_key() { # pid
+  local lstart sum
+  lstart="$(ps -o lstart= -p "$1" 2>/dev/null)"
+  [ -n "$lstart" ] || { printf '%s' "-"; return 0; }
+  sum="$(printf '%s' "$lstart" | cksum | cut -d' ' -f1)"
+  printf '%s' "${sum:--}"
+}
+
 SELF_PID="$(owner_pid)"
 SELF_ID=""
+SELF_KEY="-"
 if [ -n "${SESSION_LEDGER_ID:-}" ]; then
   SELF_ID="$(sanitize "$SESSION_LEDGER_ID")"
   [ -n "$SELF_PID" ] || SELF_PID="$PPID"
+  SELF_KEY="$(proc_start_key "$SELF_PID")"
 elif [ -n "$SELF_PID" ]; then
+  SELF_KEY="$(proc_start_key "$SELF_PID")"
   SELF_ID="pid-$SELF_PID"
+  [ "$SELF_KEY" = "-" ] || SELF_ID="$SELF_ID-$SELF_KEY"
 fi
 
 # 持ち主を特定できないとき 0 を返す（呼び出し側が警告して通す）。
@@ -146,11 +163,20 @@ owner_unknown() {
   return 0
 }
 
-pid_alive() {
+# 持ち主が生きているか。登録時の開始時刻が分かっていて、いまのプロセスの開始時刻と
+# 違えば、PID が再利用された別のプロセスなので、生きていないものとして扱う。
+pid_alive() { # pid [開始時刻の cksum]
+  local now_key
   case "$1" in '' | *[!0-9]*) return 1 ;; esac
-  kill -0 "$1" 2>/dev/null && return 0
-  # 他ユーザーのプロセスは kill -0 が EPERM で失敗する。存在だけを ps で確かめる。
-  ps -p "$1" >/dev/null 2>&1
+  if ! kill -0 "$1" 2>/dev/null; then
+    # 他ユーザーのプロセスは kill -0 が EPERM で失敗する。存在だけを ps で確かめる。
+    ps -p "$1" >/dev/null 2>&1 || return 1
+  fi
+  case "${2:--}" in
+    - | '') return 0 ;;
+  esac
+  now_key="$(proc_start_key "$1")"
+  [ "$now_key" = "-" ] || [ "$now_key" = "$2" ]
 }
 
 # ── 置き場所 ──────────────────────────────────────────────────────────────────
@@ -170,6 +196,8 @@ resolve_dir() {
 
 TOPLEVEL="$(git rev-parse --show-toplevel 2>/dev/null || true)"
 [ -n "$TOPLEVEL" ] || TOPLEVEL="$(pwd)"
+# シンボリックリンクをたどった実体のパスに揃える（同じ作業ツリーが別の表記で現れても一致させる）。
+TOPLEVEL="$(cd -P "$TOPLEVEL" 2>/dev/null && pwd -P || printf '%s' "$TOPLEVEL")"
 
 # 台帳の置き場所を使える状態にする。失敗したら呼び出し側が警告して通す。
 ensure_dir() {
@@ -182,6 +210,42 @@ ensure_dir() {
 
 # ── 対象の正規化 ──────────────────────────────────────────────────────────────
 
+# パスを絶対パスにし、. と .. を畳む。存在しない部分は、存在する親ディレクトリの実体
+# から先を字句だけで畳む。末尾の / は保つ。
+normalize_path() {
+  local p="$1" trail="" abs out seg d rest real
+  case "$p" in */) trail="/" ;; esac
+  case "$p" in
+    /*) abs="$p" ;;
+    *) abs="$(pwd -P)/$p" ;;
+  esac
+  out=""
+  set -f
+  local IFS=/
+  for seg in $abs; do
+    case "$seg" in
+      '' | .) ;;
+      ..) out="${out%/*}" ;;
+      *) out="$out/$seg" ;;
+    esac
+  done
+  unset IFS
+  set +f
+  abs="${out:-/}"
+  d="$abs"
+  rest=""
+  while [ ! -d "$d" ] && [ "$d" != "/" ]; do
+    rest="/${d##*/}$rest"
+    d="${d%/*}"
+    [ -n "$d" ] || d="/"
+  done
+  real="$(cd -P "$d" 2>/dev/null && pwd -P)" || real="$d"
+  abs="${real%/}$rest"
+  [ -n "$abs" ] || abs="/"
+  if [ "$abs" = "/" ]; then trail=""; fi
+  printf '%s%s' "$abs" "$trail"
+}
+
 normalize_target() { # kind target
   local kind="$1" t="$2"
   # タブと改行は書式を壊すので空白へ。
@@ -191,13 +255,17 @@ normalize_target() { # kind target
       t="${t#\#}"
       ;;
     doc)
-      t="${t#./}"
-      case "$t" in
-        "$TOPLEVEL"/*) t="${t#"$TOPLEVEL"/}" ;;
-      esac
+      if [ -n "$t" ]; then
+        t="$(normalize_path "$t")"
+        case "$t" in
+          "$TOPLEVEL"/*) t="${t#"$TOPLEVEL"/}" ;;
+        esac
+      fi
       ;;
     git)
-      [ -n "$t" ] || t="$TOPLEVEL"
+      if [ -n "$t" ]; then t="$(normalize_path "$t")"; else t="$TOPLEVEL"; fi
+      t="${t%/}"
+      [ -n "$t" ] || t="/"
       ;;
   esac
   [ -n "$t" ] || t="-"
@@ -218,6 +286,7 @@ replay_file() { # file sid
       key = $3 "\034" $4
       if ($2 == "claim") {
         live[key] = 1; kind[key] = $3; tgt[key] = $4; pid[key] = $5; wt[key] = $6
+        skey[key] = (NF >= 7 && $7 ~ /^[0-9]+$/) ? $7 : "-"
       } else if ($3 == "*") {
         for (x in live) delete live[x]
       } else if ($4 == "*") {
@@ -227,7 +296,7 @@ replay_file() { # file sid
       }
     }
     END {
-      for (x in live) printf "%s\t%s\t%s\t%s\t%s\t%d\n", sid, kind[x], tgt[x], pid[x], wt[x], last
+      for (x in live) printf "%s\t%s\t%s\t%s\t%s\t%d\t%s\n", sid, kind[x], tgt[x], pid[x], wt[x], last, skey[x]
       if (bad > 0) printf "[session-ledger] WARN: %s: 壊れた行を %d 件読み飛ばしました。\n", file, bad > "/dev/stderr"
     }
   ' "$1"
@@ -247,10 +316,10 @@ collect() {
       warn "読めない台帳のファイルを読み飛ばします: $f"
       continue
     fi
-    replay_file "$f" "$sid" | while IFS="$TAB" read -r a_sid a_kind a_tgt a_pid a_wt a_last; do
+    replay_file "$f" "$sid" | while IFS="$TAB" read -r a_sid a_kind a_tgt a_pid a_wt a_last a_key; do
       [ -n "$a_sid" ] || continue
       state="live"
-      if ! pid_alive "$a_pid"; then
+      if ! pid_alive "$a_pid" "$a_key"; then
         state="expired"
       elif [ $((now - a_last)) -gt "$ttl" ]; then
         state="expired"
@@ -329,7 +398,7 @@ EOF
 }
 
 append_record() { # op kind target
-  printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$(date +%s)" "$1" "$2" "$3" "$SELF_PID" "$TOPLEVEL" \
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$(date +%s)" "$1" "$2" "$3" "$SELF_PID" "$TOPLEVEL" "$SELF_KEY" \
     >>"$LEDGER_DIR/$SELF_ID.tsv" 2>/dev/null
 }
 
@@ -391,7 +460,14 @@ cmd_release() {
   fi
   # 自分のファイルが無ければ解放するものも無い。
   [ -e "$LEDGER_DIR/$SELF_ID.tsv" ] || return 0
-  append_record release "$kind" "$target" || warn "台帳へ書き込めませんでした。解放できていません。"
+  if ! append_record release "$kind" "$target"; then
+    # 解放の行を書けなかった。登録は残っている。fail-open の方針なので終了コードは 0 のまま
+    # にし、残っていることが出力から分かるようにする（失効するか、書けるようになった後の
+    # release で消える）。
+    warn "台帳へ書き込めませんでした。解放できていません（登録が残っています）。"
+    echo "release-failed: session=$SELF_ID kind=$kind target=$target（登録は残っています）"
+    return 0
+  fi
   echo "released: session=$SELF_ID kind=$kind target=$target"
   return 0
 }
