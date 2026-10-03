@@ -8108,6 +8108,8 @@ dcb_origin_get() {
 # ORIGIN_IN_BASE_IMAGE は mode が override のときだけ値を持つ（auto の値は生成時の
 # 環境の選択結果で、再現すべき入力ではない）。ORIGIN_IN_PLAYBOOK_REF は source が
 # tag / url で、かつ記録した（秘密や相対パスになりうる値は記録しない）ときだけ値を持つ。
+# ORIGIN_IN_* は呼び出し側（--upgrade と試験）が読むので、ここでは未使用に見える。
+# shellcheck disable=SC2034
 dcb_origin_load_inputs() {
   local file="$1" mode
   ORIGIN_IN_PROJECT_NAME="" ORIGIN_IN_LANGUAGES="" ORIGIN_IN_FLAGS=""
