@@ -273,7 +273,7 @@ chmod +x scripts/review-usable.sh scripts/check-review-usable.sh
 | 上記の手順 | DCB の扱い |
 |---|---|
 | 1. 規範を配置する | 実施する（`*.md` のみ。`README.md` と `CHANGELOG.md` は規範ではないため配布対象外） |
-| 2. 3 層構造を配線する | 実施する（`.github/project-ai-rules.md` と入口ファイル 2 種） |
+| 2. 3 層構造を配線する | 実施する（`.github/project-ai-rules.md` と入口ファイル 3 種） |
 | 3. プロジェクト固有の値を埋める | **実施しない。** 内容の判断が必要で自動化できないため、生成後に手で埋める |
 | 4. 第二意見レビューを用意する | 実施する（`scripts/second-opinion-review.sh` を実行可能属性付きで配置） |
 | 4a. 第二意見の記録・確認側を配線する | 実施する（装備の選択によらず、4 と同時に配置する） |
