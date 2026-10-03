@@ -618,6 +618,19 @@ gh の OAuth App には「ユーザー × アプリ × scope あたり 10 トー
 
 - **名前は gh 自身が読む `GH_TOKEN` をそのまま使います。** `GIT_IDENTITY_*` を別名にしているのと方針が逆に見えますが、理由が違います。git は自身が読む名前を環境へ置くと `user.useConfigOnly` の保護が無効になるため別名にします。gh には、環境変数を置くことで無効化される保護がありません。別名にすると受け渡しの仕掛けを足すだけになります。
 - **PAT を設定しているあいだ `gh auth login` は使えません。これは制約ではなく安全装置です。** うっかり再認証して他環境のトークンを殺す事故が構造的に起きなくなります。gh 2.96.0 で実測したところ、値が設定されているあいだ gh はログインを拒否します（`--with-token` / `--web` のいずれでも `The value of the GH_TOKEN environment variable is being used for authentication.` で終了し、通信もしません）。危ないのはその先で、拒否メッセージ（`first clear the value from the environment`）に従って値を空にしてログインすると、上限枠を 1 つ消費します。
+- **fine-grained PAT で必要になる権限の例と、選べない権限があること:** `/land` の雛形（`.claude/skills/land/SKILL.md`）が行う操作は、次の権限で足ります。必要な権限は行う操作で変わるため、最小の組はプロジェクトごとに決めてください。
+
+  | 行う操作 | repository permission |
+  |---|---|
+  | clone / push | Contents: Read and write |
+  | PR の作成・コメント・マージ | Pull requests: Read and write |
+  | issue の起票・コメント | Issues: Read and write |
+  | `.github/workflows/` を含む push | Workflows: Read and write |
+  | CI の実行の確認（`gh run list` / `actions/runs`） | Actions: Read |
+  | commit status（`second-opinion-gate` など）の確認 | Commit statuses: Read |
+  | （必須・自動付与） | Metadata: Read |
+
+  **Checks は fine-grained PAT では選べません。** そのため、**非公開リポジトリでは** `commits/<sha>/check-runs` と `gh pr checks` が 403 になります（公開リポジトリでは読めます）。`/land` の雛形はこの 2 つを使わず、Actions と Commit statuses の権限だけで CI を待ちます。プロジェクト側でスクリプトを足すときも、この 2 つに頼らないでください。
 - **`GH_TOKEN` が空の環境は従来どおり**保存済み認証で動きます（`GITHUB_TOKEN` も未設定である場合。下記）。PAT を持たない利用者を壊しません。
 - 発行手順と必要権限は、対象リポジトリと行う操作で変わるため、このパッケージは決め打ちしません。プロジェクト層（`.ai-playbook/templates/project-ai-rules.md` の「機密の具体化」）に記述してください。
 

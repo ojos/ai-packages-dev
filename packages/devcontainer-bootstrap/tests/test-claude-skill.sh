@@ -105,6 +105,24 @@ else
   fail "land 雛形と配置後のファイルが食い違う: $(diff "$PLAYBOOK_SRC/templates/claude-skill-land.md" "$land_skill" | head -n 8 | tr '\n' '/')"
 fi
 
+it "land 雛形の手順（コードブロック）が check-runs・gh pr checks・gh run watch に依存しない（Checks 権限を要らない）"
+# fine-grained PAT には Checks の権限が無く、非公開リポジトリでは commits/<sha>/check-runs と
+# gh pr checks が 403 になる（issue #416）。gh run watch も実行中のジョブの annotations（Checks の API）を
+# 読むことがある。CI の確認は Actions: Read（actions/runs）と Commit statuses: Read（commits/<sha>/status）
+# だけで成り立たせる。箇条書きの中のコードブロック（字下げした ```）も対象にする。
+# 理由を説明する散文には両方の名前が現れるため、実行する例（コードブロック）だけを見る。
+land_code="$(awk '/^[[:space:]]*```/{f=!f; next} f' "$land_skill")"
+if [[ -z "$land_code" ]]; then
+  fail "land 雛形からコードブロックを取り出せない（検査が成立しない）"
+elif printf '%s\n' "$land_code" | grep -qE 'check-runs|gh[[:space:]]+pr[[:space:]]+checks|gh[[:space:]]+run[[:space:]]+watch'; then
+  fail "land 雛形のコードブロックが check-runs・gh pr checks・gh run watch のいずれかを使っている（非公開リポジトリの fine-grained PAT で 403）: $(printf '%s\n' "$land_code" | grep -nE 'check-runs|gh[[:space:]]+pr[[:space:]]+checks|gh[[:space:]]+run[[:space:]]+watch' | head -n 3 | tr '\n' '/')"
+elif ! printf '%s\n' "$land_code" | grep -qF 'actions/runs?head_sha=' \
+  || ! printf '%s\n' "$land_code" | grep -qF 'commits/$sha/status'; then
+  fail "land 雛形が actions/runs?head_sha= と commits/\$sha/status の両方を使っていない"
+else
+  pass
+fi
+
 it "land 雛形の CI スキップ検査は PR 本文とコミットメッセージの両方を見る（squash 本文の設定に依らない）"
 # squash マージの本文の組み立て方（PR の説明文だけを使うか、各コミットのメッセージを
 # 連ねるか）は squash_merge_commit_message（PR_BODY / COMMIT_MESSAGES）というリポジトリ

@@ -132,6 +132,8 @@ gh CLI の認証はコンテナ内で行い、その状態を named volume に�
   | `second-opinion-gate` の commit status 確認 | Commit statuses: Read |
   | （必須・自動付与） | Metadata: Read |
 
+  **Checks は fine-grained PAT では選べません。** 非公開リポジトリでは `commits/<sha>/check-runs` と `gh pr checks` が 403 になるため、CI の確認は上の Actions と Commit statuses で行います（`/land` の雛形もそうしています）。例の表は `packages/devcontainer-bootstrap/README.md`「資格情報の扱い」にもあります。
+
 - **`GH_TOKEN` を設定しているあいだ `gh auth login` を実行しません。** gh 2.96.0 で実測したところ、値が設定されているあいだ gh はログインを拒否します（`--with-token` / `--web` のいずれでも `The value of the GH_TOKEN environment variable is being used for authentication.` で終了し、通信もしません）。危ないのはその先で、拒否メッセージ（`first clear the value from the environment`）に従って値を空にしてログインすると上限枠を 1 つ消費し、上限に達していれば他環境のトークンが 1 本失効します。この拒否は制約ではなく安全装置として扱います。
 - **`GITHUB_TOKEN` を恒久的に設定しません。** gh は `GH_TOKEN` → `GITHUB_TOKEN` の順に環境変数を読み、**空文字だけを読み飛ばします**。したがって `GH_TOKEN` を空にすることは `GITHUB_TOKEN` に対する盾になりません。gh 2.96.0 での実測: `GITHUB_TOKEN=" " gh api user` は `Bad credentials`、`GITHUB_TOKEN=" " GH_TOKEN="" gh api user` も `Bad credentials`（一方 `GITHUB_TOKEN="" gh api user` と `GH_TOKEN= gh api user` はどちらも保存済み認証で成功）。**手元のシェル・rc・`.env` のいずれにも `GITHUB_TOKEN` を置きません。**
 - ワークフローの `env: GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}` はこの話と別です。Actions のランナーに `.env` は無く、ジョブ限りのトークンなので上限枠も消費しません。**手元のシェルで `GITHUB_TOKEN` を設定してよい根拠にはなりません**（上記）。
