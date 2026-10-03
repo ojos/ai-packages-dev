@@ -16,6 +16,15 @@
 # セッションは SESSION_LEDGER_ID と SESSION_LEDGER_PID で模擬する。bash 3.2 互換。
 
 set -uo pipefail
+
+# run-tests.sh を介さず直接実行されたときは、自前で一時領域を作って後で消す
+# （受け入れ条件は `bash tests/test-session-ledger.sh` が 0 で終わること）。
+OWN_TMP_ROOT=""
+if [[ -z "${TEST_TMP_ROOT:-}" ]]; then
+  TEST_TMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/dcb-session-ledger-test.XXXXXX")"
+  export TEST_TMP_ROOT
+  OWN_TMP_ROOT="$TEST_TMP_ROOT"
+fi
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 echo "test-session-ledger"
@@ -54,7 +63,10 @@ sleep 600 &
 PID_A=$!
 sleep 600 &
 PID_B=$!
-cleanup() { kill "$PID_A" "$PID_B" "${PID_C:-}" 2>/dev/null || true; }
+cleanup() {
+  kill "$PID_A" "$PID_B" "${PID_C:-}" 2>/dev/null || true
+  [[ -z "$OWN_TMP_ROOT" ]] || rm -rf "$OWN_TMP_ROOT"
+}
 trap cleanup EXIT
 
 # run <セッション> <作業ツリー> <引数...>。標準出力・標準エラーをまとめ、終了コードは RC へ。
@@ -286,8 +298,54 @@ OUT="$(cd "$repo" && SESSION_LEDGER_PID="$PID_A" bash "$LEDGER" release 2>&1)"
 
 it "識別子に使えない文字は _ になる（ファイル名として安全）"
 run "a/b c" "$repo" claim issue 778
-if [[ -f "$DIR/a_b_c.tsv" ]]; then pass; else fail "$(ls "$DIR")"; fi
+# 置き換えが起きたので、元の識別子の cksum が付く（別の識別子と同じファイルにならないように）。
+if ls "$DIR"/a_b_c-*.tsv >/dev/null 2>&1; then pass; else fail "$(ls "$DIR")"; fi
 run "a/b c" "$repo" release
+
+# (f) で PID_C を消したので、生きている持ち主を用意し直す。
+sleep 600 &
+PID_C=$!
+
+it "識別子の置き換えで別の識別子が同じファイルにならない（a/b と a_b）"
+run "a/b" "$repo" claim doc docs/slash.md
+run "a_b" "$repo" check doc docs/slash.md
+slash_out="$OUT"
+run "a/b" "$repo" release
+run "a_b" "$repo" release
+if [[ "$(printf '%s\n' "$slash_out" | head -1)" == "LEDGER_WARN" ]]; then
+  pass
+else
+  fail "a/b の登録が a_b と同じファイルに混ざった: $slash_out"
+fi
+
+it "置き換えが起きない識別子のファイル名は変わらない"
+run "plain-id.1" "$repo" claim issue 779
+if [[ -f "$DIR/plain-id.1.tsv" ]]; then pass; else fail "$(ls "$DIR")"; fi
+run "plain-id.1" "$repo" release
+
+it "doc: 先に個別ファイルが登録されていても、別のセッションの配下ディレクトリの確認が衝突になる"
+run s-a "$repo" claim doc docs/sym/a.md
+run s-b "$repo" check doc docs/sym/
+sym1="$(first_line)"
+run s-a "$repo" release
+run s-a "$repo" claim doc docs/sym/
+run s-b "$repo" check doc docs/sym/a.md
+sym2="$(first_line)"
+run s-a "$repo" release
+if [[ "$sym1" == "LEDGER_WARN" && "$sym2" == "LEDGER_WARN" ]]; then pass; else fail "個別→配下=$sym1 配下→個別=$sym2"; fi
+
+it "持ち主を特定できないときは、識別子を共有せず、警告を出して LEDGER_SKIP で通す"
+# 持ち主を特定できない状況（PID 1 へ落ちる場合など）を、読み込んだあとで識別子を空にして作る。
+lines_before="$(cat "$DIR"/*.tsv | grep -c .)"
+# shellcheck disable=SC1090,SC2034  # 生成物を読み込み、SELF_ID は読み込んだ関数が使う
+OUT="$(cd "$repo" && . "$LEDGER" && SELF_ID="" && { cmd_claim merge; echo "rc=$?"; cmd_check merge; echo "rc=$?"; cmd_release; echo "rc=$?"; } 2>&1)"
+skip_n="$(printf '%s\n' "$OUT" | grep -c '^LEDGER_SKIP$')"
+if [[ "$skip_n" -eq 2 ]] && printf '%s' "$OUT" | grep -q 'WARN' && ! printf '%s' "$OUT" | grep -q 'rc=[1-9]' \
+   && [[ "$(cat "$DIR"/*.tsv | grep -c .)" -eq "$lines_before" ]]; then
+  pass
+else
+  fail "出力: $OUT"
+fi
 
 it "不明な種類と不明なサブコマンドは使い方の誤り（終了コード 2）"
 run s-a "$repo" claim nothing

@@ -6928,8 +6928,17 @@ level_of() {
   esac
 }
 
+# ファイル名として安全な形へ直す。置き換えが起きたときは、元の識別子の cksum を足して、
+# 別の識別子（a/b と a_b など）が同じファイルにならないようにする。置き換えが起きない
+# 識別子は変えない。
 sanitize() {
-  printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '_'
+  local s sum
+  s="$(printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '_')"
+  if [ "$s" != "$1" ]; then
+    sum="$(printf '%s' "$1" | cksum | cut -d' ' -f1)"
+    s="$s-$sum"
+  fi
+  printf '%s' "$s"
 }
 
 # ── 持ち主の PID とセッション識別子 ──────────────────────────────────────────
@@ -6959,15 +6968,29 @@ owner_pid() {
     echo "$pp"
     return 0
   done
-  echo "$PPID"
+  # 持ち主を特定できない。PID 1 などは別のセッションと共有してしまうので使わない。
+  case "$PPID" in '' | *[!0-9]*) return 0 ;; esac
+  [ "$PPID" -gt 1 ] && echo "$PPID"
+  return 0
 }
 
+# 持ち主を特定できないときは SELF_ID を空にし、登録・確認を警告して通す（fail-open）。
+# SESSION_LEDGER_ID を明示した場合は、PID を特定できなくても親プロセスを使う。
 SELF_PID="$(owner_pid)"
+SELF_ID=""
 if [ -n "${SESSION_LEDGER_ID:-}" ]; then
   SELF_ID="$(sanitize "$SESSION_LEDGER_ID")"
-else
+  [ -n "$SELF_PID" ] || SELF_PID="$PPID"
+elif [ -n "$SELF_PID" ]; then
   SELF_ID="pid-$SELF_PID"
 fi
+
+# 持ち主を特定できないとき 0 を返す（呼び出し側が警告して通す）。
+owner_unknown() {
+  [ -n "$SELF_ID" ] && return 1
+  warn "セッションの持ち主を特定できません。SESSION_LEDGER_ID と SESSION_LEDGER_PID を指定してください。台帳を使わず通します。"
+  return 0
+}
 
 pid_alive() {
   case "$1" in '' | *[!0-9]*) return 1 ;; esac
@@ -7092,11 +7115,19 @@ target_matches() { # kind query claimed
     merge | gate) return 0 ;;
     doc)
       [ "$q" = "$c" ] && return 0
-      # 末尾が / の登録は、その配下すべてを指す。
+      # 末尾が / の登録は、その配下すべてを指す。どちらか一方がもう一方の配下なら
+      # 衝突とする（登録の順序に依らない）。
       case "$c" in
         */)
           case "$q" in
             "$c"*) return 0 ;;
+          esac
+          ;;
+      esac
+      case "$q" in
+        */)
+          case "$c" in
+            "$q"*) return 0 ;;
           esac
           ;;
       esac
@@ -7154,6 +7185,10 @@ cmd_check() {
   local kind="${1:-}" target
   valid_kind "$kind" || { usage; return 2; }
   target="$(normalize_target "$kind" "${2:-}")"
+  if owner_unknown; then
+    echo "LEDGER_SKIP"
+    return 0
+  fi
   if ! ensure_dir; then
     echo "LEDGER_SKIP"
     return 0
@@ -7165,6 +7200,10 @@ cmd_claim() {
   local kind="${1:-}" target res rc
   valid_kind "$kind" || { usage; return 2; }
   target="$(normalize_target "$kind" "${2:-}")"
+  if owner_unknown; then
+    echo "LEDGER_SKIP"
+    return 0
+  fi
   if ! ensure_dir; then
     echo "LEDGER_SKIP"
     return 0
@@ -7192,6 +7231,7 @@ cmd_release() {
     valid_kind "$kind" || { usage; return 2; }
     [ "$target" = "*" ] || target="$(normalize_target "$kind" "$target")"
   fi
+  owner_unknown && return 0
   if ! ensure_dir; then
     return 0
   fi
