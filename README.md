@@ -69,7 +69,7 @@ ai-packages-dev/
 | `AGENTS.md` を読む実行環境（Codex など） | `AGENTS.md` | なし | なし | なし | 実行環境とは独立（下記） |
 
 - 入口ファイルは 3 つとも同じ雛形（`templates/entry.md`）の写しで、プロジェクト共通ルールを経由して 3 層構造へつながります。規範を置かない生成では、どれも作りません。
-- 第二意見のエンジンは、実行環境ではなく `scripts/second-opinion-review.sh --engine` で選びます（`gemini`（既定）/ `antigravity` / `codex`）。第二意見は主レビューと別ベンダーのモデルで取る仕組みなので、どの実行環境から使っても同じです。
+- 第二意見のエンジンは、実行環境ではなく `scripts/second-opinion-review.sh --engine` で選びます（`gemini`（既定）/ `antigravity` / `codex`）。第二意見は主レビューと別ベンダーのモデルで取ることが前提です。エンジンは実行環境から自動では決まらず、選び方の検査もしないため、**主レビューと同じベンダーのエンジンを選ばないでください**（例: Codex で実装するなら `codex` 以外）。
 - GitHub Copilot のリモートレビュー要求（`--with-copilot-review`）は、リモート最終ゲートの選択制の機構です。入口ファイルの有無とは別です。
 
 ## 経緯: Agent Swarm Framework の退役
