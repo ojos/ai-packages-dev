@@ -804,7 +804,7 @@ OAuth トークン（`CLAUDE_CODE_OAUTH_TOKEN`）を `remoteEnv` へ注入する
 - `scripts/setup-git-identity.sh` / `scripts/verify-commit-identity.sh` / `scripts/verify-commit-identity-selftest.sh`（git identity ガード。下記参照）
 - `.github/workflows/identity-guard.yml`（コミット identity の検証 CI。下記参照）
 - `scripts/verify.sh` / `scripts/acceptance.sh` / `scripts/loop-gate.sh`（ループコーディング支援。下記参照）
-- `scripts/session-ledger.sh`（同じホストで並行して動く AI セッションの共有台帳。`claim` / `release` / `list` / `check` を持つ。置き場所は `git rev-parse --git-common-dir` の配下で、セッションごとに別ファイルへ追記する。規範は `.ai-playbook/shared-ai-rules.md`「セッション間の協調」。実行環境に依存しないので、装備フラグに関わらず常に生成する）
+- `scripts/session-ledger.sh`（同じホストで並行して動く AI セッションの共有台帳。`claim` / `release` / `list` / `check` / `refresh` を持つ。置き場所は `git rev-parse --git-common-dir` の配下で、セッションごとに別ファイルへ追記する。規範は `.ai-playbook/shared-ai-rules.md`「セッション間の協調」。実行環境に依存しないので、装備フラグに関わらず常に生成する）
 - `scripts/check-no-secrets.sh`（機密混入の検知ゲート。`verify.sh` が受け入れ条件の手前で呼ぶ。下記参照）
 - `scripts/check-control-chars.sh`（追跡ファイルへの表示されない制御文字混入の検知ゲート。単体で `bash scripts/check-control-chars.sh` として実行する。`acceptance.sh` からは自動で呼ばれないため、通す契機にしたい場合はプロジェクト側で配線する）
 - `scripts/check-table-breaks.sh`（Markdown の表の途中へ段落が差し込まれ、続く行が表として描画されなくなっていないかの検知ゲート。単体で `bash scripts/check-table-breaks.sh` として実行する。`acceptance.sh` からは自動で呼ばれないため、通す契機にしたい場合はプロジェクト側で配線する。**先頭行（ヘッダー行）が `|` を持たない表**（`a | b` / `--- | ---` の形。GFM としては有効）**は対象外**。判定を広げると本文中の `|` を含む段落を誤検知し始めるため、意図して見ない。この対象外の挙動はテストで固定している）
@@ -821,7 +821,8 @@ OAuth トークン（`CLAUDE_CODE_OAUTH_TOKEN`）を `remoteEnv` へ注入する
 `--with-claude` を選んだ場合は、規範の配置とは独立に次を出力します（下記「[マージ確認フック](#マージ確認フックclaude-code)」参照）。
 
 - `scripts/confirm-merge-hook.sh`（マージ実行の前に確認を挟む PreToolUse フックの本体）
-- `.claude/settings.json`（上記フックの配線。既存ファイルは既定ポリシー `skip` で温存します）
+- `scripts/session-coord-hook.sh`（並行セッションの共有台帳を操作の直前に確かめるフックの本体。下記「[セッション協調フック](#セッション協調フックclaude-code)」参照）
+- `.claude/settings.json`（上記 2 つのフックの配線。既存ファイルは既定ポリシー `skip` で温存します）
 - `.claude/.gitignore`（`settings.local.json` を追跡しない）
 
 規範を配置する場合（`--with-playbook` / `--playbook-version` / `--playbook-from`）は、加えて次を出力します。
@@ -966,6 +967,64 @@ squash 本文の組み立て方（PR の説明文だけを使うか、各コミ�
 
 > **他の実行環境へ一般化できるか**: 現時点ではできません。`.claude/settings.json` の `PreToolUse` は Claude Code 固有の機構で、`--with-gemini` / `--with-copilot` に同等の「ツール実行前に判定を差し込む」配線がありません。フック本体（`scripts/confirm-merge-hook.sh`）は標準入力の JSON を読んで標準出力へ判定を返すだけなので、同種の機構を持つ実行環境が現れたら**配線だけを足せば再利用できます。** 判定ロジックを実行環境ごとに複製しない形にしてあります。
 
+#### セッション協調フック（Claude Code）
+
+`--with-claude` を選ぶと、**並行して動く別のセッションとの衝突を、操作の直前に確かめる**フックを配置します（規範は `.ai-playbook/shared-ai-rules.md`「セッション間の協調」。規範を配置しない構成でも配線されます）。台帳の読み書きと衝突の判定は、装備フラグに関わらず生成する `scripts/session-ledger.sh` が担い、このフックは「いつ確かめるか」と「Claude Code へどう返すか」だけを持ちます。
+
+| ファイル | 役割 |
+|---|---|
+| `scripts/session-coord-hook.sh` | フック本体。標準入力の JSON を読み、台帳へ登録・確認して、標準出力の JSON で拒否（`deny`）や警告（`additionalContext` と `systemMessage`）を返します |
+| `.claude/settings.json` | 配線。下表のイベントから上記を呼びます |
+
+| イベント | 対象 | 判定 |
+|---|---|---|
+| `SessionStart` | — | 他のセッションの登録を要約して表示する（他に登録が無ければ何も出さない） |
+| `PreToolUse` | `Bash` | `gh pr merge` / `gh release create`・`edit`・`delete`・`upload` / REST の merge への `PUT` / `mergePullRequest`、同じ作業ツリーでの `git checkout`・`switch`・`rebase`・`reset`・`fetch`・`pull`・`merge` など、`verify.sh` / `loop-gate.sh` の起動を、他のセッションの登録と衝突するなら**拒否**する。ブランチ作成（`git checkout -b feat/395-…` など）で、他のセッションが着手している issue なら**警告**する |
+| `PreToolUse` | `Edit\|Write` | 他のセッションが登録している文書なら**警告**する（通す） |
+| `PostToolUse` | `Bash` | `PreToolUse` で登録した「実行のあいだだけの登録」（マージ・作業ツリー・ゲート）を解放する |
+| `SessionEnd` | — | 自分の登録をすべて解放する |
+
+- **拒否と警告の出力に、相手のセッションの識別子・登録の種類・作業ツリー・調整の手順が含まれます。** 調整は、Claude Code では `ListAgents` で相手を確かめて `SendMessage` で連絡します（他の実行環境では利用者を経由します）。
+- **フックが自分で登録する時点:** マージ・作業ツリーの git 操作・重いゲートは、実行の直前に登録し、終わったら解放します。issue はブランチ作成の時点で登録し、`SessionEnd` まで持ちます。文書は、フックは確かめるだけで登録しません（長く触る文書は、セッション自身が `session-ledger.sh claim doc <パス>` で登録します）。**限界:** 確認（`ask`）を利用者が断った場合は `PostToolUse` が来ないため、次に同じ種類の操作を通すか、セッションが終わるか、持ち主のプロセスが消えるまで登録が残ります。バックグラウンドで起動したゲートは、起動の呼び出しが返った時点で解放されます。
+- **セッションの識別子は台帳の既定に任せます。** フックも `Bash` ツールのコマンドも Claude Code 本体のプロセスの子として動くため、「祖先で最初のシェル以外のプロセス」が同じ本体になり、識別子が揃います（実機で確認済み）。`SESSION_LEDGER_ID` / `SESSION_LEDGER_PID` を渡せば、それが優先されます。
+- **長いセッションの失効を避けるため、`PreToolUse` のたびに `session-ledger.sh refresh` を呼びます**（前回の更新から 5 分以上たっていなければ何もしません）。
+- **台帳そのものの読み書きに失敗したときは、警告（`systemMessage`）を出して通します（fail-open）。** 台帳が見つからない・置き場所を作れない・git リポジトリの外・出力を読めない場合です。台帳の不具合ですべての操作が止まるのを避けるためで、空のペイロードを `ask` にする確認フックとは逆です（あちらは承認の記録が目的で、こちらは合図だからです）。
+- コマンドの見分け方は確認フックと同じ考え方（クォートを認識して節に分け、節の先頭のコマンドで判定する）の縮小版です。`bash -c "..."` の中身や変数展開の結果などは取りこぼします。**うっかりの衝突へ合図を出す機構であって、意図的な迂回を防ぐ境界ではありません。**
+- 台帳は排他制御ではなく合図です。2 つのセッションがほぼ同時に登録すると、両方が通ることがあります。
+
+**既存の `.claude/settings.json` がある場合**は、衝突ポリシー（既定 `skip`）で温存されるため配線は足されません。次の `hooks` を手で足してください（`confirm-merge-hook.sh` の配線がある場合は、`PreToolUse` の `Bash` の `hooks` へ 2 つ目のコマンドとして足します）。**追跡している設定を書き換えることになるため、足してよいかは先に確かめてください。**
+
+```json
+{
+  "hooks": {
+    "SessionStart": [
+      { "hooks": [{ "type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR/scripts/session-coord-hook.sh\"" }] }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          { "type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR/scripts/confirm-merge-hook.sh\"" },
+          { "type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR/scripts/session-coord-hook.sh\"" }
+        ]
+      },
+      {
+        "matcher": "Edit|Write",
+        "hooks": [{ "type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR/scripts/session-coord-hook.sh\"" }]
+      }
+    ],
+    "PostToolUse": [
+      { "matcher": "Bash", "hooks": [{ "type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR/scripts/session-coord-hook.sh\"" }] }
+    ],
+    "SessionEnd": [
+      { "hooks": [{ "type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR/scripts/session-coord-hook.sh\"" }] }
+    ]
+  }
+}
+```
+
+同梱の `/intake` と `/land` のスキル雛形は、着手のとき（`session-ledger.sh claim issue <番号>`）、マージの前（`check merge`）、作業の終わり（`release`）に台帳を使う手順を持ちます。
+
 #### リモート最終ゲート（Copilot）ワークフロー
 規範を配置し、かつ `--with-copilot-review` を選択した場合のみ、**要求側・確認側・確認側が使う判定スクリプト 2 本**を配置します（規範 `.ai-playbook/review-workflow.md`「リモート最終ゲート」に対応）。
 
@@ -1035,6 +1094,7 @@ github/gitignore のテンプレートは言語・OS・エディタの生成物�
 | `scripts/load-project-env.sh` | そのまま書き出す | — |
 | `scripts/loop-gate.sh` | そのまま書き出す | — |
 | `scripts/on-attach.sh` | そのまま書き出す | — |
+| `scripts/session-coord-hook.sh` | そのまま書き出す | —（`--with-claude` のときだけ生成） |
 | `scripts/session-ledger.sh` | そのまま書き出す | — |
 | `scripts/setup-git-identity.sh` | そのまま書き出す | — |
 | `scripts/verify-commit-identity.sh` | そのまま書き出す | — |
