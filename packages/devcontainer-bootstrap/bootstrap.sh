@@ -7806,7 +7806,7 @@ upsert_gitignore() {
 
   # mktemp は 0600 で作成し mv がそれを維持するため、既存 .gitignore のモードを
   # 潰してしまう。元のモードを復元し、644 は新規作成したファイルにのみ使う。
-  mv "$tmp" "$gitignore_path"
+  dcb_place_file "$tmp" "$gitignore_path"
   chmod "${prev_mode:-644}" "$gitignore_path"
   echo "write: $gitignore_path (managed section)"
 }
@@ -8294,25 +8294,42 @@ dcb_guard_parent() {
   fi
 }
 
-# 書き込み先がディレクトリ（リンク経由を含む）なら、mv が「その中へ移す」ことになり
-# 出力先の外へ届きうるので、何も書かずに止める。
+# 本物のディレクトリが書き込み先に居座っているときは、何も書かずに止める。
+# ディレクトリを指すリンクは対象外（dcb_place_file がリンク自体を置き換える）。
 dcb_refuse_dir_dest() {
-  if [[ -d "$1" ]]; then
+  if [[ -d "$1" && ! -L "$1" ]]; then
     echo "error: $1 はディレクトリです。書き込まずに止めます。" >&2
     exit 1
   fi
 }
 
-# src を dest へ、同じディレクトリの一時ファイル -> mv で置く。mv（rename）は dest が
-# リンクならリンク自体を置き換えるので、検査と書き込みのあいだにリンクを置き直されても
-# リンク先へは書かない。
+# 一時ファイル tmp を dest へ mv で置く（生成先を書く経路の共通の出口）。
+# dest がシンボリックリンクなら、指す先がファイルでもディレクトリでも、先にリンク自体を
+# 消す。mv はディレクトリを指すリンクを置き換えず、その中へ移してしまうため。
+# 消してから mv するまでのあいだにリンクを置き直された場合（同時に書き換える相手がいる
+# ときだけ起きる）に備え、mv のあとで dest が通常ファイルであることを確かめる。そうで
+# なければ、リンク先へ入った一時ファイルを消してエラーにする（リンク先の既存の中身は
+# 触らない。mv -T は BSD に無いので使わない）。
+dcb_place_file() { # tmp dest
+  local tmp="$1" dest="$2"
+  dcb_refuse_dir_dest "$dest"
+  [[ -L "$dest" ]] && rm -f "$dest"
+  mv -f "$tmp" "$dest"
+  if [[ -L "$dest" || ! -f "$dest" ]]; then
+    [[ -d "$dest" ]] && rm -f "$dest/$(basename "$tmp")"
+    echo "error: $dest が書き込み中にリンクへ置き換えられました。止めます。" >&2
+    exit 1
+  fi
+}
+
+# src を dest へ、同じディレクトリの一時ファイル -> dcb_place_file で置く。
 dcb_install_file() { # src dest mode
   local tmp
   dcb_refuse_dir_dest "$2"
   tmp="$(mktemp "$2.XXXXXX")"
   cp "$1" "$tmp"
   chmod "$3" "$tmp"
-  mv -f "$tmp" "$2"
+  dcb_place_file "$tmp" "$2"
 }
 
 # 今回書く予定のすべての生成先について、親ディレクトリの実体が出力先の中かを、
@@ -8520,9 +8537,9 @@ write_file() {
     tmp2="$(mktemp "${TMPDIR:-/tmp}/dcb-render.XXXXXX")"
     jq . "$tmp" > "$tmp2"
     rm -f "$tmp"
-    mv "$tmp2" "$out"
+    dcb_place_file "$tmp2" "$out"
   else
-    mv "$tmp" "$out"
+    dcb_place_file "$tmp" "$out"
   fi
   # mktemp は 0600 で作成し mv がそれを維持するため、生成ファイルが読めるよう正規化する。
   chmod 644 "$out"
@@ -8716,7 +8733,7 @@ EOF
   if [[ "$UPGRADE" == "true" && -f "$dest" && ! -L "$dest" ]]; then
     prev_mode="$(file_mode_octal "$dest")"
   fi
-  mv "$tmp" "$dest"
+  dcb_place_file "$tmp" "$dest"
   chmod "${prev_mode:-644}" "$dest"
   echo "write: $dest"
 }

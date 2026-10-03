@@ -49,6 +49,10 @@ plant_links() {
     if [[ "$kind" == "valid" ]]; then
       echo "KEEP" > "$outside/$flat"
       chmod 640 "$outside/$flat"
+    elif [[ "$kind" == "dir" ]]; then
+      mkdir "$outside/$flat"
+      echo "KEEP" > "$outside/$flat/s"
+      chmod 750 "$outside/$flat"
     fi
     ln -s "$outside/$flat" "$out/$rel"
   done
@@ -61,12 +65,15 @@ outside_intact() { # outside kind
     flat="$(printf '%s' "$rel" | tr '/' '_')"
     if [[ "$kind" == "broken" ]]; then
       [[ ! -e "$outside/$flat" && ! -L "$outside/$flat" ]] || { echo "$flat が作られた"; return 1; }
+    elif [[ "$kind" == "dir" ]]; then
+      [[ -d "$outside/$flat" && "$(ls -A "$outside/$flat")" == "s" && "$(cat "$outside/$flat/s")" == "KEEP" \
+        && "$(mode_of "$outside/$flat")" == "750" ]] || { echo "$flat（ディレクトリ）が変わった"; return 1; }
     else
       [[ "$(cat "$outside/$flat")" == "KEEP" && "$(mode_of "$outside/$flat")" == "640" ]] \
         || { echo "$flat が変わった"; return 1; }
     fi
   done
-  [[ "$kind" == "valid" ]] && want="$N_ALL"
+  [[ "$kind" != "broken" ]] && want="$N_ALL"
   [[ "$(ls -A "$outside" | wc -l | tr -d ' ')" == "$want" ]] || { echo "外のファイル数が違う: $(ls -A "$outside")"; return 1; }
   return 0
 }
@@ -84,7 +91,7 @@ all_state() { # out state(L|R) rels...
   return 0
 }
 
-for kind in broken valid; do
+for kind in broken valid dir; do
   it "[$kind] 既定の再実行: リンクを温存し、外へ書かない"
   w="$(new_workdir)"; out="$w/p"; outside="$w/outside"; mkdir -p "$outside"
   plant_links "$out" "$outside" "$kind"
