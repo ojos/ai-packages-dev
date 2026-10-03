@@ -180,9 +180,41 @@ BEGIN { infence = 0; fmark = ""; fline = 0 }
 infence { next }
 {
   line = $0
-  while (match(line, /\]\([^)]*\)/)) {
-    raw = substr(line, RSTART + 2, RLENGTH - 3)
-    line = substr(line, RSTART + RLENGTH)
+  while (match(line, /\]\(/)) {
+    # `](` の後ろから括弧の深さを数え、対応する `)` までを 1 つのリンク先とする
+    # （`[a](docs/foo(bar).md)` を `docs/foo(bar` で切らない）。対応する `)` が
+    # 行内に無ければ、従来どおり最初の `)` で切る（括弧の数え方で、変更前より
+    # 検査を漏らさないため）。タイトル（空白の後の "..." / '...'）と `<...>` の
+    # 中の括弧、およびバックスラッシュでエスケープした文字は数えない
+    # （`[a](x.md "T (")` や `[a](x.md "T \" (")` を検査から漏らさない）。
+    # リンク先は空白を含まないので、空白の後に続いてよいのは空白・タイトル・
+    # 閉じ括弧だけとする。それ以外が来たら正しいリンクではないとみなし、従来
+    # どおりに切る（`[a](x(y) [b](gone.md) )` の後ろのリンクを漏らさない）。
+    rest = substr(line, RSTART + 2)
+    depth = 1
+    endpos = 0
+    quote = ""
+    prev = ""
+    spaced = 0
+    rlen = length(rest)
+    for (ci = 1; ci <= rlen; ci++) {
+      ch = substr(rest, ci, 1)
+      if (ch == "\\") { ci++; prev = ""; continue }
+      if (quote != "") { if (ch == quote) quote = "" }
+      else if (ch == " " || ch == "\t") { if (depth > 1) break; spaced = 1 }
+      else if (depth == 1 && (ch == "\"" || ch == "'") && spaced) quote = ch
+      else if (ch == "<" && depth == 1 && prev == "") quote = ">"
+      else if (ch == ")") { depth--; if (depth == 0) { endpos = ci; break } }
+      else if (spaced) break
+      else if (ch == "(") depth++
+      prev = ch
+    }
+    if (endpos == 0) {
+      endpos = index(rest, ")")
+      if (endpos == 0) { line = rest; continue }
+    }
+    raw = substr(rest, 1, endpos - 1)
+    line = substr(rest, endpos + 1)
     t = raw
     # リンク先とタイトルを分ける（`[a](path "title")` / `[a](path 'title')`）。
     # CommonMark では、リンク先は空白を含まないか `<...>` で囲む。囲みがあれば

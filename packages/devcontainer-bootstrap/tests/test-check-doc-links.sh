@@ -259,6 +259,55 @@ commit_repo "$repo" add-angle
 run_check "$repo"
 assert_pass "<...> で囲んだリンク先"
 
+# ── 括弧を含むリンク先 ───────────────────────────────────────────────────────
+
+it "対になった括弧を含む実在のリンク先は通る"
+repo="$(new_repo)"
+add_doc "$repo" "docs/a.md" '[paren](foo(bar).md) と [title](foo(bar).md "T (x)")
+'
+add_doc "$repo" "docs/foo(bar).md" 'x
+'
+commit_repo "$repo" add-paren-ok
+run_check "$repo"
+assert_pass "括弧を含む実在のリンク"
+
+it "対になった括弧を含む実在しないリンク先は、括弧ごと報告して落ちる"
+repo="$(new_repo)"
+add_doc "$repo" "docs/a.md" '[paren](gone(bar).md)
+'
+commit_repo "$repo" add-paren-broken
+run_check "$repo"
+assert_fail "括弧を含む壊れたリンク" "docs/gone(bar).md"
+
+it "タイトルや <...> の中の対になっていない括弧は数えない（リンクを検査から漏らさない）"
+repo="$(new_repo)"
+add_doc "$repo" "docs/a.md" "[dq](gone.md \"T (\") と [sq](gone2.md 'T (') と [angle](<gone3(.md>)
+"
+commit_repo "$repo" add-unbalanced-title
+run_check "$repo"
+assert_fail "タイトル中の ( で漏れない（二重引用符）" "docs/gone.md"
+assert_fail "タイトル中の ( で漏れない（一重引用符）" "docs/gone2.md"
+assert_fail "<...> 中の ( で漏れない" "docs/gone3(.md"
+
+it "エスケープした引用符や、対応の取れない括弧でもリンクを検査から漏らさない"
+# 対応する ) が見つからないときは、従来どおり最初の ) で切る（変更前より漏らさない）。
+repo="$(new_repo)"
+add_doc "$repo" "docs/a.md" '[esc](gone.md "T \" (") と [open](gone4(.md)
+'
+commit_repo "$repo" add-escaped-title
+run_check "$repo"
+assert_fail "エスケープした引用符の後の ( で漏れない" "docs/gone.md"
+assert_fail "対応の取れない ( は従来どおり最初の ) で切る" "docs/gone4(.md"
+
+it "閉じていない括弧の後ろに続くリンクも検査する"
+repo="$(new_repo)"
+add_doc "$repo" "docs/a.md" '[a](foo(bar) [b](gone5.md) ) と [c](#frag(x) [d](gone6.md) )
+'
+commit_repo "$repo" add-unclosed-then-link
+run_check "$repo"
+assert_fail "閉じていない ( の後ろのリンク" "docs/gone5.md"
+assert_fail "閉じていない ( の後ろのリンク（フラグメント）" "docs/gone6.md"
+
 # ── 検査が成立していないことを合格にしない ────────────────────────────────────
 
 it "git 管理外では落ちる（検査が成立していない）"
