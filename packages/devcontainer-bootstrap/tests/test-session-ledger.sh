@@ -70,7 +70,7 @@ run() {
   RC=$?
 }
 
-first_line() { printf '%s\n' "$OUT" | head -1; }
+first_line() { printf '%s\n' "$OUT" | sed -n 1p; }
 
 # 台帳の置き場所（共通ディレクトリの配下）
 COMMON="$(cd "$repo" && cd "$(git rev-parse --git-common-dir)" && pwd)"
@@ -183,7 +183,7 @@ if [[ -f "$DIR/s-a.tsv" && -f "$DIR/s-b.tsv" ]]; then pass; else fail "$(ls "$DI
 it "list --others は自分以外の登録だけを出す"
 run s-b "$repo" list --others
 case "$OUT" in
-  *"session=s-a"*) if printf '%s' "$OUT" | grep -q 'session=s-b'; then fail "自分の登録が混ざる: $OUT"; else pass; fi ;;
+  *"session=s-a"*) if [[ "$OUT" == *"session=s-b"* ]]; then fail "自分の登録が混ざる: $OUT"; else pass; fi ;;
   *) fail "出力: $OUT" ;;
 esac
 
@@ -232,7 +232,7 @@ it "(f) 失効した登録は list に出ず、list --all では expired と示�
 run s-b "$repo" list
 plain="$OUT"
 run s-b "$repo" list --all
-if ! printf '%s' "$plain" | grep -q 'session=s-c' && printf '%s' "$OUT" | grep 'session=s-c' | grep -q 'state=expired'; then
+if [[ "$plain" != *"session=s-c"* ]] && printf '%s\n' "$OUT" | grep 'session=s-c' | grep -c 'state=expired' >/dev/null; then
   pass
 else
   fail "list=$plain all=$OUT"
