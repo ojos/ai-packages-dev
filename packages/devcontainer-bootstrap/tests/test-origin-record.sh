@@ -338,6 +338,14 @@ grep -v -e '^inputs-format=' -e '^input:' "$old_out$ORIGIN_REL" > "$old_out$ORIG
 mv "$old_out$ORIGIN_REL.new" "$old_out$ORIGIN_REL"
 if dcb_origin_load_inputs "$old_out$ORIGIN_REL"; then fail "古い ORIGIN を読み戻せてしまった"; else pass; fi
 
+it "inputs-format が 1 でない記録は読み戻しに失敗する（未知の書式を読まない）"
+fmt_out="$(new_workdir)/p"
+bash "$BOOTSTRAP" --project-name fmt1 --languages node --output-dir "$fmt_out" >/dev/null 2>&1
+dcb_origin_load_inputs "$fmt_out$ORIGIN_REL" || fail "対照: 正常な記録を読めない"
+awk '/^inputs-format=/ { print "inputs-format=2"; next } { print }' "$fmt_out$ORIGIN_REL" > "$fmt_out$ORIGIN_REL.new"
+mv "$fmt_out$ORIGIN_REL.new" "$fmt_out$ORIGIN_REL"
+if dcb_origin_load_inputs "$fmt_out$ORIGIN_REL"; then fail "inputs-format=2 を読み戻せてしまった"; else pass; fi
+
 it "入力の行が無い古い ORIGIN でも doctor.sh は従来どおり読める（FAIL にならない）"
 bash "$DOCTOR" --target-dir "$old_out" >/dev/null 2>&1
 code=$?

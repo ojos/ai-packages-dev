@@ -103,7 +103,8 @@ dcb_version_lt() {
 # hash:<パス>=<sha256 の 64 桁> のどれかであること。読み飛ばして黙って通さない。
 check_origin_format() {
   local origin_file="$1" line bad="" v val mode playbook source lang l_rest
-  while IFS= read -r line; do
+  # 最終行が改行で終わっていなくても検査する。
+  while IFS= read -r line || [[ -n "$line" ]]; do
     [[ -n "$line" ]] || continue
     case "$line" in
       '#'*) ;;
@@ -128,6 +129,12 @@ check_origin_format() {
         ;;
     esac
   done < "$origin_file"
+
+  # input: の行があるのに inputs-format が無い記録は、旧形式ではなく壊れた新形式。
+  if awk '/^input:/ { f = 1 } END { exit !f }' "$origin_file" \
+    && ! awk '/^inputs-format=/ { f = 1 } END { exit !f }' "$origin_file"; then
+    bad="$bad [input: の行があるのに inputs-format= の行が無い]"
+  fi
 
   if awk '/^inputs-format=/ { f = 1 } END { exit !f }' "$origin_file"; then
     if [[ "$(origin_get "$origin_file" inputs-format)" != "1" ]]; then

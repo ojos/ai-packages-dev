@@ -290,6 +290,20 @@ output="$(bash "$DOCTOR" --target-dir "$out" 2>&1)"; code=$?
 if [[ $code -ne 0 ]] && printf '%s' "$output" | grep -qF 'changed since generation:' && printf '%s' "$output" | grep -qF 'dir=x/f.txt'; then pass; else fail "改変を changed と言わない: 終了コード=$code
 $output"; fi
 
+it "input: の行があるのに inputs-format の行が無ければ malformed（旧形式として検査を省かない）"
+out="$(base_out)"
+mutate_origin "$out" "inputs-format=" ""
+output="$(bash "$DOCTOR" --target-dir "$out" 2>&1)"; code=$?
+if [[ $code -ne 0 ]] && printf '%s' "$output" | grep -q '\[FAIL\] origin record malformed.*inputs-format'; then pass; else fail "終了コード=$code
+$output"; fi
+
+it "改行で終わらない最終行も検査する（不正な input: 行が最終行でも malformed）"
+out="$(base_out)"
+printf 'input:bogus=1' >> "$out$ORIGIN_REL"
+output="$(bash "$DOCTOR" --target-dir "$out" 2>&1)"; code=$?
+if [[ $code -ne 0 ]] && printf '%s' "$output" | grep -q '\[FAIL\] origin record malformed.*input:bogus'; then pass; else fail "終了コード=$code
+$output"; fi
+
 it ".ai-playbook/** の規範ファイルを変えると changed と判定する"
 out="$(new_workdir)/p"
 run_bootstrap "$out" --playbook-from "$PLAYBOOK_SRC" >/dev/null 2>&1

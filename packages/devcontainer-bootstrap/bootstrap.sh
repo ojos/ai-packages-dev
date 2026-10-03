@@ -8117,7 +8117,8 @@ dcb_origin_load_inputs() {
   ORIGIN_IN_MANAGE_GITIGNORE="" ORIGIN_IN_GITIGNORE_TARGETS=""
   ORIGIN_IN_PLAYBOOK="" ORIGIN_IN_PLAYBOOK_SOURCE="" ORIGIN_IN_PLAYBOOK_REF=""
   [[ -f "$file" ]] || return 1
-  dcb_origin_get "$file" inputs-format >/dev/null || return 1
+  # 値が 1 でなければ、この版が読めない書式として 1 を返す（doctor.sh と揃える）。
+  [[ "$(dcb_origin_get "$file" inputs-format)" == "1" ]] || return 1
   ORIGIN_IN_PROJECT_NAME="$(dcb_origin_get "$file" input:project-name)" || return 1
   ORIGIN_IN_LANGUAGES="$(dcb_origin_get "$file" input:languages)" || return 1
   ORIGIN_IN_FLAGS="$(dcb_origin_get "$file" flags)" || return 1
