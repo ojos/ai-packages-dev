@@ -29,7 +29,7 @@ GITIGNORE_TARGETS_EXPLICIT="false"
 # upgrade の結果の集計。UPGRADE_HASHES は「相対パス<TAB>新しい版のハッシュ」の行
 # （温存したファイルにも新しい版のハッシュを記録するため、現物ではなくこちらを ORIGIN へ書く）。
 UPGRADE_HASHES=""
-UPGRADE_DCBNEW_COUNT=0
+UPGRADE_LEFTOVER=""
 
 BASE_IMAGE_OVERRIDE=""
 BASE_IMAGE=""
@@ -8208,12 +8208,46 @@ write_playbook_version_file() {
 # どの場合も、ORIGIN へ書くのは新しい版のハッシュ（UPGRADE_HASHES）。温存したファイルにも
 # 新しい版のハッシュを記録するので、次の --upgrade でも「記録と現物が違う = 手を入れた」
 # として温存され、doctor は「生成時から変わった」と報告する。.dcb-new が取り込み待ちの印。
+# 書き込み先の親ディレクトリ（実体）が出力先（実体）の中にあるか。シンボリックリンクの
+# ディレクトリ経由で出力先の外へ書かないための検査。親がまだ無いときは、存在する最も
+# 近い祖先で判定する（mkdir -p はその先を作るだけで、祖先を越えない）。
+upgrade_parent_inside_output() {
+  local d root real
+  d="$(dirname "$1")"
+  while [[ ! -d "$d" ]]; do d="$(dirname "$d")"; done
+  real="$(cd -P "$d" 2>/dev/null && pwd -P)" || return 1
+  root="$(cd -P "$OUTPUT_DIR" 2>/dev/null && pwd -P)" || return 1
+  [[ "$real" == "$root" || "$real" == "$root"/* ]]
+}
+
+# 新しい版を中身だけ書く。open 時に既存ファイルがあれば失敗させる（noclobber）ので、
+# リンクを張られた先へは書かない。
+upgrade_write_new() {
+  ( set -C; cat "$1" > "$2" )
+}
+
 upgrade_apply_file() {
   local dest="$1" src="$2" rel newh curh rec mode verb
   rel="${dest#"$OUTPUT_DIR"/}"
+  if ! upgrade_parent_inside_output "$dest"; then
+    echo "error: $dest の親ディレクトリが出力先の外を指しています（シンボリックリンク）。書き込まずに止めます。" >&2
+    exit 1
+  fi
   newh="$(dcb_file_sha256 "$src")"
   UPGRADE_HASHES="${UPGRADE_HASHES}${rel}"$'\t'"${newh}"$'\n'
   rec="$(dcb_origin_get "$OUTPUT_DIR/$ORIGIN_REL_PATH" "hash:$rel" 2>/dev/null || true)"
+
+  # シンボリックリンク（切れたものを含む）と通常ファイル以外は、たどらず比較もせず、
+  # 手を入れた扱いにして新しい版を .dcb-new として置く（リンク先を書き換えない）。
+  if [[ -L "$dest" || ( -e "$dest" && ! -f "$dest" ) ]]; then
+    if [[ "$DRY_RUN" == "true" ]]; then
+      echo "plan: keep (symlink or not a regular file) $dest -> $dest.dcb-new"
+    else
+      upgrade_place_dcbnew "$dest" "$src"
+      echo "keep (symlink or not a regular file): $dest -> $dest.dcb-new"
+    fi
+    return 0
+  fi
 
   if [[ ! -e "$dest" ]]; then
     if [[ "$DRY_RUN" == "true" ]]; then
@@ -8221,7 +8255,7 @@ upgrade_apply_file() {
       return 0
     fi
     mkdir -p "$(dirname "$dest")"
-    cat "$src" > "$dest"
+    upgrade_write_new "$src" "$dest"
     chmod 644 "$dest"
     [[ "$dest" == *.sh ]] && chmod +x "$dest"
     echo "write: $dest (new)"
@@ -8255,13 +8289,27 @@ upgrade_apply_file() {
   if [[ "$DRY_RUN" == "true" ]]; then
     echo "plan: keep ($verb) $dest -> $dest.dcb-new"
   else
-    mode="$(file_mode_octal "$dest")"
-    cat "$src" > "$dest.dcb-new"
-    chmod "${mode:-644}" "$dest.dcb-new"
+    upgrade_place_dcbnew "$dest" "$src"
     echo "keep ($verb): $dest -> $dest.dcb-new"
-    UPGRADE_DCBNEW_COUNT=$((UPGRADE_DCBNEW_COUNT + 1))
   fi
-  upgrade_diff_summary "$dest" "$src"
+  if [[ -f "$dest" && ! -L "$dest" ]]; then upgrade_diff_summary "$dest" "$src"; fi
+  return 0
+}
+
+# <dest>.dcb-new を通常ファイルとして置く。既にあるもの（リンクや通常ファイル以外を含む）は
+# 先に消す。モードは元のファイルに揃える（元がリンク等でモードが読めなければ 644）。
+upgrade_place_dcbnew() {
+  local dest="$1" src="$2" mode=""
+  if [[ -e "$dest.dcb-new" || -L "$dest.dcb-new" ]]; then
+    rm -f "$dest.dcb-new"
+    if [[ -e "$dest.dcb-new" || -L "$dest.dcb-new" ]]; then
+      echo "error: $dest.dcb-new を置き換えられません（通常のファイルではなく消せない）。" >&2
+      exit 1
+    fi
+  fi
+  if [[ -f "$dest" && ! -L "$dest" ]]; then mode="$(file_mode_octal "$dest")"; fi
+  upgrade_write_new "$src" "$dest.dcb-new"
+  chmod "${mode:-644}" "$dest.dcb-new"
 }
 
 # 差分の要約（変更行数と unified diff の先頭数行）を、字下げして出す。
@@ -8285,6 +8333,26 @@ upgrade_report_removed() {
       echo "no longer generated (not deleted): $OUTPUT_DIR/$rel"
     fi
   done < <(sed -n 's/^hash://p' "$origin" | sed 's/=[^=]*$//')
+}
+
+# 記録の対象（旧 ORIGIN と新しい版の両方）のうち、<path>.dcb-new が残っているものを
+# UPGRADE_LEFTOVER へ集める。生成対象から外れたファイルの古い .dcb-new も数える。
+# ORIGIN を書き直す前に呼ぶこと（旧 ORIGIN を読むため）。
+upgrade_collect_leftover() {
+  local origin="$OUTPUT_DIR/$ORIGIN_REL_PATH" rels rel old=""
+  if [[ -f "$origin" ]]; then
+    old="$(sed -n 's/^hash://p' "$origin" | sed 's/=[^=]*$//')"
+  fi
+  rels="$( { printf '%s\n' "$sorted_rels"; playbook_installed_rel_paths; playbook_rules_rel_paths; printf '%s\n' "$old"; } | sort -u)"
+  UPGRADE_LEFTOVER=""
+  while IFS= read -r rel; do
+    [[ -n "$rel" ]] || continue
+    if [[ -e "$OUTPUT_DIR/$rel.dcb-new" || -L "$OUTPUT_DIR/$rel.dcb-new" ]]; then
+      UPGRADE_LEFTOVER="${UPGRADE_LEFTOVER}${OUTPUT_DIR}/${rel}.dcb-new"$'\n'
+    fi
+  done <<EOF
+$rels
+EOF
 }
 
 # upgrade 中は、新しい版を書いたあとの chmod +x を既存ファイルへ掛けない
@@ -8438,7 +8506,7 @@ origin_playbook_source() {
 # 生成物を直したときと同じく --force（および必要なら
 # --playbook-conflict-policy overwrite）で明示的に再生成すること。
 write_origin_record() {
-  local dest="$OUTPUT_DIR/$ORIGIN_REL_PATH" tmp rel h flags_csv origin_rels skipped_rel="" languages_csv pb_src pb_ref
+  local dest="$OUTPUT_DIR/$ORIGIN_REL_PATH" tmp rel h flags_csv origin_rels skipped_rel="" languages_csv pb_src pb_ref prev_mode
   if [[ -e "$dest" && "$FORCE" != "true" && "$UPGRADE" != "true" ]]; then
     echo "skip (exists): $dest"
     return 0
@@ -8511,8 +8579,13 @@ EOF
 $origin_rels
 EOF
   } > "$tmp"
+  # --upgrade は既存 ORIGIN のモードを保つ（無ければ 644）。従来の経路は常に 644。
+  prev_mode=""
+  if [[ "$UPGRADE" == "true" && -f "$dest" && ! -L "$dest" ]]; then
+    prev_mode="$(file_mode_octal "$dest")"
+  fi
   mv "$tmp" "$dest"
-  chmod 644 "$dest"
+  chmod "${prev_mode:-644}" "$dest"
   echo "write: $dest"
 }
 
@@ -8612,6 +8685,7 @@ fi
 
 if [[ "$UPGRADE" == "true" ]]; then
   upgrade_report_removed
+  upgrade_collect_leftover
   if [[ "$DRY_RUN" == "true" ]]; then
     echo "plan: $OUTPUT_DIR/$ORIGIN_REL_PATH (rewritten from the new version)"
     echo "[bootstrap] dry-run: no files were written"
@@ -8625,8 +8699,9 @@ fi
 # second-opinion-review.sh 等）が記録に載らない（実測）。
 write_origin_record
 
-if [[ "$UPGRADE" == "true" && "$UPGRADE_DCBNEW_COUNT" -gt 0 ]]; then
-  echo "[bootstrap] upgrade: ${UPGRADE_DCBNEW_COUNT} file(s) kept as edited; the new version is beside each as <path>.dcb-new" >&2
+if [[ "$UPGRADE" == "true" && -n "$UPGRADE_LEFTOVER" ]]; then
+  echo "[bootstrap] upgrade: 取り込み待ちの .dcb-new が残っています（手を入れたファイルの隣の新しい版、または以前の実行の残り）:" >&2
+  printf '  %s' "$UPGRADE_LEFTOVER" >&2
   echo "[bootstrap] completed (with .dcb-new)"
   exit 2
 fi

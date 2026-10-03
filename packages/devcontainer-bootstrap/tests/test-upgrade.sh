@@ -5,6 +5,14 @@
 # （install_playbook_rules の経路）への適用の検証は 3/3 で足す。
 
 set -uo pipefail
+
+# run-tests.sh を介さず直接実行されたときは、自前で一時領域を作って後で消す
+# （受け入れ条件は `bash tests/test-upgrade.sh` が 0 で終わること）。
+if [[ -z "${TEST_TMP_ROOT:-}" ]]; then
+  TEST_TMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/dcb-upgrade-test.XXXXXX")"
+  export TEST_TMP_ROOT
+  trap 'rm -rf "$TEST_TMP_ROOT"' EXIT
+fi
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 echo "test-upgrade"
@@ -186,5 +194,75 @@ if [[ "$rc" == "0" ]] && grep -q '# mine' "$o6/scripts/verify.sh" && [[ ! -e "$o
 it "--force は手を入れたファイルも上書きする"
 bash "$BOOTSTRAP" --project-name upg --languages node --base-image "$IMG" --output-dir "$o6" --force >/dev/null 2>&1
 if ! grep -q '# mine' "$o6/scripts/verify.sh"; then pass; else fail "上書きされていない"; fi
+
+# ── シンボリックリンク・ORIGIN のモード・残った .dcb-new ──────────────────────
+
+o7="$(new_workdir)/p"
+gen "$o7"
+outside="$(new_workdir)/outside"
+mkdir -p "$outside"
+
+it "生成先がシンボリックリンクなら、たどって書かず、手を入れた扱いで .dcb-new を置く"
+echo "target" > "$outside/target.txt"
+rm -f "$o7/scripts/verify.sh"
+ln -s "$outside/target.txt" "$o7/scripts/verify.sh"
+upgrade "$o7"
+if [[ "$UP_RC" == "2" && "$(cat "$outside/target.txt")" == "target" && -L "$o7/scripts/verify.sh" \
+  && -f "$o7/scripts/verify.sh.dcb-new" && ! -L "$o7/scripts/verify.sh.dcb-new" ]] \
+  && printf '%s' "$UP_OUT" | grep -q 'keep (symlink'; then pass; else fail "rc=$UP_RC target=$(cat "$outside/target.txt")"; fi
+
+it "切れたシンボリックリンクの生成先でも、リンク先を作らない"
+rm -f "$o7/scripts/verify.sh" "$o7/scripts/verify.sh.dcb-new"
+ln -s "$outside/missing.txt" "$o7/scripts/verify.sh"
+upgrade "$o7"
+if [[ ! -e "$outside/missing.txt" && -f "$o7/scripts/verify.sh.dcb-new" ]]; then pass; else fail "リンク先が作られた、または .dcb-new が無い"; fi
+
+it ".dcb-new がシンボリックリンクなら、たどらず消して通常ファイルとして作る"
+rm -f "$o7/scripts/verify.sh" "$o7/scripts/verify.sh.dcb-new"
+cp "$o7/scripts/check-no-secrets.sh" "$o7/scripts/verify.sh"
+echo "keep" > "$outside/dcbnew-target.txt"
+ln -s "$outside/dcbnew-target.txt" "$o7/scripts/verify.sh.dcb-new"
+upgrade "$o7"
+if [[ "$(cat "$outside/dcbnew-target.txt")" == "keep" && -f "$o7/scripts/verify.sh.dcb-new" && ! -L "$o7/scripts/verify.sh.dcb-new" ]]; then pass; else fail "リンク先が書き換わった、または通常ファイルでない"; fi
+
+it "親ディレクトリが出力先の外を指すシンボリックリンクなら、書かずに止まる（exit 1）"
+o8="$(new_workdir)/p"
+gen "$o8"
+mkdir -p "$outside/scripts-copy"
+echo "orig" > "$outside/scripts-copy/verify.sh"
+rm -rf "$o8/scripts"
+ln -s "$outside/scripts-copy" "$o8/scripts"
+upgrade "$o8"
+if [[ "$UP_RC" == "1" && "$(cat "$outside/scripts-copy/verify.sh")" == "orig" && "$(ls "$outside/scripts-copy")" == "verify.sh" ]]; then pass; else fail "rc=$UP_RC / 出力先の外: $(ls "$outside/scripts-copy")"; fi
+
+it "--upgrade は既存の ORIGIN のモードを保つ（600 のまま）"
+o9="$(new_workdir)/p"
+gen "$o9"
+chmod 600 "$o9$ORIGIN_REL"
+upgrade "$o9"
+assert_eq "$(mode_of "$o9$ORIGIN_REL")" "600" "ORIGIN のモード"
+
+it "ORIGIN が無いところへ --upgrade で作るときは 644"
+rm -f "$o9$ORIGIN_REL"
+upgrade "$o9" --project-name upg --languages node --base-image "$IMG"
+assert_eq "$(mode_of "$o9$ORIGIN_REL")" "644" "ORIGIN のモード"
+
+it "生成対象から外れたファイルに以前の .dcb-new が残っていると、終了コード 2 で一覧を出す"
+o10="$(new_workdir)/p"
+gen "$o10"
+echo "hash:legacy/old-file.txt=0000" >> "$o10$ORIGIN_REL"
+mkdir -p "$o10/legacy"
+echo x > "$o10/legacy/old-file.txt"
+echo y > "$o10/legacy/old-file.txt.dcb-new"
+upgrade "$o10"
+if [[ "$UP_RC" == "2" ]] && printf '%s' "$UP_OUT" | grep -q 'legacy/old-file.txt.dcb-new'; then pass; else fail "rc=$UP_RC"; fi
+
+it "従来の経路（--upgrade なし）の --force は ORIGIN を 644 にし、終了コードは 0"
+o11="$(new_workdir)/p"
+gen "$o11"
+chmod 600 "$o11$ORIGIN_REL"
+bash "$BOOTSTRAP" --project-name upg --languages node --base-image "$IMG" --output-dir "$o11" --force >/dev/null 2>&1
+rc=$?
+if [[ "$rc" == "0" && "$(mode_of "$o11$ORIGIN_REL")" == "644" ]]; then pass; else fail "rc=$rc mode=$(mode_of "$o11$ORIGIN_REL")"; fi
 
 exit_with_result
