@@ -473,6 +473,48 @@ list_after="$(ledger s-b "$repo" list --others)"
 if [[ "$rc_end" -eq 0 && -z "$out_end" && "$d1" == "none" && "$d2" == "none" && -z "$list_after" ]]; then pass; else fail "rc=$rc_end out=$out_end git=$d1 merge=$d2 list=$list_after"; fi
 reset_ledger
 
+# ── 作業ツリーの別表記（正規化）──────────────────────────────────────────────
+
+it "同じ作業ツリーの別表記（symlink 経由の cd・-C の ./ と末尾 /・..）でも、相手の git の登録と一致して拒否される"
+ln -s "$repo" "$(dirname "$repo")/repo-link"
+pre_bash s-a "$repo" 'git rebase main'
+pre_bash s-b "$wt2" "cd $(dirname "$repo")/repo-link && git reset --hard"
+n1="$(decision)"
+pre_bash s-b "$wt2" "git -C $repo/./ checkout main"
+n2="$(decision)"
+pre_bash s-b "$wt2" "git -C $repo/../repo/ fetch"
+n3="$(decision)"
+if [[ "$n1" == "deny" && "$n2" == "deny" && "$n3" == "deny" ]]; then pass; else fail "symlink=$n1 ./=$n2 ..=$n3"; fi
+post_bash s-a "$repo" 'git rebase main'
+reset_ledger
+
+# ── 解放の失敗 ───────────────────────────────────────────────────────────────
+
+it "SessionEnd で解放の行を書けなかったときは、通したうえで、登録が残ったことを systemMessage で知らせる"
+mkdir -p "$DIR"
+ledger s-rel "$repo" claim issue 901 >/dev/null
+rm -f "$DIR/s-rel.tsv"
+mkdir "$DIR/s-rel.tsv"
+hook_raw s-rel "$(pl_event SessionEnd "$repo")"
+rel_rc="$HRC"
+rel_msg="$(sysmsg)"
+rmdir "$DIR/s-rel.tsv"
+if [[ "$rel_rc" -eq 0 && "$rel_msg" == *"登録は残っています"* ]]; then pass; else fail "rc=$rel_rc out=$HOUT"; fi
+
+it "PostToolUse で解放できなかったときも、拒否せず、systemMessage で知らせる"
+pre_bash s-rel "$repo" 'gh pr merge 5'
+rm -f "$DIR/s-rel.tsv.bak"
+cp "$DIR/s-rel.tsv" "$DIR/s-rel.bak"
+rm -f "$DIR/s-rel.tsv"
+mkdir "$DIR/s-rel.tsv"
+post_bash s-rel "$repo" 'gh pr merge 5'
+rel_rc="$HRC"
+rel_msg="$(sysmsg)"
+rel_dec="$(decision)"
+rmdir "$DIR/s-rel.tsv"
+if [[ "$rel_rc" -eq 0 && "$rel_dec" == "none" && "$rel_msg" == *"登録は残っています"* ]]; then pass; else fail "rc=$rel_rc out=$HOUT"; fi
+reset_ledger
+
 # ── 更新（長いセッションの失効を避ける）──────────────────────────────────────
 
 it "PreToolUse のたびに、自分の登録の更新時刻を新しくする（一定時間たっていれば）"

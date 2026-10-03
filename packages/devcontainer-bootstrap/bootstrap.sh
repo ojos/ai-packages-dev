@@ -7579,6 +7579,13 @@ run_ledger() {
     rc=$?
   fi
   [[ -z "$err" ]] || add_warn "$err"
+  # 解放の行を書けなかったとき、台帳は終了コード 0 で「release-failed: …（登録は残っています）」
+  # を出す。実行は止めないが、登録が残ったことを利用者へ知らせる（systemMessage）。
+  case "$LEDGER_OUT" in
+    *release-failed*)
+      add_warn "[session-coord] 登録を解放できませんでした。登録は残っています（持ち主が消える、または一定時間更新が無いと失効します）。"
+      ;;
+  esac
   LEDGER_VERDICT="${LEDGER_OUT%%$'\n'*}"
   case "$LEDGER_VERDICT" in
     LEDGER_OK | LEDGER_WARN | LEDGER_DENY | LEDGER_SKIP) ;;
