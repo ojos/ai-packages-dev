@@ -66,6 +66,7 @@ for rel in \
   .claude/agents/implementer.md \
   .github/project-ai-rules.md \
   CLAUDE.md \
+  AGENTS.md \
   .github/copilot-instructions.md; do
   grep -qF -- "hash:$rel=" "$pb_origin" || missing="$missing $rel"
 done

@@ -68,6 +68,21 @@ if diff -q "$out/CLAUDE.md" "$TPL/entry.md" >/dev/null 2>&1; then pass; else fai
 it "copilot-instructions.md は雛形と完全一致する"
 if diff -q "$out/.github/copilot-instructions.md" "$TPL/entry.md" >/dev/null 2>&1; then pass; else fail "雛形と一致しない"; fi
 
+it "AGENTS.md は雛形と完全一致する"
+if diff -q "$out/AGENTS.md" "$TPL/entry.md" >/dev/null 2>&1; then pass; else fail "雛形と一致しない"; fi
+
+it "規範を置かない生成（--without-playbook）では AGENTS.md を作らない"
+nopb="$(new_workdir)/p"
+run_bootstrap "$nopb" --without-playbook >/dev/null 2>&1
+if [[ ! -e "$nopb/AGENTS.md" ]]; then pass; else fail "AGENTS.md ができている"; fi
+
+it "既存の AGENTS.md は --playbook-conflict-policy skip で温存される"
+keep="$(new_workdir)/p"
+mkdir -p "$keep"
+printf 'mine\n' > "$keep/AGENTS.md"
+run_bootstrap "$keep" --with-playbook --playbook-conflict-policy skip >/dev/null 2>&1
+if [[ "$(cat "$keep/AGENTS.md")" == "mine" ]]; then pass; else fail "既存の AGENTS.md が上書きされた"; fi
+
 it "project-ai-rules.md は雛形と完全一致する"
 if diff -q "$out/.github/project-ai-rules.md" "$TPL/project-ai-rules.md" >/dev/null 2>&1; then pass; else fail "雛形と一致しない"; fi
 

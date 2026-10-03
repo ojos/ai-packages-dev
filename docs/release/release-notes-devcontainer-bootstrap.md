@@ -6,6 +6,15 @@
 >
 > 同じ理由で、issue 参照は `ojos/ai-packages-dev#NNN` の形で書いてください。裸の `#NNN` は GitHub のオートリンクが**配布先リポジトリの issue** として解決するため、配布後は存在しない issue や無関係な issue を指します。
 
+## 未リリース
+
+### Summary
+- **規範を置くとき、入口ファイルに `AGENTS.md` を加えた**（ojos/ai-packages-dev#397）。Codex など `AGENTS.md` を読む実行環境が、規範の入口から 3 層構造へたどれる。`CLAUDE.md` / `.github/copilot-instructions.md` と同じ雛形（`templates/entry.md`）の写しで、既存の `AGENTS.md` は `--playbook-conflict-policy` に従う。`--without-playbook` など規範を置かない生成では作らない。由来記録（`.devcontainer/ORIGIN`）のハッシュの記録の対象にも含まれる。
+- README に、実行環境ごとの対応範囲の表を足した。機構（スキル・委譲先エージェント・フック）は Claude Code 向けだけで、この方針は変わらない。
+
+### 移行
+- 規範を置いて再生成すると、リポジトリ直下に `AGENTS.md` が増える。既に独自の `AGENTS.md` がある場合は、既定ポリシー（`skip`）で温存される。
+
 ## v0.14.0
 
 ### Summary
