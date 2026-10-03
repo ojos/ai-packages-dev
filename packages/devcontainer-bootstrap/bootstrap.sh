@@ -7341,6 +7341,7 @@ cmd_release() {
 
 cmd_refresh() {
   local rows min
+  owner_unknown && return 0
   min="${SESSION_LEDGER_REFRESH_MIN:-300}"
   case "$min" in '' | *[!0-9]*) min=300 ;; esac
   ensure_dir || return 0

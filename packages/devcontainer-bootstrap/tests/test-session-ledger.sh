@@ -463,6 +463,12 @@ OUT="$(cd "$repo" && SESSION_LEDGER_PID="$PID_A" bash "$LEDGER" claim issue 780 
 assert_contains "$OUT" "session=pid-$PID_A-$key_a" "出力"
 OUT="$(cd "$repo" && SESSION_LEDGER_PID="$PID_A" bash "$LEDGER" release 2>&1)"
 
+it "refresh: 持ち主を特定できないときは、台帳に書かず警告して通す"
+lines_before="$(cat "$DIR"/*.tsv | grep -c .)"
+# shellcheck disable=SC1090,SC2034  # 生成物を読み込み、SELF_ID は読み込んだ関数が使う
+OUT="$(cd "$repo" && . "$LEDGER" && SELF_ID="" && SESSION_LEDGER_REFRESH_MIN=0 && { cmd_refresh; echo "rc=$?"; } 2>&1)"
+if [[ "$OUT" == *WARN* && "$OUT" == *"rc=0"* && "$(cat "$DIR"/*.tsv | grep -c .)" -eq "$lines_before" ]]; then pass; else fail "出力: $OUT"; fi
+
 it "不明な種類と不明なサブコマンドは使い方の誤り（終了コード 2）"
 run s-a "$repo" claim nothing
 rc1="$RC"

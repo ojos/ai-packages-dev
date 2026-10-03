@@ -127,8 +127,8 @@ BOOTSTRAP="$REPO_ROOT/packages/devcontainer-bootstrap/bootstrap.sh"
 #   マージ・git 操作・ゲートの起動とみなすか、拒否と警告の返し方）は生成条件に依らず
 #   全構成で同一であり、置換プレースホルダを 1 つも持たない。台帳（session-ledger.sh）
 #   と対で配られるため、片方だけ直すと拒否の出力を読めなくなる。
-#   なお、この開発リポジトリの .claude/settings.json への配線は、追跡している設定の
-#   書き換えにあたるため利用者の確認を経て別に行う（写しだけを先に置く）。
+#   この開発リポジトリも .claude/settings.json で同じ配線を持つ（雛形との一致は
+#   tests/test-claude-mirror.sh が検査する）。
 MIRRORED_RELS='scripts/check-control-chars.sh
 scripts/check-doc-links.sh
 scripts/check-no-secrets.sh

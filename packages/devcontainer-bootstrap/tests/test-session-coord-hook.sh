@@ -26,6 +26,14 @@
 # セッションは SESSION_LEDGER_ID と SESSION_LEDGER_PID で模擬する。bash 3.2 互換。
 
 set -uo pipefail
+
+# run-tests.sh を介さず直接実行されたときは、自前で一時領域を作って後で消す。
+OWN_TMP_ROOT=""
+if [[ -z "${TEST_TMP_ROOT:-}" ]]; then
+  TEST_TMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/dcb-session-coord-test.XXXXXX")"
+  export TEST_TMP_ROOT
+  OWN_TMP_ROOT="$TEST_TMP_ROOT"
+fi
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 echo "test-session-coord-hook"
@@ -114,7 +122,10 @@ sleep 600 &
 PID_A=$!
 sleep 600 &
 PID_B=$!
-cleanup() { kill "$PID_A" "$PID_B" "${PID_C:-}" 2>/dev/null || true; }
+cleanup() {
+  kill "$PID_A" "$PID_B" "${PID_C:-}" 2>/dev/null || true
+  [[ -z "$OWN_TMP_ROOT" ]] || rm -rf "$OWN_TMP_ROOT"
+}
 trap cleanup EXIT
 
 pid_of() {
