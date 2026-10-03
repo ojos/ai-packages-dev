@@ -257,6 +257,29 @@ echo y > "$o10/legacy/old-file.txt.dcb-new"
 upgrade "$o10"
 if [[ "$UP_RC" == "2" ]] && printf '%s' "$UP_OUT" | grep -q 'legacy/old-file.txt.dcb-new'; then pass; else fail "rc=$UP_RC"; fi
 
+it "2 回目以降の --upgrade でも、生成対象から外れたファイルの .dcb-new を検出して 2 を返す"
+upgrade "$o10"
+if [[ "$UP_RC" == "2" ]] && printf '%s' "$UP_OUT" | grep -q 'legacy/old-file.txt.dcb-new'; then pass; else fail "rc=$UP_RC"; fi
+
+it "出力先がまだ無くても、引数を明示した --upgrade は生成して 0 で終わる"
+o12="$(new_workdir)/not-yet/p"
+upgrade "$o12" --project-name upg --languages node --base-image "$IMG"
+if [[ "$UP_RC" == "0" && -f "$o12$ORIGIN_REL" && -f "$o12/scripts/verify.sh" ]]; then pass; else fail "rc=$UP_RC"; fi
+
+it "出力先がまだ無いときの --upgrade --dry-run は何も作らない"
+o13="$(new_workdir)/not-yet/p"
+upgrade "$o13" --project-name upg --languages node --base-image "$IMG" --dry-run
+if [[ "$UP_RC" == "0" && ! -e "$o13" && ! -e "$(dirname "$o13")" ]] && printf '%s' "$UP_OUT" | grep -q "plan: create $o13/scripts/verify.sh"; then pass; else fail "rc=$UP_RC"; fi
+
+it "TMPDIR が書き込み不可でも、--upgrade --dry-run は計画を出して 0 で終わる（一時ファイルを作らない）"
+ro_tmp="$(new_workdir)/ro"
+mkdir -p "$ro_tmp"
+chmod 555 "$ro_tmp"
+UP_OUT="$(TMPDIR="$ro_tmp" bash "$BOOTSTRAP" --upgrade --dry-run --output-dir "$out" 2>&1)"
+UP_RC=$?
+chmod 755 "$ro_tmp"
+if [[ "$UP_RC" == "0" ]] && printf '%s' "$UP_OUT" | grep -q '^plan: '; then pass; else fail "rc=$UP_RC: $(printf '%s' "$UP_OUT" | tail -3)"; fi
+
 it "従来の経路（--upgrade なし）の --force は ORIGIN を 644 にし、終了コードは 0"
 o11="$(new_workdir)/p"
 gen "$o11"

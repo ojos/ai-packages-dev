@@ -8178,6 +8178,18 @@ install_playbook_rules() {
 write_playbook_version_file() {
   local dest="$OUTPUT_DIR/$PLAYBOOK_REL_ROOT/VERSION" tmp
   local ver="${PLAYBOOK_VERSION:-(unspecified)}"
+  if [[ "$UPGRADE" == "true" && "$DRY_RUN" == "true" ]]; then
+    # 何も書かない: 一時ファイルを作らず、中身をパイプでハッシュへ流す。
+    local h
+    h="$( {
+      echo "# devcontainer-bootstrap が記録した ai-playbook のソース情報。"
+      echo "# version は --playbook-version 指定時のタグ。未指定なら (unspecified)。"
+      echo "version=$ver"
+      echo "source=${PLAYBOOK_FROM:-<adjacent checkout>}"
+    } | dcb_file_sha256 /dev/stdin)"
+    upgrade_apply_file "$dest" "" "$h"
+    return 0
+  fi
   tmp="$(mktemp "${TMPDIR:-/tmp}/dcb-playbook-version.XXXXXX")"
   {
     echo "# devcontainer-bootstrap が記録した ai-playbook のソース情報。"
@@ -8213,6 +8225,9 @@ write_playbook_version_file() {
 # 近い祖先で判定する（mkdir -p はその先を作るだけで、祖先を越えない）。
 upgrade_parent_inside_output() {
   local d root real
+  # 出力先がまだ無ければ、その配下には書き込み先の親も存在せず、たどるリンクも無い
+  # （mkdir -p が出力先ごと新規に作る）。
+  [[ -d "$OUTPUT_DIR" ]] || return 0
   d="$(dirname "$1")"
   while [[ ! -d "$d" ]]; do d="$(dirname "$d")"; done
   real="$(cd -P "$d" 2>/dev/null && pwd -P)" || return 1
@@ -8233,7 +8248,13 @@ upgrade_apply_file() {
     echo "error: $dest の親ディレクトリが出力先の外を指しています（シンボリックリンク）。書き込まずに止めます。" >&2
     exit 1
   fi
-  newh="$(dcb_file_sha256 "$src")"
+  # 3 番目の引数は --dry-run 専用: 新しい版の中身をファイルにせず（一時ファイルも
+  # 書かない）、ハッシュだけを渡す。このとき src は空で、差分の要約は出せない。
+  if [[ $# -ge 3 ]]; then
+    newh="$3"
+  else
+    newh="$(dcb_file_sha256 "$src")"
+  fi
   UPGRADE_HASHES="${UPGRADE_HASHES}${rel}"$'\t'"${newh}"$'\n'
   rec="$(dcb_origin_get "$OUTPUT_DIR/$ORIGIN_REL_PATH" "hash:$rel" 2>/dev/null || true)"
 
@@ -8292,7 +8313,7 @@ upgrade_apply_file() {
     upgrade_place_dcbnew "$dest" "$src"
     echo "keep ($verb): $dest -> $dest.dcb-new"
   fi
-  if [[ -f "$dest" && ! -L "$dest" ]]; then upgrade_diff_summary "$dest" "$src"; fi
+  if [[ -n "$src" && -f "$dest" && ! -L "$dest" ]]; then upgrade_diff_summary "$dest" "$src"; fi
   return 0
 }
 
@@ -8339,20 +8360,13 @@ upgrade_report_removed() {
 # UPGRADE_LEFTOVER へ集める。生成対象から外れたファイルの古い .dcb-new も数える。
 # ORIGIN を書き直す前に呼ぶこと（旧 ORIGIN を読むため）。
 upgrade_collect_leftover() {
-  local origin="$OUTPUT_DIR/$ORIGIN_REL_PATH" rels rel old=""
-  if [[ -f "$origin" ]]; then
-    old="$(sed -n 's/^hash://p' "$origin" | sed 's/=[^=]*$//')"
-  fi
-  rels="$( { printf '%s\n' "$sorted_rels"; playbook_installed_rel_paths; playbook_rules_rel_paths; printf '%s\n' "$old"; } | sort -u)"
+  # 記録の一覧には頼らず、出力先の中を探す（ORIGIN を書き直すと、生成対象から外れた
+  # ファイルは記録から消えるため、2 回目以降の --upgrade で見失う）。
+  # リンクはたどらない。.git と node_modules は除く。
   UPGRADE_LEFTOVER=""
-  while IFS= read -r rel; do
-    [[ -n "$rel" ]] || continue
-    if [[ -e "$OUTPUT_DIR/$rel.dcb-new" || -L "$OUTPUT_DIR/$rel.dcb-new" ]]; then
-      UPGRADE_LEFTOVER="${UPGRADE_LEFTOVER}${OUTPUT_DIR}/${rel}.dcb-new"$'\n'
-    fi
-  done <<EOF
-$rels
-EOF
+  [[ -d "$OUTPUT_DIR" ]] || return 0
+  UPGRADE_LEFTOVER="$(find "$OUTPUT_DIR" \( -name .git -o -name node_modules \) -prune -o -name '*.dcb-new' -print | sort)"
+  [[ -z "$UPGRADE_LEFTOVER" ]] || UPGRADE_LEFTOVER="${UPGRADE_LEFTOVER}"$'\n'
 }
 
 # upgrade 中は、新しい版を書いたあとの chmod +x を既存ファイルへ掛けない
@@ -8365,6 +8379,17 @@ dcb_chmod_exec() {
 write_file() {
   local rel="$1" content="$2" out tmp tmp2
   out="$OUTPUT_DIR/$rel"
+  if [[ "$UPGRADE" == "true" && "$DRY_RUN" == "true" ]]; then
+    # 何も書かない: 一時ファイルを作らず、中身をパイプでハッシュへ流して判定する。
+    local h
+    if [[ "$out" == *.json ]]; then
+      h="$(render_content "$content" | perl -0777 -pe 's/,\s*([}\]])/$1/g' | jq . | dcb_file_sha256 /dev/stdin)"
+    else
+      h="$(render_content "$content" | dcb_file_sha256 /dev/stdin)"
+    fi
+    upgrade_apply_file "$out" "" "$h"
+    return 0
+  fi
   if [[ "$UPGRADE" == "true" ]]; then
     tmp="$(mktemp "${TMPDIR:-/tmp}/dcb-render.XXXXXX")"
     render_content "$content" > "$tmp"
