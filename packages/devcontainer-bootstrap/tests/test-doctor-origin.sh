@@ -330,4 +330,74 @@ bash "$DOCTOR" --target-dir "$out" --strict >/dev/null 2>&1
 code=$?
 assert_eq "$code" "2" "strict 終了コード"
 
+# ── flags= の必須化・input: の重複・*.dcb-new の報告（#396 の 3/3） ───────────
+
+it "新しい形式（inputs-format=1）で flags= の行が消えていれば malformed（FAIL）"
+out="$(base_out)"
+mutate_origin "$out" "flags=" ""
+output="$(bash "$DOCTOR" --target-dir "$out" 2>&1)"; code=$?
+if [[ $code -ne 0 ]] && printf '%s' "$output" | grep -q '\[FAIL\] origin record malformed.*flags='; then pass; else fail "終了コード=$code
+$output"; fi
+
+it "flags= が空の値でも、行があれば通る（対照群）"
+out="$(base_out)"
+output="$(bash "$DOCTOR" --target-dir "$out" 2>&1)"; code=$?
+if grep -q '^flags=$' "$out$ORIGIN_REL" && [[ $code -eq 0 ]] && ! printf '%s' "$output" | grep -q 'origin record malformed'; then pass; else fail "終了コード=$code
+$output"; fi
+
+it "古い形式（inputs-format 無し）では flags= が無くても通る（後方互換）"
+out="$(base_out)"
+mutate_origin "$out" "flags=" ""
+grep -v '^inputs-format=\|^input:' "$out$ORIGIN_REL" > "$out$ORIGIN_REL.tmp"; mv "$out$ORIGIN_REL.tmp" "$out$ORIGIN_REL"
+output="$(bash "$DOCTOR" --target-dir "$out" 2>&1)"; code=$?
+if [[ $code -eq 0 ]] && ! printf '%s' "$output" | grep -q 'origin record malformed'; then pass; else fail "終了コード=$code
+$output"; fi
+
+it "同じ input: のキーが重複していれば malformed（FAIL）"
+out="$(base_out)"
+printf 'input:project-name=other\n' >> "$out$ORIGIN_REL"
+output="$(bash "$DOCTOR" --target-dir "$out" 2>&1)"; code=$?
+if [[ $code -ne 0 ]] && printf '%s' "$output" | grep -q '\[FAIL\] origin record malformed.*重複.*input:project-name'; then pass; else fail "終了コード=$code
+$output"; fi
+
+it "残っている *.dcb-new を WARN で一覧し、取り込み方を出す"
+out="$(base_out)"
+echo new > "$out/scripts/verify.sh.dcb-new"
+mkdir -p "$out/.git" "$out/node_modules/x"
+echo ignored > "$out/.git/a.dcb-new"
+echo ignored > "$out/node_modules/x/b.dcb-new"
+output="$(bash "$DOCTOR" --target-dir "$out" 2>&1)"; code=$?
+if [[ $code -eq 0 ]] && printf '%s' "$output" | grep -q '\[WARN\] .*\.dcb-new' \
+  && printf '%s' "$output" | grep -q 'scripts/verify.sh.dcb-new' \
+  && printf '%s' "$output" | grep -q '手で混ぜて' \
+  && ! printf '%s' "$output" | grep -q 'a.dcb-new\|b.dcb-new'; then pass; else fail "終了コード=$code
+$output"; fi
+
+it "*.dcb-new が無ければ WARN を出さない（対照群）"
+out="$(base_out)"
+output="$(bash "$DOCTOR" --target-dir "$out" 2>&1)"
+if printf '%s' "$output" | grep -q 'dcb-new が残'; then fail "$output"; else pass; fi
+
+it "*.dcb-new の WARN は --strict で非 0 終了になる"
+out="$(base_out)"
+echo new > "$out/scripts/verify.sh.dcb-new"
+bash "$DOCTOR" --target-dir "$out" --strict >/dev/null 2>&1
+assert_eq "$?" "2" "strict 終了コード"
+
+it "読めないディレクトリがあっても、doctor は最後まで走り、探索の失敗を WARN で出す（OK と言わない）"
+if [[ "$(id -u)" == "0" ]]; then
+  echo "  skip (root では chmod が効かない)"
+  pass
+else
+  out="$(base_out)"
+  mkdir -p "$out/locked/inner"
+  chmod 000 "$out/locked"
+  output="$(bash "$DOCTOR" --target-dir "$out" 2>&1)"; code=$?
+  chmod 755 "$out/locked"
+  if [[ $code -eq 0 ]] && printf '%s' "$output" | grep -q '\[WARN\] \*\.dcb-new を一部探索できませんでした' \
+    && printf '%s' "$output" | grep -q 'Summary:' \
+    && ! printf '%s' "$output" | grep -q 'no \*\.dcb-new left behind'; then pass; else fail "終了コード=$code
+$output"; fi
+fi
+
 exit_with_result
