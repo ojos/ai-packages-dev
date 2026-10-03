@@ -95,6 +95,121 @@ dcb_version_lt() {
   return 1
 }
 
+# ORIGIN の書式を検査する（行の文法と、入力の記録 input: 行）。壊れていれば ng を出して
+# 1 を返す。入力の記録が無い古い ORIGIN（inputs-format 行が無い）は、行の文法だけを
+# 見て通す（後方互換。診断は version= とハッシュで従来どおり成立する）。
+#
+# 行の文法: 空行・# 行のほかは version= / flags= / inputs-format= / input:<名前>= /
+# hash:<パス>=<sha256 の 64 桁> のどれかであること。読み飛ばして黙って通さない。
+check_origin_format() {
+  local origin_file="$1" line bad="" v val mode playbook source lang l_rest
+  # 最終行が改行で終わっていなくても検査する。
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ -n "$line" ]] || continue
+    case "$line" in
+      '#'*) ;;
+      version=*|flags=*|inputs-format=*) ;;
+      input:project-name=*|input:languages=*|input:base-image-mode=*|input:base-image=*|input:manage-gitignore=*|input:gitignore-targets=*|input:playbook=*|input:playbook-source=*|input:playbook-ref=*) ;;
+      input:*) bad="$bad [認識できない入力の行: ${line%%=*}]" ;;
+      hash:?*=*)
+        # sha256 に = は入らないが、パスには入りうる。最後の = で区切る。
+        val="${line##*=}"
+        if ! [[ "$val" =~ ^[0-9a-f]{64}$ ]] || [[ -z "${line#hash:}" || "${line#hash:}" == "=$val" ]]; then bad="$bad [hash の行が不正: ${line%=*}]"; fi
+        ;;
+      *) bad="$bad [認識できない行: $line]" ;;
+    esac
+    # 値の中の % は %25 / %0A / %0D だけを許す（書き手の符号化と対）。
+    case "$line" in
+      input:*=*)
+        v="${line#*=}"
+        v="${v//%25/}"
+        v="${v//%0A/}"
+        v="${v//%0D/}"
+        if [[ "$v" == *%* ]]; then bad="$bad [不正な % の並び: ${line%%=*}]"; fi
+        ;;
+    esac
+  done < "$origin_file"
+
+  # input: の行があるのに inputs-format が無い記録は、旧形式ではなく壊れた新形式。
+  if awk '/^input:/ { f = 1 } END { exit !f }' "$origin_file" \
+    && ! awk '/^inputs-format=/ { f = 1 } END { exit !f }' "$origin_file"; then
+    bad="$bad [input: の行があるのに inputs-format= の行が無い]"
+  fi
+
+  if awk '/^inputs-format=/ { f = 1 } END { exit !f }' "$origin_file"; then
+    if [[ "$(origin_get "$origin_file" inputs-format)" != "1" ]]; then
+      warn "origin inputs-format is not 1 ($ORIGIN_REL_PATH): この doctor.sh が知らない書式の入力記録なので、入力の検査を省きます（取得し直した最新の doctor.sh を使ってください）"
+    else
+      v="$(origin_get "$origin_file" input:project-name)" || v=""
+      [[ -n "$v" ]] || bad="$bad [input:project-name が無い、または空]"
+      v="$(origin_get "$origin_file" input:languages)" || v=""
+      if [[ -z "$v" ]]; then
+        bad="$bad [input:languages が無い、または空]"
+      else
+        l_rest="$v,"
+        while [[ -n "$l_rest" ]]; do
+          lang="${l_rest%%,*}"
+          l_rest="${l_rest#*,}"
+          case "$lang" in
+            node|go|python|php|rust|ruby) ;;
+            *) bad="$bad [input:languages に未対応または空の値: '$lang']" ;;
+          esac
+        done
+      fi
+      mode="$(origin_get "$origin_file" input:base-image-mode)" || mode=""
+      case "$mode" in
+        auto)
+          # bootstrap.sh は auto でも観測記録として必ず書く。
+          origin_get "$origin_file" input:base-image >/dev/null || bad="$bad [input:base-image が無い]"
+          ;;
+        override)
+          v="$(origin_get "$origin_file" input:base-image)" || v=""
+          [[ -n "$v" ]] || bad="$bad [input:base-image-mode=override なのに input:base-image が無い、または空]"
+          ;;
+        *) bad="$bad [input:base-image-mode が auto / override ではない]" ;;
+      esac
+      v="$(origin_get "$origin_file" input:manage-gitignore)" || v=""
+      case "$v" in true|false) ;; *) bad="$bad [input:manage-gitignore が true / false ではない]" ;; esac
+      origin_get "$origin_file" input:gitignore-targets >/dev/null || bad="$bad [input:gitignore-targets が無い]"
+      playbook="$(origin_get "$origin_file" input:playbook)" || playbook=""
+      case "$playbook" in
+        none) ;;
+        installed)
+          source="$(origin_get "$origin_file" input:playbook-source)" || source=""
+          case "$source" in
+            tag|url)
+              # 記録しない場合（資格情報を含みうる URL）がある url は ref 無しを許す。tag は必須。
+              if [[ "$source" == "tag" ]]; then
+                v="$(origin_get "$origin_file" input:playbook-ref)" || v=""
+                [[ -n "$v" ]] || bad="$bad [input:playbook-source=tag なのに input:playbook-ref が無い、または空]"
+              fi
+              ;;
+            local|adjacent) ;;
+            *) bad="$bad [input:playbook-source が tag / url / local / adjacent ではない]" ;;
+          esac
+          ;;
+        *) bad="$bad [input:playbook が installed / none ではない]" ;;
+      esac
+    fi
+  fi
+
+  if [[ -n "$bad" ]]; then
+    ng "origin record malformed ($ORIGIN_REL_PATH):$bad。乖離を診断できません"
+    return 1
+  fi
+  return 0
+}
+
+# ORIGIN から key の値を復号して出す。無ければ 1 を返す（空の値は 0 で空を出す）。
+origin_get() {
+  local file="$1" key="$2" raw v pct='%' nl=$'\n' cr=$'\r'
+  raw="$(awk -v k="$key=" 'index($0, k) == 1 { print substr($0, length(k) + 1); found = 1; exit } END { exit !found }' "$file")" || return 1
+  v="${raw//%0A/$nl}"
+  v="${v//%0D/$cr}"
+  v="${v//%25/$pct}"
+  printf '%s' "$v"
+}
+
 # 生成物の由来（.devcontainer/ORIGIN）を診断する。ネットワークは
 # 使わない。上流の更新有無は doctor.sh 自身に埋め込んだ DCB_VERSION とだけ比べる
 # （このファイル冒頭のコメント参照）。
@@ -138,12 +253,14 @@ check_origin_record() {
     ok "origin version matches or is newer than doctor.sh: recorded=$origin_version self=$DCB_VERSION"
   fi
 
+  check_origin_format "$origin_file" || return 0
+
   local hash_count=0 unchanged_count=0 changed="" missing="" line rel recorded_hash actual_hash
   while IFS= read -r line; do
     [[ -n "$line" ]] || continue
     rel="${line#hash:}"
-    rel="${rel%%=*}"
-    recorded_hash="${line#*=}"
+    rel="${rel%=*}"
+    recorded_hash="${line##*=}"
     [[ -n "$rel" && -n "$recorded_hash" ]] || continue
     hash_count=$((hash_count + 1))
     if [[ ! -f "$TARGET_DIR/$rel" ]]; then

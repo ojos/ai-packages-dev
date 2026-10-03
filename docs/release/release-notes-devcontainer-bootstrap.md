@@ -11,6 +11,11 @@
 ### Summary
 - **規範を置くとき、入口ファイルに `AGENTS.md` を加えた**（ojos/ai-packages-dev#397）。Codex など `AGENTS.md` を読む実行環境が、規範の入口から 3 層構造へたどれる。`CLAUDE.md` / `.github/copilot-instructions.md` と同じ雛形（`templates/entry.md`）の写しで、既存の `AGENTS.md` は `--playbook-conflict-policy` に従う。`--without-playbook` など規範を置かない生成では作らない。由来記録（`.devcontainer/ORIGIN`）のハッシュの記録の対象にも含まれる。
 - README に、実行環境ごとの対応範囲の表を足した。機構（スキル・委譲先エージェント・フック）は Claude Code 向けだけで、この方針は変わらない。
+- **`.devcontainer/ORIGIN` に、生成結果を左右する入力と、`.ai-playbook/**` のハッシュを記録するようにした**（ojos/ai-packages-dev#396 の第一段階。`bootstrap.sh --upgrade` の下ごしらえで、この段階では `--upgrade` はまだ無い）。既存の行（`version=` / `flags=` / `hash:<path>=`）は変えず、`inputs-format=1` と `input:<名前>=<値>` の行を足す。記録する入力は `--project-name` / `--languages` / `--base-image` を指定したか（指定しなければ `auto`）と、その値 / `--no-gitignore`・`--gitignore-targets` / 規範を置いたか・取得元の種類（`tag` / `url` / `local` / `adjacent`）。値の中の改行・`%` だけを `%0A` / `%0D` / `%25` へ置き換えるので、カンマ・空白・`=` を含む値も読み戻せる。
+- **ローカルのパスは ORIGIN へ書かない**（ORIGIN からは利用側リポジトリへ絶対パスが残らない。`.ai-playbook/VERSION` の `source=` には従来どおりローカルのパスが残る）。`--playbook-from` が URL のときだけ値を残すが、`@` `?` `#` を含む URL（資格情報や署名を含みうる）は書かない。`--playbook-conflict-policy` / `--force` / `--output-dir` は生成結果を決める入力ではないので記録しない。
+- **規範経由で置く `.ai-playbook/**`（規範本体の `.md` と `VERSION`）のハッシュも記録対象に加えた。** `doctor.sh` は、これらを変えた・消したときも `changed` / `missing` として報告する。
+- **`doctor.sh` が ORIGIN の書式を検査する。** 認識できない行・不正な値・入力の必須の行の欠落は FAIL にする。入力の行が無い古い ORIGIN は、今までどおり読める。
+- 既存フラグの挙動は変わらない。**既存の生成先に規範が入っていて `.ai-playbook/**` を温存した再実行では、ORIGIN を作らない**（温存したファイルの由来を保証できないという従来の規則が、`.ai-playbook/**` にも及ぶ）。
 
 ### 移行
 - 規範を置いて再生成すると、リポジトリ直下に `AGENTS.md` が増える。既に独自の `AGENTS.md` がある場合は、既定ポリシー（`skip`）で温存される。

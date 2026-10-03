@@ -33,9 +33,9 @@ recorded="$(sed -n 's|^hash:scripts/verify\.sh=||p' "$origin")"
 actual="$(dcb_file_sha256_for_test "$out/scripts/verify.sh")"
 assert_eq "$recorded" "$actual" "scripts/verify.sh のハッシュ"
 
-it "記録は .ai-playbook/** のハッシュを持たない（あちらは VERSION が別に担う）"
+it "規範を配置しない構成では .ai-playbook/** のハッシュを持たない"
 if grep -q '^hash:\.ai-playbook/' "$origin"; then
-  fail ".ai-playbook 配下がハッシュ対象に含まれている"
+  fail "規範を配置していないのに .ai-playbook 配下がハッシュ対象に含まれている"
 else
   pass
 fi
@@ -201,6 +201,155 @@ else
   fail "想定外の出力:
 $output_retro"
 fi
+
+# ── 規範経由の .ai-playbook/** も記録対象に入る（#396 の 1/3） ────────────────
+
+it "記録は .ai-playbook/** の規範本体と VERSION のハッシュも持ち、実ハッシュと一致する"
+pbk="$(new_workdir)/p"
+run_bootstrap "$pbk" --playbook-from "$PLAYBOOK_SRC" >/dev/null 2>&1
+pbk_origin="$pbk$ORIGIN_REL"
+bad=""
+count=0
+for f in $(cd "$pbk" && find .ai-playbook -type f | sed 's|^\./||' | sort); do
+  count=$((count + 1))
+  rec="$(sed -n "s|^hash:$f=||p" "$pbk_origin")"
+  act="$(dcb_file_sha256_for_test "$pbk/$f")"
+  [[ -n "$rec" && "$rec" == "$act" ]] || bad="$bad $f"
+done
+if [[ -z "$bad" && "$count" -gt 1 ]] && grep -q '^hash:\.ai-playbook/VERSION=' "$pbk_origin"; then
+  pass
+else
+  fail "記録が無い、または実ハッシュと不一致:$bad（件数=$count）"
+fi
+
+# ── 入力の記録と読み戻し ──────────────────────────────────────────────────────
+
+# 読み戻し関数（dcb_origin_* と dcb_origin_load_inputs）は bootstrap.sh 自身が持つ。
+# bootstrap.sh は source すると本体が走るため、マーカーで囲んだ純粋な関数群だけを
+# 切り出して読み込む（--upgrade がこれを使う）。
+io_src="$(new_workdir)/origin-io.sh"
+sed -n '/^# >>> dcb-origin-io/,/^# <<< dcb-origin-io/p' "$BOOTSTRAP" > "$io_src"
+# shellcheck disable=SC1090
+. "$io_src"
+
+it "入力の行を持つ（inputs-format / project-name / languages / base-image / gitignore / playbook）"
+in_out="$(new_workdir)/p"
+bash "$BOOTSTRAP" --project-name "my app=1,x%y" --languages node,go --with-claude --with-aws \
+  --base-image "mcr.microsoft.com/devcontainers/base:noble" --gitignore-targets "Node,Go" \
+  --output-dir "$in_out" >/dev/null 2>&1
+in_origin="$in_out$ORIGIN_REL"
+miss=""
+for k in inputs-format= input:project-name= input:languages= input:base-image-mode= input:base-image= \
+  input:manage-gitignore= input:gitignore-targets= input:playbook=; do
+  grep -q "^$k" "$in_origin" || miss="$miss $k"
+done
+if [[ -z "$miss" ]]; then pass; else fail "欠けている行:$miss"; fi
+
+it "既存の行（version= / flags= / hash:）の書式は変わらない"
+if grep -qE '^version=v[0-9]+\.[0-9]+\.[0-9]+$' "$in_origin" \
+  && [[ "$(sed -n 's/^flags=//p' "$in_origin")" == "aws,claude" ]] \
+  && grep -qE '^hash:scripts/verify\.sh=[0-9a-f]{64}$' "$in_origin"; then
+  pass
+else
+  fail "既存の行が変わっている"
+fi
+
+it "書いた入力を読み戻すと同じになる（= , 空白 % を含む値でも）"
+if dcb_origin_load_inputs "$in_origin" \
+  && [[ "$ORIGIN_IN_PROJECT_NAME" == "my app=1,x%y" \
+     && "$ORIGIN_IN_LANGUAGES" == "node,go" \
+     && "$ORIGIN_IN_FLAGS" == "aws,claude" \
+     && "$ORIGIN_IN_BASE_IMAGE_MODE" == "override" \
+     && "$ORIGIN_IN_BASE_IMAGE" == "mcr.microsoft.com/devcontainers/base:noble" \
+     && "$ORIGIN_IN_MANAGE_GITIGNORE" == "true" \
+     && "$ORIGIN_IN_GITIGNORE_TARGETS" == "Node,Go" \
+     && "$ORIGIN_IN_PLAYBOOK" == "none" ]]; then
+  pass
+else
+  fail "読み戻した値が違う: name=[$ORIGIN_IN_PROJECT_NAME] langs=[$ORIGIN_IN_LANGUAGES] flags=[$ORIGIN_IN_FLAGS] mode=[$ORIGIN_IN_BASE_IMAGE_MODE] image=[$ORIGIN_IN_BASE_IMAGE] gi=[$ORIGIN_IN_MANAGE_GITIGNORE/$ORIGIN_IN_GITIGNORE_TARGETS] pb=[$ORIGIN_IN_PLAYBOOK]"
+fi
+
+it "符号化: 改行・復帰・% を含む値も 1 行で書き、そのまま復元できる"
+weird="$(printf 'a=b,c d%%25\nx\ry ')"
+line="$(dcb_origin_line input:x "$weird")"
+tmp_io="$(new_workdir)/io.txt"
+printf '%s\n' "$line" > "$tmp_io"
+got="$(dcb_origin_get "$tmp_io" input:x; printf 'E')"
+got="${got%E}"
+if [[ "$(printf '%s\n' "$line" | wc -l | tr -d ' ')" == "1" && "$got" == "$weird" ]]; then pass; else fail "復元できない: [$got]"; fi
+
+it "--base-image 無しは mode=auto（値は観測記録で、読み戻しでは再現すべき入力として返さない）"
+auto_out="$(new_workdir)/p"
+bash "$BOOTSTRAP" --project-name auto1 --languages node --output-dir "$auto_out" >/dev/null 2>&1
+if dcb_origin_load_inputs "$auto_out$ORIGIN_REL" \
+  && [[ "$ORIGIN_IN_BASE_IMAGE_MODE" == "auto" && -z "$ORIGIN_IN_BASE_IMAGE" ]] \
+  && grep -q '^input:base-image=.\+' "$auto_out$ORIGIN_REL"; then
+  pass
+else
+  fail "auto の扱いが想定と違う: mode=[$ORIGIN_IN_BASE_IMAGE_MODE] image=[$ORIGIN_IN_BASE_IMAGE]"
+fi
+
+it "--no-gitignore は manage-gitignore=false として読み戻せる"
+ng_out="$(new_workdir)/p"
+bash "$BOOTSTRAP" --project-name ng1 --languages node --no-gitignore --output-dir "$ng_out" >/dev/null 2>&1
+if dcb_origin_load_inputs "$ng_out$ORIGIN_REL" && [[ "$ORIGIN_IN_MANAGE_GITIGNORE" == "false" ]]; then pass; else fail "manage-gitignore=[$ORIGIN_IN_MANAGE_GITIGNORE]"; fi
+
+it "規範の取得元: --playbook-version は tag として、ref にタグを記録する（関数単位で確かめる）"
+# タグの取得にはネットワークが要るため、ローカル HTTP ではなく URL 形式の記録だけを
+# 関数単位で確かめる（origin_playbook_source は変数だけで決まる）。
+src_fn="$(new_workdir)/src-fn.sh"
+sed -n '/^origin_playbook_source() {/,/^}/p' "$BOOTSTRAP" > "$src_fn"
+# shellcheck disable=SC1090
+. "$src_fn"
+res=""
+PLAYBOOK_VERSION="v0.6.0" PLAYBOOK_FROM="https://github.com/ojos/ai-playbook/archive/refs/tags/v0.6.0.tar.gz"
+res="$res|$(origin_playbook_source | tr '\n' ',')"
+PLAYBOOK_VERSION="" PLAYBOOK_FROM="https://example.com/pb.tar.gz"
+res="$res|$(origin_playbook_source | tr '\n' ',')"
+PLAYBOOK_FROM="https://user:tok@example.com/pb.tar.gz"
+res="$res|$(origin_playbook_source | tr '\n' ',')"
+PLAYBOOK_FROM="/home/someone/ai-playbook"
+res="$res|$(origin_playbook_source | tr '\n' ',')"
+PLAYBOOK_FROM=""
+res="$res|$(origin_playbook_source | tr '\n' ',')"
+assert_eq "$res" "|tag,v0.6.0,|url,https://example.com/pb.tar.gz,|url,,|local,,|adjacent,," "取得元の記録"
+
+it "規範の取得元: ローカルのパスは ORIGIN へ書かない（絶対パスを利用側リポジトリへ残さない）"
+pbl="$(new_workdir)/p"
+bash "$BOOTSTRAP" --project-name pbl --languages node --playbook-from "$PLAYBOOK_SRC" --output-dir "$pbl" >/dev/null 2>&1
+if dcb_origin_load_inputs "$pbl$ORIGIN_REL" \
+  && [[ "$ORIGIN_IN_PLAYBOOK" == "installed" && "$ORIGIN_IN_PLAYBOOK_SOURCE" == "local" && -z "$ORIGIN_IN_PLAYBOOK_REF" ]] \
+  && ! grep -qF -- "$PLAYBOOK_SRC" "$pbl$ORIGIN_REL" \
+  && ! grep -qF -- "$pbl" "$pbl$ORIGIN_REL"; then
+  pass
+else
+  fail "ローカルのパスが記録に含まれる、または読み戻しが違う: source=[$ORIGIN_IN_PLAYBOOK_SOURCE] ref=[$ORIGIN_IN_PLAYBOOK_REF]"
+fi
+
+it "--playbook-conflict-policy は記録しない（生成結果を決める入力ではない）"
+if grep -qi 'conflict' "$pbl$ORIGIN_REL"; then fail "conflict-policy が記録されている"; else pass; fi
+
+# ── 古い ORIGIN（入力の行が無い）との後方互換 ────────────────────────────────
+
+it "入力の行が無い古い ORIGIN は読み戻しに失敗する（--upgrade が「引数の明示を求めて止める」判定に使う）"
+old_out="$(new_workdir)/p"
+bash "$BOOTSTRAP" --project-name old1 --languages node --output-dir "$old_out" >/dev/null 2>&1
+grep -v -e '^inputs-format=' -e '^input:' "$old_out$ORIGIN_REL" > "$old_out$ORIGIN_REL.new"
+mv "$old_out$ORIGIN_REL.new" "$old_out$ORIGIN_REL"
+if dcb_origin_load_inputs "$old_out$ORIGIN_REL"; then fail "古い ORIGIN を読み戻せてしまった"; else pass; fi
+
+it "inputs-format が 1 でない記録は読み戻しに失敗する（未知の書式を読まない）"
+fmt_out="$(new_workdir)/p"
+bash "$BOOTSTRAP" --project-name fmt1 --languages node --output-dir "$fmt_out" >/dev/null 2>&1
+dcb_origin_load_inputs "$fmt_out$ORIGIN_REL" || fail "対照: 正常な記録を読めない"
+awk '/^inputs-format=/ { print "inputs-format=2"; next } { print }' "$fmt_out$ORIGIN_REL" > "$fmt_out$ORIGIN_REL.new"
+mv "$fmt_out$ORIGIN_REL.new" "$fmt_out$ORIGIN_REL"
+if dcb_origin_load_inputs "$fmt_out$ORIGIN_REL"; then fail "inputs-format=2 を読み戻せてしまった"; else pass; fi
+
+it "入力の行が無い古い ORIGIN でも doctor.sh は従来どおり読める（FAIL にならない）"
+bash "$DOCTOR" --target-dir "$old_out" >/dev/null 2>&1
+code=$?
+if [[ $code -eq 0 ]]; then pass; else fail "終了コード=$code"; fi
 
 # ── bootstrap.sh と doctor.sh の DCB_VERSION が一致する ──────────────────────
 #

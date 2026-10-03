@@ -195,6 +195,132 @@ else
 $output"
 fi
 
+# ── 入力の記録（input: 行）と .ai-playbook/** のハッシュ（#396 の 1/3） ──────
+
+it "入力の行がある新しい書式の記録を、そのまま合格として読める"
+out="$(base_out)"
+output="$(bash "$DOCTOR" --target-dir "$out" 2>&1)"; code=$?
+if [[ $code -eq 0 ]] && grep -q '^inputs-format=1' "$out$ORIGIN_REL" && ! printf '%s' "$output" | grep -q 'origin record malformed'; then pass; else fail "終了コード=$code
+$output"; fi
+
+# 入力の行を 1 行書き換える補助。$1=生成先 $2=置換対象の行頭 $3=新しい行（空なら削除）
+mutate_origin() {
+  local tmp="$1$ORIGIN_REL.mut"
+  awk -v k="$2" -v n="$3" 'index($0, k) == 1 { if (n != "") print n; next } { print }' "$1$ORIGIN_REL" > "$tmp"
+  mv "$tmp" "$1$ORIGIN_REL"
+}
+
+it "input:project-name が欠けていれば malformed（FAIL）"
+out="$(base_out)"
+mutate_origin "$out" "input:project-name=" ""
+output="$(bash "$DOCTOR" --target-dir "$out" 2>&1)"; code=$?
+if [[ $code -ne 0 ]] && printf '%s' "$output" | grep -q '\[FAIL\] origin record malformed.*input:project-name'; then pass; else fail "終了コード=$code
+$output"; fi
+
+it "input:base-image-mode が不正値なら malformed（FAIL）"
+out="$(base_out)"
+mutate_origin "$out" "input:base-image-mode=" "input:base-image-mode=maybe"
+output="$(bash "$DOCTOR" --target-dir "$out" 2>&1)"; code=$?
+if [[ $code -ne 0 ]] && printf '%s' "$output" | grep -q '\[FAIL\] origin record malformed.*base-image-mode'; then pass; else fail "終了コード=$code
+$output"; fi
+
+it "値の中の不正な % の並びは malformed（FAIL）"
+out="$(base_out)"
+mutate_origin "$out" "input:gitignore-targets=" "input:gitignore-targets=a%zz"
+output="$(bash "$DOCTOR" --target-dir "$out" 2>&1)"; code=$?
+if [[ $code -ne 0 ]] && printf '%s' "$output" | grep -q '\[FAIL\] origin record malformed.*%'; then pass; else fail "終了コード=$code
+$output"; fi
+
+it "認識できない行（読み飛ばさない）は malformed（FAIL）"
+out="$(base_out)"
+printf 'garbage line without key\n' >> "$out$ORIGIN_REL"
+output="$(bash "$DOCTOR" --target-dir "$out" 2>&1)"; code=$?
+if [[ $code -ne 0 ]] && printf '%s' "$output" | grep -q '\[FAIL\] origin record malformed.*認識できない行'; then pass; else fail "終了コード=$code
+$output"; fi
+
+it "hash: 行の値が sha256 でなければ malformed（FAIL）"
+out="$(base_out)"
+printf 'hash:scripts/zzz.sh=notahash\n' >> "$out$ORIGIN_REL"
+output="$(bash "$DOCTOR" --target-dir "$out" 2>&1)"; code=$?
+if [[ $code -ne 0 ]] && printf '%s' "$output" | grep -q '\[FAIL\] origin record malformed.*hash'; then pass; else fail "終了コード=$code
+$output"; fi
+
+it "inputs-format が 1 でなければ入力の検査を省いて WARN にする（未知の書式を FAIL にしない）"
+out="$(base_out)"
+mutate_origin "$out" "inputs-format=" "inputs-format=2"
+mutate_origin "$out" "input:project-name=" ""
+output="$(bash "$DOCTOR" --target-dir "$out" 2>&1)"; code=$?
+if [[ $code -eq 0 ]] && printf '%s' "$output" | grep -q '\[WARN\] origin inputs-format is not 1'; then pass; else fail "終了コード=$code
+$output"; fi
+
+it "未知の input: キーは malformed（FAIL）"
+out="$(base_out)"
+printf 'input:bogus=1\n' >> "$out$ORIGIN_REL"
+output="$(bash "$DOCTOR" --target-dir "$out" 2>&1)"; code=$?
+if [[ $code -ne 0 ]] && printf '%s' "$output" | grep -q '\[FAIL\] origin record malformed.*input:bogus'; then pass; else fail "終了コード=$code
+$output"; fi
+
+it "base-image-mode=auto でも input:base-image が欠けていれば malformed（FAIL）"
+out="$(base_out)"
+mutate_origin "$out" "input:base-image-mode=" "input:base-image-mode=auto"
+mutate_origin "$out" "input:base-image=" ""
+output="$(bash "$DOCTOR" --target-dir "$out" 2>&1)"; code=$?
+if [[ $code -ne 0 ]] && printf '%s' "$output" | grep -q '\[FAIL\] origin record malformed.*input:base-image が無い'; then pass; else fail "終了コード=$code
+$output"; fi
+
+for bad_langs in 'node,' ',node' 'node,,go'; do
+  it "input:languages に空要素（$bad_langs）があれば malformed（FAIL）"
+  out="$(base_out)"
+  mutate_origin "$out" "input:languages=" "input:languages=$bad_langs"
+  output="$(bash "$DOCTOR" --target-dir "$out" 2>&1)"; code=$?
+  if [[ $code -ne 0 ]] && printf '%s' "$output" | grep -q '\[FAIL\] origin record malformed.*input:languages'; then pass; else fail "終了コード=$code
+$output"; fi
+done
+
+it "パスに = を含む hash: 行も正しく読める（正常な記録は通り、改変は changed になる）"
+out="$(base_out)"
+mkdir -p "$out/dir=x"
+printf 'hello\n' > "$out/dir=x/f.txt"
+printf 'hash:dir=x/f.txt=%s\n' "$(dcb_file_sha256_for_test "$out/dir=x/f.txt")" >> "$out$ORIGIN_REL"
+output="$(bash "$DOCTOR" --target-dir "$out" 2>&1)"; code=$?
+if [[ $code -eq 0 ]] && ! printf '%s' "$output" | grep -q 'malformed'; then pass; else fail "正常な記録が通らない: 終了コード=$code
+$output"; fi
+printf 'X' >> "$out/dir=x/f.txt"
+output="$(bash "$DOCTOR" --target-dir "$out" 2>&1)"; code=$?
+if [[ $code -ne 0 ]] && printf '%s' "$output" | grep -qF 'changed since generation:' && printf '%s' "$output" | grep -qF 'dir=x/f.txt'; then pass; else fail "改変を changed と言わない: 終了コード=$code
+$output"; fi
+
+it "input: の行があるのに inputs-format の行が無ければ malformed（旧形式として検査を省かない）"
+out="$(base_out)"
+mutate_origin "$out" "inputs-format=" ""
+output="$(bash "$DOCTOR" --target-dir "$out" 2>&1)"; code=$?
+if [[ $code -ne 0 ]] && printf '%s' "$output" | grep -q '\[FAIL\] origin record malformed.*inputs-format'; then pass; else fail "終了コード=$code
+$output"; fi
+
+it "改行で終わらない最終行も検査する（不正な input: 行が最終行でも malformed）"
+out="$(base_out)"
+printf 'input:bogus=1' >> "$out$ORIGIN_REL"
+output="$(bash "$DOCTOR" --target-dir "$out" 2>&1)"; code=$?
+if [[ $code -ne 0 ]] && printf '%s' "$output" | grep -q '\[FAIL\] origin record malformed.*input:bogus'; then pass; else fail "終了コード=$code
+$output"; fi
+
+it ".ai-playbook/** の規範ファイルを変えると changed と判定する"
+out="$(new_workdir)/p"
+run_bootstrap "$out" --playbook-from "$PLAYBOOK_SRC" >/dev/null 2>&1
+pb_file="$(cd "$out" && find .ai-playbook -type f -name '*.md' | sort | sed -n 1p)"
+printf '\nedited\n' >> "$out/$pb_file"
+output="$(bash "$DOCTOR" --target-dir "$out" 2>&1)"; code=$?
+if [[ $code -ne 0 ]] && printf '%s' "$output" | grep -qF "changed since generation: $pb_file"; then pass; else fail "終了コード=$code
+$output"; fi
+
+it ".ai-playbook/VERSION を消すと missing と判定する"
+out="$(new_workdir)/p"
+run_bootstrap "$out" --playbook-from "$PLAYBOOK_SRC" >/dev/null 2>&1
+rm -f "$out/.ai-playbook/VERSION"
+output="$(bash "$DOCTOR" --target-dir "$out" 2>&1)"; code=$?
+if [[ $code -ne 0 ]] && printf '%s' "$output" | grep -q 'recorded in origin but missing.*\.ai-playbook/VERSION'; then pass; else fail "終了コード=$code
+$output"; fi
+
 # ── strict モードとの関係 ─────────────────────────────────────────────────────
 
 it "記録欠落（WARN）は --strict で非 0 終了になる"
