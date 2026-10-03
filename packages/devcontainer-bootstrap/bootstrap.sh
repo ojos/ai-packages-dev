@@ -8322,14 +8322,14 @@ dcb_place_file() { # tmp dest
   fi
 }
 
-# src を dest へ、同じディレクトリの一時ファイル -> dcb_place_file で置く。
+# src を dest へ書く。通常ファイルか存在しない生成先は、従来どおり cp でその場に書く
+# （親に書き込み権限が無くても、ファイル自体が書ければ成功する。ハードリンクの先にも
+# 反映される）。シンボリックリンクのときだけ、リンク自体を消してから書く。
 dcb_install_file() { # src dest mode
-  local tmp
   dcb_refuse_dir_dest "$2"
-  tmp="$(mktemp "$2.XXXXXX")"
-  cp "$1" "$tmp"
-  chmod "$3" "$tmp"
-  dcb_place_file "$tmp" "$2"
+  [[ -L "$2" ]] && rm -f "$2"
+  cp "$1" "$2"
+  chmod "$3" "$2"
 }
 
 # 今回書く予定のすべての生成先について、親ディレクトリの実体が出力先の中かを、
@@ -8533,11 +8533,10 @@ write_file() {
   render_content "$content" > "$tmp"
   if [[ "$out" == *.json ]]; then
     perl -0777 -i -pe 's/,\s*([}\]])/$1/g' "$tmp"
-    # jq の出力も一時ファイルへ書いて mv で置く（リンクをたどって書かない）。
-    tmp2="$(mktemp "${TMPDIR:-/tmp}/dcb-render.XXXXXX")"
-    jq . "$tmp" > "$tmp2"
+    # 従来どおりその場に書く。シンボリックリンクのときだけ、リンク自体を消してから書く。
+    [[ -L "$out" ]] && rm -f "$out"
+    jq . "$tmp" > "$out"
     rm -f "$tmp"
-    dcb_place_file "$tmp2" "$out"
   else
     dcb_place_file "$tmp" "$out"
   fi

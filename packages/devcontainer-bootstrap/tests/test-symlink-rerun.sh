@@ -186,6 +186,33 @@ ln -s "$outside" "$out/scripts"
 run "$out" --force
 if [[ "$RUN_RC" == "1" && "$(cat "$outside/verify.sh")" == "orig" && "$(ls "$outside")" == "verify.sh" ]]; then pass; else fail "rc=$RUN_RC"; fi
 
+it "通常ファイルの overwrite は、親ディレクトリに書き込み権限が無くても成功する"
+if [[ "$(id -u)" == "0" ]]; then
+  echo "  skip (root で走るため、権限の検査はできない)"
+  pass
+else
+  w="$(new_workdir)"; out="$w/p"
+  run "$out"
+  echo "# edit" >> "$out/.ai-playbook/shared-ai-rules.md"
+  chmod 640 "$out/.ai-playbook/shared-ai-rules.md"
+  chmod a-w "$out/.ai-playbook"
+  run "$out" --playbook-conflict-policy overwrite
+  chmod u+w "$out/.ai-playbook"
+  if [[ "$RUN_RC" == "0" ]] && ! grep -q '# edit' "$out/.ai-playbook/shared-ai-rules.md" \
+    && [[ "$(mode_of "$out/.ai-playbook/shared-ai-rules.md")" == "640" ]]; then pass; else fail "rc=$RUN_RC"; fi
+fi
+
+it "ハードリンクの生成先を overwrite / --force すると、もう一方のパスにも反映される"
+w="$(new_workdir)"; out="$w/p"
+run "$out"
+ln "$out/.ai-playbook/shared-ai-rules.md" "$w/hl-rules"
+ln "$out/.devcontainer/devcontainer.json" "$w/hl-json"
+echo "# edit" >> "$out/.ai-playbook/shared-ai-rules.md"
+echo "{}" > "$out/.devcontainer/devcontainer.json"
+run "$out" --force --playbook-conflict-policy overwrite
+if [[ "$RUN_RC" == "0" ]] && ! grep -q '# edit' "$w/hl-rules" && cmp -s "$w/hl-rules" "$out/.ai-playbook/shared-ai-rules.md" \
+  && cmp -s "$w/hl-json" "$out/.devcontainer/devcontainer.json" && grep -q '"name"' "$w/hl-json"; then pass; else fail "rc=$RUN_RC"; fi
+
 it "リンクでない通常の生成先: skip で温存・--force で上書き（挙動は変えない）"
 w="$(new_workdir)"; out="$w/p"
 run "$out"
