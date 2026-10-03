@@ -253,6 +253,43 @@ output="$(bash "$DOCTOR" --target-dir "$out" 2>&1)"; code=$?
 if [[ $code -eq 0 ]] && printf '%s' "$output" | grep -q '\[WARN\] origin inputs-format is not 1'; then pass; else fail "終了コード=$code
 $output"; fi
 
+it "未知の input: キーは malformed（FAIL）"
+out="$(base_out)"
+printf 'input:bogus=1\n' >> "$out$ORIGIN_REL"
+output="$(bash "$DOCTOR" --target-dir "$out" 2>&1)"; code=$?
+if [[ $code -ne 0 ]] && printf '%s' "$output" | grep -q '\[FAIL\] origin record malformed.*input:bogus'; then pass; else fail "終了コード=$code
+$output"; fi
+
+it "base-image-mode=auto でも input:base-image が欠けていれば malformed（FAIL）"
+out="$(base_out)"
+mutate_origin "$out" "input:base-image-mode=" "input:base-image-mode=auto"
+mutate_origin "$out" "input:base-image=" ""
+output="$(bash "$DOCTOR" --target-dir "$out" 2>&1)"; code=$?
+if [[ $code -ne 0 ]] && printf '%s' "$output" | grep -q '\[FAIL\] origin record malformed.*input:base-image が無い'; then pass; else fail "終了コード=$code
+$output"; fi
+
+for bad_langs in 'node,' ',node' 'node,,go'; do
+  it "input:languages に空要素（$bad_langs）があれば malformed（FAIL）"
+  out="$(base_out)"
+  mutate_origin "$out" "input:languages=" "input:languages=$bad_langs"
+  output="$(bash "$DOCTOR" --target-dir "$out" 2>&1)"; code=$?
+  if [[ $code -ne 0 ]] && printf '%s' "$output" | grep -q '\[FAIL\] origin record malformed.*input:languages'; then pass; else fail "終了コード=$code
+$output"; fi
+done
+
+it "パスに = を含む hash: 行も正しく読める（正常な記録は通り、改変は changed になる）"
+out="$(base_out)"
+mkdir -p "$out/dir=x"
+printf 'hello\n' > "$out/dir=x/f.txt"
+printf 'hash:dir=x/f.txt=%s\n' "$(dcb_file_sha256_for_test "$out/dir=x/f.txt")" >> "$out$ORIGIN_REL"
+output="$(bash "$DOCTOR" --target-dir "$out" 2>&1)"; code=$?
+if [[ $code -eq 0 ]] && ! printf '%s' "$output" | grep -q 'malformed'; then pass; else fail "正常な記録が通らない: 終了コード=$code
+$output"; fi
+printf 'X' >> "$out/dir=x/f.txt"
+output="$(bash "$DOCTOR" --target-dir "$out" 2>&1)"; code=$?
+if [[ $code -ne 0 ]] && printf '%s' "$output" | grep -qF 'changed since generation:' && printf '%s' "$output" | grep -qF 'dir=x/f.txt'; then pass; else fail "改変を changed と言わない: 終了コード=$code
+$output"; fi
+
 it ".ai-playbook/** の規範ファイルを変えると changed と判定する"
 out="$(new_workdir)/p"
 run_bootstrap "$out" --playbook-from "$PLAYBOOK_SRC" >/dev/null 2>&1

@@ -108,10 +108,12 @@ check_origin_format() {
     case "$line" in
       '#'*) ;;
       version=*|flags=*|inputs-format=*) ;;
-      input:?*=*) ;;
+      input:project-name=*|input:languages=*|input:base-image-mode=*|input:base-image=*|input:manage-gitignore=*|input:gitignore-targets=*|input:playbook=*|input:playbook-source=*|input:playbook-ref=*) ;;
+      input:*) bad="$bad [認識できない入力の行: ${line%%=*}]" ;;
       hash:?*=*)
-        val="${line#*=}"
-        if ! [[ "$val" =~ ^[0-9a-f]{64}$ ]]; then bad="$bad [hash の値が sha256 ではない: ${line%%=*}]"; fi
+        # sha256 に = は入らないが、パスには入りうる。最後の = で区切る。
+        val="${line##*=}"
+        if ! [[ "$val" =~ ^[0-9a-f]{64}$ ]] || [[ -z "${line#hash:}" || "${line#hash:}" == "=$val" ]]; then bad="$bad [hash の行が不正: ${line%=*}]"; fi
         ;;
       *) bad="$bad [認識できない行: $line]" ;;
     esac
@@ -137,19 +139,22 @@ check_origin_format() {
       if [[ -z "$v" ]]; then
         bad="$bad [input:languages が無い、または空]"
       else
-        l_rest="$v"
+        l_rest="$v,"
         while [[ -n "$l_rest" ]]; do
           lang="${l_rest%%,*}"
-          if [[ "$l_rest" == *,* ]]; then l_rest="${l_rest#*,}"; else l_rest=""; fi
+          l_rest="${l_rest#*,}"
           case "$lang" in
             node|go|python|php|rust|ruby) ;;
-            *) bad="$bad [input:languages に未対応の値: $lang]" ;;
+            *) bad="$bad [input:languages に未対応または空の値: '$lang']" ;;
           esac
         done
       fi
       mode="$(origin_get "$origin_file" input:base-image-mode)" || mode=""
       case "$mode" in
-        auto) ;;
+        auto)
+          # bootstrap.sh は auto でも観測記録として必ず書く。
+          origin_get "$origin_file" input:base-image >/dev/null || bad="$bad [input:base-image が無い]"
+          ;;
         override)
           v="$(origin_get "$origin_file" input:base-image)" || v=""
           [[ -n "$v" ]] || bad="$bad [input:base-image-mode=override なのに input:base-image が無い、または空]"
@@ -247,8 +252,8 @@ check_origin_record() {
   while IFS= read -r line; do
     [[ -n "$line" ]] || continue
     rel="${line#hash:}"
-    rel="${rel%%=*}"
-    recorded_hash="${line#*=}"
+    rel="${rel%=*}"
+    recorded_hash="${line##*=}"
     [[ -n "$rel" && -n "$recorded_hash" ]] || continue
     hash_count=$((hash_count + 1))
     if [[ ! -f "$TARGET_DIR/$rel" ]]; then
