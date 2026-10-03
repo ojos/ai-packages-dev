@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # test-upgrade.sh — bootstrap.sh --upgrade の振り分けを検証する（#396 の 2/3）。
 #
-# 対象は DCB 自身のテンプレート（write_file の経路）。規範経由のファイル
-# （install_playbook_rules の経路）への適用の検証は 3/3 で足す。
+# 対象は DCB 自身のテンプレート（write_file の経路）と、規範経由のファイル
+# （install_playbook_rules の経路。末尾の節）の両方。
 
 set -uo pipefail
 
@@ -287,5 +287,72 @@ chmod 600 "$o11$ORIGIN_REL"
 bash "$BOOTSTRAP" --project-name upg --languages node --base-image "$IMG" --output-dir "$o11" --force >/dev/null 2>&1
 rc=$?
 if [[ "$rc" == "0" && "$(mode_of "$o11$ORIGIN_REL")" == "644" ]]; then pass; else fail "rc=$rc mode=$(mode_of "$o11$ORIGIN_REL")"; fi
+
+# ── 規範経由のファイル（--playbook-from を明示した --upgrade） ──────────────────
+
+# 古い版の規範と、中身を一部変えた「新しい版」の写し。
+pb_old="$(new_workdir)/pb-old"
+pb_new="$(new_workdir)/pb-new"
+cp -R "$PLAYBOOK_SRC" "$pb_old"
+cp -R "$PLAYBOOK_SRC" "$pb_new"
+for f in review-workflow.md shared-ai-rules.md templates/entry.md templates/second-opinion-review.sh templates/second-opinion-record.sh; do
+  printf '\n# new-version marker\n' >> "$pb_new/$f"
+done
+
+o14="$(new_workdir)/p"
+gen "$o14" --with-claude --playbook-from "$pb_old"
+origin14="$o14$ORIGIN_REL"
+echo "# my rules" >> "$o14/.ai-playbook/shared-ai-rules.md"          # 規範: 手を入れた
+echo "# my entry" >> "$o14/CLAUDE.md"                                 # 入口: 手を入れた
+rm -f "$o14/.github/copilot-instructions.md"                         # 入口: 記録が無い
+drop_record "$origin14" ".github/copilot-instructions.md"
+echo "# my record" >> "$o14/scripts/second-opinion-record.sh"        # スクリプト: 手を入れた
+rules_edit_sha="$(sha_of "$o14/.ai-playbook/shared-ai-rules.md")"
+sorec_mode="$(mode_of "$o14/scripts/second-opinion-record.sh")"
+soreview_mode="$(mode_of "$o14/scripts/second-opinion-review.sh")"
+upgrade "$o14" --playbook-from "$pb_new"
+
+it "規範経由: 終了コードは 2（.dcb-new あり）"
+assert_eq "$UP_RC" "2" "exit code"
+
+it "規範ファイル（.md）は、手を入れていなければ新しい版へ更新される"
+if grep -q 'new-version marker' "$o14/.ai-playbook/review-workflow.md" && [[ ! -e "$o14/.ai-playbook/review-workflow.md.dcb-new" ]]; then pass; else fail "更新されていない"; fi
+
+it "規範ファイル（.md）は、手を入れていれば温存され、新しい版が .dcb-new に置かれる"
+if [[ "$(sha_of "$o14/.ai-playbook/shared-ai-rules.md")" == "$rules_edit_sha" ]] \
+  && grep -q 'new-version marker' "$o14/.ai-playbook/shared-ai-rules.md.dcb-new" \
+  && ! grep -q '# my rules' "$o14/.ai-playbook/shared-ai-rules.md.dcb-new"; then pass; else fail "温存または .dcb-new が違う"; fi
+
+it "入口ファイルも同じ振り分け（手を入れていない AGENTS.md は更新、CLAUDE.md は温存して .dcb-new）"
+if grep -q 'new-version marker' "$o14/AGENTS.md" && [[ ! -e "$o14/AGENTS.md.dcb-new" ]] \
+  && grep -q '# my entry' "$o14/CLAUDE.md" && grep -q 'new-version marker' "$o14/CLAUDE.md.dcb-new"; then pass; else fail "入口ファイルの振り分けが違う"; fi
+
+it "入口ファイルの記録が無く現物も無ければ生成される"
+if [[ -f "$o14/.github/copilot-instructions.md" ]] && grep -q 'new-version marker' "$o14/.github/copilot-instructions.md" \
+  && grep -q '^hash:\.github/copilot-instructions\.md=' "$origin14"; then pass; else fail "生成されていない"; fi
+
+it ".ai-playbook/VERSION は、手を入れていなければ新しい取得元の記録へ更新される"
+if grep -q "^source=$pb_new\$" "$o14/.ai-playbook/VERSION" && [[ ! -e "$o14/.ai-playbook/VERSION.dcb-new" ]]; then pass; else fail "VERSION: $(grep '^source=' "$o14/.ai-playbook/VERSION")"; fi
+
+it "第二意見のスクリプト: 手を入れていなければ更新され、実行ビットは保たれる"
+if grep -q 'new-version marker' "$o14/scripts/second-opinion-review.sh" \
+  && [[ "$(mode_of "$o14/scripts/second-opinion-review.sh")" == "$soreview_mode" && -x "$o14/scripts/second-opinion-review.sh" ]]; then pass; else fail "更新されない、またはモードが変わった"; fi
+
+it "第二意見のスクリプト: 手を入れていれば温存し、.dcb-new のモードは元に揃う"
+if grep -q '# my record' "$o14/scripts/second-opinion-record.sh" \
+  && grep -q 'new-version marker' "$o14/scripts/second-opinion-record.sh.dcb-new" \
+  && [[ "$(mode_of "$o14/scripts/second-opinion-record.sh")" == "$sorec_mode" \
+     && "$(mode_of "$o14/scripts/second-opinion-record.sh.dcb-new")" == "$sorec_mode" ]]; then pass; else fail "温存・.dcb-new・モードのいずれかが違う"; fi
+
+it "規範経由のファイルにも、温存したものには新しい版のハッシュが記録される"
+if [[ "$(sed -n 's|^hash:\.ai-playbook/shared-ai-rules\.md=||p' "$origin14")" == "$(sha_of "$o14/.ai-playbook/shared-ai-rules.md.dcb-new")" ]]; then pass; else fail "記録が新しい版のハッシュでない"; fi
+
+it "規範経由: --dry-run は 1 バイトも書かない"
+rm -f "$o14/.ai-playbook/shared-ai-rules.md.dcb-new" "$o14/CLAUDE.md.dcb-new" "$o14/scripts/second-opinion-record.sh.dcb-new"
+echo "# again" >> "$o14/AGENTS.md"
+before="$(tree_state "$o14")"
+upgrade "$o14" --playbook-from "$pb_new" --dry-run
+after="$(tree_state "$o14")"
+if [[ "$before" == "$after" && "$UP_RC" == "0" ]] && printf '%s' "$UP_OUT" | grep -q 'plan: '; then pass; else fail "ツリーが変わった、または rc=$UP_RC"; fi
 
 exit_with_result

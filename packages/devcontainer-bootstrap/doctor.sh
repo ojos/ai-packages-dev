@@ -136,10 +136,19 @@ check_origin_format() {
     bad="$bad [input: の行があるのに inputs-format= の行が無い]"
   fi
 
+  # 同じ input: のキーが 2 回以上あれば不正（どちらが効くかを読み手が決めてしまう）。
+  v="$(awk '/^input:/ { k = $0; sub(/=.*/, "", k); if (seen[k]++ == 1) printf "%s ", k }' "$origin_file")"
+  if [[ -n "$v" ]]; then
+    for lang in $v; do bad="$bad [入力の行が重複: $lang]"; done
+  fi
+
   if awk '/^inputs-format=/ { f = 1 } END { exit !f }' "$origin_file"; then
     if [[ "$(origin_get "$origin_file" inputs-format)" != "1" ]]; then
       warn "origin inputs-format is not 1 ($ORIGIN_REL_PATH): この doctor.sh が知らない書式の入力記録なので、入力の検査を省きます（取得し直した最新の doctor.sh を使ってください）"
     else
+      # 新しい形式（inputs-format=1）では version= と flags= が必須（空の値は許す）。
+      awk '/^version=/ { f = 1 } END { exit !f }' "$origin_file" || bad="$bad [version= の行が無い]"
+      awk '/^flags=/ { f = 1 } END { exit !f }' "$origin_file" || bad="$bad [flags= の行が無い]"
       v="$(origin_get "$origin_file" input:project-name)" || v=""
       [[ -n "$v" ]] || bad="$bad [input:project-name が無い、または空]"
       v="$(origin_get "$origin_file" input:languages)" || v=""
@@ -291,6 +300,21 @@ check_origin_record() {
   fi
 }
 
+# --upgrade が置いた *.dcb-new（手を入れたファイルの隣に置く新しい版）が残っていれば
+# WARN で報告する。探し方は bootstrap.sh の upgrade_collect_leftover と揃える
+# （.git と node_modules は除外し、シンボリックリンクはたどらない）。
+check_dcb_new_leftover() {
+  local found
+  found="$(find "$TARGET_DIR" \( -name .git -o -name node_modules \) -prune -o -name '*.dcb-new' -print 2>/dev/null | sort)"
+  if [[ -z "$found" ]]; then
+    ok "no *.dcb-new left behind"
+    return 0
+  fi
+  warn "*.dcb-new が残っています（--upgrade が置いた新しい版です）:"
+  printf '%s\n' "$found" | sed 's|^|  - |'
+  echo "  取り込み方: 元のファイルと .dcb-new の中身を見比べ、必要な差分を手で混ぜてから、.dcb-new を消してください（自動では混ぜません）。"
+}
+
 require_file() {
   local f="$1"
   if [[ -f "$TARGET_DIR/$f" ]]; then
@@ -407,6 +431,7 @@ done
 
 section "Generation origin"
 check_origin_record
+check_dcb_new_leftover
 
 section "Runtime command availability"
 for cmd in bash jq perl gh; do
