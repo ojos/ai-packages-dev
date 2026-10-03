@@ -21,6 +21,15 @@ FORCE="false"
 DRY_RUN="false"
 MANAGE_GITIGNORE="true"
 GITIGNORE_TARGETS=""
+# --upgrade: 記録した入力で生成し直し、手を入れていないファイルだけ新しい版へ更新する。
+# 引数で明示されたものだけを記録の入力より優先するため、明示の有無を別に持つ。
+UPGRADE="false"
+MANAGE_GITIGNORE_EXPLICIT="false"
+GITIGNORE_TARGETS_EXPLICIT="false"
+# upgrade の結果の集計。UPGRADE_HASHES は「相対パス<TAB>新しい版のハッシュ」の行
+# （温存したファイルにも新しい版のハッシュを記録するため、現物ではなくこちらを ORIGIN へ書く）。
+UPGRADE_HASHES=""
+UPGRADE_DCBNEW_COUNT=0
 
 BASE_IMAGE_OVERRIDE=""
 BASE_IMAGE=""
@@ -87,6 +96,13 @@ options:
   --base-image <image>        Override auto-selected devcontainer base image
   --dry-run                   Show planned outputs without writing files
   --force                     Overwrite existing files
+  --upgrade                   Regenerate from the inputs recorded in .devcontainer/ORIGIN
+                              (output dir defaults to $PWD). Files you have not touched
+                              are updated; edited files are kept and the new version is
+                              written beside them as <path>.dcb-new. Arguments you pass
+                              override the recorded inputs. Not combinable with --force;
+                              --dry-run prints the plan only. Exit: 0 all applied,
+                              2 some <path>.dcb-new left, 1 failure.
   --no-gitignore              管理対象の .gitignore セクションを更新しない
   --gitignore-targets <csv>   Additional template names to use (e.g. VisualStudioCode,JetBrains)
   --with-playbook             Install shared AI rules (ai-playbook) and entry files
@@ -126,6 +142,77 @@ notes:
 EOF
 }
 
+# >>> dcb-origin-io（試験が sed で切り出して読み込む。外側の変数に依存させないこと）
+#
+# ORIGIN の値の符号化。1 行 1 値の key=value 形式を保つため、値の中の改行・復帰・
+# % だけを %0A / %0D / %25 へ置き換える。カンマ・空白・= はそのまま書く（読み出しは
+# 「最初の = までがキー」なので値に = があっても壊れない。空白は行頭行末も含めて保つ）。
+dcb_origin_encode() {
+  local v="$1" pct='%' nl=$'\n' cr=$'\r'
+  v="${v//"$pct"/%25}"
+  v="${v//"$nl"/%0A}"
+  v="${v//"$cr"/%0D}"
+  printf '%s' "$v"
+}
+
+dcb_origin_decode() {
+  local v="$1" pct='%' nl=$'\n' cr=$'\r'
+  v="${v//%0A/$nl}"
+  v="${v//%0D/$cr}"
+  v="${v//%25/$pct}"
+  printf '%s' "$v"
+}
+
+# key=<符号化した値> を 1 行出力する。
+dcb_origin_line() {
+  printf '%s=%s\n' "$1" "$(dcb_origin_encode "$2")"
+}
+
+# ORIGIN から key（接頭辞を含む完全名。例: input:project-name）の値を復号して出す。
+# 無ければ 1 を返す（値が空の行は 0 で空を出す。「無い」と「空」を区別する）。
+dcb_origin_get() {
+  local file="$1" key="$2" raw
+  raw="$(awk -v k="$key=" 'index($0, k) == 1 { print substr($0, length(k) + 1); found = 1; exit } END { exit !found }' "$file")" || return 1
+  dcb_origin_decode "$raw"
+}
+
+# ORIGIN から、生成結果を左右する入力を取り出して ORIGIN_IN_* へ入れる（--upgrade が
+# 同じ入力で生成し直すために使う）。入力の記録が無い古い ORIGIN、または必須の行が
+# 欠けている ORIGIN では 1 を返す（その場合 ORIGIN_IN_* は信用しないこと）。
+#
+# ORIGIN_IN_BASE_IMAGE は mode が override のときだけ値を持つ（auto の値は生成時の
+# 環境の選択結果で、再現すべき入力ではない）。ORIGIN_IN_PLAYBOOK_REF は source が
+# tag / url で、かつ記録した（秘密や相対パスになりうる値は記録しない）ときだけ値を持つ。
+# ORIGIN_IN_* は呼び出し側（--upgrade と試験）が読むので、ここでは未使用に見える。
+# shellcheck disable=SC2034
+dcb_origin_load_inputs() {
+  local file="$1" mode
+  ORIGIN_IN_PROJECT_NAME="" ORIGIN_IN_LANGUAGES="" ORIGIN_IN_FLAGS=""
+  ORIGIN_IN_BASE_IMAGE_MODE="" ORIGIN_IN_BASE_IMAGE=""
+  ORIGIN_IN_MANAGE_GITIGNORE="" ORIGIN_IN_GITIGNORE_TARGETS=""
+  ORIGIN_IN_PLAYBOOK="" ORIGIN_IN_PLAYBOOK_SOURCE="" ORIGIN_IN_PLAYBOOK_REF=""
+  [[ -f "$file" ]] || return 1
+  # 値が 1 でなければ、この版が読めない書式として 1 を返す（doctor.sh と揃える）。
+  [[ "$(dcb_origin_get "$file" inputs-format)" == "1" ]] || return 1
+  ORIGIN_IN_PROJECT_NAME="$(dcb_origin_get "$file" input:project-name)" || return 1
+  ORIGIN_IN_LANGUAGES="$(dcb_origin_get "$file" input:languages)" || return 1
+  ORIGIN_IN_FLAGS="$(dcb_origin_get "$file" flags)" || return 1
+  mode="$(dcb_origin_get "$file" input:base-image-mode)" || return 1
+  ORIGIN_IN_BASE_IMAGE_MODE="$mode"
+  if [[ "$mode" == "override" ]]; then
+    ORIGIN_IN_BASE_IMAGE="$(dcb_origin_get "$file" input:base-image)" || return 1
+  fi
+  ORIGIN_IN_MANAGE_GITIGNORE="$(dcb_origin_get "$file" input:manage-gitignore)" || return 1
+  ORIGIN_IN_GITIGNORE_TARGETS="$(dcb_origin_get "$file" input:gitignore-targets)" || return 1
+  ORIGIN_IN_PLAYBOOK="$(dcb_origin_get "$file" input:playbook)" || return 1
+  if [[ "$ORIGIN_IN_PLAYBOOK" == "installed" ]]; then
+    ORIGIN_IN_PLAYBOOK_SOURCE="$(dcb_origin_get "$file" input:playbook-source)" || return 1
+    ORIGIN_IN_PLAYBOOK_REF="$(dcb_origin_get "$file" input:playbook-ref)" || ORIGIN_IN_PLAYBOOK_REF=""
+  fi
+  return 0
+}
+# <<< dcb-origin-io
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --project-name)     PROJECT_NAME="$2"; shift 2 ;;
@@ -161,8 +248,9 @@ while [[ $# -gt 0 ]]; do
     --base-image)       BASE_IMAGE_OVERRIDE="$2"; shift 2 ;;
     --dry-run)          DRY_RUN="true"; shift ;;
     --force)            FORCE="true"; shift ;;
-    --no-gitignore)     MANAGE_GITIGNORE="false"; shift ;;
-    --gitignore-targets)   GITIGNORE_TARGETS="$2"; shift 2 ;;
+    --upgrade)          UPGRADE="true"; shift ;;
+    --no-gitignore)     MANAGE_GITIGNORE="false"; MANAGE_GITIGNORE_EXPLICIT="true"; shift ;;
+    --gitignore-targets)   GITIGNORE_TARGETS="$2"; GITIGNORE_TARGETS_EXPLICIT="true"; shift 2 ;;
     --with-playbook)    WITH_PLAYBOOK="true"; shift ;;
     --without-playbook) WITH_PLAYBOOK="false"; shift ;;
     --playbook-from)    PLAYBOOK_FROM="$2"; shift 2 ;;
@@ -172,6 +260,15 @@ while [[ $# -gt 0 ]]; do
     *) echo "error: unknown option: $1" >&2; usage; exit 1 ;;
   esac
 done
+
+# --upgrade は「手を入れたものを上書きしない」が前提。--force は「手を入れたものも
+# 上書きする」なので、同時に指定すると意味が両立しない。片方優先にせず指定の時点で止める。
+if [[ "$UPGRADE" == "true" && "$FORCE" == "true" ]]; then
+  echo "error: --upgrade と --force は同時に指定できません。" >&2
+  echo "       --upgrade は手を入れたファイルを上書きせず <path>.dcb-new を隣へ置きます。" >&2
+  echo "       --force は手を入れたファイルも上書きするため、意味が両立しません。" >&2
+  exit 1
+fi
 
 # ── 検証 ───────────────────────────────────────────────────────────────
 
@@ -183,6 +280,87 @@ require_cmd perl
 require_cmd awk
 require_cmd sed
 require_cmd curl
+
+# --upgrade の入力の決定。ORIGIN に記録した入力を読み、引数で明示されたものだけを上書きする。
+# 規則:
+#   project-name / languages / base-image / gitignore-targets  明示があればそれ、無ければ記録
+#   --with-*   記録した集合へ明示分を足す（外す手段は無い。外したいときは再生成する）
+#   --no-gitignore  明示があれば false、無ければ記録
+#   規範  --playbook-from / --playbook-version の明示は取得元ごと置き換える。
+#         --without-playbook は none。それ以外は記録の取得元を再現する
+#         （local と ref の無い url は再現できないので --playbook-from の明示を求めて止める）
+# 記録が読めない（古い ORIGIN・ORIGIN が無い）ときは記録を一切使わず、引数の明示を求める。
+upgrade_merge_inputs() {
+  local origin="$OUTPUT_DIR/$ORIGIN_REL_PATH" flag rest
+  local src_explicit="false"
+  [[ -n "$PLAYBOOK_FROM" || -n "$PLAYBOOK_VERSION" ]] && src_explicit="true"
+
+  if ! dcb_origin_load_inputs "$origin"; then
+    if [[ -f "$origin" ]]; then
+      echo "error: --upgrade: $origin に生成時の入力の記録がありません（古い版の記録、または欠落）。" >&2
+    else
+      echo "error: --upgrade: $origin がありません（このディレクトリは DCB の生成物ではない、または記録が消えています）。" >&2
+    fi
+    echo "       記録から入力を再現できないため、生成時と同じ引数を明示してください:" >&2
+    echo "         --project-name <name> --languages <csv>（必須）" >&2
+    echo "         --with-*（使っていたもの） --base-image --no-gitignore --gitignore-targets" >&2
+    echo "         --with-playbook / --playbook-version <tag> / --playbook-from <path|url>（規範を置いていたもの）" >&2
+    echo "       出力先は --output-dir で指定します（既定は現在のディレクトリ）。明示した引数で生成し、記録し直します。" >&2
+    if [[ -z "$PROJECT_NAME" || ${#LANGUAGES[@]} -eq 0 ]]; then
+      exit 1
+    fi
+    return 0
+  fi
+
+  [[ -n "$PROJECT_NAME" ]] || PROJECT_NAME="$ORIGIN_IN_PROJECT_NAME"
+  if [[ ${#LANGUAGES[@]} -eq 0 ]]; then
+    IFS=',' read -ra LANGUAGES <<< "$ORIGIN_IN_LANGUAGES"
+  fi
+  if [[ -n "$ORIGIN_IN_FLAGS" ]]; then
+    IFS=',' read -ra rest <<< "$ORIGIN_IN_FLAGS"
+    for flag in "${rest[@]}"; do
+      [[ -n "$flag" ]] && WITH_SET+=("$flag")
+    done
+  fi
+  if [[ -z "$BASE_IMAGE_OVERRIDE" && "$ORIGIN_IN_BASE_IMAGE_MODE" == "override" ]]; then
+    BASE_IMAGE_OVERRIDE="$ORIGIN_IN_BASE_IMAGE"
+  fi
+  if [[ "$MANAGE_GITIGNORE_EXPLICIT" != "true" ]]; then
+    MANAGE_GITIGNORE="$ORIGIN_IN_MANAGE_GITIGNORE"
+  fi
+  if [[ "$GITIGNORE_TARGETS_EXPLICIT" != "true" ]]; then
+    GITIGNORE_TARGETS="$ORIGIN_IN_GITIGNORE_TARGETS"
+  fi
+
+  if [[ "$src_explicit" == "true" || "$WITH_PLAYBOOK" == "false" ]]; then
+    : # 明示された取得元（または明示の opt-out）をそのまま使う
+  elif [[ "$ORIGIN_IN_PLAYBOOK" == "installed" ]]; then
+    case "$ORIGIN_IN_PLAYBOOK_SOURCE" in
+      tag)      PLAYBOOK_VERSION="$ORIGIN_IN_PLAYBOOK_REF" ;;
+      adjacent) WITH_PLAYBOOK="true" ;;
+      url)
+        if [[ -n "$ORIGIN_IN_PLAYBOOK_REF" ]]; then
+          PLAYBOOK_FROM="$ORIGIN_IN_PLAYBOOK_REF"
+        fi
+        ;;
+    esac
+    if [[ "$ORIGIN_IN_PLAYBOOK_SOURCE" == "local" || ( "$ORIGIN_IN_PLAYBOOK_SOURCE" == "url" && -z "$ORIGIN_IN_PLAYBOOK_REF" ) ]]; then
+      echo "error: --upgrade: 規範の取得元（$ORIGIN_IN_PLAYBOOK_SOURCE）は記録から再現できません。" >&2
+      echo "       ローカルのパスや、@ ? # を含む URL は記録していません。--playbook-from <path|url> で取得元を明示してください。" >&2
+      exit 1
+    fi
+  elif [[ "$WITH_PLAYBOOK" != "true" ]]; then
+    WITH_PLAYBOOK="false"
+  fi
+  return 0
+}
+
+if [[ "$UPGRADE" == "true" ]]; then
+  # 出力先の既定は現在のディレクトリ（生成先の中で実行する想定）。--project-name から
+  # $PWD/<name> を導くと、記録から読む名前と出力先の関係が循環する。
+  [[ -n "$OUTPUT_DIR" ]] || OUTPUT_DIR="$PWD"
+  upgrade_merge_inputs
+fi
 
 [[ -n "$PROJECT_NAME" ]] || { echo "error: --project-name is required" >&2; usage; exit 1; }
 # プロジェクト名は compose のマウントパス・workspaceFolder・sed 置換に流れるため、
@@ -7722,6 +7900,11 @@ detect_playbook_dir() {
 apply_file_with_policy() {
   local src="$1" dest="$2" answer prev_mode
 
+  if [[ "$UPGRADE" == "true" ]]; then
+    upgrade_apply_file "$dest" "$src"
+    return 0
+  fi
+
   mkdir -p "$(dirname "$dest")"
 
   if [[ ! -f "$dest" ]]; then
@@ -7889,7 +8072,7 @@ install_playbook_rules() {
   tpl="$(require_playbook_template second-opinion-review.sh)"
   apply_file_with_policy "$tpl" "$OUTPUT_DIR/scripts/second-opinion-review.sh"
   if [[ -f "$OUTPUT_DIR/scripts/second-opinion-review.sh" ]]; then
-    chmod +x "$OUTPUT_DIR/scripts/second-opinion-review.sh"
+    dcb_chmod_exec "$OUTPUT_DIR/scripts/second-opinion-review.sh"
   fi
 
   # JSON スキーマ方式で判定するエンジン（antigravity / codex）が読む回答の形。
@@ -7906,13 +8089,13 @@ install_playbook_rules() {
   tpl="$(require_playbook_template second-opinion-record.sh)"
   apply_file_with_policy "$tpl" "$OUTPUT_DIR/scripts/second-opinion-record.sh"
   if [[ -f "$OUTPUT_DIR/scripts/second-opinion-record.sh" ]]; then
-    chmod +x "$OUTPUT_DIR/scripts/second-opinion-record.sh"
+    dcb_chmod_exec "$OUTPUT_DIR/scripts/second-opinion-record.sh"
   fi
 
   tpl="$(require_playbook_template second-opinion-gate-exempt.sh)"
   apply_file_with_policy "$tpl" "$OUTPUT_DIR/scripts/second-opinion-gate-exempt.sh"
   if [[ -f "$OUTPUT_DIR/scripts/second-opinion-gate-exempt.sh" ]]; then
-    chmod +x "$OUTPUT_DIR/scripts/second-opinion-gate-exempt.sh"
+    dcb_chmod_exec "$OUTPUT_DIR/scripts/second-opinion-gate-exempt.sh"
   fi
 
   tpl="$(require_playbook_template second-opinion-gate.yml)"
@@ -7946,13 +8129,13 @@ install_playbook_rules() {
     tpl="$(require_playbook_template review-usable.sh)"
     apply_file_with_policy "$tpl" "$OUTPUT_DIR/scripts/review-usable.sh"
     if [[ -f "$OUTPUT_DIR/scripts/review-usable.sh" ]]; then
-      chmod +x "$OUTPUT_DIR/scripts/review-usable.sh"
+      dcb_chmod_exec "$OUTPUT_DIR/scripts/review-usable.sh"
     fi
 
     tpl="$(require_playbook_template check-review-usable.sh)"
     apply_file_with_policy "$tpl" "$OUTPUT_DIR/scripts/check-review-usable.sh"
     if [[ -f "$OUTPUT_DIR/scripts/check-review-usable.sh" ]]; then
-      chmod +x "$OUTPUT_DIR/scripts/check-review-usable.sh"
+      dcb_chmod_exec "$OUTPUT_DIR/scripts/check-review-usable.sh"
     fi
   fi
 
@@ -8009,9 +8192,124 @@ write_playbook_version_file() {
   rm -f "$tmp"
 }
 
+# ── --upgrade の振り分け ────────────────────────────────────────────────────
+#
+# 新しい版の中身（ファイル）と現物と ORIGIN の記録を突き合わせ、ファイルごとに振り分ける。
+# write_file（DCB 自身のテンプレート）と apply_file_with_policy（規範経由のファイル）の
+# 両方から呼ぶ共通の入口。--dry-run のときは計画を出すだけで何も書かない。
+#
+#   現物が無い                                  -> 生成する（新しい版で増えた分・消えた分）
+#   現物 = 新しい版                             -> 更新済み（手を入れていても、同じ内容なら）
+#   現物 = 記録したハッシュ（手を入れていない） -> 新しい版で更新する（モードは変えない）
+#   上記以外（手を入れた。記録が無い現物も含む）-> 上書きせず <path>.dcb-new を置く
+#
+# 記録が無いのに現物がある場合は「手を入れた」扱いにする。由来が分からない現物を
+# 上書きすると、利用側の改善を黙って消しうるため、安全側（温存 + .dcb-new）へ倒す。
+# どの場合も、ORIGIN へ書くのは新しい版のハッシュ（UPGRADE_HASHES）。温存したファイルにも
+# 新しい版のハッシュを記録するので、次の --upgrade でも「記録と現物が違う = 手を入れた」
+# として温存され、doctor は「生成時から変わった」と報告する。.dcb-new が取り込み待ちの印。
+upgrade_apply_file() {
+  local dest="$1" src="$2" rel newh curh rec mode verb
+  rel="${dest#"$OUTPUT_DIR"/}"
+  newh="$(dcb_file_sha256 "$src")"
+  UPGRADE_HASHES="${UPGRADE_HASHES}${rel}"$'\t'"${newh}"$'\n'
+  rec="$(dcb_origin_get "$OUTPUT_DIR/$ORIGIN_REL_PATH" "hash:$rel" 2>/dev/null || true)"
+
+  if [[ ! -e "$dest" ]]; then
+    if [[ "$DRY_RUN" == "true" ]]; then
+      echo "plan: create $dest"
+      return 0
+    fi
+    mkdir -p "$(dirname "$dest")"
+    cat "$src" > "$dest"
+    chmod 644 "$dest"
+    [[ "$dest" == *.sh ]] && chmod +x "$dest"
+    echo "write: $dest (new)"
+    return 0
+  fi
+
+  curh="$(dcb_file_sha256 "$dest")"
+  if [[ "$curh" == "$newh" ]]; then
+    if [[ "$DRY_RUN" == "true" ]]; then
+      echo "plan: up-to-date $dest"
+    else
+      rm -f "$dest.dcb-new"
+      echo "up-to-date: $dest"
+    fi
+    return 0
+  fi
+
+  if [[ -n "$rec" && "$curh" == "$rec" ]]; then
+    if [[ "$DRY_RUN" == "true" ]]; then
+      echo "plan: update $dest"
+      return 0
+    fi
+    # cat で中身だけ差し替える（mv / cp だとモード・所有者が変わりうる）。
+    cat "$src" > "$dest"
+    rm -f "$dest.dcb-new"
+    echo "write: $dest (upgraded)"
+    return 0
+  fi
+
+  if [[ -n "$rec" ]]; then verb="modified"; else verb="no record"; fi
+  if [[ "$DRY_RUN" == "true" ]]; then
+    echo "plan: keep ($verb) $dest -> $dest.dcb-new"
+  else
+    mode="$(file_mode_octal "$dest")"
+    cat "$src" > "$dest.dcb-new"
+    chmod "${mode:-644}" "$dest.dcb-new"
+    echo "keep ($verb): $dest -> $dest.dcb-new"
+    UPGRADE_DCBNEW_COUNT=$((UPGRADE_DCBNEW_COUNT + 1))
+  fi
+  upgrade_diff_summary "$dest" "$src"
+}
+
+# 差分の要約（変更行数と unified diff の先頭数行）を、字下げして出す。
+upgrade_diff_summary() {
+  local cur="$1" new="$2" n_del n_add
+  command -v diff >/dev/null 2>&1 || { echo "    (diff コマンドが無いため差分の要約を省略)"; return 0; }
+  n_del="$(diff "$cur" "$new" | grep -c '^<' || true)"
+  n_add="$(diff "$cur" "$new" | grep -c '^>' || true)"
+  echo "    diff: -${n_del} +${n_add} lines (現物 -> 新しい版)"
+  diff -u "$cur" "$new" | sed -n '3,12p' | sed 's/^/    /' || true
+}
+
+# 記録にあって、新しい版では生成されなくなったファイルを報告する（削除はしない）。
+upgrade_report_removed() {
+  local origin="$OUTPUT_DIR/$ORIGIN_REL_PATH" new_rels rel
+  [[ -f "$origin" ]] || return 0
+  new_rels="$( { printf '%s\n' "$sorted_rels"; playbook_installed_rel_paths; playbook_rules_rel_paths; } | sort -u)"
+  while IFS= read -r rel; do
+    [[ -n "$rel" ]] || continue
+    if ! printf '%s\n' "$new_rels" | grep -Fxq -- "$rel"; then
+      echo "no longer generated (not deleted): $OUTPUT_DIR/$rel"
+    fi
+  done < <(sed -n 's/^hash://p' "$origin" | sed 's/=[^=]*$//')
+}
+
+# upgrade 中は、新しい版を書いたあとの chmod +x を既存ファイルへ掛けない
+# （既存ファイルのモードを変えない。新規は upgrade_apply_file が整える）。
+dcb_chmod_exec() {
+  [[ "$UPGRADE" == "true" ]] && return 0
+  chmod +x "$1"
+}
+
 write_file() {
-  local rel="$1" content="$2" out tmp
+  local rel="$1" content="$2" out tmp tmp2
   out="$OUTPUT_DIR/$rel"
+  if [[ "$UPGRADE" == "true" ]]; then
+    tmp="$(mktemp "${TMPDIR:-/tmp}/dcb-render.XXXXXX")"
+    render_content "$content" > "$tmp"
+    if [[ "$out" == *.json ]]; then
+      perl -0777 -i -pe 's/,\s*([}\]])/$1/g' "$tmp"
+      tmp2="$(mktemp "${TMPDIR:-/tmp}/dcb-render.XXXXXX")"
+      jq . "$tmp" > "$tmp2"
+      mv "$tmp2" "$tmp"
+    fi
+    upgrade_apply_file "$out" "$tmp"
+    rm -f "$tmp"
+    return 0
+  fi
   if [[ -e "$out" && "$FORCE" != "true" ]]; then
     echo "skip (exists): $out"
     SKIPPED_DESTS="${SKIPPED_DESTS}${out}"$'\n'
@@ -8067,76 +8365,6 @@ EOF
   printf '%s' "$out"
 }
 
-# >>> dcb-origin-io（試験が sed で切り出して読み込む。外側の変数に依存させないこと）
-#
-# ORIGIN の値の符号化。1 行 1 値の key=value 形式を保つため、値の中の改行・復帰・
-# % だけを %0A / %0D / %25 へ置き換える。カンマ・空白・= はそのまま書く（読み出しは
-# 「最初の = までがキー」なので値に = があっても壊れない。空白は行頭行末も含めて保つ）。
-dcb_origin_encode() {
-  local v="$1" pct='%' nl=$'\n' cr=$'\r'
-  v="${v//"$pct"/%25}"
-  v="${v//"$nl"/%0A}"
-  v="${v//"$cr"/%0D}"
-  printf '%s' "$v"
-}
-
-dcb_origin_decode() {
-  local v="$1" pct='%' nl=$'\n' cr=$'\r'
-  v="${v//%0A/$nl}"
-  v="${v//%0D/$cr}"
-  v="${v//%25/$pct}"
-  printf '%s' "$v"
-}
-
-# key=<符号化した値> を 1 行出力する。
-dcb_origin_line() {
-  printf '%s=%s\n' "$1" "$(dcb_origin_encode "$2")"
-}
-
-# ORIGIN から key（接頭辞を含む完全名。例: input:project-name）の値を復号して出す。
-# 無ければ 1 を返す（値が空の行は 0 で空を出す。「無い」と「空」を区別する）。
-dcb_origin_get() {
-  local file="$1" key="$2" raw
-  raw="$(awk -v k="$key=" 'index($0, k) == 1 { print substr($0, length(k) + 1); found = 1; exit } END { exit !found }' "$file")" || return 1
-  dcb_origin_decode "$raw"
-}
-
-# ORIGIN から、生成結果を左右する入力を取り出して ORIGIN_IN_* へ入れる（--upgrade が
-# 同じ入力で生成し直すために使う）。入力の記録が無い古い ORIGIN、または必須の行が
-# 欠けている ORIGIN では 1 を返す（その場合 ORIGIN_IN_* は信用しないこと）。
-#
-# ORIGIN_IN_BASE_IMAGE は mode が override のときだけ値を持つ（auto の値は生成時の
-# 環境の選択結果で、再現すべき入力ではない）。ORIGIN_IN_PLAYBOOK_REF は source が
-# tag / url で、かつ記録した（秘密や相対パスになりうる値は記録しない）ときだけ値を持つ。
-# ORIGIN_IN_* は呼び出し側（--upgrade と試験）が読むので、ここでは未使用に見える。
-# shellcheck disable=SC2034
-dcb_origin_load_inputs() {
-  local file="$1" mode
-  ORIGIN_IN_PROJECT_NAME="" ORIGIN_IN_LANGUAGES="" ORIGIN_IN_FLAGS=""
-  ORIGIN_IN_BASE_IMAGE_MODE="" ORIGIN_IN_BASE_IMAGE=""
-  ORIGIN_IN_MANAGE_GITIGNORE="" ORIGIN_IN_GITIGNORE_TARGETS=""
-  ORIGIN_IN_PLAYBOOK="" ORIGIN_IN_PLAYBOOK_SOURCE="" ORIGIN_IN_PLAYBOOK_REF=""
-  [[ -f "$file" ]] || return 1
-  # 値が 1 でなければ、この版が読めない書式として 1 を返す（doctor.sh と揃える）。
-  [[ "$(dcb_origin_get "$file" inputs-format)" == "1" ]] || return 1
-  ORIGIN_IN_PROJECT_NAME="$(dcb_origin_get "$file" input:project-name)" || return 1
-  ORIGIN_IN_LANGUAGES="$(dcb_origin_get "$file" input:languages)" || return 1
-  ORIGIN_IN_FLAGS="$(dcb_origin_get "$file" flags)" || return 1
-  mode="$(dcb_origin_get "$file" input:base-image-mode)" || return 1
-  ORIGIN_IN_BASE_IMAGE_MODE="$mode"
-  if [[ "$mode" == "override" ]]; then
-    ORIGIN_IN_BASE_IMAGE="$(dcb_origin_get "$file" input:base-image)" || return 1
-  fi
-  ORIGIN_IN_MANAGE_GITIGNORE="$(dcb_origin_get "$file" input:manage-gitignore)" || return 1
-  ORIGIN_IN_GITIGNORE_TARGETS="$(dcb_origin_get "$file" input:gitignore-targets)" || return 1
-  ORIGIN_IN_PLAYBOOK="$(dcb_origin_get "$file" input:playbook)" || return 1
-  if [[ "$ORIGIN_IN_PLAYBOOK" == "installed" ]]; then
-    ORIGIN_IN_PLAYBOOK_SOURCE="$(dcb_origin_get "$file" input:playbook-source)" || return 1
-    ORIGIN_IN_PLAYBOOK_REF="$(dcb_origin_get "$file" input:playbook-ref)" || ORIGIN_IN_PLAYBOOK_REF=""
-  fi
-  return 0
-}
-# <<< dcb-origin-io
 
 # 規範経由で .ai-playbook/** へ置くファイル（規範本体の .md と VERSION）の相対パス。
 # install_playbook_rules の配置対象と同じ規則（README.md / CHANGELOG.md は除く）で
@@ -8211,15 +8439,18 @@ origin_playbook_source() {
 # --playbook-conflict-policy overwrite）で明示的に再生成すること。
 write_origin_record() {
   local dest="$OUTPUT_DIR/$ORIGIN_REL_PATH" tmp rel h flags_csv origin_rels skipped_rel="" languages_csv pb_src pb_ref
-  if [[ -e "$dest" && "$FORCE" != "true" ]]; then
+  if [[ -e "$dest" && "$FORCE" != "true" && "$UPGRADE" != "true" ]]; then
     echo "skip (exists): $dest"
     return 0
   fi
 
   origin_rels="$( { printf '%s\n' "$sorted_rels"; playbook_installed_rel_paths; playbook_rules_rel_paths; } | sort -u)"
 
+  # --upgrade は温存したファイルにも新しい版のハッシュを記録する（記録の規則が違う）ので、
+  # 「温存が 1 つでもあれば作らない」を適用しない。
   while IFS= read -r rel; do
     [[ -n "$rel" ]] || continue
+    [[ "$UPGRADE" == "true" ]] && break
     if printf '%s' "$SKIPPED_DESTS" | grep -Fxq -- "$OUTPUT_DIR/$rel"; then
       skipped_rel="$rel"
       break
@@ -8270,7 +8501,11 @@ EOF
     fi
     while IFS= read -r rel; do
       [[ -n "$rel" ]] || continue
-      h="$(dcb_file_sha256 "$OUTPUT_DIR/$rel")"
+      h=""
+      if [[ "$UPGRADE" == "true" ]]; then
+        h="$(printf '%s' "$UPGRADE_HASHES" | awk -F'\t' -v r="$rel" '$1 == r { h = $2 } END { print h }')"
+      fi
+      [[ -n "$h" ]] || h="$(dcb_file_sha256 "$OUTPUT_DIR/$rel")"
       echo "hash:$rel=$h"
     done <<EOF
 $origin_rels
@@ -8316,7 +8551,7 @@ fi
 # 合流させるので、dry-run の計画と実際の書き込みは条件付きファイルでも一致する。
 sorted_rels="$( { template_rel_paths; conditional_template_rel_paths; } | sort)"
 
-if [[ "$DRY_RUN" == "true" ]]; then
+if [[ "$DRY_RUN" == "true" && "$UPGRADE" != "true" ]]; then
   echo "[bootstrap] dry-run: no files will be written"
   while IFS= read -r rel; do
     [[ -n "$rel" ]] || continue
@@ -8364,11 +8599,24 @@ $sorted_rels
 EOF
 
 if [[ "$MANAGE_GITIGNORE" == "true" ]]; then
-  upsert_gitignore
+  if [[ "$UPGRADE" == "true" && "$DRY_RUN" == "true" ]]; then
+    echo "plan: $OUTPUT_DIR/.gitignore (managed section update)"
+  else
+    upsert_gitignore
+  fi
 fi
 
 if should_install_playbook; then
   install_playbook_rules
+fi
+
+if [[ "$UPGRADE" == "true" ]]; then
+  upgrade_report_removed
+  if [[ "$DRY_RUN" == "true" ]]; then
+    echo "plan: $OUTPUT_DIR/$ORIGIN_REL_PATH (rewritten from the new version)"
+    echo "[bootstrap] dry-run: no files were written"
+    exit 0
+  fi
 fi
 
 # 由来の記録は、DCB 自身のテンプレートと、規範経由で配置される非 .ai-playbook
@@ -8376,5 +8624,11 @@ fi
 # より先に書くと、この票の動機だったファイル（review-gate.yml /
 # second-opinion-review.sh 等）が記録に載らない（実測）。
 write_origin_record
+
+if [[ "$UPGRADE" == "true" && "$UPGRADE_DCBNEW_COUNT" -gt 0 ]]; then
+  echo "[bootstrap] upgrade: ${UPGRADE_DCBNEW_COUNT} file(s) kept as edited; the new version is beside each as <path>.dcb-new" >&2
+  echo "[bootstrap] completed (with .dcb-new)"
+  exit 2
+fi
 
 echo "[bootstrap] completed"
