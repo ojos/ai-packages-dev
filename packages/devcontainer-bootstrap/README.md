@@ -258,6 +258,7 @@ fi
 - `--base-image <image>`（既定: Docker サーバーの `os/arch` から自動判定。この値で上書きして明示指定）
 - `--dry-run`（既定: 無効。生成予定のパスを `plan:` 行として並べるだけで、**ファイルを 1 つも書きません**）
 - `--force`（既定: 無効。既存ファイルの上書きを許可します。下記「再実行したときの挙動」参照）
+- `--upgrade`（既定: 無効。`.devcontainer/ORIGIN` に記録した入力で生成し直し、手を入れていないファイルだけ新しい版へ更新します。手を入れたファイルは温存して隣へ `<path>.dcb-new` を置き、終了コード 2 で終わります。`--force` とは同時に指定できません。出力先の既定は現在のディレクトリです）
 - `--no-gitignore`（既定: 無効＝`.gitignore` の managed セクションを更新する。指定すると `.gitignore` に一切触れません）
 - `--gitignore-targets <csv>`（既定: 空。暗黙ターゲットに**追加で合成**する github/gitignore テンプレート名。下記「`.gitignore` と github/gitignore の連携」参照）
 - `--with-playbook` / `--without-playbook`（AI 共通ルールの配置。既定: 配置しない）
