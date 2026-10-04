@@ -169,6 +169,9 @@ it "古い ORIGIN でも、引数を明示すれば生成でき、記録し直�
 upgrade "$o3" --project-name upg --languages node --base-image "$IMG" --with-aws
 if [[ "$UP_RC" == "0" ]] && grep -q '^inputs-format=1' "$o3$ORIGIN_REL" && grep -q '^flags=aws$' "$o3$ORIGIN_REL"; then pass; else fail "rc=$UP_RC"; fi
 
+it "古い ORIGIN でも引数を明示したときは、error: でなく note: の案内だけを出す"
+if [[ "$UP_OUT" != *"error:"* && "$UP_OUT" == *"note: --upgrade:"* ]]; then pass; else fail "$UP_OUT"; fi
+
 it "ORIGIN が無いディレクトリでも、引数を明示しないと止まる"
 o4="$(new_workdir)/none"
 upgrade "$o4"
