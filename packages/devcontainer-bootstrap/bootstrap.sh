@@ -296,6 +296,11 @@ upgrade_merge_inputs() {
   [[ -n "$PLAYBOOK_FROM" || -n "$PLAYBOOK_VERSION" ]] && src_explicit="true"
 
   if ! dcb_origin_load_inputs "$origin"; then
+    # 必須の引数がそろっていれば、案内だけ出して続ける（正しい使い方なので error: は付けない）。
+    if [[ -n "$PROJECT_NAME" && ${#LANGUAGES[@]} -gt 0 ]]; then
+      echo "note: --upgrade: $origin に生成時の入力の記録が無いため、明示した引数で生成し、記録し直します。" >&2
+      return 0
+    fi
     if [[ -f "$origin" ]]; then
       echo "error: --upgrade: $origin に生成時の入力の記録がありません（古い版の記録、または欠落）。" >&2
     else
@@ -306,10 +311,7 @@ upgrade_merge_inputs() {
     echo "         --with-*（使っていたもの） --base-image --no-gitignore --gitignore-targets" >&2
     echo "         --with-playbook / --playbook-version <tag> / --playbook-from <path|url>（規範を置いていたもの）" >&2
     echo "       出力先は --output-dir で指定します（既定は現在のディレクトリ）。明示した引数で生成し、記録し直します。" >&2
-    if [[ -z "$PROJECT_NAME" || ${#LANGUAGES[@]} -eq 0 ]]; then
-      exit 1
-    fi
-    return 0
+    exit 1
   fi
 
   [[ -n "$PROJECT_NAME" ]] || PROJECT_NAME="$ORIGIN_IN_PROJECT_NAME"
