@@ -40,11 +40,14 @@
 #     解放する（失敗した呼び出しは PostToolUseFailure で解放する）。「実行する間は登録する」
 #     （規範）を、実行のあいだに限って機構が担う。拒否したときは、その呼び出しで登録した
 #     ものを解放してから拒否する（issue は、拒否しないと決まってから登録する）。
+#     登録と解放には、その呼び出しの tool_use_id を識別子として渡す（`session-ledger.sh
+#     claim|release --call <tool_use_id>`）。解放（拒否したときの巻き戻しを含む）はその
+#     識別子の登録だけを外すため、同じセッションで同じ種類の Bash 呼び出しが並行しても、
+#     先に終わった方が他方の登録を外さない。複合コマンドが拒否されたときも、同じセッションの
+#     先行する登録は残る。識別子は衝突の判定には使わない（種類・作業ツリーの単位のまま）。
+#     tool_use_id が入力に無いときは、識別子なしで（種類と対象の単位で）登録・解放する。
 #     限界: 利用者が確認（ask）を断った場合は、どちらも来ないため、次に同じ種類の操作を
 #     通すか、セッションが終わる（SessionEnd）か、持ち主が消えるまで登録が残る。
-#     同じセッションで同じ種類の Bash 呼び出しが並行すると、先に終わった方が解放する
-#     （台帳の対象は git では作業ツリーの等値比較、merge / gate では無視されるため、
-#     呼び出しごとの tool_use_id を対象へ入れて区別することはできない）。
 #     バックグラウンドで起動したゲートは、起動の呼び出しが返った時点で解放される。
 #   - issue: ブランチ作成の時点で登録し、SessionEnd まで持つ。ただし、その呼び出しが失敗した
 #     （PostToolUseFailure）ときは、その呼び出しで新しく登録した issue だけを解放する（ブランチ
@@ -517,6 +520,8 @@ on_session_end() {
 
 pre_bash() {
   local d denies="" warns="" before_rows="" new_issues="" me="" claimed_merge=0 claimed_gate=0 claimed_dirs="" n
+  local call_opt=()
+  [[ -z "$tuid" ]] || call_opt=(--call "$tuid")
   [[ -n "$cmd" ]] || return 0
   refresh_ledger "$cwd"
   classify_command "$cmd" "$cwd"
@@ -524,14 +529,14 @@ pre_bash() {
   [[ $HIT_MERGE -eq 1 || $HIT_GATE -eq 1 || -n "$HIT_GIT_DIRS" || -n "$HIT_ISSUES" ]] || return 0
 
   if [[ $HIT_MERGE -eq 1 ]]; then
-    run_ledger "$cwd" claim merge
+    run_ledger "$cwd" claim ${call_opt[@]+"${call_opt[@]}"} merge
     case "$LEDGER_VERDICT" in
       LEDGER_DENY) denies="${denies:+$denies$'\n'}$(deny_text 'マージ・リリース' "$LEDGER_DETAIL")" ;;
       LEDGER_OK | LEDGER_WARN) claimed_merge=1 ;;
     esac
   fi
   if [[ $HIT_GATE -eq 1 ]]; then
-    run_ledger "$cwd" claim gate
+    run_ledger "$cwd" claim ${call_opt[@]+"${call_opt[@]}"} gate
     case "$LEDGER_VERDICT" in
       LEDGER_DENY) denies="${denies:+$denies$'\n'}$(deny_text '重いゲート（verify / loop-gate）の起動' "$LEDGER_DETAIL")" ;;
       LEDGER_OK | LEDGER_WARN) claimed_gate=1 ;;
@@ -540,7 +545,7 @@ pre_bash() {
   if [[ -n "$HIT_GIT_DIRS" ]]; then
     while IFS= read -r d; do
       [[ -n "$d" ]] || continue
-      run_ledger "$d" claim git "$d"
+      run_ledger "$d" claim ${call_opt[@]+"${call_opt[@]}"} git "$d"
       case "$LEDGER_VERDICT" in
         LEDGER_DENY) denies="${denies:+$denies$'\n'}$(deny_text "作業ツリー（$d）での git 操作" "$LEDGER_DETAIL")" ;;
         LEDGER_OK | LEDGER_WARN) claimed_dirs="${claimed_dirs:+$claimed_dirs$'\n'}$d" ;;
@@ -551,14 +556,19 @@ EOF
   fi
   if [[ -n "$denies" ]]; then
     # 実行しないので、この呼び出しで登録したものを解放する（PostToolUse は来ない）。
-    [[ $claimed_merge -eq 0 ]] || run_ledger "$cwd" release merge
-    [[ $claimed_gate -eq 0 ]] || run_ledger "$cwd" release gate
-    if [[ -n "$claimed_dirs" ]]; then
-      while IFS= read -r d; do
-        [[ -n "$d" ]] && run_ledger "$d" release git "$d"
-      done <<EOF
+    # tool_use_id があれば、その識別子の登録だけを外す（同じセッションの先行する登録は残す）。
+    if [[ -n "$tuid" ]]; then
+      [[ $claimed_merge -eq 1 || $claimed_gate -eq 1 || -n "$claimed_dirs" ]] && run_ledger "$cwd" release --call "$tuid"
+    else
+      [[ $claimed_merge -eq 0 ]] || run_ledger "$cwd" release merge
+      [[ $claimed_gate -eq 0 ]] || run_ledger "$cwd" release gate
+      if [[ -n "$claimed_dirs" ]]; then
+        while IFS= read -r d; do
+          [[ -n "$d" ]] && run_ledger "$d" release git "$d"
+        done <<EOF
 $claimed_dirs
 EOF
+      fi
     fi
     DECISION="deny"
     REASON="$denies"
@@ -623,6 +633,13 @@ post_bash() {
   if [[ "$event" == "PostToolUseFailure" ]]; then settle_issue_mark release; else settle_issue_mark keep; fi
   [[ -n "$cmd" ]] || return 0
   classify_command "$cmd" "$cwd"
+  if [[ -n "$tuid" ]]; then
+    # 登録時に渡した tool_use_id の登録だけを解放する（並行する別の呼び出しの登録は残る）。
+    if [[ $HIT_MERGE -eq 1 || $HIT_GATE -eq 1 || -n "$HIT_GIT_DIRS" ]]; then
+      run_ledger "$cwd" release --call "$tuid"
+    fi
+    return 0
+  fi
   [[ $HIT_MERGE -eq 1 ]] && run_ledger "$cwd" release merge
   [[ $HIT_GATE -eq 1 ]] && run_ledger "$cwd" release gate
   if [[ -n "$HIT_GIT_DIRS" ]]; then

@@ -6853,8 +6853,8 @@ TMPL
 # 複製しない。ここは台帳の読み書きだけを担い、実行環境（フック・メッセージ）には依存しない。
 #
 # 使い方:
-#   session-ledger.sh claim   <kind> [target]   登録する（同じ登録は更新時刻を更新する）
-#   session-ledger.sh release [<kind> [target]] 自分の登録を解放する（引数なしは全部）
+#   session-ledger.sh claim   [--call <ID>] <kind> [target]   登録する（同じ登録は更新時刻を更新する）
+#   session-ledger.sh release [--call <ID>] [<kind> [target]] 自分の登録を解放する（引数なしは全部）
 #   session-ledger.sh list    [--others|--all]  登録を表示する（既定は生きている登録すべて）
 #   session-ledger.sh check   <kind> [target]   他セッションの登録と衝突するかを調べる
 #   session-ledger.sh refresh                   自分の最後の更新時刻を新しくする（失効を避ける）
@@ -6873,8 +6873,19 @@ TMPL
 # 置き場所と書式:
 #   $(git rev-parse --git-common-dir)/session-ledger/<セッション識別子>.tsv
 #   作業ツリーをまたいで共有され、セッションごとに別ファイルへ追記する（追記のみ。
-#   既存の行を書き換えない。解放も「解放の行」を足す）。1 行 = タブ区切り 6 列:
-#     時刻(epoch 秒)  claim|release  kind  target  PID  作業ツリー
+#   既存の行を書き換えない。解放も「解放の行」を足す）。1 行 = タブ区切り 8 列:
+#     時刻(epoch 秒)  claim|release  kind  target  PID  作業ツリー  開始時刻のキー  識別子
+#   呼び出しの識別子（8 列目。任意）: claim / release の --call <ID> で渡す。
+#     claim に --call を付けると、その登録に識別子を持たせる（8 列目。無ければ -）。
+#     release に --call を付けると、その識別子の登録だけを解放する（kind / target を
+#     併せて渡せば、その中でさらに絞る。無ければ、その識別子の登録すべて）。識別子は
+#     照合のキーにも衝突の判定にも使わない。解放の単位にだけ使う。同じセッションが同じ
+#     （kind, target）を別々の識別子で登録しても、衝突の判定は従来どおり。
+#     --call の無い呼び出しは従来どおり、種類と対象の単位で登録・解放する（release は、
+#     識別子の有無にかかわらずその（kind, target）の登録をすべて外す）。
+#     いま有効な登録の判定: 同じ（kind, target）に識別子の違う claim が複数あるとき、
+#     解放されていないものが 1 つでもあれば有効（1 件として表示・判定する）。
+#     7 列（識別子なし）の古い台帳ファイルも読める（識別子は - として扱う）。
 #   release の kind が * なら全部、target が * ならその種類すべてを解放する。
 #
 # セッションの識別子と持ち主の PID:
@@ -6916,8 +6927,8 @@ warn() { echo "[session-ledger] WARN: $*" >&2; }
 
 usage() {
   cat >&2 <<'USAGE'
-usage: session-ledger.sh claim   <issue|doc|merge|git|gate> [target]
-       session-ledger.sh release [<kind> [target]]
+usage: session-ledger.sh claim   [--call <ID>] <issue|doc|merge|git|gate> [target]
+       session-ledger.sh release [--call <ID>] [<kind> [target]]
        session-ledger.sh list    [--others|--all]
        session-ledger.sh check   <issue|doc|merge|git|gate> [target]
        session-ledger.sh refresh
@@ -7142,7 +7153,7 @@ normalize_target() { # kind target
 # ── 台帳の読み出し ────────────────────────────────────────────────────────────
 
 # 1 セッションぶんのファイルを再生して、いま有効な登録を TSV で出す:
-#   sid kind target pid worktree 最後の更新(epoch)
+#   sid kind target pid worktree 最後の更新(epoch) 開始時刻のキー 識別子
 # 壊れた行は読み飛ばし、件数を警告する。
 replay_file() { # file sid
   awk -v sid="$2" -v file="$1" '
@@ -7150,27 +7161,40 @@ replay_file() { # file sid
     {
       if (NF < 6 || $1 !~ /^[0-9]+$/ || ($2 != "claim" && $2 != "release") || $5 !~ /^[0-9]+$/) { bad++; next }
       if ($1 + 0 > last) last = $1 + 0
-      key = $3 "\034" $4
+      cid = (NF >= 8 && $8 != "") ? $8 : "-"
+      key = $3 "\034" $4 "\034" cid
       if ($2 == "claim") {
-        live[key] = 1; kind[key] = $3; tgt[key] = $4; pid[key] = $5; wt[key] = $6
+        live[key] = 1; kind[key] = $3; tgt[key] = $4; pid[key] = $5; wt[key] = $6; cids[key] = cid
         skey[key] = (NF >= 7 && $7 ~ /^[0-9]+$/) ? $7 : "-"
-      } else if ($3 == "*") {
-        for (x in live) delete live[x]
-      } else if ($4 == "*") {
-        for (x in live) if (kind[x] == $3) delete live[x]
       } else {
-        delete live[key]
+        # 識別子の付いた解放は、その識別子の登録だけを（kind / target で絞って）外す。
+        # 識別子の無い解放は、従来どおり種類と対象の単位で、識別子にかかわらず外す。
+        for (x in live) {
+          if (cid != "-" && cids[x] != cid) continue
+          if ($3 != "*" && kind[x] != $3) continue
+          if ($3 != "*" && $4 != "*" && tgt[x] != $4) continue
+          delete live[x]
+        }
       }
     }
     END {
-      for (x in live) printf "%s\t%s\t%s\t%s\t%s\t%d\t%s\n", sid, kind[x], tgt[x], pid[x], wt[x], last, skey[x]
+      # 同じ（kind, target）に識別子の違う登録が複数あっても、1 件として出す（1 つでも
+      # 解放されていなければ有効）。
+      for (x in live) {
+        kt = kind[x] "\034" tgt[x]
+        if (!(kt in seen) || cids[x] != "-") { seen[kt] = 1; pick[kt] = x }
+      }
+      for (kt in pick) {
+        x = pick[kt]
+        printf "%s\t%s\t%s\t%s\t%s\t%d\t%s\t%s\n", sid, kind[x], tgt[x], pid[x], wt[x], last, skey[x], cids[x]
+      }
       if (bad > 0) printf "[session-ledger] WARN: %s: 壊れた行を %d 件読み飛ばしました。\n", file, bad > "/dev/stderr"
     }
   ' "$1"
 }
 
 # 全セッションの有効な登録に、状態（live / expired）を付けて出す。
-#   sid kind target pid worktree 最後の更新 age state
+#   sid kind target pid worktree 最後の更新 age state 識別子
 collect() {
   local f sid now ttl
   now="$(date +%s)"
@@ -7183,7 +7207,7 @@ collect() {
       warn "読めない台帳のファイルを読み飛ばします: $f"
       continue
     fi
-    replay_file "$f" "$sid" | while IFS="$TAB" read -r a_sid a_kind a_tgt a_pid a_wt a_last a_key; do
+    replay_file "$f" "$sid" | while IFS="$TAB" read -r a_sid a_kind a_tgt a_pid a_wt a_last a_key a_cid; do
       [ -n "$a_sid" ] || continue
       state="live"
       if ! pid_alive "$a_pid" "$a_key"; then
@@ -7191,8 +7215,8 @@ collect() {
       elif [ $((now - a_last)) -gt "$ttl" ]; then
         state="expired"
       fi
-      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-        "$a_sid" "$a_kind" "$a_tgt" "$a_pid" "$a_wt" "$a_last" "$((now - a_last))" "$state"
+      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+        "$a_sid" "$a_kind" "$a_tgt" "$a_pid" "$a_wt" "$a_last" "$((now - a_last))" "$state" "$a_cid"
     done
   done
 }
@@ -7241,7 +7265,7 @@ do_check() { # kind target
   out=""
   peers=""
   n=0
-  while IFS="$TAB" read -r r_sid r_kind r_tgt r_pid r_wt _ r_age r_state; do
+  while IFS="$TAB" read -r r_sid r_kind r_tgt r_pid r_wt _ r_age r_state _; do
     [ -n "$r_sid" ] || continue
     [ "$r_state" = "live" ] || continue
     [ "$r_sid" != "$SELF_ID" ] || continue
@@ -7264,8 +7288,18 @@ EOF
   return 0
 }
 
+# 呼び出しの識別子。--call で渡されたものを、ファイル名と同じ規則で安全な形へ直す。
+# 渡されなければ - （識別子なし）。
+CALL_ID="-"
+set_call_id() { # 値
+  local c
+  c="$(printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '_')"
+  [ -n "$c" ] || c="-"
+  CALL_ID="$c"
+}
+
 append_record() { # op kind target
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$(date +%s)" "$1" "$2" "$3" "$SELF_PID" "$TOPLEVEL" "$SELF_KEY" \
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$(date +%s)" "$1" "$2" "$3" "$SELF_PID" "$TOPLEVEL" "$SELF_KEY" "$CALL_ID" \
     >>"$LEDGER_DIR/$SELF_ID.tsv" 2>/dev/null
 }
 
@@ -7287,7 +7321,13 @@ cmd_check() {
 }
 
 cmd_claim() {
-  local kind="${1:-}" target res rc
+  local kind target res rc
+  if [ "${1:-}" = "--call" ]; then
+    [ "$#" -ge 2 ] || { usage; return 2; }
+    set_call_id "$2"
+    shift 2
+  fi
+  kind="${1:-}"
   valid_kind "$kind" || { usage; return 2; }
   target="$(normalize_target "$kind" "${2:-}")"
   if owner_unknown; then
@@ -7316,7 +7356,14 @@ cmd_claim() {
 }
 
 cmd_release() {
-  local kind="${1:-*}" target="${2:-*}"
+  local kind target
+  if [ "${1:-}" = "--call" ]; then
+    [ "$#" -ge 2 ] || { usage; return 2; }
+    set_call_id "$2"
+    shift 2
+  fi
+  kind="${1:-*}"
+  target="${2:-*}"
   if [ "$kind" != "*" ]; then
     valid_kind "$kind" || { usage; return 2; }
     [ "$target" = "*" ] || target="$(normalize_target "$kind" "$target")"
@@ -7346,11 +7393,12 @@ cmd_refresh() {
   case "$min" in '' | *[!0-9]*) min=300 ;; esac
   ensure_dir || return 0
   rows="$(collect)" || rows=""
-  while IFS="$TAB" read -r r_sid r_kind r_tgt _ _ _ r_age r_state; do
+  while IFS="$TAB" read -r r_sid r_kind r_tgt _ _ _ r_age r_state r_cid; do
     [ -n "$r_sid" ] || continue
     [ "$r_sid" = "$SELF_ID" ] || continue
     [ "$r_state" = "live" ] || continue
     if [ "$r_age" -ge "$min" ]; then
+      CALL_ID="${r_cid:--}"
       append_record claim "$r_kind" "$r_tgt" || warn "台帳へ書き込めませんでした。更新できていません。"
       echo "refreshed: session=$SELF_ID"
     fi
@@ -7366,7 +7414,7 @@ cmd_list() {
   case "$mode" in '' | --others | --all) ;; *) usage; return 2 ;; esac
   ensure_dir || return 0
   rows="$(collect)" || rows=""
-  while IFS="$TAB" read -r r_sid r_kind r_tgt r_pid r_wt _ r_age r_state; do
+  while IFS="$TAB" read -r r_sid r_kind r_tgt r_pid r_wt _ r_age r_state _; do
     [ -n "$r_sid" ] || continue
     if [ "$mode" != "--all" ] && [ "$r_state" != "live" ]; then continue; fi
     if [ "$mode" = "--others" ] && [ "$r_sid" = "$SELF_ID" ]; then continue; fi
@@ -7445,11 +7493,14 @@ TMPL
 #     解放する（失敗した呼び出しは PostToolUseFailure で解放する）。「実行する間は登録する」
 #     （規範）を、実行のあいだに限って機構が担う。拒否したときは、その呼び出しで登録した
 #     ものを解放してから拒否する（issue は、拒否しないと決まってから登録する）。
+#     登録と解放には、その呼び出しの tool_use_id を識別子として渡す（`session-ledger.sh
+#     claim|release --call <tool_use_id>`）。解放（拒否したときの巻き戻しを含む）はその
+#     識別子の登録だけを外すため、同じセッションで同じ種類の Bash 呼び出しが並行しても、
+#     先に終わった方が他方の登録を外さない。複合コマンドが拒否されたときも、同じセッションの
+#     先行する登録は残る。識別子は衝突の判定には使わない（種類・作業ツリーの単位のまま）。
+#     tool_use_id が入力に無いときは、識別子なしで（種類と対象の単位で）登録・解放する。
 #     限界: 利用者が確認（ask）を断った場合は、どちらも来ないため、次に同じ種類の操作を
 #     通すか、セッションが終わる（SessionEnd）か、持ち主が消えるまで登録が残る。
-#     同じセッションで同じ種類の Bash 呼び出しが並行すると、先に終わった方が解放する
-#     （台帳の対象は git では作業ツリーの等値比較、merge / gate では無視されるため、
-#     呼び出しごとの tool_use_id を対象へ入れて区別することはできない）。
 #     バックグラウンドで起動したゲートは、起動の呼び出しが返った時点で解放される。
 #   - issue: ブランチ作成の時点で登録し、SessionEnd まで持つ。ただし、その呼び出しが失敗した
 #     （PostToolUseFailure）ときは、その呼び出しで新しく登録した issue だけを解放する（ブランチ
@@ -7922,6 +7973,8 @@ on_session_end() {
 
 pre_bash() {
   local d denies="" warns="" before_rows="" new_issues="" me="" claimed_merge=0 claimed_gate=0 claimed_dirs="" n
+  local call_opt=()
+  [[ -z "$tuid" ]] || call_opt=(--call "$tuid")
   [[ -n "$cmd" ]] || return 0
   refresh_ledger "$cwd"
   classify_command "$cmd" "$cwd"
@@ -7929,14 +7982,14 @@ pre_bash() {
   [[ $HIT_MERGE -eq 1 || $HIT_GATE -eq 1 || -n "$HIT_GIT_DIRS" || -n "$HIT_ISSUES" ]] || return 0
 
   if [[ $HIT_MERGE -eq 1 ]]; then
-    run_ledger "$cwd" claim merge
+    run_ledger "$cwd" claim ${call_opt[@]+"${call_opt[@]}"} merge
     case "$LEDGER_VERDICT" in
       LEDGER_DENY) denies="${denies:+$denies$'\n'}$(deny_text 'マージ・リリース' "$LEDGER_DETAIL")" ;;
       LEDGER_OK | LEDGER_WARN) claimed_merge=1 ;;
     esac
   fi
   if [[ $HIT_GATE -eq 1 ]]; then
-    run_ledger "$cwd" claim gate
+    run_ledger "$cwd" claim ${call_opt[@]+"${call_opt[@]}"} gate
     case "$LEDGER_VERDICT" in
       LEDGER_DENY) denies="${denies:+$denies$'\n'}$(deny_text '重いゲート（verify / loop-gate）の起動' "$LEDGER_DETAIL")" ;;
       LEDGER_OK | LEDGER_WARN) claimed_gate=1 ;;
@@ -7945,7 +7998,7 @@ pre_bash() {
   if [[ -n "$HIT_GIT_DIRS" ]]; then
     while IFS= read -r d; do
       [[ -n "$d" ]] || continue
-      run_ledger "$d" claim git "$d"
+      run_ledger "$d" claim ${call_opt[@]+"${call_opt[@]}"} git "$d"
       case "$LEDGER_VERDICT" in
         LEDGER_DENY) denies="${denies:+$denies$'\n'}$(deny_text "作業ツリー（$d）での git 操作" "$LEDGER_DETAIL")" ;;
         LEDGER_OK | LEDGER_WARN) claimed_dirs="${claimed_dirs:+$claimed_dirs$'\n'}$d" ;;
@@ -7956,14 +8009,19 @@ EOF
   fi
   if [[ -n "$denies" ]]; then
     # 実行しないので、この呼び出しで登録したものを解放する（PostToolUse は来ない）。
-    [[ $claimed_merge -eq 0 ]] || run_ledger "$cwd" release merge
-    [[ $claimed_gate -eq 0 ]] || run_ledger "$cwd" release gate
-    if [[ -n "$claimed_dirs" ]]; then
-      while IFS= read -r d; do
-        [[ -n "$d" ]] && run_ledger "$d" release git "$d"
-      done <<EOF
+    # tool_use_id があれば、その識別子の登録だけを外す（同じセッションの先行する登録は残す）。
+    if [[ -n "$tuid" ]]; then
+      [[ $claimed_merge -eq 1 || $claimed_gate -eq 1 || -n "$claimed_dirs" ]] && run_ledger "$cwd" release --call "$tuid"
+    else
+      [[ $claimed_merge -eq 0 ]] || run_ledger "$cwd" release merge
+      [[ $claimed_gate -eq 0 ]] || run_ledger "$cwd" release gate
+      if [[ -n "$claimed_dirs" ]]; then
+        while IFS= read -r d; do
+          [[ -n "$d" ]] && run_ledger "$d" release git "$d"
+        done <<EOF
 $claimed_dirs
 EOF
+      fi
     fi
     DECISION="deny"
     REASON="$denies"
@@ -8028,6 +8086,13 @@ post_bash() {
   if [[ "$event" == "PostToolUseFailure" ]]; then settle_issue_mark release; else settle_issue_mark keep; fi
   [[ -n "$cmd" ]] || return 0
   classify_command "$cmd" "$cwd"
+  if [[ -n "$tuid" ]]; then
+    # 登録時に渡した tool_use_id の登録だけを解放する（並行する別の呼び出しの登録は残る）。
+    if [[ $HIT_MERGE -eq 1 || $HIT_GATE -eq 1 || -n "$HIT_GIT_DIRS" ]]; then
+      run_ledger "$cwd" release --call "$tuid"
+    fi
+    return 0
+  fi
   [[ $HIT_MERGE -eq 1 ]] && run_ledger "$cwd" release merge
   [[ $HIT_GATE -eq 1 ]] && run_ledger "$cwd" release gate
   if [[ -n "$HIT_GIT_DIRS" ]]; then

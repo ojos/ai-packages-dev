@@ -9,6 +9,7 @@
 ## 未リリース
 
 ### Summary
+- **`shared-ai-rules.md` 16 章に、台帳の登録へ持たせる「呼び出しの識別子」を足した**（ojos/ai-packages-dev#425）。識別子付きの解放はその識別子の登録だけを外し、同じセッションの並行する呼び出しが互いの登録を外さない。識別子は衝突の判定に使わず、無ければ従来どおり種類と対象の単位で扱う。同じ（種類, 対象）に複数の登録があるときは、解放されていないものが 1 つでもあれば有効とする。
 - **`shared-ai-rules.md` に 16 章「セッション間の協調」を足した**（ojos/ai-packages-dev#395 の 1/2）。互いを知らない別々のセッションが同じものを触る衝突（同じ issue への重複着手・共有文書の同時編集・作業ツリーの git 操作と重いゲートの干渉・マージ/リリースの競合）を、共有台帳への登録と確認で避ける規範。台帳の項目、すり合わせの時点、種類ごとの止める強さ（警告 / 拒否）、調整の手順、持ち主が消えた登録の失効を定める。調整は Claude Code では `ListAgents` / `SendMessage`、それ以外の実行環境では利用者を経由する。章は末尾へ足したので、既存の章番号は変わらない。
 - **`templates/claude-skill-intake.md` と `templates/claude-skill-land.md` に、並行セッションの台帳の手順を足した**（ojos/ai-packages-dev#395 の 2/2）。`/intake` は着手のときに `bash scripts/session-ledger.sh claim issue <番号>` で issue を登録し、`LEDGER_WARN` なら相手と調整してから進める。`/land` は、マージの前提の確認に `check merge`（`LEDGER_DENY` ならマージせずに止めて報告）を、マージ後の確認の末尾に作業の終わりの `release` を足した。相手の「進めてよい」という返事はマージの承認の代わりにならない。台帳（`scripts/session-ledger.sh`）が無いプロジェクトでは省く。雛形は 15 種のまま。
 - **`templates/claude-skill-land.md` の CI 待ちを、Checks の権限なしで成り立たせた**（ojos/ai-packages-dev#416）。fine-grained PAT には Checks の権限が無く、非公開リポジトリでは `commits/<sha>/check-runs` と `gh pr checks` が 403 になって CI 待ちが成り立たなかった。`actions/runs`（Actions: Read）と `commits/<sha>/status`（Commit statuses: Read）で判定し、同じ SHA を持つ別 PR の実行は PR 番号で除く。完了の待ちも `gh run watch` を使わず `actions/runs` の読み直しにした（実行中のジョブの annotations で Checks の API を読むことがあるため）。`templates/project-ai-rules.md` に、Checks は fine-grained PAT では選べない旨の注記を足した。雛形は 15 種のまま。
