@@ -259,4 +259,43 @@ else
   fail "permissions キーを含むフィクスチャを検出できなかった（照合が空振りしている）"
 fi
 
+# ── フックの配線（確認フックとセッション協調フック）─────────────────────────────
+
+# 配線の中身を、イベントと matcher ごとに読む。フック本体が実在しても、ここから
+# 呼ばれなければ何も起きない。
+wired_cmds() { # jq フィルタ（hooks の配列を返す）
+  jq -r "$1 // [] | map(.hooks[].command) | join(\"\\n\")" "$SETTINGS" 2>/dev/null
+}
+
+it "settings.json: PreToolUse(Bash) は確認フックを先頭に、セッション協調フックをその次に呼ぶ"
+bash_cmds="$(jq -r '.hooks.PreToolUse | map(select(.matcher == "Bash")) | .[0].hooks | map(.command) | @tsv' "$SETTINGS" 2>/dev/null)"
+case "$bash_cmds" in
+  *confirm-merge-hook.sh*session-coord-hook.sh*) pass ;;
+  *) fail "PreToolUse(Bash): $bash_cmds" ;;
+esac
+
+it "settings.json: PreToolUse(Edit|Write) からセッション協調フックを呼ぶ"
+case "$(wired_cmds '.hooks.PreToolUse | map(select(.matcher == "Edit|Write"))')" in
+  *session-coord-hook.sh*) pass ;;
+  *) fail "PreToolUse(Edit|Write) に配線が無い" ;;
+esac
+
+it "settings.json: SessionStart / PostToolUse(Bash) / PostToolUseFailure(Bash) / SessionEnd からセッション協調フックを呼ぶ"
+a="$(wired_cmds '.hooks.SessionStart')"
+b="$(wired_cmds '.hooks.PostToolUse | map(select(.matcher == "Bash"))')"
+c="$(wired_cmds '.hooks.SessionEnd')"
+f="$(wired_cmds '.hooks.PostToolUseFailure | map(select(.matcher == "Bash"))')"
+if [[ "$a" == *session-coord-hook.sh* && "$b" == *session-coord-hook.sh* && "$c" == *session-coord-hook.sh* && "$f" == *session-coord-hook.sh* ]]; then
+  pass
+else
+  fail "SessionStart=$a PostToolUse=$b SessionEnd=$c PostToolUseFailure=$f"
+fi
+
+it "settings.json の配線が、DCB が --with-claude で生成する雛形と一致する"
+TEMPLATE_SETTINGS="$(awk -v q="'" '$0=="    " q ".claude/settings.json" q ")"{seen=1;next} seen&&$0=="      cat <<" q "TMPL" q{inside=1;seen=0;next} inside&&$0=="TMPL"{exit} inside{print}' "$REPO_ROOT/packages/devcontainer-bootstrap/bootstrap.sh")"
+if [[ -n "$TEMPLATE_SETTINGS" && "$(cat "$SETTINGS")" == "$TEMPLATE_SETTINGS" ]]; then pass; else fail "雛形と食い違っている（雛形が空の場合も含む）"; fi
+
+it "配線の呼び出し先（scripts/ の 2 本）が実在する"
+if [[ -f "$REPO_ROOT/scripts/confirm-merge-hook.sh" && -f "$REPO_ROOT/scripts/session-coord-hook.sh" ]]; then pass; else fail "フック本体が無い"; fi
+
 exit_with_result

@@ -9,6 +9,7 @@
 #   session-ledger.sh release [<kind> [target]] 自分の登録を解放する（引数なしは全部）
 #   session-ledger.sh list    [--others|--all]  登録を表示する（既定は生きている登録すべて）
 #   session-ledger.sh check   <kind> [target]   他セッションの登録と衝突するかを調べる
+#   session-ledger.sh refresh                   自分の最後の更新時刻を新しくする（失効を避ける）
 #
 # kind（登録の種類）と衝突の判定・強さ:
 #   issue  target = issue 番号（# は付けても付けなくてもよい）。同じ番号で衝突。警告。
@@ -51,8 +52,14 @@
 #   終了コードは LEDGER_DENY のときだけ 3。それ以外は 0（台帳の不具合は fail-open）。
 #   使い方の誤りは 2。
 #
+# 更新（refresh）:
+#   自分に生きている登録があり、最後の更新から SESSION_LEDGER_REFRESH_MIN 秒（既定 300）
+#   以上たっていれば、その登録を 1 件だけ claim し直す（追記のみ）。失効の判定はセッション
+#   単位で最後の更新を見るため、1 件で足りる。長く続くセッションが、フックなどから呼んで
+#   失効を避けるための入口。頻繁に呼んでも台帳が膨らまない。
+#
 # 環境変数: SESSION_LEDGER_ID / SESSION_LEDGER_PID / SESSION_LEDGER_TTL /
-#           SESSION_LEDGER_DIR（置き場所を差し替える。試験用）
+#           SESSION_LEDGER_REFRESH_MIN / SESSION_LEDGER_DIR（置き場所を差し替える。試験用）
 #
 # bash 3.2 互換（連想配列・mapfile を使わない）。
 set -u
@@ -65,6 +72,7 @@ usage: session-ledger.sh claim   <issue|doc|merge|git|gate> [target]
        session-ledger.sh release [<kind> [target]]
        session-ledger.sh list    [--others|--all]
        session-ledger.sh check   <issue|doc|merge|git|gate> [target]
+       session-ledger.sh refresh
 USAGE
 }
 
@@ -483,6 +491,28 @@ cmd_release() {
   return 0
 }
 
+cmd_refresh() {
+  local rows min
+  owner_unknown && return 0
+  min="${SESSION_LEDGER_REFRESH_MIN:-300}"
+  case "$min" in '' | *[!0-9]*) min=300 ;; esac
+  ensure_dir || return 0
+  rows="$(collect)" || rows=""
+  while IFS="$TAB" read -r r_sid r_kind r_tgt _ _ _ r_age r_state; do
+    [ -n "$r_sid" ] || continue
+    [ "$r_sid" = "$SELF_ID" ] || continue
+    [ "$r_state" = "live" ] || continue
+    if [ "$r_age" -ge "$min" ]; then
+      append_record claim "$r_kind" "$r_tgt" || warn "台帳へ書き込めませんでした。更新できていません。"
+      echo "refreshed: session=$SELF_ID"
+    fi
+    break
+  done <<EOF
+$rows
+EOF
+  return 0
+}
+
 cmd_list() {
   local mode="${1:-}" rows
   case "$mode" in '' | --others | --all) ;; *) usage; return 2 ;; esac
@@ -507,6 +537,7 @@ main() {
     release) cmd_release "$@" ;;
     list) cmd_list "$@" ;;
     check) cmd_check "$@" ;;
+    refresh) cmd_refresh ;;
     *) usage; return 2 ;;
   esac
 }

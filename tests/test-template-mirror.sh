@@ -122,6 +122,13 @@ BOOTSTRAP="$REPO_ROOT/packages/devcontainer-bootstrap/bootstrap.sh"
 #   このリポジトリ自身の scripts/acceptance.sh がこの写しを呼ぶため、正本と
 #   写しがずれると「配布物では自己試験が壊れを検知するが手元では検知しない」
 #   状態が生まれる。
+#
+#   session-coord-hook.sh を MIRRORED に入れる理由（#395）: 判定（どのコマンドを
+#   マージ・git 操作・ゲートの起動とみなすか、拒否と警告の返し方）は生成条件に依らず
+#   全構成で同一であり、置換プレースホルダを 1 つも持たない。台帳（session-ledger.sh）
+#   と対で配られるため、片方だけ直すと拒否の出力を読めなくなる。
+#   この開発リポジトリも .claude/settings.json で同じ配線を持つ（雛形との一致は
+#   tests/test-claude-mirror.sh が検査する）。
 MIRRORED_RELS='scripts/check-control-chars.sh
 scripts/check-doc-links.sh
 scripts/check-no-secrets.sh
@@ -131,6 +138,7 @@ scripts/confirm-merge-hook.sh
 scripts/load-project-env.sh
 scripts/loop-gate.sh
 scripts/on-attach.sh
+scripts/session-coord-hook.sh
 scripts/session-ledger.sh
 scripts/setup-git-identity.sh
 scripts/verify-commit-identity.sh

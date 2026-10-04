@@ -11,7 +11,8 @@
 #   (h) 台帳が壊れていても、警告を出して通る
 #   (i) 拒否・警告の出力に、相手セッションの識別子・登録の種類・調整の手順が含まれる
 #   (k) 相手が release した後は、同じ操作が通る
-#   ほか: 種類ごとの止める強さ、作業ツリーをまたぐ共有、追記のみ、セッションごとの別ファイル
+#   ほか: 種類ごとの止める強さ、作業ツリーをまたぐ共有、追記のみ、セッションごとの別ファイル、
+#         更新（refresh）
 #
 # セッションは SESSION_LEDGER_ID と SESSION_LEDGER_PID で模擬する。bash 3.2 互換。
 
@@ -289,6 +290,35 @@ OUT="$(cd "$nogit" && GIT_CEILING_DIRECTORIES="$nogit/.." SESSION_LEDGER_ID=s-a 
 RC=$?
 if [[ "$RC" -eq 0 ]] && printf '%s' "$OUT" | grep -q 'LEDGER_SKIP'; then pass; else fail "rc=$RC out=$OUT"; fi
 
+# ── 更新（長いセッションの失効を避ける）──────────────────────────────────────
+
+it "refresh: 最後の更新から一定時間たっていれば、生きている登録を claim し直して更新時刻を新しくする"
+old=$(( $(date +%s) - 1000 ))
+printf '%s\tclaim\tissue\t900\t%s\t%s\n' "$old" "$PID_A" "$repo" > "$DIR/s-r.tsv"
+before="$(grep -c . "$DIR/s-r.tsv")"
+(cd "$repo" && SESSION_LEDGER_ID=s-r SESSION_LEDGER_PID="$PID_A" bash "$LEDGER" refresh >/dev/null 2>&1)
+after="$(grep -c . "$DIR/s-r.tsv")"
+run s-b "$repo" list
+age="$(printf '%s\n' "$OUT" | sed -n 's/.*session=s-r.*age=\([0-9]*\)s.*/\1/p' | sed -n 1p)"
+if [[ "$before" -eq 1 && "$after" -eq 2 && -n "$age" && "$age" -lt 100 ]]; then pass; else fail "行数 $before -> $after age=$age"; fi
+
+it "refresh: 更新したばかりなら何も足さない（台帳が膨らまない）"
+(cd "$repo" && SESSION_LEDGER_ID=s-r SESSION_LEDGER_PID="$PID_A" bash "$LEDGER" refresh >/dev/null 2>&1)
+assert_eq "$(grep -c . "$DIR/s-r.tsv")" "2" "行数"
+
+it "refresh: 解放した登録は更新しない（生きている登録が無ければ何も足さない）"
+(cd "$repo" && SESSION_LEDGER_ID=s-r SESSION_LEDGER_PID="$PID_A" bash "$LEDGER" release >/dev/null 2>&1)
+printf '%s\trelease\t*\t*\t%s\t%s\n' "$old" "$PID_A" "$repo" >> "$DIR/s-r.tsv"
+n1="$(grep -c . "$DIR/s-r.tsv")"
+(cd "$repo" && SESSION_LEDGER_ID=s-r SESSION_LEDGER_PID="$PID_A" SESSION_LEDGER_REFRESH_MIN=0 bash "$LEDGER" refresh >/dev/null 2>&1)
+assert_eq "$(grep -c . "$DIR/s-r.tsv")" "$n1" "行数"
+rm -f "$DIR/s-r.tsv"
+
+it "refresh: 台帳の置き場所を作れなくても、警告を出して終了コード 0"
+OUT="$(cd "$repo" && SESSION_LEDGER_DIR="$blocker/ledger" SESSION_LEDGER_ID=s-a SESSION_LEDGER_PID="$PID_A" bash "$LEDGER" refresh 2>&1)"
+RC=$?
+if [[ "$RC" -eq 0 && "$OUT" == *WARN* ]]; then pass; else fail "rc=$RC out=$OUT"; fi
+
 # ── 識別子と使い方 ────────────────────────────────────────────────────────────
 
 it "識別子を渡さないときは pid-<持ち主の PID> になる"
@@ -432,6 +462,12 @@ it "既定の識別子に持ち主の開始時刻が入る（pid-<PID>-<cksum>�
 OUT="$(cd "$repo" && SESSION_LEDGER_PID="$PID_A" bash "$LEDGER" claim issue 780 2>&1)"
 assert_contains "$OUT" "session=pid-$PID_A-$key_a" "出力"
 OUT="$(cd "$repo" && SESSION_LEDGER_PID="$PID_A" bash "$LEDGER" release 2>&1)"
+
+it "refresh: 持ち主を特定できないときは、台帳に書かず警告して通す"
+lines_before="$(cat "$DIR"/*.tsv | grep -c .)"
+# shellcheck disable=SC1090,SC2034  # 生成物を読み込み、SELF_ID は読み込んだ関数が使う
+OUT="$(cd "$repo" && . "$LEDGER" && SELF_ID="" && SESSION_LEDGER_REFRESH_MIN=0 && { cmd_refresh; echo "rc=$?"; } 2>&1)"
+if [[ "$OUT" == *WARN* && "$OUT" == *"rc=0"* && "$(cat "$DIR"/*.tsv | grep -c .)" -eq "$lines_before" ]]; then pass; else fail "出力: $OUT"; fi
 
 it "不明な種類と不明なサブコマンドは使い方の誤り（終了コード 2）"
 run s-a "$repo" claim nothing
