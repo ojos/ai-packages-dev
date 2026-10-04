@@ -440,14 +440,14 @@ EOF
   return 0
 }
 
-# 呼び出しの識別子。--call で渡されたものを、ファイル名と同じ規則で安全な形へ直す。
-# 渡されなければ - （識別子なし）。
+# 呼び出しの識別子。--call で渡されたものを、セッションの識別子と同じ規則（sanitize）で
+# 安全な形へ直す。置き換えが起きたときは元の値の cksum を足すので、a/b と a_b は別の識別子
+# になる。渡されなければ - （識別子なし）。空文字と - は「識別子なし」と区別できないため、
+# 使い方の誤りとして 1 を返す。
 CALL_ID="-"
 set_call_id() { # 値
-  local c
-  c="$(printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '_')"
-  [ -n "$c" ] || c="-"
-  CALL_ID="$c"
+  case "$1" in '' | -) return 1 ;; esac
+  CALL_ID="$(sanitize "$1")"
 }
 
 append_record() { # op kind target
@@ -476,7 +476,7 @@ cmd_claim() {
   local kind target res rc
   if [ "${1:-}" = "--call" ]; then
     [ "$#" -ge 2 ] || { usage; return 2; }
-    set_call_id "$2"
+    set_call_id "$2" || { usage; return 2; }
     shift 2
   fi
   kind="${1:-}"
@@ -511,7 +511,7 @@ cmd_release() {
   local kind target
   if [ "${1:-}" = "--call" ]; then
     [ "$#" -ge 2 ] || { usage; return 2; }
-    set_call_id "$2"
+    set_call_id "$2" || { usage; return 2; }
     shift 2
   fi
   kind="${1:-*}"

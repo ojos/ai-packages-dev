@@ -7288,14 +7288,14 @@ EOF
   return 0
 }
 
-# 呼び出しの識別子。--call で渡されたものを、ファイル名と同じ規則で安全な形へ直す。
-# 渡されなければ - （識別子なし）。
+# 呼び出しの識別子。--call で渡されたものを、セッションの識別子と同じ規則（sanitize）で
+# 安全な形へ直す。置き換えが起きたときは元の値の cksum を足すので、a/b と a_b は別の識別子
+# になる。渡されなければ - （識別子なし）。空文字と - は「識別子なし」と区別できないため、
+# 使い方の誤りとして 1 を返す。
 CALL_ID="-"
 set_call_id() { # 値
-  local c
-  c="$(printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '_')"
-  [ -n "$c" ] || c="-"
-  CALL_ID="$c"
+  case "$1" in '' | -) return 1 ;; esac
+  CALL_ID="$(sanitize "$1")"
 }
 
 append_record() { # op kind target
@@ -7324,7 +7324,7 @@ cmd_claim() {
   local kind target res rc
   if [ "${1:-}" = "--call" ]; then
     [ "$#" -ge 2 ] || { usage; return 2; }
-    set_call_id "$2"
+    set_call_id "$2" || { usage; return 2; }
     shift 2
   fi
   kind="${1:-}"
@@ -7359,7 +7359,7 @@ cmd_release() {
   local kind target
   if [ "${1:-}" = "--call" ]; then
     [ "$#" -ge 2 ] || { usage; return 2; }
-    set_call_id "$2"
+    set_call_id "$2" || { usage; return 2; }
     shift 2
   fi
   kind="${1:-*}"
@@ -7498,6 +7498,9 @@ TMPL
 #     識別子の登録だけを外すため、同じセッションで同じ種類の Bash 呼び出しが並行しても、
 #     先に終わった方が他方の登録を外さない。複合コマンドが拒否されたときも、同じセッションの
 #     先行する登録は残る。識別子は衝突の判定には使わない（種類・作業ツリーの単位のまま）。
+#     別のリポジトリ（別の台帳）へ登録したときのため、登録した台帳の一覧を tool_use_id を
+#     鍵にした印（一時ディレクトリ）へ控え、解放はその一覧のすべての台帳へ行う（印が無い
+#     ときは cwd の台帳だけ）。
 #     tool_use_id が入力に無いときは、識別子なしで（種類と対象の単位で）登録・解放する。
 #     限界: 利用者が確認（ask）を断った場合は、どちらも来ないため、次に同じ種類の操作を
 #     通すか、セッションが終わる（SessionEnd）か、持ち主が消えるまで登録が残る。
@@ -7972,7 +7975,7 @@ on_session_end() {
 }
 
 pre_bash() {
-  local d denies="" warns="" before_rows="" new_issues="" me="" claimed_merge=0 claimed_gate=0 claimed_dirs="" n
+  local d denies="" warns="" before_rows="" new_issues="" me="" claimed_merge=0 claimed_gate=0 claimed_dirs="" n call_dirs=""
   local call_opt=()
   [[ -z "$tuid" ]] || call_opt=(--call "$tuid")
   [[ -n "$cmd" ]] || return 0
@@ -7985,14 +7988,14 @@ pre_bash() {
     run_ledger "$cwd" claim ${call_opt[@]+"${call_opt[@]}"} merge
     case "$LEDGER_VERDICT" in
       LEDGER_DENY) denies="${denies:+$denies$'\n'}$(deny_text 'マージ・リリース' "$LEDGER_DETAIL")" ;;
-      LEDGER_OK | LEDGER_WARN) claimed_merge=1 ;;
+      LEDGER_OK | LEDGER_WARN) claimed_merge=1; call_dirs="${call_dirs:+$call_dirs$'\n'}$cwd" ;;
     esac
   fi
   if [[ $HIT_GATE -eq 1 ]]; then
     run_ledger "$cwd" claim ${call_opt[@]+"${call_opt[@]}"} gate
     case "$LEDGER_VERDICT" in
       LEDGER_DENY) denies="${denies:+$denies$'\n'}$(deny_text '重いゲート（verify / loop-gate）の起動' "$LEDGER_DETAIL")" ;;
-      LEDGER_OK | LEDGER_WARN) claimed_gate=1 ;;
+      LEDGER_OK | LEDGER_WARN) claimed_gate=1; call_dirs="${call_dirs:+$call_dirs$'\n'}$cwd" ;;
     esac
   fi
   if [[ -n "$HIT_GIT_DIRS" ]]; then
@@ -8001,7 +8004,7 @@ pre_bash() {
       run_ledger "$d" claim ${call_opt[@]+"${call_opt[@]}"} git "$d"
       case "$LEDGER_VERDICT" in
         LEDGER_DENY) denies="${denies:+$denies$'\n'}$(deny_text "作業ツリー（$d）での git 操作" "$LEDGER_DETAIL")" ;;
-        LEDGER_OK | LEDGER_WARN) claimed_dirs="${claimed_dirs:+$claimed_dirs$'\n'}$d" ;;
+        LEDGER_OK | LEDGER_WARN) claimed_dirs="${claimed_dirs:+$claimed_dirs$'\n'}$d"; call_dirs="${call_dirs:+$call_dirs$'\n'}$d" ;;
       esac
     done <<EOF
 $HIT_GIT_DIRS
@@ -8011,7 +8014,7 @@ EOF
     # 実行しないので、この呼び出しで登録したものを解放する（PostToolUse は来ない）。
     # tool_use_id があれば、その識別子の登録だけを外す（同じセッションの先行する登録は残す）。
     if [[ -n "$tuid" ]]; then
-      [[ $claimed_merge -eq 1 || $claimed_gate -eq 1 || -n "$claimed_dirs" ]] && run_ledger "$cwd" release --call "$tuid"
+      release_call_dirs "$call_dirs"
     else
       [[ $claimed_merge -eq 0 ]] || run_ledger "$cwd" release merge
       [[ $claimed_gate -eq 0 ]] || run_ledger "$cwd" release gate
@@ -8027,6 +8030,9 @@ EOF
     REASON="$denies"
     return 0
   fi
+  # 登録した台帳（リポジトリ）の一覧を、tool_use_id を鍵にした印へ控える。git -C などで別の
+  # リポジトリへ登録することがあり、解放はその一覧のすべての台帳に対して行うため。
+  [[ -z "$tuid" || -z "$call_dirs" ]] || write_dirs_mark "$call_dirs"
   # issue は、実行を拒否しないと決まってから登録する（拒否した呼び出しで登録を残さない）。
   # この呼び出しで新しく登録した issue は、呼び出しが失敗したとき（PostToolUseFailure）に
   # 解放できるよう、tool_use_id を鍵にした印へ控える。前から持っていた登録は控えない。
@@ -8058,9 +8064,27 @@ EOF
 
 # 呼び出しごとの印（この呼び出しで新しく登録した issue の番号）。置き場所は一時ディレクトリで、
 # 名前は tool_use_id から作る。tool_use_id が無ければ印は作らない（失敗時の解放は諦める）。
-issue_mark_path() {
+issue_mark_path() { # [接尾辞]
   [[ -n "$tuid" ]] || return 1
-  printf '%s/session-coord-%s' "${TMPDIR:-/tmp}" "$(printf '%s' "$tuid" | tr -c 'A-Za-z0-9._-' '_')"
+  printf '%s/session-coord-%s%s' "${TMPDIR:-/tmp}" "$(printf '%s' "$tuid" | tr -c 'A-Za-z0-9._-' '_')" "${1:-}"
+}
+# この呼び出しが登録した台帳（作業ディレクトリの一覧。改行区切り）の印。
+write_dirs_mark() {
+  local f
+  f="$(issue_mark_path .dirs)" || return 0
+  printf '%s\n' "$1" >"$f" 2>/dev/null || true
+}
+# 一覧のすべての台帳から、この呼び出しの識別子の登録を解放する（重複は 1 回）。
+release_call_dirs() { # 改行区切りの作業ディレクトリ
+  local d seen=""
+  while IFS= read -r d; do
+    [[ -n "$d" ]] || continue
+    case $'\n'"$seen"$'\n' in *$'\n'"$d"$'\n'*) continue ;; esac
+    seen="${seen:+$seen$'\n'}$d"
+    run_ledger "$d" release --call "$tuid"
+  done <<EOF
+$1
+EOF
 }
 write_issue_mark() {
   local f
@@ -8088,7 +8112,14 @@ post_bash() {
   classify_command "$cmd" "$cwd"
   if [[ -n "$tuid" ]]; then
     # 登録時に渡した tool_use_id の登録だけを解放する（並行する別の呼び出しの登録は残る）。
-    if [[ $HIT_MERGE -eq 1 || $HIT_GATE -eq 1 || -n "$HIT_GIT_DIRS" ]]; then
+    # 印があれば、その呼び出しが登録した台帳すべてから解放する。無ければ cwd の台帳だけ。
+    local mark dirs=""
+    mark="$(issue_mark_path .dirs)" || mark=""
+    if [[ -n "$mark" && -f "$mark" ]]; then
+      dirs="$(cat "$mark" 2>/dev/null)"
+      rm -f "$mark"
+      release_call_dirs "$dirs"
+    elif [[ $HIT_MERGE -eq 1 || $HIT_GATE -eq 1 || -n "$HIT_GIT_DIRS" ]]; then
       run_ledger "$cwd" release --call "$tuid"
     fi
     return 0

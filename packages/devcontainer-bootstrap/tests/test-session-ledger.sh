@@ -600,4 +600,32 @@ rm -f "$DIR/s-old.tsv"
 if [[ "$mixed_after_call" == "LEDGER_DENY" && "$mixed_after_plain" == "LEDGER_OK" ]]; then pass; else fail "識別子の解放後=$mixed_after_call 識別子なしの解放後=$mixed_after_plain"; fi
 
 
+
+it "(#425) --call の値が置き換わっても別の識別子になる（a/b の解放で a_b の登録は外れない）"
+run s-a "$repo" claim --call 'a/b' merge
+run s-a "$repo" claim --call 'a_b' merge
+run s-a "$repo" release --call 'a/b'
+run s-b "$repo" check merge
+slash_kept="$(first_line)"
+run s-a "$repo" release --call 'a_b'
+run s-b "$repo" check merge
+if [[ "$slash_kept" == "LEDGER_DENY" && "$(first_line)" == "LEDGER_OK" ]]; then pass; else fail "a/b の解放後=$slash_kept"; fi
+run s-a "$repo" release
+
+it "(#425) --call の値が空文字や - なら使い方の誤り（終了コード 2）で、登録も解放もしない"
+run s-a "$repo" claim merge
+run s-a "$repo" release --call -
+rc_dash="$RC"
+run s-a "$repo" release --call ''
+rc_empty="$RC"
+run s-a "$repo" claim --call - gate
+rc_claim="$RC"
+run s-b "$repo" check merge
+merge_kept="$(first_line)"
+run s-b "$repo" check gate
+gate_none="$(first_line)"
+run s-a "$repo" release
+if [[ "$rc_dash" -eq 2 && "$rc_empty" -eq 2 && "$rc_claim" -eq 2 && "$merge_kept" == "LEDGER_DENY" && "$gate_none" == "LEDGER_OK" ]]; then pass; else fail "rc=$rc_dash,$rc_empty,$rc_claim merge=$merge_kept gate=$gate_none"; fi
+
+
 exit_with_result

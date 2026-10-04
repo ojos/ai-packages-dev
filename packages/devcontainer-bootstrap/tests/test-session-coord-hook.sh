@@ -522,6 +522,56 @@ gone="$(ledger s-b "$repo" check merge | sed -n 1p)"
 if [[ "$col8" == "-" && "$gone" == "LEDGER_OK" ]]; then pass; else fail "claim の識別子=$col8 解放後=$gone"; fi
 reset_ledger
 
+
+# 別のリポジトリ（別の台帳）への git 操作。台帳はリポジトリごとなので、解放は登録した台帳へ行う。
+repo_x="$(new_workdir)/repo_x"
+mkdir -p "$repo_x"
+(
+  cd "$repo_x" || exit 1
+  git init -q . 2>/dev/null
+  git config user.name test
+  git config user.email test@example.com
+  git config commit.gpgsign false
+  echo x > f.txt
+  git add f.txt
+  git commit -q -m init
+) >/dev/null 2>&1
+
+it "(#425) git -C で別のリポジトリへ登録した呼び出しは、終わったとき（PostToolUse）にその台帳の登録も解放する"
+pre_bash s-a "$repo" "git -C $repo_x fetch origin" toolu_x1
+held="$(ledger s-b "$repo_x" check git "$repo_x" | sed -n 1p)"
+post_bash s-a "$repo" "git -C $repo_x fetch origin" toolu_x1
+gone="$(ledger s-b "$repo_x" check git "$repo_x" | sed -n 1p)"
+if [[ "$held" == "LEDGER_DENY" && "$gone" == "LEDGER_OK" ]]; then pass; else fail "実行中=$held 終了後=$gone"; fi
+reset_ledger
+rm -rf "$repo_x/.git/session-ledger"
+
+it "(#425) 失敗した呼び出し（PostToolUseFailure）でも、別のリポジトリの登録を解放する"
+pre_bash s-a "$repo" "git -C $repo_x fetch origin && git rebase main" toolu_x2
+fail_bash s-a "$repo" "git -C $repo_x fetch origin && git rebase main" toolu_x2
+gone_x="$(ledger s-b "$repo_x" check git "$repo_x" | sed -n 1p)"
+gone_r="$(ledger s-b "$repo" check git "$repo" | sed -n 1p)"
+if [[ "$gone_x" == "LEDGER_OK" && "$gone_r" == "LEDGER_OK" ]]; then pass; else fail "別のリポジトリ=$gone_x cwd=$gone_r"; fi
+reset_ledger
+rm -rf "$repo_x/.git/session-ledger"
+
+it "(#425) 拒否したときの巻き戻しも、別のリポジトリの先に登録した分を外す"
+ledger s-b "$repo" claim git "$repo" >/dev/null
+pre_bash s-a "$repo" "git -C $repo_x fetch origin && git rebase main" toolu_x3
+d_x="$(decision)"
+left_x="$(ledger s-b "$repo_x" check git "$repo_x" | sed -n 1p)"
+if [[ "$d_x" == "deny" && "$left_x" == "LEDGER_OK" ]]; then pass; else fail "判定=$d_x 別のリポジトリ=$left_x"; fi
+reset_ledger
+rm -rf "$repo_x/.git/session-ledger"
+
+it "(#425) 印が無い（PostToolUse だけが来た）ときは、従来どおり cwd の台帳へ解放する"
+pre_bash s-a "$repo" 'gh pr merge 5 --squash' toolu_x4
+rm -f "${TMPDIR:-/tmp}/session-coord-toolu_x4.dirs"
+post_bash s-a "$repo" 'gh pr merge 5 --squash' toolu_x4
+gone="$(ledger s-b "$repo" check merge | sed -n 1p)"
+assert_eq "$gone" "LEDGER_OK" "解放後"
+reset_ledger
+
 # ── (e) 文書の編集 ───────────────────────────────────────────────────────────
 
 it "(e) 相手が登録していない文書の Edit は黙って通る"
