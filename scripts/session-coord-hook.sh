@@ -40,11 +40,17 @@
 #     解放する（失敗した呼び出しは PostToolUseFailure で解放する）。「実行する間は登録する」
 #     （規範）を、実行のあいだに限って機構が担う。拒否したときは、その呼び出しで登録した
 #     ものを解放してから拒否する（issue は、拒否しないと決まってから登録する）。
+#     登録と解放には、その呼び出しの tool_use_id を識別子として渡す（`session-ledger.sh
+#     claim|release --call <tool_use_id>`）。解放（拒否したときの巻き戻しを含む）はその
+#     識別子の登録だけを外すため、同じセッションで同じ種類の Bash 呼び出しが並行しても、
+#     先に終わった方が他方の登録を外さない。複合コマンドが拒否されたときも、同じセッションの
+#     先行する登録は残る。識別子は衝突の判定には使わない（種類・作業ツリーの単位のまま）。
+#     別のリポジトリ（別の台帳）へ登録したときのため、登録した台帳の一覧を tool_use_id を
+#     鍵にした印（一時ディレクトリ）へ控え、解放はその一覧のすべての台帳へ行う（印が無い
+#     ときは cwd の台帳だけ）。
+#     tool_use_id が入力に無いときは、識別子なしで（種類と対象の単位で）登録・解放する。
 #     限界: 利用者が確認（ask）を断った場合は、どちらも来ないため、次に同じ種類の操作を
 #     通すか、セッションが終わる（SessionEnd）か、持ち主が消えるまで登録が残る。
-#     同じセッションで同じ種類の Bash 呼び出しが並行すると、先に終わった方が解放する
-#     （台帳の対象は git では作業ツリーの等値比較、merge / gate では無視されるため、
-#     呼び出しごとの tool_use_id を対象へ入れて区別することはできない）。
 #     バックグラウンドで起動したゲートは、起動の呼び出しが返った時点で解放される。
 #   - issue: ブランチ作成の時点で登録し、SessionEnd まで持つ。ただし、その呼び出しが失敗した
 #     （PostToolUseFailure）ときは、その呼び出しで新しく登録した issue だけを解放する（ブランチ
@@ -516,7 +522,9 @@ on_session_end() {
 }
 
 pre_bash() {
-  local d denies="" warns="" before_rows="" new_issues="" me="" claimed_merge=0 claimed_gate=0 claimed_dirs="" n
+  local d denies="" warns="" before_rows="" new_issues="" me="" claimed_merge=0 claimed_gate=0 claimed_dirs="" n call_dirs=""
+  local call_opt=()
+  [[ -z "$tuid" ]] || call_opt=(--call "$tuid")
   [[ -n "$cmd" ]] || return 0
   refresh_ledger "$cwd"
   classify_command "$cmd" "$cwd"
@@ -524,26 +532,26 @@ pre_bash() {
   [[ $HIT_MERGE -eq 1 || $HIT_GATE -eq 1 || -n "$HIT_GIT_DIRS" || -n "$HIT_ISSUES" ]] || return 0
 
   if [[ $HIT_MERGE -eq 1 ]]; then
-    run_ledger "$cwd" claim merge
+    run_ledger "$cwd" claim ${call_opt[@]+"${call_opt[@]}"} merge
     case "$LEDGER_VERDICT" in
       LEDGER_DENY) denies="${denies:+$denies$'\n'}$(deny_text 'マージ・リリース' "$LEDGER_DETAIL")" ;;
-      LEDGER_OK | LEDGER_WARN) claimed_merge=1 ;;
+      LEDGER_OK | LEDGER_WARN) claimed_merge=1; call_dirs="${call_dirs:+$call_dirs$'\n'}$cwd" ;;
     esac
   fi
   if [[ $HIT_GATE -eq 1 ]]; then
-    run_ledger "$cwd" claim gate
+    run_ledger "$cwd" claim ${call_opt[@]+"${call_opt[@]}"} gate
     case "$LEDGER_VERDICT" in
       LEDGER_DENY) denies="${denies:+$denies$'\n'}$(deny_text '重いゲート（verify / loop-gate）の起動' "$LEDGER_DETAIL")" ;;
-      LEDGER_OK | LEDGER_WARN) claimed_gate=1 ;;
+      LEDGER_OK | LEDGER_WARN) claimed_gate=1; call_dirs="${call_dirs:+$call_dirs$'\n'}$cwd" ;;
     esac
   fi
   if [[ -n "$HIT_GIT_DIRS" ]]; then
     while IFS= read -r d; do
       [[ -n "$d" ]] || continue
-      run_ledger "$d" claim git "$d"
+      run_ledger "$d" claim ${call_opt[@]+"${call_opt[@]}"} git "$d"
       case "$LEDGER_VERDICT" in
         LEDGER_DENY) denies="${denies:+$denies$'\n'}$(deny_text "作業ツリー（$d）での git 操作" "$LEDGER_DETAIL")" ;;
-        LEDGER_OK | LEDGER_WARN) claimed_dirs="${claimed_dirs:+$claimed_dirs$'\n'}$d" ;;
+        LEDGER_OK | LEDGER_WARN) claimed_dirs="${claimed_dirs:+$claimed_dirs$'\n'}$d"; call_dirs="${call_dirs:+$call_dirs$'\n'}$d" ;;
       esac
     done <<EOF
 $HIT_GIT_DIRS
@@ -551,19 +559,27 @@ EOF
   fi
   if [[ -n "$denies" ]]; then
     # 実行しないので、この呼び出しで登録したものを解放する（PostToolUse は来ない）。
-    [[ $claimed_merge -eq 0 ]] || run_ledger "$cwd" release merge
-    [[ $claimed_gate -eq 0 ]] || run_ledger "$cwd" release gate
-    if [[ -n "$claimed_dirs" ]]; then
-      while IFS= read -r d; do
-        [[ -n "$d" ]] && run_ledger "$d" release git "$d"
-      done <<EOF
+    # tool_use_id があれば、その識別子の登録だけを外す（同じセッションの先行する登録は残す）。
+    if [[ -n "$tuid" ]]; then
+      release_call_dirs "$call_dirs"
+    else
+      [[ $claimed_merge -eq 0 ]] || run_ledger "$cwd" release merge
+      [[ $claimed_gate -eq 0 ]] || run_ledger "$cwd" release gate
+      if [[ -n "$claimed_dirs" ]]; then
+        while IFS= read -r d; do
+          [[ -n "$d" ]] && run_ledger "$d" release git "$d"
+        done <<EOF
 $claimed_dirs
 EOF
+      fi
     fi
     DECISION="deny"
     REASON="$denies"
     return 0
   fi
+  # 登録した台帳（リポジトリ）の一覧を、tool_use_id を鍵にした印へ控える。git -C などで別の
+  # リポジトリへ登録することがあり、解放はその一覧のすべての台帳に対して行うため。
+  [[ -z "$tuid" || -z "$call_dirs" ]] || write_dirs_mark "$call_dirs"
   # issue は、実行を拒否しないと決まってから登録する（拒否した呼び出しで登録を残さない）。
   # この呼び出しで新しく登録した issue は、呼び出しが失敗したとき（PostToolUseFailure）に
   # 解放できるよう、tool_use_id を鍵にした印へ控える。前から持っていた登録は控えない。
@@ -595,9 +611,27 @@ EOF
 
 # 呼び出しごとの印（この呼び出しで新しく登録した issue の番号）。置き場所は一時ディレクトリで、
 # 名前は tool_use_id から作る。tool_use_id が無ければ印は作らない（失敗時の解放は諦める）。
-issue_mark_path() {
+issue_mark_path() { # [接尾辞]
   [[ -n "$tuid" ]] || return 1
-  printf '%s/session-coord-%s' "${TMPDIR:-/tmp}" "$(printf '%s' "$tuid" | tr -c 'A-Za-z0-9._-' '_')"
+  printf '%s/session-coord-%s%s' "${TMPDIR:-/tmp}" "$(printf '%s' "$tuid" | tr -c 'A-Za-z0-9._-' '_')" "${1:-}"
+}
+# この呼び出しが登録した台帳（作業ディレクトリの一覧。改行区切り）の印。
+write_dirs_mark() {
+  local f
+  f="$(issue_mark_path .dirs)" || return 0
+  printf '%s\n' "$1" >"$f" 2>/dev/null || true
+}
+# 一覧のすべての台帳から、この呼び出しの識別子の登録を解放する（重複は 1 回）。
+release_call_dirs() { # 改行区切りの作業ディレクトリ
+  local d seen=""
+  while IFS= read -r d; do
+    [[ -n "$d" ]] || continue
+    case $'\n'"$seen"$'\n' in *$'\n'"$d"$'\n'*) continue ;; esac
+    seen="${seen:+$seen$'\n'}$d"
+    run_ledger "$d" release --call "$tuid"
+  done <<EOF
+$1
+EOF
 }
 write_issue_mark() {
   local f
@@ -623,6 +657,20 @@ post_bash() {
   if [[ "$event" == "PostToolUseFailure" ]]; then settle_issue_mark release; else settle_issue_mark keep; fi
   [[ -n "$cmd" ]] || return 0
   classify_command "$cmd" "$cwd"
+  if [[ -n "$tuid" ]]; then
+    # 登録時に渡した tool_use_id の登録だけを解放する（並行する別の呼び出しの登録は残る）。
+    # 印があれば、その呼び出しが登録した台帳すべてから解放する。無ければ cwd の台帳だけ。
+    local mark dirs=""
+    mark="$(issue_mark_path .dirs)" || mark=""
+    if [[ -n "$mark" && -f "$mark" ]]; then
+      dirs="$(cat "$mark" 2>/dev/null)"
+      rm -f "$mark"
+      release_call_dirs "$dirs"
+    elif [[ $HIT_MERGE -eq 1 || $HIT_GATE -eq 1 || -n "$HIT_GIT_DIRS" ]]; then
+      run_ledger "$cwd" release --call "$tuid"
+    fi
+    return 0
+  fi
   [[ $HIT_MERGE -eq 1 ]] && run_ledger "$cwd" release merge
   [[ $HIT_GATE -eq 1 ]] && run_ledger "$cwd" release gate
   if [[ -n "$HIT_GIT_DIRS" ]]; then

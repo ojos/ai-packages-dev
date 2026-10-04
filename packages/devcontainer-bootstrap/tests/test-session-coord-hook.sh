@@ -389,7 +389,7 @@ reset_ledger
 # ── 失敗した呼び出し・拒否時・重複判定 ──────────────────────────────────────
 
 it "失敗した Bash 呼び出し（PostToolUseFailure）でも、実行のあいだだけの登録を解放する"
-pre_bash s-a "$repo" 'bash scripts/verify.sh'
+pre_bash s-a "$repo" 'bash scripts/verify.sh' toolu_x
 pre_bash s-b "$repo" 'bash scripts/loop-gate.sh'
 held="$(decision)"
 hook_raw s-a "$(jq -n --arg cwd "$repo" --arg cmd 'bash scripts/verify.sh' '{hook_event_name:"PostToolUseFailure",tool_name:"Bash",cwd:$cwd,tool_input:{command:$cmd},tool_use_id:"toolu_x",error:"Exit code 1",is_interrupt:false}')"
@@ -458,6 +458,118 @@ pre_bash s-b "$repo2" 'git fetch'
 c2="$(decision)"
 if [[ "$c1" == "deny" && "$c2" == "deny" ]]; then pass; else fail "repo=$c1 repo2=$c2"; fi
 post_bash s-a "$repo" "git -C $repo2 fetch; git -C $repo fetch"
+reset_ledger
+
+
+# ── 呼び出しごとの解放（#425）──────────────────────────────────────────────────
+
+it "(#425) 同じセッションで merge が並行しても、先に終わった呼び出しの解放で、他方の登録は外れない"
+pre_bash s-a "$repo" 'gh pr merge 5 --squash' toolu_m1
+pre_bash s-a "$repo" 'gh pr merge 6 --squash' toolu_m2
+post_bash s-a "$repo" 'gh pr merge 5 --squash' toolu_m1
+held="$(ledger s-b "$repo" check merge | sed -n 1p)"
+post_bash s-a "$repo" 'gh pr merge 6 --squash' toolu_m2
+gone="$(ledger s-b "$repo" check merge | sed -n 1p)"
+if [[ "$held" == "LEDGER_DENY" && "$gone" == "LEDGER_OK" ]]; then pass; else fail "1 本目の後=$held 2 本目の後=$gone"; fi
+reset_ledger
+
+it "(#425) 失敗した呼び出し（PostToolUseFailure）の解放も、その呼び出しの登録だけを外す"
+pre_bash s-a "$repo" 'bash scripts/verify.sh' toolu_g1
+pre_bash s-a "$repo" 'bash scripts/loop-gate.sh' toolu_g2
+fail_bash s-a "$repo" 'bash scripts/verify.sh' toolu_g1
+held="$(ledger s-b "$repo" check gate | sed -n 1p)"
+post_bash s-a "$repo" 'bash scripts/loop-gate.sh' toolu_g2
+gone="$(ledger s-b "$repo" check gate | sed -n 1p)"
+if [[ "$held" == "LEDGER_DENY" && "$gone" == "LEDGER_OK" ]]; then pass; else fail "失敗した 1 本の後=$held 2 本とも終わった後=$gone"; fi
+reset_ledger
+
+it "(#425) git も同様。同じ作業ツリーで並行する 2 本のうち 1 本が終わっても、別セッションの git は拒否のまま"
+pre_bash s-a "$repo" 'git fetch origin' toolu_c1
+pre_bash s-a "$repo" 'git rebase main' toolu_c2
+post_bash s-a "$repo" 'git fetch origin' toolu_c1
+pre_bash s-b "$repo" 'git rebase main'
+held="$(decision)"
+post_bash s-a "$repo" 'git rebase main' toolu_c2
+pre_bash s-b "$repo" 'git rebase main'
+if [[ "$held" == "deny" && "$(decision)" == "none" ]]; then pass; else fail "1 本目の後=$held 2 本目の後=$(decision)"; fi
+reset_ledger
+
+it "(#425) 複合コマンドが拒否されたとき、同じセッションの先行する登録は残り、その呼び出しの登録だけが外れる"
+pre_bash s-a "$repo" 'gh pr merge 5 --squash' toolu_p1
+ledger s-b "$wt2" claim git "$wt2" >/dev/null
+pre_bash s-a "$repo" "gh pr merge 6 --squash && git -C $wt2 rebase main" toolu_p2
+d_compound="$(decision)"
+# 拒否された呼び出しでは merge も残さない（先行する toolu_p1 の登録だけが残る）。
+kept="$(ledger s-b "$repo" check merge | sed -n 1p)"
+post_bash s-a "$repo" 'gh pr merge 5 --squash' toolu_p1
+after_p1="$(ledger s-b "$repo" check merge | sed -n 1p)"
+if [[ "$d_compound" == "deny" && "$kept" == "LEDGER_DENY" && "$after_p1" == "LEDGER_OK" ]]; then pass; else fail "判定=$d_compound 拒否後=$kept 先行の解放後=$after_p1"; fi
+reset_ledger
+
+it "(#425) フックが台帳へ渡す識別子は tool_use_id である（台帳の 8 列目に入る）"
+pre_bash s-a "$repo" 'gh pr merge 5 --squash' toolu_id1
+col8="$(awk -F'\t' '$2 == "claim" && $3 == "merge" {print $8}' "$DIR/s-a.tsv" | tail -1)"
+post_bash s-a "$repo" 'gh pr merge 5 --squash' toolu_id1
+rel8="$(awk -F'\t' '$2 == "release" {print $8}' "$DIR/s-a.tsv" | tail -1)"
+if [[ "$col8" == "toolu_id1" && "$rel8" == "toolu_id1" ]]; then pass; else fail "claim=$col8 release=$rel8"; fi
+reset_ledger
+
+it "(#425) tool_use_id が入力に無いときは、従来どおり種類と対象の単位で登録・解放する"
+pre_bash s-a "$repo" 'gh pr merge 5 --squash'
+col8="$(awk -F'\t' '$2 == "claim" && $3 == "merge" {print $8}' "$DIR/s-a.tsv" | tail -1)"
+post_bash s-a "$repo" 'gh pr merge 5 --squash'
+gone="$(ledger s-b "$repo" check merge | sed -n 1p)"
+if [[ "$col8" == "-" && "$gone" == "LEDGER_OK" ]]; then pass; else fail "claim の識別子=$col8 解放後=$gone"; fi
+reset_ledger
+
+
+# 別のリポジトリ（別の台帳）への git 操作。台帳はリポジトリごとなので、解放は登録した台帳へ行う。
+repo_x="$(new_workdir)/repo_x"
+mkdir -p "$repo_x"
+(
+  cd "$repo_x" || exit 1
+  git init -q . 2>/dev/null
+  git config user.name test
+  git config user.email test@example.com
+  git config commit.gpgsign false
+  echo x > f.txt
+  git add f.txt
+  git commit -q -m init
+) >/dev/null 2>&1
+
+it "(#425) git -C で別のリポジトリへ登録した呼び出しは、終わったとき（PostToolUse）にその台帳の登録も解放する"
+pre_bash s-a "$repo" "git -C $repo_x fetch origin" toolu_x1
+held="$(ledger s-b "$repo_x" check git "$repo_x" | sed -n 1p)"
+post_bash s-a "$repo" "git -C $repo_x fetch origin" toolu_x1
+gone="$(ledger s-b "$repo_x" check git "$repo_x" | sed -n 1p)"
+if [[ "$held" == "LEDGER_DENY" && "$gone" == "LEDGER_OK" ]]; then pass; else fail "実行中=$held 終了後=$gone"; fi
+reset_ledger
+rm -rf "$repo_x/.git/session-ledger"
+
+it "(#425) 失敗した呼び出し（PostToolUseFailure）でも、別のリポジトリの登録を解放する"
+pre_bash s-a "$repo" "git -C $repo_x fetch origin && git rebase main" toolu_x2
+fail_bash s-a "$repo" "git -C $repo_x fetch origin && git rebase main" toolu_x2
+gone_x="$(ledger s-b "$repo_x" check git "$repo_x" | sed -n 1p)"
+gone_r="$(ledger s-b "$repo" check git "$repo" | sed -n 1p)"
+if [[ "$gone_x" == "LEDGER_OK" && "$gone_r" == "LEDGER_OK" ]]; then pass; else fail "別のリポジトリ=$gone_x cwd=$gone_r"; fi
+reset_ledger
+rm -rf "$repo_x/.git/session-ledger"
+
+it "(#425) 拒否したときの巻き戻しも、別のリポジトリの先に登録した分を外す"
+ledger s-b "$repo" claim git "$repo" >/dev/null
+pre_bash s-a "$repo" "git -C $repo_x fetch origin && git rebase main" toolu_x3
+d_x="$(decision)"
+left_x="$(ledger s-b "$repo_x" check git "$repo_x" | sed -n 1p)"
+if [[ "$d_x" == "deny" && "$left_x" == "LEDGER_OK" ]]; then pass; else fail "判定=$d_x 別のリポジトリ=$left_x"; fi
+reset_ledger
+rm -rf "$repo_x/.git/session-ledger"
+
+it "(#425) 印が無い（PostToolUse だけが来た）ときは、従来どおり cwd の台帳へ解放する"
+pre_bash s-a "$repo" 'gh pr merge 5 --squash' toolu_x4
+rm -f "${TMPDIR:-/tmp}/session-coord-toolu_x4.dirs"
+post_bash s-a "$repo" 'gh pr merge 5 --squash' toolu_x4
+gone="$(ledger s-b "$repo" check merge | sed -n 1p)"
+assert_eq "$gone" "LEDGER_OK" "解放後"
 reset_ledger
 
 # ── (e) 文書の編集 ───────────────────────────────────────────────────────────

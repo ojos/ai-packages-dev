@@ -475,4 +475,157 @@ rc1="$RC"
 run s-a "$repo" frobnicate
 if [[ "$rc1" -eq 2 && "$RC" -eq 2 ]]; then pass; else fail "rc=$rc1,$RC"; fi
 
+
+# ── 呼び出しごとの解放（#425）──────────────────────────────────────────────────
+
+run s-a "$repo" release >/dev/null
+run s-b "$repo" release >/dev/null
+
+it "(#425) 同じセッションの同じ種類の登録 2 本のうち 1 本目だけを解放しても、別セッションの check は LEDGER_DENY のまま"
+run s-a "$repo" claim --call call-1 merge
+run s-a "$repo" claim --call call-2 merge
+run s-a "$repo" release --call call-1
+run s-b "$repo" check merge
+after_first="$(first_line)"
+run s-a "$repo" release --call call-2
+run s-b "$repo" check merge
+after_second="$(first_line)"
+if [[ "$after_first" == "LEDGER_DENY" && "$after_second" == "LEDGER_OK" ]]; then pass; else fail "1 本解放後=$after_first 2 本解放後=$after_second"; fi
+
+it "(#425) git は作業ツリーの単位のまま。識別子違いの 2 本のうち 1 本目の解放では、同じ作業ツリーの check は拒否のまま"
+run s-a "$repo" claim --call call-1 git "$repo"
+run s-a "$repo" claim --call call-2 git "$repo"
+run s-a "$repo" release --call call-1
+run s-b "$repo" check git "$repo"
+git_after_first="$(first_line)"
+run s-b "$repo" check git "$wt2"
+git_other_wt="$(first_line)"
+run s-a "$repo" release --call call-2
+run s-b "$repo" check git "$repo"
+if [[ "$git_after_first" == "LEDGER_DENY" && "$git_other_wt" == "LEDGER_OK" && "$(first_line)" == "LEDGER_OK" ]]; then pass; else fail "$git_after_first / $git_other_wt / $(first_line)"; fi
+
+it "(#425) 衝突の出力は識別子の違う 2 本でも 1 件にまとまる"
+run s-a "$repo" claim --call call-1 merge
+run s-a "$repo" claim --call call-2 merge
+run s-b "$repo" check merge
+conflicts="$(printf '%s\n' "$OUT" | grep -c '^conflict:')"
+run s-a "$repo" release >/dev/null
+assert_eq "$conflicts" "1" "conflict 行の数"
+
+it "(#425) 識別子付きの解放は、識別子の無い登録を外さない"
+run s-a "$repo" claim merge
+run s-a "$repo" release --call call-9
+run s-b "$repo" check merge
+nocall_kept="$(first_line)"
+run s-a "$repo" release
+assert_eq "$nocall_kept" "LEDGER_DENY" "判定"
+
+it "(#425) 識別子の無い解放は、従来どおり種類と対象の単位で、識別子付きの登録もすべて外す"
+run s-a "$repo" claim --call call-1 merge
+run s-a "$repo" claim --call call-2 merge
+run s-a "$repo" release merge
+run s-b "$repo" check merge
+assert_eq "$(first_line)" "LEDGER_OK" "判定"
+
+it "(#425) --call と kind を併せて渡すと、その識別子の中で kind / target を絞って解放する"
+run s-a "$repo" claim --call call-1 merge
+run s-a "$repo" claim --call call-1 gate
+run s-a "$repo" release --call call-1 merge
+run s-b "$repo" check merge
+k_merge="$(first_line)"
+run s-b "$repo" check gate
+k_gate="$(first_line)"
+run s-a "$repo" release
+if [[ "$k_merge" == "LEDGER_OK" && "$k_gate" == "LEDGER_DENY" ]]; then pass; else fail "merge=$k_merge gate=$k_gate"; fi
+
+it "(#425) --call のみの解放は、その識別子の登録すべて（種類をまたいで）を外す"
+run s-a "$repo" claim --call call-1 merge
+run s-a "$repo" claim --call call-1 gate
+run s-a "$repo" claim --call call-2 gate
+run s-a "$repo" release --call call-1
+run s-b "$repo" check merge
+c_merge="$(first_line)"
+run s-b "$repo" check gate
+c_gate="$(first_line)"
+run s-a "$repo" release
+if [[ "$c_merge" == "LEDGER_OK" && "$c_gate" == "LEDGER_DENY" ]]; then pass; else fail "merge=$c_merge gate=$c_gate"; fi
+
+it "(#425) 識別子付きの台帳の行は 8 列目に識別子を持つ。識別子の無い行は 8 列目が - である"
+run s-a "$repo" claim --call call-7 merge
+run s-a "$repo" release --call call-7
+run s-a "$repo" claim gate
+cols="$(awk -F'\t' '{print NF ":" $8}' "$DIR/s-a.tsv" | tail -3 | tr '\n' ' ')"
+run s-a "$repo" release
+assert_eq "$cols" "8:call-7 8:call-7 8:- " "列数:識別子"
+
+it "(#425) --call の値が欠けている使い方は使い方の誤り（終了コード 2）"
+run s-a "$repo" claim --call
+rc1="$RC"
+run s-a "$repo" release --call
+if [[ "$rc1" -eq 2 && "$RC" -eq 2 ]]; then pass; else fail "rc=$rc1,$RC"; fi
+
+it "(#425) 識別子付きの登録も、refresh で識別子を保ったまま更新される（識別子付きの解放が効く）"
+run s-a "$repo" claim --call call-1 gate
+SESSION_LEDGER_REFRESH_MIN=0 run s-a "$repo" refresh
+run s-a "$repo" release --call call-1
+run s-b "$repo" check gate
+assert_eq "$(first_line)" "LEDGER_OK" "判定"
+
+it "(#425) 7 列・6 列の古い台帳ファイルを読める。識別子なしの解放で外れる"
+now_t="$(date +%s)"
+lstart_a="$(ps -o lstart= -p "$PID_A")"
+key_a="$(printf "%s" "$lstart_a" | cksum | cut -d" " -f1)"
+printf '%s\tclaim\tmerge\t-\t%s\t%s\t%s\n' "$now_t" "$PID_A" "$repo" "$key_a" > "$DIR/s-old.tsv"
+run s-b "$repo" check merge
+old_deny="$(first_line)"
+printf '%s\trelease\tmerge\t-\t%s\t%s\t%s\n' "$now_t" "$PID_A" "$repo" "$key_a" >> "$DIR/s-old.tsv"
+run s-b "$repo" check merge
+old_ok="$(first_line)"
+printf '%s\tclaim\tgate\t-\t%s\t%s\n' "$now_t" "$PID_A" "$repo" > "$DIR/s-old.tsv"
+run s-b "$repo" check gate
+old6="$(first_line)"
+rm -f "$DIR/s-old.tsv"
+if [[ "$old_deny" == "LEDGER_DENY" && "$old_ok" == "LEDGER_OK" && "$old6" == "LEDGER_DENY" ]]; then pass; else fail "7列=$old_deny→$old_ok 6列=$old6"; fi
+
+it "(#425) 7 列の古い登録と識別子付きの登録が混ざっても、識別子の解放は後者だけを、識別子なしの解放は両方を外す"
+printf '%s\tclaim\tmerge\t-\t%s\t%s\t%s\n' "$now_t" "$PID_A" "$repo" "$key_a" > "$DIR/s-old.tsv"
+printf '%s\tclaim\tmerge\t-\t%s\t%s\t%s\tcall-1\n' "$now_t" "$PID_A" "$repo" "$key_a" >> "$DIR/s-old.tsv"
+printf '%s\trelease\tmerge\t-\t%s\t%s\t%s\tcall-1\n' "$now_t" "$PID_A" "$repo" "$key_a" >> "$DIR/s-old.tsv"
+run s-b "$repo" check merge
+mixed_after_call="$(first_line)"
+printf '%s\trelease\tmerge\t-\t%s\t%s\t%s\n' "$now_t" "$PID_A" "$repo" "$key_a" >> "$DIR/s-old.tsv"
+run s-b "$repo" check merge
+mixed_after_plain="$(first_line)"
+rm -f "$DIR/s-old.tsv"
+if [[ "$mixed_after_call" == "LEDGER_DENY" && "$mixed_after_plain" == "LEDGER_OK" ]]; then pass; else fail "識別子の解放後=$mixed_after_call 識別子なしの解放後=$mixed_after_plain"; fi
+
+
+
+it "(#425) --call の値が置き換わっても別の識別子になる（a/b の解放で a_b の登録は外れない）"
+run s-a "$repo" claim --call 'a/b' merge
+run s-a "$repo" claim --call 'a_b' merge
+run s-a "$repo" release --call 'a/b'
+run s-b "$repo" check merge
+slash_kept="$(first_line)"
+run s-a "$repo" release --call 'a_b'
+run s-b "$repo" check merge
+if [[ "$slash_kept" == "LEDGER_DENY" && "$(first_line)" == "LEDGER_OK" ]]; then pass; else fail "a/b の解放後=$slash_kept"; fi
+run s-a "$repo" release
+
+it "(#425) --call の値が空文字や - なら使い方の誤り（終了コード 2）で、登録も解放もしない"
+run s-a "$repo" claim merge
+run s-a "$repo" release --call -
+rc_dash="$RC"
+run s-a "$repo" release --call ''
+rc_empty="$RC"
+run s-a "$repo" claim --call - gate
+rc_claim="$RC"
+run s-b "$repo" check merge
+merge_kept="$(first_line)"
+run s-b "$repo" check gate
+gate_none="$(first_line)"
+run s-a "$repo" release
+if [[ "$rc_dash" -eq 2 && "$rc_empty" -eq 2 && "$rc_claim" -eq 2 && "$merge_kept" == "LEDGER_DENY" && "$gate_none" == "LEDGER_OK" ]]; then pass; else fail "rc=$rc_dash,$rc_empty,$rc_claim merge=$merge_kept gate=$gate_none"; fi
+
+
 exit_with_result
