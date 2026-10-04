@@ -9,13 +9,15 @@
 
 | パッケージ | リポジトリ | 現行バージョン | 配布形態 |
 |---|---|---|---|
-| devcontainer-bootstrap | `ojos/devcontainer-bootstrap` | v0.14.0 | GitHub Release + 資産 5 点（配布スクリプト 2: `bootstrap.sh` / `doctor.sh`、生成物 3: `SHA256SUMS` / `RELEASE-MANIFEST.json` / `PACKAGE_ARCHIVE.tar.gz`） |
-| ai-playbook | `ojos/ai-playbook` | v0.6.0 | git タグのみ |
+| devcontainer-bootstrap | `ojos/devcontainer-bootstrap` | v0.15.0 | GitHub Release + 資産 5 点（配布スクリプト 2: `bootstrap.sh` / `doctor.sh`、生成物 3: `SHA256SUMS` / `RELEASE-MANIFEST.json` / `PACKAGE_ARCHIVE.tar.gz`） |
+| ai-playbook | `ojos/ai-playbook` | v0.7.0 | git タグのみ |
 
 ### 新世代の版更新
 
 | パッケージ | 版 | 公開日 | 要点 |
 |---|---|---|---|
+| devcontainer-bootstrap | v0.15.0 | 2026-10-04 | **`bootstrap.sh --upgrade` を追加した**（#396）。`.devcontainer/ORIGIN` に入力とハッシュを記録し、手を入れていないファイルだけを新しい版へ更新、手を入れたものは `<path>.dcb-new` を隣へ置く（終了コード 0 / 2 / 1）。`doctor.sh` が残った `*.dcb-new` を WARN で報告する。**並行セッションの共有台帳 `session-ledger.sh` と協調フック `session-coord-hook.sh` を生成物へ足した**（#395 / #425）。規範を置くとき入口ファイルに `AGENTS.md` を加えた（#397）。生成先のシンボリックリンクをたどって出力先の外へ書かない（#418）。リンク検査の括弧の扱い（#415）、PAT の権限の例（#416）。要求する ai-playbook は v0.5.0 以降のまま（v0.7.0 を推奨）。既存フラグの挙動は変わらない |
+| ai-playbook | v0.7.0 | 2026-10-04 | **セッション間の協調を足した**（#395 / #425。`shared-ai-rules.md` 16 章、intake / land の雛形に台帳の手順）。実行環境ごとの対応範囲の表と `entry.md` の例示（#397）。レビュー往復の打ち切りを重大でない指摘に限った（#414）。land の CI 待ちを Checks の権限なしで成り立たせた（#416）。破壊的変更なし。雛形は 15 種のまま |
 | devcontainer-bootstrap | v0.14.0 | 2026-10-03 | **devhost を同梱した最初の版**（#375 / #376）。SSH で届く外部の機械で devcontainer を保ち、どの端末からも入って AI コーディングを続ける道具一式を `PACKAGE_ARCHIVE.tar.gz` の `devhost/` に入れた（個別の資産にはしない）。**`--with-codex` の生成物で codex のサンドボックスが動くようにした**（#392。`security_opt: [apparmor=unconfined, seccomp=unconfined]`。Docker の既定の seccomp が Mac でも Linux でも bwrap を止め、Linux ではさらに AppArmor が止めていた）。**loop-gate で第二意見を差し替えたときの偽の緑を塞いだ**（#402）。要求する ai-playbook は v0.5.0 以降のまま（v0.6.0 を推奨）。既存フラグの挙動は変わらない |
 | ai-playbook | v0.6.0 | 2026-10-03 | **差分を読めなかった第二意見を通過させない**（#386）。JSON スキーマ方式のエンジンで必須の真偽値 `reviewed` を足し、`false` や欠落は落とす。**破壊的変更**: `second-opinion-schema.json` と `second-opinion-review.sh` は対で写し直す（`--engine gemini` だけなら影響なし）。`land` の雛形に `pgrep -f` の自己一致の誤判定と避け方（#403）。雛形は 15 種のまま |
 | devcontainer-bootstrap | v0.13.0 | 2026-10-02 | **ベースイメージを版の名前（`base:noble` / `base:bookworm`）で固定した**（#368）。`base:ubuntu` が 26.04 を指すようになり、`--with-gcp` の google-cloud-cli の feature が `apt-key` の欠落で落ちていた。**第二意見の記録と確認側を配置する**（#361 / #363。規範を配置する構成のとき、記録・確認側・除外判定・schema の 4 本）。**`--with-codex` を足した**（#362）。**identity-guard が squash merge の co-author（`users.noreply`）を許可し、判定の自己試験を配る**（#369。`push(main)` の全履歴検査が赤のままになっていた）。**文書の相対リンクの検査 `check-doc-links.sh` を配る**（#371）。**loop-gate のレビュー範囲から、他の PR を取り消す差分を除いた**（#382）。ネイティブ Linux の UID の食い違いは `updateRemoteUserUID` が吸収することを README に書いた（#372。取り込み元の「compose 方式には効かない」は実測で否定）。**この版は ai-playbook v0.5.0 以降を要求する**（雛形 4 本が必要）。既存フラグの挙動は変わらない |
