@@ -375,6 +375,20 @@ n4="$(first_line)"
 run s-a "$repo" release
 if [[ "$n1" == "LEDGER_DENY" && "$n2" == "LEDGER_DENY" && "$n3" == "LEDGER_DENY" && "$n4" == "LEDGER_DENY" ]]; then pass; else fail ". =$n1 /./=$n2 symlink=$n3 ..=$n4"; fi
 
+it "git: 作業ツリーの下の階層を対象にしても、作業ツリーのルートへ揃えて照合する"
+mkdir -p "$repo/sub/deeper"
+run s-a "$repo" claim git
+run s-b "$repo/sub" check git .
+g1="$(first_line)"
+run s-b "$repo" check git "$repo/sub/deeper"
+g2="$(first_line)"
+run s-a "$repo" release
+run s-a "$repo/sub" claim git .
+run s-b "$repo" check git
+g3="$(first_line)"
+run s-a "$repo" release
+if [[ "$g1" == "LEDGER_DENY" && "$g2" == "LEDGER_DENY" && "$g3" == "LEDGER_DENY" ]]; then pass; else fail "sub=$g1 deeper=$g2 逆=$g3"; fi
+
 it "doc: . と .. を含む表記を正規化して照合する（存在しないファイルでも）"
 run s-a "$repo" claim doc docs/norm.md
 run s-b "$repo" check doc docs/sub/../norm.md

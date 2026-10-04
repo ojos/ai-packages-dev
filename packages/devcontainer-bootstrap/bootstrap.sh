@@ -7095,7 +7095,7 @@ normalize_path() {
 }
 
 normalize_target() { # kind target
-  local kind="$1" t="$2"
+  local kind="$1" t="$2" top
   # タブと改行は書式を壊すので空白へ。
   t="$(printf '%s' "$t" | tr '\t\n\r' '   ')"
   case "$kind" in
@@ -7113,6 +7113,15 @@ normalize_target() { # kind target
     git)
       if [ -n "$t" ]; then t="$(normalize_path "$t")"; else t="$TOPLEVEL"; fi
       t="${t%/}"
+      # 作業ツリーの下の階層を渡されても、その作業ツリーのルートへ揃える（cd した先や
+      # git -C の先がサブディレクトリでも、同じ作業ツリーの登録と照合できるように）。
+      if [ -d "$t" ]; then
+        top="$(git -C "$t" rev-parse --show-toplevel 2>/dev/null)" || top=""
+        if [ -n "$top" ]; then
+          top="$(cd -P "$top" 2>/dev/null && pwd -P)" || top=""
+          [ -n "$top" ] && t="$top"
+        fi
+      fi
       [ -n "$t" ] || t="/"
       ;;
   esac
