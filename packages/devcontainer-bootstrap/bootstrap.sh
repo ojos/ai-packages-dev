@@ -7772,6 +7772,19 @@ upsert_gitignore() {
   block="$(build_gitignore_block)"
   tmp="$(mktemp "${TMPDIR:-/tmp}/dcb-gitignore-block.XXXXXX")"
 
+  dcb_guard_parent "$gitignore_path"
+  # （--upgrade の経路は従来どおり: リンクは mv が置き換える）
+  # シンボリックリンクの .gitignore は「既存のファイル」として扱い、たどらない。
+  # 既定では温存する。--force のときはリンク自体を置き換える（中身は引き継がない）。
+  if [[ "$UPGRADE" != "true" && -L "$gitignore_path" ]]; then
+    if [[ "$FORCE" != "true" ]]; then
+      rm -f "$tmp"
+      echo "skip (exists): $gitignore_path"
+      return 0
+    fi
+    rm -f "$gitignore_path"
+  fi
+
   [[ -f "$gitignore_path" ]] && prev_mode="$(file_mode_octal "$gitignore_path")"
 
   if [[ -f "$gitignore_path" ]]; then
@@ -7793,7 +7806,7 @@ upsert_gitignore() {
 
   # mktemp は 0600 で作成し mv がそれを維持するため、既存 .gitignore のモードを
   # 潰してしまう。元のモードを復元し、644 は新規作成したファイルにのみ使う。
-  mv "$tmp" "$gitignore_path"
+  dcb_place_file "$tmp" "$gitignore_path"
   chmod "${prev_mode:-644}" "$gitignore_path"
   echo "write: $gitignore_path (managed section)"
 }
@@ -7937,19 +7950,26 @@ apply_file_with_policy() {
     return 0
   fi
 
+  dcb_guard_parent "$dest"
   mkdir -p "$(dirname "$dest")"
 
-  if [[ ! -f "$dest" ]]; then
-    cp "$src" "$dest"
+  if [[ ! -e "$dest" && ! -L "$dest" ]]; then
     # 取得元は mktemp 由来（0600）。新規作成するファイルは他と同様に読めるようにする。
-    chmod 644 "$dest"
+    dcb_install_file "$src" "$dest" 644
     echo "write: $dest"
     return 0
   fi
 
-  # 既存ファイルを上書きする場合は、そのモードを変えてはならない。
-  prev_mode="$(file_mode_octal "$dest")"
-  prev_mode="${prev_mode:-644}"
+  # シンボリックリンク（切れたものを含む）は「既存のファイル」として扱い、たどらない。
+  # 置き換えるときはリンク自体を消してから書く（リンク先は触らない）。モードはリンク先
+  # のものを引き継がず、新規と同じ 644 にする。
+  if [[ -L "$dest" ]]; then
+    prev_mode=644
+  else
+    # 既存ファイルを上書きする場合は、そのモードを変えてはならない。
+    prev_mode="$(file_mode_octal "$dest")"
+    prev_mode="${prev_mode:-644}"
+  fi
 
   case "$PLAYBOOK_CONFLICT_POLICY" in
     skip)
@@ -7957,15 +7977,13 @@ apply_file_with_policy() {
       SKIPPED_DESTS="${SKIPPED_DESTS}${dest}"$'\n'
       ;;
     overwrite)
-      cp "$src" "$dest"
-      chmod "$prev_mode" "$dest"
+      dcb_install_file "$src" "$dest" "$prev_mode"
       echo "write: $dest (overwrite)"
       ;;
     prompt)
       read -r -p "File exists: $dest. Overwrite? [y/N]: " answer
       if [[ "$answer" == "y" || "$answer" == "Y" ]]; then
-        cp "$src" "$dest"
-        chmod "$prev_mode" "$dest"
+        dcb_install_file "$src" "$dest" "$prev_mode"
         echo "write: $dest (overwrite)"
       else
         echo "skip (declined): $dest"
@@ -8267,6 +8285,71 @@ upgrade_parent_inside_output() {
   [[ "$real" == "$root" || "$real" == "$root"/* ]]
 }
 
+# 従来の経路（--upgrade を付けない再実行・--force・規範の配置）の書き込み先の検査。
+# 親ディレクトリの実体が出力先の外なら、何も書かずに止める（--upgrade の経路と同じ判定）。
+dcb_guard_parent() {
+  if ! upgrade_parent_inside_output "$1"; then
+    echo "error: $1 の親ディレクトリが出力先の外を指しています（シンボリックリンク）。書き込まずに止めます。" >&2
+    exit 1
+  fi
+}
+
+# 本物のディレクトリが書き込み先に居座っているときは、何も書かずに止める。
+# ディレクトリを指すリンクは対象外（dcb_place_file がリンク自体を置き換える）。
+dcb_refuse_dir_dest() {
+  if [[ -d "$1" && ! -L "$1" ]]; then
+    echo "error: $1 はディレクトリです。書き込まずに止めます。" >&2
+    exit 1
+  fi
+}
+
+# 一時ファイル tmp を dest へ mv で置く（生成先を書く経路の共通の出口）。
+# dest がシンボリックリンクなら、指す先がファイルでもディレクトリでも、先にリンク自体を
+# 消す。mv はディレクトリを指すリンクを置き換えず、その中へ移してしまうため。
+# 消してから mv するまでのあいだにリンクを置き直された場合（同時に書き換える相手がいる
+# ときだけ起きる）に備え、mv のあとで dest が通常ファイルであることを確かめる。そうで
+# なければ、リンク先へ入った一時ファイルを消してエラーにする（リンク先の既存の中身は
+# 触らない。mv -T は BSD に無いので使わない）。
+dcb_place_file() { # tmp dest
+  local tmp="$1" dest="$2"
+  dcb_refuse_dir_dest "$dest"
+  [[ -L "$dest" ]] && rm -f "$dest"
+  mv -f "$tmp" "$dest"
+  if [[ -L "$dest" || ! -f "$dest" ]]; then
+    [[ -d "$dest" ]] && rm -f "$dest/$(basename "$tmp")"
+    echo "error: $dest が書き込み中にリンクへ置き換えられました。止めます。" >&2
+    exit 1
+  fi
+}
+
+# src を dest へ書く。通常ファイルか存在しない生成先は、従来どおり cp でその場に書く
+# （親に書き込み権限が無くても、ファイル自体が書ければ成功する。ハードリンクの先にも
+# 反映される）。シンボリックリンクのときだけ、リンク自体を消してから書く。
+dcb_install_file() { # src dest mode
+  dcb_refuse_dir_dest "$2"
+  [[ -L "$2" ]] && rm -f "$2"
+  cp "$1" "$2"
+  chmod "$3" "$2"
+}
+
+# 今回書く予定のすべての生成先について、親ディレクトリの実体が出力先の中かを、
+# 書き込みを始める前に検査する（途中まで書いてから止まらないようにする）。
+dcb_precheck_destinations() {
+  local rel
+  while IFS= read -r rel; do
+    [[ -n "$rel" ]] || continue
+    dcb_guard_parent "$OUTPUT_DIR/$rel"
+  done <<EOF2
+$(printf '%s\n' "$sorted_rels"
+  printf '%s\n' "$ORIGIN_REL_PATH"
+  [[ "$MANAGE_GITIGNORE" == "true" ]] && printf '%s\n' ".gitignore"
+  if should_install_playbook; then
+    playbook_installed_rel_paths
+    playbook_rules_rel_paths
+  fi)
+EOF2
+}
+
 # 新しい版を中身だけ書く。open 時に既存ファイルがあれば失敗させる（noclobber）ので、
 # リンクを張られた先へは書かない。
 upgrade_write_new() {
@@ -8405,6 +8488,8 @@ upgrade_collect_leftover() {
 # （既存ファイルのモードを変えない。新規は upgrade_apply_file が整える）。
 dcb_chmod_exec() {
   [[ "$UPGRADE" == "true" ]] && return 0
+  # 温存したシンボリックリンクは、たどってリンク先のモードを変えない。
+  [[ -L "$1" ]] && return 0
   chmod +x "$1"
 }
 
@@ -8435,20 +8520,25 @@ write_file() {
     rm -f "$tmp"
     return 0
   fi
-  if [[ -e "$out" && "$FORCE" != "true" ]]; then
+  dcb_guard_parent "$out"
+  # 切れたシンボリックリンクも「既存のファイル」として扱う（-e だけでは無いと判定する）。
+  if [[ ( -e "$out" || -L "$out" ) && "$FORCE" != "true" ]]; then
     echo "skip (exists): $out"
     SKIPPED_DESTS="${SKIPPED_DESTS}${out}"$'\n'
     return 0
   fi
   mkdir -p "$(dirname "$out")"
+  dcb_refuse_dir_dest "$out"
   tmp="$(mktemp "${TMPDIR:-/tmp}/dcb-render.XXXXXX")"
   render_content "$content" > "$tmp"
   if [[ "$out" == *.json ]]; then
     perl -0777 -i -pe 's/,\s*([}\]])/$1/g' "$tmp"
+    # 従来どおりその場に書く。シンボリックリンクのときだけ、リンク自体を消してから書く。
+    [[ -L "$out" ]] && rm -f "$out"
     jq . "$tmp" > "$out"
     rm -f "$tmp"
   else
-    mv "$tmp" "$out"
+    dcb_place_file "$tmp" "$out"
   fi
   # mktemp は 0600 で作成し mv がそれを維持するため、生成ファイルが読めるよう正規化する。
   chmod 644 "$out"
@@ -8564,7 +8654,8 @@ origin_playbook_source() {
 # --playbook-conflict-policy overwrite）で明示的に再生成すること。
 write_origin_record() {
   local dest="$OUTPUT_DIR/$ORIGIN_REL_PATH" tmp rel h flags_csv origin_rels skipped_rel="" languages_csv pb_src pb_ref prev_mode
-  if [[ -e "$dest" && "$FORCE" != "true" && "$UPGRADE" != "true" ]]; then
+  dcb_guard_parent "$dest"
+  if [[ ( -e "$dest" || -L "$dest" ) && "$FORCE" != "true" && "$UPGRADE" != "true" ]]; then
     echo "skip (exists): $dest"
     return 0
   fi
@@ -8641,7 +8732,7 @@ EOF
   if [[ "$UPGRADE" == "true" && -f "$dest" && ! -L "$dest" ]]; then
     prev_mode="$(file_mode_octal "$dest")"
   fi
-  mv "$tmp" "$dest"
+  dcb_place_file "$tmp" "$dest"
   chmod "${prev_mode:-644}" "$dest"
   echo "write: $dest"
 }
@@ -8680,6 +8771,10 @@ fi
 # --with-* 条件ぶん（conditional_template_rel_paths）を 1 つの一覧へまとめる。ここで
 # 合流させるので、dry-run の計画と実際の書き込みは条件付きファイルでも一致する。
 sorted_rels="$( { template_rel_paths; conditional_template_rel_paths; } | sort)"
+
+# 書き込みを始める前に、すべての生成先の親ディレクトリを検査する（--dry-run と
+# --upgrade も同じ。1 つでも出力先の外を指していれば、何も書かずに止まる）。
+dcb_precheck_destinations
 
 if [[ "$DRY_RUN" == "true" && "$UPGRADE" != "true" ]]; then
   echo "[bootstrap] dry-run: no files will be written"

@@ -225,6 +225,24 @@ ln -s "$outside/dcbnew-target.txt" "$o7/scripts/verify.sh.dcb-new"
 upgrade "$o7"
 if [[ "$(cat "$outside/dcbnew-target.txt")" == "keep" && -f "$o7/scripts/verify.sh.dcb-new" && ! -L "$o7/scripts/verify.sh.dcb-new" ]]; then pass; else fail "リンク先が書き換わった、または通常ファイルでない"; fi
 
+it "生成先が、外のディレクトリを指すリンクなら、たどらず .dcb-new を置く（外は無傷）"
+o7d="$(new_workdir)/p"
+gen "$o7d"
+mkdir -p "$outside/dir-target"
+echo "keep" > "$outside/dir-target/s"
+rm -f "$o7d/scripts/verify.sh"
+ln -s "$outside/dir-target" "$o7d/scripts/verify.sh"
+upgrade "$o7d"
+if [[ "$UP_RC" == "2" && -L "$o7d/scripts/verify.sh" && -f "$o7d/scripts/verify.sh.dcb-new" && ! -L "$o7d/scripts/verify.sh.dcb-new" \
+  && "$(ls -A "$outside/dir-target")" == "s" && "$(cat "$outside/dir-target/s")" == "keep" ]]; then pass; else fail "rc=$UP_RC 外: $(ls -A "$outside/dir-target")"; fi
+
+it ".dcb-new が外のディレクトリを指すリンクなら、リンク自体を消して通常ファイルを作る（外は無傷）"
+rm -f "$o7d/scripts/verify.sh.dcb-new"
+ln -s "$outside/dir-target" "$o7d/scripts/verify.sh.dcb-new"
+upgrade "$o7d"
+if [[ -f "$o7d/scripts/verify.sh.dcb-new" && ! -L "$o7d/scripts/verify.sh.dcb-new" \
+  && "$(ls -A "$outside/dir-target")" == "s" && "$(cat "$outside/dir-target/s")" == "keep" ]]; then pass; else fail "外: $(ls -A "$outside/dir-target")"; fi
+
 it "親ディレクトリが出力先の外を指すシンボリックリンクなら、書かずに止まる（exit 1）"
 o8="$(new_workdir)/p"
 gen "$o8"
