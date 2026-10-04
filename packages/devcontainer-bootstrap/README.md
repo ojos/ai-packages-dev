@@ -981,11 +981,11 @@ squash 本文の組み立て方（PR の説明文だけを使うか、各コミ�
 | `SessionStart` | — | 他のセッションの登録を要約して表示する（他に登録が無ければ何も出さない） |
 | `PreToolUse` | `Bash` | `gh pr merge` / `gh release create`・`edit`・`delete`・`upload` / REST の merge への `PUT` / `mergePullRequest`、同じ作業ツリーでの `git checkout`・`switch`・`rebase`・`reset`・`fetch`・`pull`・`merge` など、`verify.sh` / `loop-gate.sh` の起動を、他のセッションの登録と衝突するなら**拒否**する。ブランチ作成（`git checkout -b feat/395-…` など）で、他のセッションが着手している issue なら**警告**する |
 | `PreToolUse` | `Edit\|Write` | 他のセッションが登録している文書なら**警告**する（通す） |
-| `PostToolUse` | `Bash` | `PreToolUse` で登録した「実行のあいだだけの登録」（マージ・作業ツリー・ゲート）を解放する |
+| `PostToolUse` / `PostToolUseFailure` | `Bash` | `PreToolUse` で登録した「実行のあいだだけの登録」（マージ・作業ツリー・ゲート）を解放する。終了コードが 0 以外の呼び出しや中断は `PostToolUse` ではなく `PostToolUseFailure` が来るため、両方へ配線する |
 | `SessionEnd` | — | 自分の登録をすべて解放する |
 
 - **拒否と警告の出力に、相手のセッションの識別子・登録の種類・作業ツリー・調整の手順が含まれます。** 調整は、Claude Code では `ListAgents` で相手を確かめて `SendMessage` で連絡します（他の実行環境では利用者を経由します）。
-- **フックが自分で登録する時点:** マージ・作業ツリーの git 操作・重いゲートは、実行の直前に登録し、終わったら解放します。issue はブランチ作成の時点で登録し、`SessionEnd` まで持ちます。文書は、フックは確かめるだけで登録しません（長く触る文書は、セッション自身が `session-ledger.sh claim doc <パス>` で登録します）。**限界:** 確認（`ask`）を利用者が断った場合は `PostToolUse` が来ないため、次に同じ種類の操作を通すか、セッションが終わるか、持ち主のプロセスが消えるまで登録が残ります。バックグラウンドで起動したゲートは、起動の呼び出しが返った時点で解放されます。
+- **フックが自分で登録する時点:** マージ・作業ツリーの git 操作・重いゲートは、実行の直前に登録し、終わったら解放します。issue はブランチ作成の時点で登録し、`SessionEnd` まで持ちます。文書は、フックは確かめるだけで登録しません（長く触る文書は、セッション自身が `session-ledger.sh claim doc <パス>` で登録します）。拒否したときは、その呼び出しで登録したものを解放してから拒否します（issue は、拒否しないと決まってから登録します）。**限界:** 確認（`ask`）を利用者が断った場合は `PostToolUse` も `PostToolUseFailure` も来ないため、次に同じ種類の操作を通すか、セッションが終わるか、持ち主のプロセスが消えるまで登録が残ります。同じセッションで同じ種類の Bash 呼び出しが並行すると、先に終わった方が解放します。バックグラウンドで起動したゲートは、起動の呼び出しが返った時点で解放されます。
 - **セッションの識別子は台帳の既定に任せます。** フックも `Bash` ツールのコマンドも Claude Code 本体のプロセスの子として動くため、「祖先で最初のシェル以外のプロセス」が同じ本体になり、識別子が揃います（実機で確認済み）。`SESSION_LEDGER_ID` / `SESSION_LEDGER_PID` を渡せば、それが優先されます。
 - **長いセッションの失効を避けるため、`PreToolUse` のたびに `session-ledger.sh refresh` を呼びます**（前回の更新から 5 分以上たっていなければ何もしません）。
 - **台帳そのものの読み書きに失敗したときは、警告（`systemMessage`）を出して通します（fail-open）。** 台帳が見つからない・置き場所を作れない・git リポジトリの外・出力を読めない場合です。台帳の不具合ですべての操作が止まるのを避けるためで、空のペイロードを `ask` にする確認フックとは逆です（あちらは承認の記録が目的で、こちらは合図だからです）。
@@ -1014,6 +1014,9 @@ squash 本文の組み立て方（PR の説明文だけを使うか、各コミ�
       }
     ],
     "PostToolUse": [
+      { "matcher": "Bash", "hooks": [{ "type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR/scripts/session-coord-hook.sh\"" }] }
+    ],
+    "PostToolUseFailure": [
       { "matcher": "Bash", "hooks": [{ "type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR/scripts/session-coord-hook.sh\"" }] }
     ],
     "SessionEnd": [

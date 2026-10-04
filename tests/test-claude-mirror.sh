@@ -280,14 +280,15 @@ case "$(wired_cmds '.hooks.PreToolUse | map(select(.matcher == "Edit|Write"))')"
   *) fail "PreToolUse(Edit|Write) に配線が無い" ;;
 esac
 
-it "settings.json: SessionStart / PostToolUse(Bash) / SessionEnd からセッション協調フックを呼ぶ"
+it "settings.json: SessionStart / PostToolUse(Bash) / PostToolUseFailure(Bash) / SessionEnd からセッション協調フックを呼ぶ"
 a="$(wired_cmds '.hooks.SessionStart')"
 b="$(wired_cmds '.hooks.PostToolUse | map(select(.matcher == "Bash"))')"
 c="$(wired_cmds '.hooks.SessionEnd')"
-if [[ "$a" == *session-coord-hook.sh* && "$b" == *session-coord-hook.sh* && "$c" == *session-coord-hook.sh* ]]; then
+f="$(wired_cmds '.hooks.PostToolUseFailure | map(select(.matcher == "Bash"))')"
+if [[ "$a" == *session-coord-hook.sh* && "$b" == *session-coord-hook.sh* && "$c" == *session-coord-hook.sh* && "$f" == *session-coord-hook.sh* ]]; then
   pass
 else
-  fail "SessionStart=$a PostToolUse=$b SessionEnd=$c"
+  fail "SessionStart=$a PostToolUse=$b SessionEnd=$c PostToolUseFailure=$f"
 fi
 
 it "settings.json の配線が、DCB が --with-claude で生成する雛形と一致する"

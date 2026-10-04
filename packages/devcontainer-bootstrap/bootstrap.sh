@@ -7418,7 +7418,10 @@ TMPL
 #                                     と衝突すれば拒否（deny）する。issue への着手（ブランチ作成）
 #                                     は重複を警告する。
 #   PreToolUse   (Edit|Write)         他セッションが登録している文書なら警告する（通す）。
-#   PostToolUse  (Bash)               PreToolUse で登録した「実行のあいだだけ」の登録を解放する。
+#   PostToolUse / PostToolUseFailure  (Bash)
+#                                     PreToolUse で登録した「実行のあいだだけ」の登録を解放する。
+#                                     失敗した呼び出し（終了コード 0 以外・中断）は PostToolUse では
+#                                     なく PostToolUseFailure が来るため、両方へ配線する。
 #   SessionEnd                        自分の登録をすべて解放する。
 #
 # ── 判定 ──────────────────────────────────────────────────────────────────────
@@ -7439,10 +7442,14 @@ TMPL
 # ── 自分で登録する時点 ────────────────────────────────────────────────────────
 #
 #   - merge / git / gate: 実行の直前（PreToolUse）に登録し、実行が終わったら（PostToolUse）
-#     解放する。「実行する間は登録する」（規範）を、実行のあいだに限って機構が担う。拒否された
-#     ときは、その呼び出しで登録したものを解放してから拒否する。
-#     限界: 利用者が確認（ask）を断った場合は PostToolUse が来ないため、次に同じ種類の操作を
+#     解放する（失敗した呼び出しは PostToolUseFailure で解放する）。「実行する間は登録する」
+#     （規範）を、実行のあいだに限って機構が担う。拒否したときは、その呼び出しで登録した
+#     ものを解放してから拒否する（issue は、拒否しないと決まってから登録する）。
+#     限界: 利用者が確認（ask）を断った場合は、どちらも来ないため、次に同じ種類の操作を
 #     通すか、セッションが終わる（SessionEnd）か、持ち主が消えるまで登録が残る。
+#     同じセッションで同じ種類の Bash 呼び出しが並行すると、先に終わった方が解放する
+#     （台帳の対象は git では作業ツリーの等値比較、merge / gate では無視されるため、
+#     呼び出しごとの tool_use_id を対象へ入れて区別することはできない）。
 #     バックグラウンドで起動したゲートは、起動の呼び出しが返った時点で解放される。
 #   - issue: ブランチ作成の時点で登録し、SessionEnd まで持つ。
 #   - doc: フックは登録しない（確かめるだけ）。長く触る文書は、セッション自身が
@@ -7702,8 +7709,9 @@ toplevel_of() { # 基準ディレクトリ 相対ディレクトリ
 }
 
 add_git_dir() {
-  case "$HIT_GIT_DIRS" in
-    *"$1"*) ;;
+  # 行単位の完全一致で重複を除く（/repo2 を見ているときに /repo を落とさない）。
+  case $'\n'"$HIT_GIT_DIRS"$'\n' in
+    *$'\n'"$1"$'\n'*) ;;
     *) HIT_GIT_DIRS="${HIT_GIT_DIRS:+$HIT_GIT_DIRS$'\n'}$1" ;;
   esac
 }
@@ -7942,13 +7950,6 @@ pre_bash() {
 $HIT_GIT_DIRS
 EOF
   fi
-  for n in $HIT_ISSUES; do
-    run_ledger "$cwd" claim issue "$n"
-    if [[ "$LEDGER_VERDICT" == "LEDGER_WARN" ]]; then
-      warns="${warns:+$warns$'\n'}$(warn_text "issue #$n には、他のセッションが着手しています。" "$LEDGER_DETAIL")"
-    fi
-  done
-
   if [[ -n "$denies" ]]; then
     # 実行しないので、この呼び出しで登録したものを解放する（PostToolUse は来ない）。
     [[ $claimed_merge -eq 0 ]] || run_ledger "$cwd" release merge
@@ -7964,6 +7965,13 @@ EOF
     REASON="$denies"
     return 0
   fi
+  # issue は、実行を拒否しないと決まってから登録する（拒否した呼び出しで登録を残さない）。
+  for n in $HIT_ISSUES; do
+    run_ledger "$cwd" claim issue "$n"
+    if [[ "$LEDGER_VERDICT" == "LEDGER_WARN" ]]; then
+      warns="${warns:+$warns$'\n'}$(warn_text "issue #$n には、他のセッションが着手しています。" "$LEDGER_DETAIL")"
+    fi
+  done
   [[ -z "$warns" ]] || CONTEXT="$warns"
 }
 
@@ -8021,7 +8029,7 @@ case "$event" in
       Edit | Write | MultiEdit | NotebookEdit) pre_edit ;;
     esac
     ;;
-  PostToolUse)
+  PostToolUse | PostToolUseFailure)
     [[ "$tool" != "Bash" ]] || post_bash
     ;;
 esac
@@ -8031,7 +8039,7 @@ if [[ -n "$CONTEXT" && "$DECISION" != "deny" ]]; then
   SYS="${SYS:+$SYS$'\n'}$CONTEXT"
 fi
 case "$event" in
-  SessionStart | PreToolUse | PostToolUse) emit "$event" "$DECISION" "$REASON" "$CONTEXT" "$SYS" ;;
+  SessionStart | PreToolUse | PostToolUse | PostToolUseFailure) emit "$event" "$DECISION" "$REASON" "$CONTEXT" "$SYS" ;;
   *) emit "$event" "" "" "" "$WARNS" ;;
 esac
 exit 0
@@ -8045,7 +8053,8 @@ TMPL
       # 取り出せないペイロードでの照合ばかりが増える。セッション協調フックは、
       # SessionStart / SessionEnd（登録の表示と解放）、PreToolUse の Bash（マージ・
       # git 操作・ゲートの確認と登録）と Edit|Write（文書の確認）、PostToolUse の
-      # Bash（実行のあいだだけの登録の解放）へ配る。
+      # Bash と PostToolUseFailure の Bash（実行のあいだだけの登録の解放。失敗した呼び出しは
+      # PostToolUse ではなく PostToolUseFailure が来る）へ配る。
       #
       # 既存ファイルは衝突ポリシー（既定 skip）で温存される。既に settings.json を
       # 持つプロジェクトへ後から入れる場合は、この hooks 節を手で足すことになる。
@@ -8087,6 +8096,17 @@ TMPL
       }
     ],
     "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/scripts/session-coord-hook.sh\""
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
       {
         "matcher": "Bash",
         "hooks": [

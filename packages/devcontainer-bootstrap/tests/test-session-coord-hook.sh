@@ -82,6 +82,9 @@ assert_contains "$(wired '.hooks.PreToolUse | map(select(.matcher == "Edit|Write
 it "settings.json: PostToolUse の Bash からフックを呼ぶ（実行のあいだだけの登録を解放する）"
 assert_contains "$(wired '.hooks.PostToolUse | map(select(.matcher == "Bash"))')" "session-coord-hook.sh" "PostToolUse(Bash) のコマンド"
 
+it "settings.json: PostToolUseFailure の Bash からフックを呼ぶ（失敗した呼び出しの登録を解放する）"
+assert_contains "$(wired '.hooks.PostToolUseFailure | map(select(.matcher == "Bash"))')" "session-coord-hook.sh" "PostToolUseFailure(Bash) のコマンド"
+
 it "settings.json: SessionEnd からフックを呼ぶ"
 assert_contains "$(wired '.hooks.SessionEnd')" "session-coord-hook.sh" "SessionEnd のコマンド"
 
@@ -371,6 +374,47 @@ if [[ -z "$a1" && -z "$a2" ]]; then pass; else fail "396=$a1 release=$a2"; fi
 it "(a) gh issue develop でも同じ issue への着手を警告する"
 pre_bash s-b "$wt2" 'gh issue develop 395'
 if [[ "$(decision)" == "none" && "$(context)" == *"kind=issue"* ]]; then pass; else fail "out=$HOUT"; fi
+reset_ledger
+
+# ── 失敗した呼び出し・拒否時・重複判定 ──────────────────────────────────────
+
+it "失敗した Bash 呼び出し（PostToolUseFailure）でも、実行のあいだだけの登録を解放する"
+pre_bash s-a "$repo" 'bash scripts/verify.sh'
+pre_bash s-b "$repo" 'bash scripts/loop-gate.sh'
+held="$(decision)"
+hook_raw s-a "$(jq -n --arg cwd "$repo" --arg cmd 'bash scripts/verify.sh' '{hook_event_name:"PostToolUseFailure",tool_name:"Bash",cwd:$cwd,tool_input:{command:$cmd},tool_use_id:"toolu_x",error:"Exit code 1",is_interrupt:false}')"
+fail_rc="$HRC"
+pre_bash s-b "$repo" 'bash scripts/loop-gate.sh'
+if [[ "$held" == "deny" && "$fail_rc" -eq 0 && "$(decision)" == "none" ]]; then pass; else fail "失敗前=$held rc=$fail_rc 解放後=$(decision) out=$HOUT"; fi
+post_bash s-b "$repo" 'bash scripts/loop-gate.sh'
+reset_ledger
+
+it "拒否した呼び出しでは、issue を登録しない（git が衝突して checkout -b が拒否される）"
+pre_bash s-a "$repo" 'git rebase main'
+pre_bash s-b "$repo" 'git checkout -b feat/395-x'
+d_issue="$(decision)"
+run_issue="$(ledger s-a "$repo" check issue 395 | sed -n 1p)"
+if [[ "$d_issue" == "deny" && "$run_issue" == "LEDGER_OK" ]] && ! has_claim s-b issue; then pass; else fail "判定=$d_issue 相手から見た issue=$run_issue"; fi
+post_bash s-a "$repo" 'git rebase main'
+reset_ledger
+
+it "拒否しない checkout -b では、従来どおり issue を登録する"
+pre_bash s-b "$repo" 'git checkout -b feat/395-x'
+if [[ "$(decision)" == "none" ]] && has_claim s-b issue; then pass; else fail "out=$HOUT"; fi
+post_bash s-b "$repo" 'git checkout -b feat/395-x'
+reset_ledger
+
+it "1 つのコマンドで /repo2 のような接頭辞が共通の作業ツリーと /repo を対象にしても、両方を登録する"
+repo2="${repo}2"
+mkdir -p "$repo2"
+(cd "$repo2" && git init -q . 2>/dev/null && git config user.name t && git config user.email t@example.com && git commit -q --allow-empty -m i) >/dev/null 2>&1
+pre_bash s-a "$repo" "git -C $repo2 fetch; git -C $repo fetch"
+pre_bash s-b "$repo" 'git fetch'
+c1="$(decision)"
+pre_bash s-b "$repo2" 'git fetch'
+c2="$(decision)"
+if [[ "$c1" == "deny" && "$c2" == "deny" ]]; then pass; else fail "repo=$c1 repo2=$c2"; fi
+post_bash s-a "$repo" "git -C $repo2 fetch; git -C $repo fetch"
 reset_ledger
 
 # ── (e) 文書の編集 ───────────────────────────────────────────────────────────
