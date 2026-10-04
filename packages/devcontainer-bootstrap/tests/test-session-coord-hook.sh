@@ -157,9 +157,10 @@ hook_raw() { # セッション ペイロード
   HRC=$?
 }
 
-pl_bash() { # イベント cwd コマンド
-  jq -n --arg ev "$1" --arg cwd "$2" --arg cmd "$3" \
-    '{hook_event_name: $ev, tool_name: "Bash", cwd: $cwd, tool_input: {command: $cmd}}'
+pl_bash() { # イベント cwd コマンド [tool_use_id]
+  jq -n --arg ev "$1" --arg cwd "$2" --arg cmd "$3" --arg id "${4:-}" \
+    '{hook_event_name: $ev, tool_name: "Bash", cwd: $cwd, tool_input: {command: $cmd}}
+     + (if $id != "" then {tool_use_id: $id} else {} end)'
 }
 pl_edit() { # cwd パス
   jq -n --arg cwd "$1" --arg p "$2" \
@@ -169,8 +170,9 @@ pl_event() { # イベント cwd
   jq -n --arg ev "$1" --arg cwd "$2" '{hook_event_name: $ev, cwd: $cwd}'
 }
 
-pre_bash() { hook_raw "$1" "$(pl_bash PreToolUse "$2" "$3")"; }
-post_bash() { hook_raw "$1" "$(pl_bash PostToolUse "$2" "$3")"; }
+pre_bash() { hook_raw "$1" "$(pl_bash PreToolUse "$2" "$3" "${4:-}")"; }
+post_bash() { hook_raw "$1" "$(pl_bash PostToolUse "$2" "$3" "${4:-}")"; }
+fail_bash() { hook_raw "$1" "$(pl_bash PostToolUseFailure "$2" "$3" "${4:-}")"; }
 pre_edit() { hook_raw "$1" "$(pl_edit "$2" "$3")"; }
 
 decision() {
@@ -325,6 +327,14 @@ case "$r" in
   *) fail "理由: $r" ;;
 esac
 
+it "(d) 引数を取るオプション（-o / +o / -O / --rcfile）の引数をスクリプト名と取り違えず、ゲートとして拒否する"
+bad=""
+for c in 'bash -o pipefail scripts/verify.sh' 'bash +o history scripts/loop-gate.sh' 'bash -O extglob scripts/verify.sh' 'bash --rcfile /dev/null scripts/verify.sh' 'bash -eo pipefail scripts/verify.sh'; do
+  pre_bash s-b "$repo" "$c"
+  [[ "$(decision)" == "deny" ]] || bad="$bad | $c => $(decision)"
+done
+if [[ -z "$bad" ]]; then pass; else fail "拒否されなかった: $bad"; fi
+
 it "他のスクリプトの起動や、ゲートの名前を引数に含むだけのコマンドは止めない"
 bad=""
 for c in 'bash scripts/session-ledger.sh list' 'cat scripts/verify.sh' 'git add scripts/verify.sh' 'echo bash scripts/verify.sh'; do
@@ -402,6 +412,39 @@ it "拒否しない checkout -b では、従来どおり issue を登録する"
 pre_bash s-b "$repo" 'git checkout -b feat/395-x'
 if [[ "$(decision)" == "none" ]] && has_claim s-b issue; then pass; else fail "out=$HOUT"; fi
 post_bash s-b "$repo" 'git checkout -b feat/395-x'
+reset_ledger
+
+it "ブランチの作成が失敗（PostToolUseFailure）したら、その呼び出しで新しく登録した issue を解放する"
+pre_bash s-b "$repo" 'git checkout -b feat/395-x' toolu_f1
+held="$(ledger s-a "$repo" check issue 395 | sed -n 1p)"
+fail_bash s-b "$repo" 'git checkout -b feat/395-x' toolu_f1
+gone="$(ledger s-a "$repo" check issue 395 | sed -n 1p)"
+if [[ "$held" == "LEDGER_WARN" && "$gone" == "LEDGER_OK" ]]; then pass; else fail "失敗前=$held 失敗後=$gone"; fi
+reset_ledger
+
+it "対照: 呼び出しの前から持っていた issue の登録は、失敗しても外さない"
+ledger s-b "$repo" claim issue 395 >/dev/null
+pre_bash s-b "$repo" 'git checkout -b feat/395-x' toolu_f2
+fail_bash s-b "$repo" 'git checkout -b feat/395-x' toolu_f2
+kept="$(ledger s-a "$repo" check issue 395 | sed -n 1p)"
+assert_eq "$kept" "LEDGER_WARN" "前から持っていた issue"
+reset_ledger
+
+it "対照: ブランチの作成が成功（PostToolUse）したら、issue は SessionEnd まで持つ"
+pre_bash s-b "$repo" 'git checkout -b feat/395-x' toolu_f3
+post_bash s-b "$repo" 'git checkout -b feat/395-x' toolu_f3
+kept="$(ledger s-a "$repo" check issue 395 | sed -n 1p)"
+hook_raw s-b "$(pl_event SessionEnd "$repo")"
+ended="$(ledger s-a "$repo" check issue 395 | sed -n 1p)"
+if [[ "$kept" == "LEDGER_WARN" && "$ended" == "LEDGER_OK" ]]; then pass; else fail "成功後=$kept SessionEnd 後=$ended"; fi
+reset_ledger
+
+it "失敗の解放は、その呼び出しの tool_use_id の印だけを使う（別の呼び出しの失敗では外さない）"
+pre_bash s-b "$repo" 'git checkout -b feat/395-x' toolu_f4
+fail_bash s-b "$repo" 'git checkout -b feat/395-y' toolu_other
+kept="$(ledger s-a "$repo" check issue 395 | sed -n 1p)"
+fail_bash s-b "$repo" 'git checkout -b feat/395-x' toolu_f4
+if [[ "$kept" == "LEDGER_WARN" ]]; then pass; else fail "別の呼び出しの失敗で外れた: $kept"; fi
 reset_ledger
 
 it "1 つのコマンドで /repo2 のような接頭辞が共通の作業ツリーと /repo を対象にしても、両方を登録する"

@@ -46,7 +46,10 @@
 #     （台帳の対象は git では作業ツリーの等値比較、merge / gate では無視されるため、
 #     呼び出しごとの tool_use_id を対象へ入れて区別することはできない）。
 #     バックグラウンドで起動したゲートは、起動の呼び出しが返った時点で解放される。
-#   - issue: ブランチ作成の時点で登録し、SessionEnd まで持つ。
+#   - issue: ブランチ作成の時点で登録し、SessionEnd まで持つ。ただし、その呼び出しが失敗した
+#     （PostToolUseFailure）ときは、その呼び出しで新しく登録した issue だけを解放する（ブランチ
+#     が作れていないため）。前から持っていた登録は外さない。区別は、PreToolUse で
+#     tool_use_id を鍵にした印（一時ディレクトリ）へ新しく登録した番号を控えて行う。
 #   - doc: フックは登録しない（確かめるだけ）。長く触る文書は、セッション自身が
 #     `session-ledger.sh claim doc <パス>` で登録する。編集のたびに登録すると警告が常時出る。
 #
@@ -334,7 +337,8 @@ first_positional() { # 開始位置。結果は POS_IDX
   while [[ $j -lt $n ]]; do
     w="${W[$j]}"
     case "$w" in
-      -R | --repo | --hostname | -C | -c) j=$((j + 2)) ;;
+      # 引数を取るオプションは、その引数を位置引数と取り違えない（bash -o pipefail script）。
+      -R | --repo | --hostname | -C | -c | -o | +o | -O | +O | -[a-zA-Z]*[oO] | --rcfile | --init-file) j=$((j + 2)) ;;
       -*) j=$((j + 1)) ;;
       *) POS_IDX=$j; return 0 ;;
     esac
@@ -512,7 +516,7 @@ on_session_end() {
 }
 
 pre_bash() {
-  local d denies="" warns="" claimed_merge=0 claimed_gate=0 claimed_dirs="" n
+  local d denies="" warns="" before_rows="" new_issues="" me="" claimed_merge=0 claimed_gate=0 claimed_dirs="" n
   [[ -n "$cmd" ]] || return 0
   refresh_ledger "$cwd"
   classify_command "$cmd" "$cwd"
@@ -561,17 +565,62 @@ EOF
     return 0
   fi
   # issue は、実行を拒否しないと決まってから登録する（拒否した呼び出しで登録を残さない）。
+  # この呼び出しで新しく登録した issue は、呼び出しが失敗したとき（PostToolUseFailure）に
+  # 解放できるよう、tool_use_id を鍵にした印へ控える。前から持っていた登録は控えない。
+  if [[ -n "$HIT_ISSUES" ]]; then
+    run_ledger "$cwd" list
+    before_rows="$LEDGER_DETAIL"
+  fi
   for n in $HIT_ISSUES; do
     run_ledger "$cwd" claim issue "$n"
     if [[ "$LEDGER_VERDICT" == "LEDGER_WARN" ]]; then
       warns="${warns:+$warns$'\n'}$(warn_text "issue #$n には、他のセッションが着手しています。" "$LEDGER_DETAIL")"
     fi
+    case "$LEDGER_VERDICT" in
+      LEDGER_OK | LEDGER_WARN)
+        if [[ "$LEDGER_OUT" == *"claimed: session="* ]]; then
+          me="${LEDGER_OUT##*claimed: session=}"
+          me="${me%% *}"
+          case "$before_rows" in
+            *"session=$me kind=issue target=$n "*) ;;
+            *) new_issues="${new_issues:+$new_issues }$n" ;;
+          esac
+        fi
+        ;;
+    esac
   done
+  [[ -z "$new_issues" ]] || write_issue_mark "$new_issues"
   [[ -z "$warns" ]] || CONTEXT="$warns"
+}
+
+# 呼び出しごとの印（この呼び出しで新しく登録した issue の番号）。置き場所は一時ディレクトリで、
+# 名前は tool_use_id から作る。tool_use_id が無ければ印は作らない（失敗時の解放は諦める）。
+issue_mark_path() {
+  [[ -n "$tuid" ]] || return 1
+  printf '%s/session-coord-%s' "${TMPDIR:-/tmp}" "$(printf '%s' "$tuid" | tr -c 'A-Za-z0-9._-' '_')"
+}
+write_issue_mark() {
+  local f
+  f="$(issue_mark_path)" || return 0
+  printf '%s\n' "$1" >"$f" 2>/dev/null || true
+}
+# 印を読んで消す。成功した呼び出しでは、読まずに消す（issue は SessionEnd まで持つ）。
+settle_issue_mark() { # release|keep
+  local f nums n
+  f="$(issue_mark_path)" || return 0
+  [[ -f "$f" ]] || return 0
+  if [[ "$1" == "release" ]]; then
+    nums="$(cat "$f" 2>/dev/null)"
+    for n in $nums; do
+      run_ledger "$cwd" release issue "$n"
+    done
+  fi
+  rm -f "$f"
 }
 
 post_bash() {
   local d
+  if [[ "$event" == "PostToolUseFailure" ]]; then settle_issue_mark release; else settle_issue_mark keep; fi
   [[ -n "$cmd" ]] || return 0
   classify_command "$cmd" "$cwd"
   [[ $HIT_MERGE -eq 1 ]] && run_ledger "$cwd" release merge
@@ -613,6 +662,7 @@ cmd="$(json_get command)"
 fpath="$(json_get file_path)"
 [[ -n "$fpath" ]] || fpath="$(json_get notebook_path)"
 cwd="$(json_get cwd)"
+tuid="$(json_get tool_use_id)"
 if [[ -z "$cwd" || ! -d "$cwd" ]]; then cwd="$(pwd)"; fi
 
 case "$event" in
