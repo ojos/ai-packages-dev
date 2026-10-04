@@ -318,6 +318,20 @@ else
   fail "a/b の登録が a_b と同じファイルに混ざった: $slash_out"
 fi
 
+it "先頭が . の識別子でも、登録が隠しファイルにならず、別のセッションから見える"
+run ".agent" "$repo" claim merge
+dot_out_check() { run s-b "$repo" check merge; }
+dot_out_check
+dot_out="$OUT"
+run ".agent" "$repo" release
+dot_hidden=0
+for f in "$DIR"/.agent*; do [[ -e "$f" ]] && dot_hidden=1; done
+if [[ "$(printf '%s\n' "$dot_out" | sed -n 1p)" == "LEDGER_DENY" && "$dot_hidden" == 0 ]]; then
+  pass
+else
+  fail "先頭が . の識別子の登録を、別のセッションが見つけられない: $dot_out / $(ls -a "$DIR")"
+fi
+
 it "置き換えが起きない識別子のファイル名は変わらない"
 run "plain-id.1" "$repo" claim issue 779
 if [[ -f "$DIR/plain-id.1.tsv" ]]; then pass; else fail "$(ls "$DIR")"; fi

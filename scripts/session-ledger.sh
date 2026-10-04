@@ -91,6 +91,8 @@ level_of() {
 sanitize() {
   local s sum
   s="$(printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '_')"
+  # 先頭の . は隠しファイルになり、台帳の読み出し（*.tsv）から漏れるので置き換える。
+  case "$s" in .*) s="_${s#.}" ;; esac
   if [ "$s" != "$1" ]; then
     sum="$(printf '%s' "$1" | cksum | cut -d' ' -f1)"
     s="$s-$sum"
