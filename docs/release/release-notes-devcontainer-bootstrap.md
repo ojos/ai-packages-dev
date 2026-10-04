@@ -9,6 +9,7 @@
 ## 未リリース
 
 ### Summary
+- **並行セッションの共有台帳 `scripts/session-ledger.sh` を生成物へ足した**（ojos/ai-packages-dev#395 の 1/2）。同じホストで並行して動く AI セッションが、issue・文書・マージ/リリース・作業ツリーの git 操作・重いゲートを `claim` で登録し、`check` で衝突を確かめる。置き場所は `git rev-parse --git-common-dir` の配下で、セッションごとに別ファイルへ追記する。持ち主の PID が消えた登録と、更新が止まった登録は失効する。台帳は実行環境に依存しないので、`--with-*` に関わらず常に生成する。フックと settings.json の配線は続く版で足す。
 - **`scripts/check-doc-links.sh` が、括弧を含むリンク先（例: `docs/foo(bar).md`）を最初の `)` で切らず、1 つのリンク先として検査するようにした**（ojos/ai-packages-dev#415）。タイトルや `<...>` の中の括弧は数えず、対応が取れないときは従来どおり最初の `)` で切るため、従来検査できていたリンクを漏らさない。
 - **README「資格情報の扱い」に、fine-grained PAT の権限の例を足した**（ojos/ai-packages-dev#416）。Checks は fine-grained PAT では選べず、非公開リポジトリでは `check-runs` と `gh pr checks` が 403 になる。同梱の `/land` スキル（ai-playbook の雛形）は、Actions と Commit statuses の権限だけで CI を待つ。
 - **規範を置くとき、入口ファイルに `AGENTS.md` を加えた**（ojos/ai-packages-dev#397）。Codex など `AGENTS.md` を読む実行環境が、規範の入口から 3 層構造へたどれる。`CLAUDE.md` / `.github/copilot-instructions.md` と同じ雛形（`templates/entry.md`）の写しで、既存の `AGENTS.md` は `--playbook-conflict-policy` に従う。`--without-playbook` など規範を置かない生成では作らない。由来記録（`.devcontainer/ORIGIN`）のハッシュの記録の対象にも含まれる。
