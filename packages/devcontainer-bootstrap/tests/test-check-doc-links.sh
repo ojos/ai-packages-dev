@@ -169,6 +169,48 @@ commit_repo "$repo" add-fenced-links
 run_check "$repo"
 assert_pass "フェンス内のリンクは対象外"
 
+# ── 陰性: 長いフェンスの中の短いフェンスでは閉じない（#439） ─────────────────
+# 閉じるのは、開きと同じ文字で開き以上の長さを持ち、後ろに空白しか無い行だけ
+# （CommonMark）。種類だけで見ると、4 連の中の ``` や ```sh で早く閉じ、続く
+# リンクを検査し、最後の 4 連を「閉じていない」と報告していた。
+
+it "4 連のフェンスの中の 3 連（info string あり・なし）では閉じない"
+repo="$(new_repo)"
+add_doc "$repo" "docs/a.md" '````markdown
+```sh
+[nope](missing-after-inner-open.md)
+```
+[nope](missing-after-inner-close.md)
+````
+'
+commit_repo "$repo" add-nested-fences
+run_check "$repo"
+assert_pass "長いフェンスの中のリンクは対象外"
+
+it "閉じフェンスに info string が付いた行では閉じない"
+repo="$(new_repo)"
+add_doc "$repo" "docs/a.md" '```
+```sh
+[nope](missing-after-info-close.md)
+```
+'
+commit_repo "$repo" add-info-close
+run_check "$repo"
+assert_pass "info string 付きの行は閉じフェンスではない"
+
+# ── 陽性（対照群）: 正しく閉じた後のリンクは検査する ────────────────────────
+
+it "長いフェンスを同じ長さ以上で閉じた後のリンクは検査する（陽性、偽の緑にしない）"
+repo="$(new_repo)"
+add_doc "$repo" "docs/a.md" '````
+```
+`````
+[broken](missing-after-long-close.md)
+'
+commit_repo "$repo" add-long-close
+run_check "$repo"
+assert_fail "閉じた後の壊れたリンク" "missing-after-long-close.md"
+
 # ── 陰性（対照群）: スキーム付きリンクは相対パスとして扱わない ───────────────
 
 it "スキーム付きリンク（tel: 等）は相対パスとして扱わない（対照群）"
