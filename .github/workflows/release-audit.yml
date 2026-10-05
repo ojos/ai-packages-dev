@@ -38,7 +38,7 @@ jobs:
     name: Verify published release asset integrity
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # 検査範囲は 直近 N 件。N の優先順位は
       # workflow_dispatch の入力 > リポジトリ変数 > スクリプトの既定（10）。

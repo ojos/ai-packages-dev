@@ -35,7 +35,7 @@ workflow は認証と identity をリポジトリ設定から解決する。値�
 
 | 種別 | 名前 | 値 |
 |---|---|---|
-| Secret | `RELEASE_APP_ID` | リリース用 GitHub App（`ojos-release-bot`）の App ID |
+| Secret | `RELEASE_APP_CLIENT_ID` | リリース用 GitHub App（`ojos-release-bot`）の Client ID（`Iv` で始まる。App ID ではない。`create-github-app-token@v3` で `app-id` が非推奨になったため。#432） |
 | Secret | `RELEASE_APP_PRIVATE_KEY` | 同 App の秘密鍵（`.pem` の中身全文） |
 | Variable | `RELEASE_BOT_NAME` | `ojos-release-bot[bot]` |
 | Variable | `RELEASE_BOT_EMAIL` | `<bot ユーザー ID>+ojos-release-bot[bot]@users.noreply.github.com` |

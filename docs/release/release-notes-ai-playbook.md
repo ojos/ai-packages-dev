@@ -6,6 +6,14 @@
 >
 > 同じ理由で、issue 参照は `ojos/ai-packages-dev#NNN` の形で書いてください。裸の `#NNN` は GitHub のオートリンクが**配布先リポジトリの issue** として解決するため、配布後は存在しない issue や無関係な issue を指します。
 
+## 未リリース
+
+### Summary
+- **`templates/review-gate.yml` と `templates/second-opinion-gate.yml` の `actions/checkout@v4` を `@v7` へ上げた**（ojos/ai-packages-dev#432）。v4 は Node.js 20 で動き、GitHub Actions で非推奨の警告が出る。v5 以降は Node.js 24 で動く。どちらの雛形も `pull_request_target` / `workflow_run` を契機に持たず、checkout が保存する認証情報にも頼らないので、v6・v7 の変更（認証情報の保存先、fork の PR の checkout の禁止）の影響は受けない。雛形は 15 種のまま。
+
+### 移行
+- 雛形から写した `.github/workflows/review-gate.yml` / `second-opinion-gate.yml` は自動では更新されない。`actions/checkout@v4` を `@v7` へ書き換えてください。セルフホストのランナーでは、Actions Runner v2.327.1 以降が要る。
+
 ## v0.7.0
 
 ### Summary
