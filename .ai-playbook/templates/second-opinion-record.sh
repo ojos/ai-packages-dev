@@ -259,17 +259,31 @@ cmd_post() {
 
   command -v gh >/dev/null 2>&1 || fail "gh がありません。PR へ投稿できません。"
 
-  local pr
+  local pr author me
   pr="$(gh pr view --json number --jq .number 2>/dev/null || true)"
   [[ -n "$pr" ]] || fail "このブランチに対応する PR が見つかりません。先に PR を作ってください。"
+
+  # **確認側が数える記録だけを作る。** 確認側（second-opinion-gate.yml）は、書き手が
+  # PR の作者と一致するコメントしか数えない（#370 / #436）。作者以外が投稿しても、
+  # 成功と表示されるだけで、確認側には使えない記録になる（#440）。読めなければ、
+  # 確かめられないまま投稿せずに止める。
+  author="$(gh pr view --json author --jq .author.login 2>/dev/null || true)"
+  [[ -n "$author" ]] || fail "PR #$pr の作者を読めません。投稿していません。"
+  me="$(gh api user --jq .login 2>/dev/null || true)"
+  [[ -n "$me" ]] || fail "gh が認証しているアカウントを読めません。投稿していません。"
+  if [[ "$me" != "$author" ]]; then
+    fail "gh が認証しているアカウント（$me）が PR #$pr の作者（$author）ではありません。確認側は作者のコメントだけを記録として数えるため、投稿していません。作者のアカウントで post してください。"
+  fi
 
   local marker="${MARKER_PREFIX}${VERIFIED_HEAD} -->"
 
   # **同じ SHA へ二重に投稿しない。** 冪等にしておかないと、確認側を回すたびに
-  # 投稿したくなる形になり、PR が記録で埋まる。
+  # 投稿したくなる形になり、PR が記録で埋まる。既に在るかは、確認側が数える
+  # コメント（作者が書いたもの）だけで判定する。作者以外が書いた同じ印で
+  # 「投稿済み」とすると、確認側は赤のままになる（#440）。
   local existing
   existing="$(gh api --paginate "repos/{owner}/{repo}/issues/$pr/comments" \
-    --jq '.[] | select(.body | contains("'"$marker"'")) | .id' 2>/dev/null | head -1 || true)"
+    --jq '.[] | select((.user.login // "") == "'"$author"'" and (.body | contains("'"$marker"'"))) | .id' 2>/dev/null | head -1 || true)"
   if [[ -n "$existing" ]]; then
     printf '[second-opinion-record] この SHA の記録は既に投稿されています（comment %s）。\n' "$existing"
     return 0
