@@ -95,6 +95,15 @@ it "手を入れていない残りの 3 ファイルは消える"
 left=""; for f in .github/workflows/copilot-review.yml .github/workflows/review-gate.yml scripts/check-review-usable.sh; do [[ -e "$out/$f" ]] && left="$left $f"; done
 if [[ -z "$left" ]]; then pass; else fail "残り:$left"; fi
 
+# ── --without-playbook と併せて渡しても、フラグ由来のファイルは消える ──────────
+
+it "--without-copilot-review --without-playbook を併せて渡しても、4 ファイルは消える"
+out="$(new_workdir)/p"
+gen "$out" --with-copilot-review
+upgrade "$out" --without-copilot-review --without-playbook
+left=""; for f in $CR_FILES; do [[ -e "$out/$f" ]] && left="$left $f"; done
+if [[ "$UP_RC" == "0" && -z "$left" ]]; then pass; else fail "rc=$UP_RC 残り:$left"; fi
+
 # ── 外した操作の対象外のファイルは、従来どおり消さない ──────────────────────
 
 it "外していないフラグで生成されるファイルは、--without の対象外として残る"

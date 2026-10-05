@@ -9975,10 +9975,18 @@ upgrade_report_removed() {
   [[ -f "$origin" ]] || return 0
   new_rels="$( { printf '%s\n' "$sorted_rels"; playbook_installed_rel_paths; playbook_rules_rel_paths; } | sort -u)"
   if [[ ${#WITHOUT_SET[@]} -gt 0 ]]; then
+    # フラグだけの差を取る。--without-playbook を併せて渡されても、規範経由の出力
+    # （review-gate.yml など）が候補から落ちないよう、どちらの側も規範は配置する扱いで
+    # 数える（規範の有無による差は、フラグの差ではないので打ち消し合う）。
+    local prev_rels cur_rels saved_pb="$WITH_PLAYBOOK"
     cur_with=(${WITH_SET[@]+"${WITH_SET[@]}"})
+    WITH_PLAYBOOK="true"
     WITH_SET=(${UPGRADE_PREV_WITH[@]+"${UPGRADE_PREV_WITH[@]}"})
-    off_rels="$( { template_rel_paths; conditional_template_rel_paths; playbook_installed_rel_paths; playbook_rules_rel_paths; } | sort -u)"
+    prev_rels="$( { template_rel_paths; conditional_template_rel_paths; playbook_installed_rel_paths; } | sort -u)"
     WITH_SET=(${cur_with[@]+"${cur_with[@]}"})
+    cur_rels="$( { template_rel_paths; conditional_template_rel_paths; playbook_installed_rel_paths; } | sort -u)"
+    WITH_PLAYBOOK="$saved_pb"
+    off_rels="$(comm -23 <(printf '%s\n' "$prev_rels") <(printf '%s\n' "$cur_rels"))"
   fi
   while IFS= read -r rel; do
     [[ -n "$rel" ]] || continue
