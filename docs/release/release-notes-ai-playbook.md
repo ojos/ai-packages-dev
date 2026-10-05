@@ -10,6 +10,7 @@
 
 ### Summary
 - **`templates/second-opinion-gate.yml` が数える記録を、書き手が PR の作者と一致するコメントに改めた（`author_association` を条件から外した）**（ojos/ai-packages-dev#436）。`author_association` は読む側の視点で変わり、組織のメンバーシップを公開していない作者は、Actions の `GITHUB_TOKEN` から `MEMBER` と返らない。そのため組織所有のリポジトリでは、その人の PR が記録を投稿しても常に `failure` になっていた（メンバーシップを公開して再実行すると緑になることを、利用側で実測した）。メンバーシップの非公開は GitHub の既定である。対象はフォークでない PR だけなので、作者の一致だけで「他人のコメントで緑にしない」（ojos/ai-packages-dev#370）は保てる。雛形は 15 種のまま。
+- **第二意見の記録と確認側を、リモート最終ゲートの有無にかかわらず置く標準の機構層へ改めた**（ojos/ai-packages-dev#437）。`review-workflow.md` が「置かない場合の代わり」としていた記述を「常に置く標準の機構層」へ改め、「置かない場合に失う性質」の表はリモート最終ゲート固有の性質として残した。`templates/claude-skill-land.md` は `second-opinion-gate` の確認と failure 時の `post`、push のたびの `post` を両方の構成に共通の手順にし、`templates/project-ai-rules.md` も両方の構成で投稿する前提にした。
 - **`shared-ai-rules.md` 16 章に、台帳の開始時刻と失効の扱いを足した**（ojos/ai-packages-dev#433）。セッションの識別子に使う開始時刻は、ホストの時刻の付け直しやタイムゾーンで変わらない値で表す（変わると、動いているセッションの登録が失効とみなされ、保護が黙って切れる）。実行のあいだだけ持つ登録（マージ・作業ツリーの git 操作・重いゲート）は、失効をその登録の時刻から数え、更新で延ばさない。
 - **`templates/review-gate.yml` と `templates/second-opinion-gate.yml` の `actions/checkout@v4` を `@v7` へ上げた**（ojos/ai-packages-dev#432）。v4 は Node.js 20 で動き、GitHub Actions で非推奨の警告が出る。v5 以降は Node.js 24 で動く。どちらの雛形も `pull_request_target` / `workflow_run` を契機に持たず、checkout が保存する認証情報にも頼らないので、v6・v7 の変更（認証情報の保存先、fork の PR の checkout の禁止）の影響は受けない。雛形は 15 種のまま。
 

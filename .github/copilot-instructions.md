@@ -21,4 +21,4 @@
 規範はここで再定義せず、対応する正本を指します。
 
 - このリポジトリはリモート最終ゲート（Copilot code review の要求・確認）を**置きません**。詳細は `.github/project-ai-rules.md`「リモート最終ゲート（置かない）」です。
-- `.github/workflows/second-opinion-gate.yml`: 第二意見（クロスモデル）を回したことの記録が、push した head に紐づいて存在するかを別の契機（PR 更新・定期実行）から確認します。要求はしません。規範の正本は `.ai-playbook/review-workflow.md`（リモート最終ゲート（任意の層）の「置かない場合」）です。
+- `.github/workflows/second-opinion-gate.yml`: 第二意見（クロスモデル）を回したことの記録が、push した head に紐づいて存在するかを別の契機（PR 更新・定期実行）から確認します。要求はしません。規範の正本は `.ai-playbook/review-workflow.md`（リモート最終ゲート（任意の層）の「常に置く標準の機構層」）です。
