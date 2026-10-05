@@ -191,10 +191,10 @@ jobs:
           # GitHub が一時的に不調なだけで赤が出る。逆に握り潰して緑にすると、
           # 確かめていないものを通したことになる（review-gate.yml と同じ考え方）。
           #
-          # **数えるのは、書き手が PR の作者（`pulls/{pr}` の `user.login`）と一致し、
-          # かつ `author_association` が `OWNER` / `MEMBER` / `COLLABORATOR` のコメント
-          # だけである**（#370）。public なリポジトリでは誰でも印つきのコメントを書けるので、
-          # 書き手を見ないと、第二意見を回していない PR が他人のコメント 1 つで緑になる。
+          # **数えるのは、書き手が PR の作者（`pulls/{pr}` の `user.login`）と一致する
+          # コメントだけである**（#370）。public なリポジトリでは誰でも印つきのコメントを
+          # 書けるので、書き手を見ないと、第二意見を回していない PR が他人のコメント 1 つで
+          # 緑になる。
           #
           # **「リポジトリの持ち主」ではなく「PR の作者」で揃える。** 組織所有のリポジトリでは、
           # コメントの書き手のアカウント名が組織名と一致することはなく、持ち主で絞ると
@@ -204,10 +204,15 @@ jobs:
           #
           # この判定の対象は、フォークではない同じリポジトリの PR だけである（ジョブの `if` と
           # 掃き寄せ側の `select` が、どちらも既にフォークを除いている）。したがって
-          # 「PR の作者」は常にこのリポジトリへ push できる立場であり、通常は
-          # `OWNER` / `MEMBER` / `COLLABORATOR` のいずれかになる——`author_association` の
-          # 条件は、その前提を取り違えたとき（アカウントの立場が想定と食い違うとき）の
-          # 裏付けとして働く。
+          # 「PR の作者」は常にこのリポジトリへ push できる立場であり、作者の一致だけで
+          # 「他人のコメントで緑にしない」が保てる。
+          #
+          # **`author_association` は条件に使わない**（#436）。この値は読む側の視点で変わる。
+          # 組織所有のリポジトリで、メンバーシップを公開していない作者の記録は、login が
+          # 一致していても数えられず常に赤になった（組織メンバーの PAT で読むと `MEMBER`）。
+          # メンバーシップを公開して再実行すると緑になり、何も変えずに再実行すると赤のまま
+          # だった（実測）。この `GITHUB_TOKEN` からは、非公開のメンバーが `MEMBER` と返らない。
+          # メンバーシップの非公開は GitHub の既定なので、組織所有では多くの場合こうなる。
           #
           # PR の作者以外が書いた印つきコメントは**数えないが、黙って捨てない。** 作者の記録が
           # 別にあって判定には影響しなくても、混ざっていること自体が読めるよう ::warning:: で
@@ -223,7 +228,7 @@ jobs:
             if ! author="$(gh api "repos/${REPO}/pulls/${pr}" --jq '.user.login' 2>/dev/null)" || [ -z "$author" ]; then
               return 2
             fi
-            local mine="(.user.login // \"\") == \"${author}\" and ((.author_association // \"\") as \$a | \$a == \"OWNER\" or \$a == \"MEMBER\" or \$a == \"COLLABORATOR\")"
+            local mine="(.user.login // \"\") == \"${author}\""
             # **--paginate を外さない。** 外すと先頭のページしか見ないため、
             # コメントが多い PR では、投稿されているのに「無い」と判定する。
             if ! bodies="$(gh api --paginate "repos/${REPO}/issues/${pr}/comments" --jq ".[] | select(${mine}) | .body" 2>/dev/null)"; then
@@ -234,12 +239,12 @@ jobs:
             case "$bodies" in
               *"${MARKER_PREFIX}${sha} -->"*) found=0 ;;
             esac
-            # 数えなかったコメント（作者と一致しない、または立場が COLLABORATOR 未満）の中に
+            # 数えなかったコメント（作者と一致しないもの）の中に
             # 同じ head の印があれば知らせる。読めなければここは黙って通す（found は変えない）。
             if others="$(gh api --paginate "repos/${REPO}/issues/${pr}/comments" --jq ".[] | select((${mine}) | not) | .body" 2>/dev/null)"; then
               case "$others" in
                 *"${MARKER_PREFIX}${sha} -->"*)
-                  echo "::warning::PR #${pr}: この head（${sha:0:7}）の印つきコメントに、PR の作者（${author}）以外が書いたもの、または書き手の立場が COLLABORATOR 未満のものがあります。記録としては数えません（#370）。"
+                  echo "::warning::PR #${pr}: この head（${sha:0:7}）の印つきコメントに、PR の作者（${author}）以外が書いたものがあります。記録としては数えません（#370）。"
                   ;;
               esac
             fi

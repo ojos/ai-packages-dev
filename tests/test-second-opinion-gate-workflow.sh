@@ -96,6 +96,10 @@ record_comment() { printf '{"user":{"login":"%s"},"author_association":"%s","bod
 #   collaborator … PR の作者ではない協力者（author_association=COLLABORATOR）の
 #                  印つきコメントだけがある（#370: 数えるのは作者自身の記録だけ）
 #   both         … stranger の印つきコメントと、作者自身の記録が混在する
+#   private      … PR の作者自身の記録だが、author_association が CONTRIBUTOR
+#   private_none … PR の作者自身の記録だが、author_association が NONE
+#                  （どちらも、組織のメンバーシップを公開していない作者の記録が
+#                  数えられなかった件を受けたもの。#436: 立場によらず作者が一致すれば数える）
 case_() {
   local name="$1" want="$2" author="$3" recorded="$4"; shift 4
   local fx="$WORK/fx" got
@@ -107,6 +111,8 @@ case_() {
     stranger) printf '[%s]' "$(record_comment mallory NONE)" > "$fx/comments.json" ;;
     collaborator) printf '[%s]' "$(record_comment helper COLLABORATOR)" > "$fx/comments.json" ;;
     both) printf '[%s,%s]' "$(record_comment mallory NONE)" "$(record_comment "$author" OWNER)" > "$fx/comments.json" ;;
+    private) printf '[%s]' "$(record_comment "$author" CONTRIBUTOR)" > "$fx/comments.json" ;;
+    private_none) printf '[%s]' "$(record_comment "$author" NONE)" > "$fx/comments.json" ;;
     *) printf '[{"user":{"login":"%s"},"author_association":"OWNER","body":"関係ないコメント"}]' "$author" > "$fx/comments.json" ;;
   esac
   ( cd "$REPO_ROOT" && PATH="$WORK/bin:$PATH" FIXTURES="$fx" GH_TOKEN=x REPO=o/r EVENT=pull_request \
@@ -122,7 +128,7 @@ case_() {
   # （#370。stranger / collaborator / both のいずれも、数えない印が存在する）。
   local want_warn=no got_warn=no
   case "$recorded" in stranger|collaborator|both) want_warn=yes ;; esac
-  grep -q '以外が書いたもの、または書き手の立場が COLLABORATOR 未満' "$fx/out" && got_warn=yes
+  grep -q '以外が書いたものがあります' "$fx/out" && got_warn=yes
   it "$name（作者以外の印の警告）"
   if [[ "$got_warn" == "$want_warn" ]]; then
     pass
@@ -153,6 +159,12 @@ case_ "PR の作者以外（無関係な人）が書いた印だけなら failur
 case_ "PR の作者以外の協力者が書いた印だけでも failure（作者自身の記録だけを数える）" failure someone collaborator \
   "$(commit someone someone false)"
 case_ "作者自身の記録があれば、他人の印が混ざっていても success" success someone both \
+  "$(commit someone someone false)"
+# 組織のメンバーシップを公開していない作者の記録が数えられなかった（#436）。
+# author_association は読む側の視点で変わりうるので、立場ではなく作者の一致で数える。
+case_ "作者自身の記録なら、立場が CONTRIBUTOR に見えても success" success someone private \
+  "$(commit someone someone false)"
+case_ "作者自身の記録なら、立場が NONE に見えても success" success someone private_none \
   "$(commit someone someone false)"
 
 # SHA が変わったら古いコメントで通らないこと（#361 の受け入れ条件）。記録の印は
