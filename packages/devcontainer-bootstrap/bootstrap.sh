@@ -7520,7 +7520,8 @@ TMPL
 #   gh pr merge / gh release create|edit|delete|upload /      merge                   拒否
 #     gh api の merge エンドポイントへの PUT / mergePullRequest
 #   git checkout|switch|rebase|reset|fetch|pull|merge|        git（作業ツリー）       拒否
-#     cherry-pick|revert|stash|restore|clean|am
+#     cherry-pick|revert|stash|restore|clean|am|
+#     add|commit|rm|mv（index を変える操作。#438）
 #   verify.sh / loop-gate.sh                                  gate                    拒否
 #   git checkout -b / git switch -c / git worktree add -b     issue（ブランチ名の     警告
 #     / gh issue develop（ブランチ名が番号で始まる場合）       先頭の番号）
@@ -7897,7 +7898,10 @@ classify_git() { # k（git の位置）
   done
   [[ -n "$sub" ]] || return 0
   case "$sub" in
-    checkout | switch | rebase | reset | fetch | pull | merge | cherry-pick | revert | restore | clean | am)
+    # add / commit / rm / mv も index を変える。同じ作業ツリーで並行すると、一方が stage した
+    # ものを他方の commit が取り込む・.git/index.lock で片方が落ちるなど、双方の作業を壊す
+    # （#438）。いちばん頻度の高い干渉なので、他の操作と同じく拒否の対象にする。
+    checkout | switch | rebase | reset | fetch | pull | merge | cherry-pick | revert | restore | clean | am | add | commit | rm | mv)
       add_git_dir "$(toplevel_of "$CUR_DIR" "$dir")"
       ;;
     stash)
