@@ -657,6 +657,7 @@ if [[ -r "/proc/$PID_A/stat" ]]; then
   cp "$(command -v sleep)" "$odd_bin"
   "$odd_bin" 600 >/dev/null 2>&1 &
   ODD_PID=$!
+  # shellcheck disable=SC1090  # 生成物を読み込み、関数 proc_start_key を直接呼ぶ
   odd_key="$(cd "$repo" && . "$LEDGER" >/dev/null 2>&1 && proc_start_key "$ODD_PID")"
   case "$(cat "/proc/$ODD_PID/stat")" in
     *"(a) (b c)"*) assert_eq "$odd_key" "$(start_key "$ODD_PID")" "キー" ;;
@@ -665,7 +666,9 @@ if [[ -r "/proc/$PID_A/stat" ]]; then
   kill "$ODD_PID" 2>/dev/null || true
 
   it "(#433) 旧版のキー（lstart の cksum）で書かれた生きている持ち主の登録は、失効として扱う"
-  old_key="$(ps -o lstart= -p "$PID_A" | cksum | cut -d" " -f1)"
+  # 旧版と同じ求め方（lstart を変数に受けて末尾の改行を落とし、printf '%s' で cksum へ渡す）。
+  old_lstart="$(ps -o lstart= -p "$PID_A")"
+  old_key="$(printf '%s' "$old_lstart" | cksum | cut -d" " -f1)"
   printf '%s\tclaim\tmerge\t-\t%s\t%s\t%s\n' "$(date +%s)" "$PID_A" "$repo" "$old_key" > "$DIR/s-oldkey.tsv"
   run s-b "$repo" check merge
   rm -f "$DIR/s-oldkey.tsv"
