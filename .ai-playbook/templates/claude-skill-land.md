@@ -227,8 +227,8 @@ CI が緑でも、Copilot の指摘が 0 件でも、読まずにマージしま
 
 - **PR のブランチが checkout されている worktree で直します。** 他のセッションと共有しているプライマリの作業ツリーでは直しません。
 - push の前にローカル事前ゲート（`.ai-playbook/loop-workflow.md`「ローカル事前ゲート（push 前）」）を通します。実行体（受け入れ検証・第二意見・identity の検査をまとめて通す入口）はプロジェクト層が用意します。
-- **リモート最終ゲートの有無にかかわらず、push のたびに（2 に戻る前に）`bash scripts/second-opinion-record.sh post` を実行します。** 記録は head SHA に紐づくため、直すたびに打ち直さないと、2 の `second-opinion-gate` がこの新しい head を「記録が無い」と判定します。
-- push したら、2 に戻って CI を待ちます。**Copilot には再要求しません。**
+- **リモート最終ゲートの有無にかかわらず、push が終わった直後（2 に戻る前）に、push のたびに `bash scripts/second-opinion-record.sh post` を実行します。** 記録は head SHA に紐づくため、直すたびに打ち直さないと、2 の `second-opinion-gate` がこの新しい head を「記録が無い」と判定します。
+- 上の `post` を終えたら、2 に戻って CI を待ちます。**Copilot には再要求しません。**
 - **次のどれかにあたれば、マージせずに止めて報告します。**
   - 直すには仕様の判断が要る。または直すと PR の範囲を超える
   - 直したあとも CI が赤い
