@@ -13,7 +13,7 @@
 # 受け入れ条件との対応（票 #395）:
 #   (a) 同じ issue への着手は警告して通る
 #   (b) 相手が merge を登録している間の gh pr merge は拒否される
-#   (c) 相手が登録している作業ツリーでの git rebase は拒否される
+#   (c) 相手が登録している作業ツリーでの git rebase は拒否される（add / commit / rm / mv も。#438）
 #   (d) 重いゲートの同時起動は拒否される
 #   (e) 相手が登録している文書の Edit は警告して通る
 #   (f) 持ち主の PID が消えた登録は失効し、通る
@@ -269,6 +269,14 @@ for c in 'git checkout main' 'git switch main' 'git reset --hard HEAD~1' 'git fe
 done
 if [[ -z "$bad" ]]; then pass; else fail "拒否されなかった: $bad"; fi
 
+it "(c) index を変える add / commit / rm / mv も同じ作業ツリーでは拒否される（#438）"
+bad=""
+for c in 'git add -A' 'git add docs/a.md' 'git commit -m "fix: x"' 'git commit --amend --no-edit' 'git rm --cached a' 'git mv a b' 'git -C . commit -m x'; do
+  pre_bash s-b "$repo" "$c"
+  [[ "$(decision)" == "deny" ]] || bad="$bad | $c => $(decision)"
+done
+if [[ -z "$bad" ]]; then pass; else fail "拒否されなかった: $bad"; fi
+
 it "(c) 別の作業ツリーでの git 操作は通る"
 pre_bash s-b "$wt2" 'git rebase main'
 if [[ "$(decision)" == "none" ]]; then pass; else fail "out=$HOUT"; fi
@@ -283,7 +291,7 @@ if [[ "$d1" == "deny" && "$d2" == "deny" ]]; then pass; else fail "-C=$d1 cd=$d2
 
 it "読み取りだけの git・コミットメッセージや引数に操作名を含むだけのコマンドは止めない"
 bad=""
-for c in 'git status' 'git log --oneline -5' 'git diff HEAD' 'git stash list' 'git commit -m "docs: git rebase の手順"' 'echo "git rebase main"' "grep -rn 'git reset' ." 'git branch --list' 'gh pr view 5' 'gh pr create --title x --body y' 'gh issue view 395'; do
+for c in 'git status' 'git log --oneline -5' 'git diff HEAD' 'git stash list' 'git log --grep "docs: git rebase の手順"' 'echo "git rebase main"' "grep -rn 'git reset' ." 'git branch --list' 'gh pr view 5' 'gh pr create --title x --body y' 'gh issue view 395'; do
   pre_bash s-b "$repo" "$c"
   [[ "$HRC" -eq 0 && "$(decision)" == "none" && -z "$(context)" ]] || bad="$bad | $c => $HOUT"
 done

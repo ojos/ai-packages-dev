@@ -979,7 +979,7 @@ squash 本文の組み立て方（PR の説明文だけを使うか、各コミ�
 | イベント | 対象 | 判定 |
 |---|---|---|
 | `SessionStart` | — | 他のセッションの登録を要約して表示する（他に登録が無ければ何も出さない） |
-| `PreToolUse` | `Bash` | `gh pr merge` / `gh release create`・`edit`・`delete`・`upload` / REST の merge への `PUT` / `mergePullRequest`、同じ作業ツリーでの `git checkout`・`switch`・`rebase`・`reset`・`fetch`・`pull`・`merge` など、`verify.sh` / `loop-gate.sh` の起動を、他のセッションの登録と衝突するなら**拒否**する。ブランチ作成（`git checkout -b feat/395-…` など）で、他のセッションが着手している issue なら**警告**する |
+| `PreToolUse` | `Bash` | `gh pr merge` / `gh release create`・`edit`・`delete`・`upload` / REST の merge への `PUT` / `mergePullRequest`、同じ作業ツリーでの `git checkout`・`switch`・`rebase`・`reset`・`fetch`・`pull`・`merge` や、index を変える `add`・`commit`・`rm`・`mv` など、`verify.sh` / `loop-gate.sh` の起動を、他のセッションの登録と衝突するなら**拒否**する。ブランチ作成（`git checkout -b feat/395-…` など）で、他のセッションが着手している issue なら**警告**する |
 | `PreToolUse` | `Edit\|Write` | 他のセッションが登録している文書なら**警告**する（通す） |
 | `PostToolUse` / `PostToolUseFailure` | `Bash` | `PreToolUse` で登録した「実行のあいだだけの登録」（マージ・作業ツリー・ゲート）を解放する。終了コードが 0 以外の呼び出しや中断は `PostToolUse` ではなく `PostToolUseFailure` が来るため、両方へ配線する |
 | `SessionEnd` | — | 自分の登録をすべて解放する |
