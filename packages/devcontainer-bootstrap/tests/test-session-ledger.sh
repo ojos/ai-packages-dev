@@ -65,7 +65,7 @@ PID_A=$!
 sleep 600 &
 PID_B=$!
 cleanup() {
-  kill "$PID_A" "$PID_B" "${PID_C:-}" 2>/dev/null || true
+  kill "$PID_A" "$PID_B" "${PID_C:-}" "${ODD_PID:-}" 2>/dev/null || true
   [[ -z "$OWN_TMP_ROOT" ]] || rm -rf "$OWN_TMP_ROOT"
 }
 trap cleanup EXIT
@@ -84,6 +84,19 @@ run() {
 }
 
 first_line() { printf '%s\n' "$OUT" | sed -n 1p; }
+
+TAB_CHAR="$(printf '\t')"
+
+# 台帳とは別に求めた、持ち主の開始時刻のキー（試験の期待値）。/proc があれば stat の
+# 22 列目（プロセス名の後ろの ") " から数えて 20 番目）、無ければ TZ と言語を固定した
+# lstart の cksum。
+start_key() { # pid
+  if [[ -r "/proc/$1/stat" ]]; then
+    sed 's/.*) //' "/proc/$1/stat" | awk '{ print $20 }'
+  else
+    TZ=UTC LC_ALL=C ps -o lstart= -p "$1" | cksum | cut -d" " -f1
+  fi
+}
 
 # 台帳の置き場所（共通ディレクトリの配下）
 COMMON="$(cd "$repo" && cd "$(git rev-parse --git-common-dir)" && pwd)"
@@ -446,8 +459,7 @@ else
 fi
 
 it "PID の再利用: 同じ PID でも開始時刻が違う登録は失効する。一致する登録は生きている"
-lstart_a="$(ps -o lstart= -p "$PID_A")"
-key_a="$(printf "%s" "$lstart_a" | cksum | cut -d" " -f1)"
+key_a="$(start_key "$PID_A")"
 now_t="$(date +%s)"
 printf '%s\tclaim\tmerge\t-\t%s\t%s\t%s\n' "$now_t" "$PID_A" "$repo" "$((key_a + 1))" > "$DIR/s-reuse.tsv"
 run s-b "$repo" check merge
@@ -458,7 +470,7 @@ reuse_live="$(first_line)"
 rm -f "$DIR/s-reuse.tsv"
 if [[ "$reuse_stale" == "LEDGER_OK" && "$reuse_live" == "LEDGER_DENY" ]]; then pass; else fail "違う開始時刻=$reuse_stale 一致=$reuse_live"; fi
 
-it "既定の識別子に持ち主の開始時刻が入る（pid-<PID>-<cksum>）"
+it "既定の識別子に持ち主の開始時刻のキーが入る（pid-<PID>-<キー>）"
 OUT="$(cd "$repo" && SESSION_LEDGER_PID="$PID_A" bash "$LEDGER" claim issue 780 2>&1)"
 assert_contains "$OUT" "session=pid-$PID_A-$key_a" "出力"
 OUT="$(cd "$repo" && SESSION_LEDGER_PID="$PID_A" bash "$LEDGER" release 2>&1)"
@@ -564,17 +576,18 @@ rc1="$RC"
 run s-a "$repo" release --call
 if [[ "$rc1" -eq 2 && "$RC" -eq 2 ]]; then pass; else fail "rc=$rc1,$RC"; fi
 
-it "(#425) 識別子付きの登録も、refresh で識別子を保ったまま更新される（識別子付きの解放が効く）"
+it "(#425/#433) 識別子付きの gate の登録は refresh で claim し直さない。識別子付きの解放が効く"
 run s-a "$repo" claim --call call-1 gate
+n_before="$(grep -c . "$DIR/s-a.tsv")"
 SESSION_LEDGER_REFRESH_MIN=0 run s-a "$repo" refresh
+n_after="$(grep -c . "$DIR/s-a.tsv")"
 run s-a "$repo" release --call call-1
 run s-b "$repo" check gate
-assert_eq "$(first_line)" "LEDGER_OK" "判定"
+if [[ "$n_before" -eq "$n_after" && "$(first_line)" == "LEDGER_OK" ]]; then pass; else fail "行数 $n_before -> $n_after 判定=$(first_line)"; fi
 
 it "(#425) 7 列・6 列の古い台帳ファイルを読める。識別子なしの解放で外れる"
 now_t="$(date +%s)"
-lstart_a="$(ps -o lstart= -p "$PID_A")"
-key_a="$(printf "%s" "$lstart_a" | cksum | cut -d" " -f1)"
+key_a="$(start_key "$PID_A")"
 printf '%s\tclaim\tmerge\t-\t%s\t%s\t%s\n' "$now_t" "$PID_A" "$repo" "$key_a" > "$DIR/s-old.tsv"
 run s-b "$repo" check merge
 old_deny="$(first_line)"
@@ -627,5 +640,72 @@ gate_none="$(first_line)"
 run s-a "$repo" release
 if [[ "$rc_dash" -eq 2 && "$rc_empty" -eq 2 && "$rc_claim" -eq 2 && "$merge_kept" == "LEDGER_DENY" && "$gate_none" == "LEDGER_OK" ]]; then pass; else fail "rc=$rc_dash,$rc_empty,$rc_claim merge=$merge_kept gate=$gate_none"; fi
 
+# ── (#433) 開始時刻のキーと、実行のあいだだけ持つ登録の失効 ──────────────────
+
+if [[ -r "/proc/$PID_A/stat" ]]; then
+  it "(#433) /proc を使う経路では、TZ を変えても開始時刻のキー（既定の識別子）が変わらない"
+  OUT="$(cd "$repo" && TZ=UTC SESSION_LEDGER_PID="$PID_A" bash "$LEDGER" claim issue 781 2>&1)"
+  sid_utc="$(printf '%s\n' "$OUT" | sed -n 's/.*claimed: session=\([^ ]*\).*/\1/p')"
+  OUT="$(cd "$repo" && TZ=Asia/Tokyo SESSION_LEDGER_PID="$PID_A" bash "$LEDGER" claim issue 781 2>&1)"
+  sid_jst="$(printf '%s\n' "$OUT" | sed -n 's/.*claimed: session=\([^ ]*\).*/\1/p')"
+  OUT="$(cd "$repo" && TZ=America/Los_Angeles SESSION_LEDGER_PID="$PID_A" bash "$LEDGER" release 2>&1)"
+  if [[ -n "$sid_utc" && "$sid_utc" == "$sid_jst" && "$sid_utc" == "pid-$PID_A-$key_a" ]]; then pass; else fail "UTC=$sid_utc JST=$sid_jst 期待=pid-$PID_A-$key_a"; fi
+
+  it "(#433) プロセス名に空白や括弧があっても、/proc の stat の列を取り違えない"
+  odd_dir="$(new_workdir)"
+  odd_bin="$odd_dir/a) (b c"
+  cp "$(command -v sleep)" "$odd_bin"
+  "$odd_bin" 600 >/dev/null 2>&1 &
+  ODD_PID=$!
+  odd_key="$(cd "$repo" && . "$LEDGER" >/dev/null 2>&1 && proc_start_key "$ODD_PID")"
+  case "$(cat "/proc/$ODD_PID/stat")" in
+    *"(a) (b c)"*) assert_eq "$odd_key" "$(start_key "$ODD_PID")" "キー" ;;
+    *) pass ;;
+  esac
+  kill "$ODD_PID" 2>/dev/null || true
+
+  it "(#433) 旧版のキー（lstart の cksum）で書かれた生きている持ち主の登録は、失効として扱う"
+  old_key="$(ps -o lstart= -p "$PID_A" | cksum | cut -d" " -f1)"
+  printf '%s\tclaim\tmerge\t-\t%s\t%s\t%s\n' "$(date +%s)" "$PID_A" "$repo" "$old_key" > "$DIR/s-oldkey.tsv"
+  run s-b "$repo" check merge
+  rm -f "$DIR/s-oldkey.tsv"
+  assert_eq "$(first_line)" "LEDGER_OK" "判定"
+fi
+
+it "(#433) refresh は issue の登録を claim し直す。merge / git / gate の登録は claim し直さない"
+old=$(( $(date +%s) - 1000 ))
+printf '%s\tclaim\tgit\t%s\t%s\t%s\t%s\t-\n' "$old" "$repo" "$PID_A" "$repo" "$key_a" > "$DIR/s-x.tsv"
+printf '%s\tclaim\tissue\t433\t%s\t%s\t%s\t-\n' "$old" "$PID_A" "$repo" "$key_a" >> "$DIR/s-x.tsv"
+(cd "$repo" && SESSION_LEDGER_ID=s-x SESSION_LEDGER_PID="$PID_A" bash "$LEDGER" refresh >/dev/null 2>&1)
+added="$(tail -1 "$DIR/s-x.tsv" | cut -f2,3,4)"
+assert_eq "$added" "claim${TAB_CHAR}issue${TAB_CHAR}433" "足した行"
+
+it "(#433) 解放し損ねた git の登録は、refresh で更新が続いても、その登録の時刻から失効する"
+SESSION_LEDGER_TTL=500 run s-b "$repo" check git "$repo"
+git_verdict="$(first_line)"
+SESSION_LEDGER_TTL=500 run s-b "$repo" check issue 433
+issue_verdict="$(first_line)"
+run s-b "$repo" check git "$repo"
+git_default="$(first_line)"
+rm -f "$DIR/s-x.tsv"
+if [[ "$git_verdict" == "LEDGER_OK" && "$issue_verdict" == "LEDGER_WARN" && "$git_default" == "LEDGER_DENY" ]]; then
+  pass
+else
+  fail "TTL 超えの git=$git_verdict 更新された issue=$issue_verdict TTL 内の git=$git_default"
+fi
+
+it "(#433) refresh: 生きている登録が merge / git / gate だけなら何も足さない"
+printf '%s\tclaim\tgate\t-\t%s\t%s\t%s\tcall-9\n' "$old" "$PID_A" "$repo" "$key_a" > "$DIR/s-x.tsv"
+(cd "$repo" && SESSION_LEDGER_ID=s-x SESSION_LEDGER_PID="$PID_A" SESSION_LEDGER_REFRESH_MIN=0 bash "$LEDGER" refresh >/dev/null 2>&1)
+n_gate="$(grep -c . "$DIR/s-x.tsv")"
+rm -f "$DIR/s-x.tsv"
+assert_eq "$n_gate" "1" "行数"
+
+it "(#433) 同じ git の登録を claim し直せば、その登録の時刻が新しくなる"
+printf '%s\tclaim\tgit\t%s\t%s\t%s\t%s\t-\n' "$old" "$repo" "$PID_A" "$repo" "$key_a" > "$DIR/s-x.tsv"
+printf '%s\tclaim\tgit\t%s\t%s\t%s\t%s\t-\n' "$(date +%s)" "$repo" "$PID_A" "$repo" "$key_a" >> "$DIR/s-x.tsv"
+SESSION_LEDGER_TTL=500 run s-b "$repo" check git "$repo"
+rm -f "$DIR/s-x.tsv"
+assert_eq "$(first_line)" "LEDGER_DENY" "判定"
 
 exit_with_result

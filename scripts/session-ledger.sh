@@ -44,8 +44,13 @@
 #   SESSION_LEDGER_ID があればそれを使う（英数字と ._- 以外は _ になる）。無ければ
 #   pid-<持ち主の PID>。持ち主の PID は SESSION_LEDGER_PID があればそれ、無ければ祖先の
 #   プロセスをたどって、最初に現れるシェル以外のプロセス（セッションを動かしている
-#   本体）。見つからなければ親プロセス。識別子は pid-<PID>-<開始時刻の cksum> で、
+#   本体）。見つからなければ親プロセス。識別子は pid-<PID>-<開始時刻のキー> で、
 #   PID が再利用されても別のセッションとして扱う。
+#   開始時刻のキー: /proc/<PID>/stat の 22 列目（起動からの経過のクロック数）。ホストの
+#   時刻の付け直しやタイムゾーンで変わらない。/proc が無い環境（macOS など）では、
+#   TZ=UTC・LC_ALL=C で読んだ `ps -o lstart=` の cksum に落とす（時刻の付け直しで変わり
+#   うる）。キーの取り方が違う版の台帳（#433 より前の、lstart の cksum）の登録は、キーが
+#   一致しないため失効として扱う（誤って止める側には倒れない）。
 #   人がシェルから直接使うときは、同じ端末から起動した複数のシェルが同じ持ち主に
 #   なりうるので、SESSION_LEDGER_ID を明示する。
 #
@@ -53,6 +58,8 @@
 #   次のどちらかなら、その登録は失効したものとして無視する。
 #     - 持ち主の PID のプロセスが存在しない
 #     - そのセッションの最後の更新から SESSION_LEDGER_TTL 秒（既定 28800）を超えた
+#       （実行のあいだだけ持つ登録 = merge / git / gate は、セッションの最後の更新ではなく、
+#       その登録（同じ kind, target）の最後の claim から数える。refresh で生かし続けない）
 #
 # 出力と終了コード（check / claim）:
 #   標準出力の 1 行目が判定。LEDGER_OK（衝突なし）/ LEDGER_WARN（警告して通す）/
@@ -64,10 +71,13 @@
 #   使い方の誤りは 2。
 #
 # 更新（refresh）:
-#   自分に生きている登録があり、最後の更新から SESSION_LEDGER_REFRESH_MIN 秒（既定 300）
-#   以上たっていれば、その登録を 1 件だけ claim し直す（追記のみ）。失効の判定はセッション
-#   単位で最後の更新を見るため、1 件で足りる。長く続くセッションが、フックなどから呼んで
-#   失効を避けるための入口。頻繁に呼んでも台帳が膨らまない。
+#   自分に生きている issue / doc の登録があり、最後の更新から SESSION_LEDGER_REFRESH_MIN 秒
+#   （既定 300）以上たっていれば、その登録を 1 件だけ claim し直す（追記のみ）。issue / doc の
+#   失効の判定はセッション単位で最後の更新を見るため、1 件で足りる。長く続くセッションが、
+#   フックなどから呼んで失効を避けるための入口。頻繁に呼んでも台帳が膨らまない。
+#   merge / git / gate の登録は claim し直さず、その失効も延ばさない。実行のあいだだけ持つ
+#   はずの登録が、解放し損ねたまま（フックの版の切り替えなど）生き続けて、他のセッションを
+#   止め続けないようにするため（#433）。
 #
 # 環境変数: SESSION_LEDGER_ID / SESSION_LEDGER_PID / SESSION_LEDGER_TTL /
 #           SESSION_LEDGER_REFRESH_MIN / SESSION_LEDGER_DIR（置き場所を差し替える。試験用）
@@ -154,11 +164,28 @@ owner_pid() {
 
 # 持ち主を特定できないときは SELF_ID を空にし、登録・確認を警告して通す（fail-open）。
 # SESSION_LEDGER_ID を明示した場合は、PID を特定できなくても親プロセスを使う。
-# プロセスの開始時刻の cksum。PID が再利用されたとき、別のプロセスと見分けるために使う。
+# プロセスの開始時刻のキー。PID が再利用されたとき、別のプロセスと見分けるために使う。
+# /proc があれば stat の 22 列目（起動からの経過のクロック数。時刻の付け直しやタイムゾーンで
+# 変わらない）。2 列目のプロセス名は空白や括弧を含みうるので、最後の ")" の後ろ（3 列目から）
+# を数える。/proc が無ければ、TZ と言語を固定した lstart の cksum。
 # 取れないときは - を返す（従来の PID だけの判定に落ちる）。
 proc_start_key() { # pid
-  local lstart sum
-  lstart="$(ps -o lstart= -p "$1" 2>/dev/null)"
+  local stat start lstart sum
+  case "$1" in '' | *[!0-9]*) printf '%s' "-"; return 0 ;; esac
+  if [ -r "/proc/$1/stat" ]; then
+    stat="$(cat "/proc/$1/stat" 2>/dev/null)" || stat=""
+    case "$stat" in
+      *')'*)
+        stat="${stat##*\)}"
+        start="$(printf '%s\n' "$stat" | awk '{ print $20 }')"
+        case "$start" in
+          '' | *[!0-9]*) ;;
+          *) printf '%s' "$start"; return 0 ;;
+        esac
+        ;;
+    esac
+  fi
+  lstart="$(TZ=UTC LC_ALL=C ps -o lstart= -p "$1" 2>/dev/null)"
   [ -n "$lstart" ] || { printf '%s' "-"; return 0; }
   sum="$(printf '%s' "$lstart" | cksum | cut -d' ' -f1)"
   printf '%s' "${sum:--}"
@@ -306,6 +333,8 @@ normalize_target() { # kind target
 
 # 1 セッションぶんのファイルを再生して、いま有効な登録を TSV で出す:
 #   sid kind target pid worktree 最後の更新(epoch) 開始時刻のキー 識別子
+# 最後の更新は、issue / doc ならセッションの最後の行の時刻、merge / git / gate なら
+# その（kind, target）の有効な claim のうち最後の時刻（refresh で延ばさない。#433）。
 # 壊れた行は読み飛ばし、件数を警告する。
 replay_file() { # file sid
   awk -v sid="$2" -v file="$1" '
@@ -316,7 +345,7 @@ replay_file() { # file sid
       cid = (NF >= 8 && $8 != "") ? $8 : "-"
       key = $3 "\034" $4 "\034" cid
       if ($2 == "claim") {
-        live[key] = 1; kind[key] = $3; tgt[key] = $4; pid[key] = $5; wt[key] = $6; cids[key] = cid
+        live[key] = 1; ctime[key] = $1 + 0; kind[key] = $3; tgt[key] = $4; pid[key] = $5; wt[key] = $6; cids[key] = cid
         skey[key] = (NF >= 7 && $7 ~ /^[0-9]+$/) ? $7 : "-"
       } else {
         # 識別子の付いた解放は、その識別子の登録だけを（kind / target で絞って）外す。
@@ -335,10 +364,12 @@ replay_file() { # file sid
       for (x in live) {
         kt = kind[x] "\034" tgt[x]
         if (!(kt in seen) || cids[x] != "-") { seen[kt] = 1; pick[kt] = x }
+        if (!(kt in klast) || ctime[x] > klast[kt]) klast[kt] = ctime[x]
       }
       for (kt in pick) {
         x = pick[kt]
-        printf "%s\t%s\t%s\t%s\t%s\t%d\t%s\t%s\n", sid, kind[x], tgt[x], pid[x], wt[x], last, skey[x], cids[x]
+        upd = (kind[x] == "issue" || kind[x] == "doc") ? last : klast[kt]
+        printf "%s\t%s\t%s\t%s\t%s\t%d\t%s\t%s\n", sid, kind[x], tgt[x], pid[x], wt[x], upd, skey[x], cids[x]
       }
       if (bad > 0) printf "[session-ledger] WARN: %s: 壊れた行を %d 件読み飛ばしました。\n", file, bad > "/dev/stderr"
     }
@@ -549,6 +580,8 @@ cmd_refresh() {
     [ -n "$r_sid" ] || continue
     [ "$r_sid" = "$SELF_ID" ] || continue
     [ "$r_state" = "live" ] || continue
+    # 実行のあいだだけ持つ登録は更新しない（解放し損ねた登録を生かし続けないため。#433）。
+    case "$r_kind" in issue | doc) ;; *) continue ;; esac
     if [ "$r_age" -ge "$min" ]; then
       CALL_ID="${r_cid:--}"
       append_record claim "$r_kind" "$r_tgt" || warn "台帳へ書き込めませんでした。更新できていません。"

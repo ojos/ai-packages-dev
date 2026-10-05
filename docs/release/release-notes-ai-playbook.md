@@ -9,6 +9,7 @@
 ## 未リリース
 
 ### Summary
+- **`shared-ai-rules.md` 16 章に、台帳の開始時刻と失効の扱いを足した**（ojos/ai-packages-dev#433）。セッションの識別子に使う開始時刻は、ホストの時刻の付け直しやタイムゾーンで変わらない値で表す（変わると、動いているセッションの登録が失効とみなされ、保護が黙って切れる）。実行のあいだだけ持つ登録（マージ・作業ツリーの git 操作・重いゲート）は、失効をその登録の時刻から数え、更新で延ばさない。
 - **`templates/review-gate.yml` と `templates/second-opinion-gate.yml` の `actions/checkout@v4` を `@v7` へ上げた**（ojos/ai-packages-dev#432）。v4 は Node.js 20 で動き、GitHub Actions で非推奨の警告が出る。v5 以降は Node.js 24 で動く。どちらの雛形も `pull_request_target` / `workflow_run` を契機に持たず、checkout が保存する認証情報にも頼らないので、v6・v7 の変更（認証情報の保存先、fork の PR の checkout の禁止）の影響は受けない。雛形は 15 種のまま。
 
 ### 移行

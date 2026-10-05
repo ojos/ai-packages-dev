@@ -9,9 +9,12 @@
 ## 未リリース
 
 ### Summary
+- **共有台帳 `scripts/session-ledger.sh` の開始時刻のキーを、ホストの時刻の付け直しやタイムゾーンで変わらない値にした**（ojos/ai-packages-dev#433）。従来は `ps -o lstart=` の cksum で、Docker Desktop の VM のようにスリープや復帰で時刻が付け直される環境では、同じプロセスでもキーが変わった。そのため、動いているセッションの登録が他のセッションの check から失効とみなされ、マージ・git 操作・重いゲートの同時実行を止める保護が黙って切れていた。Linux では `/proc/<PID>/stat` の 22 列目（起動からの経過のクロック数）を使い、`/proc` が無い環境（macOS）では `TZ=UTC`・`LC_ALL=C` で読んだ `lstart` の cksum に落とす。
+- **台帳の `refresh` が、マージ・git 操作・重いゲートの登録を生かし続けないようにした**（ojos/ai-packages-dev#433）。これらは実行のあいだだけ持つ登録なので、`refresh` で claim し直さず、失効もセッションの最後の更新ではなく、その登録の時刻から数える。フックの版の切り替えや確認（`ask`）の拒否で解放し損ねた登録が、セッションが続く限り他のセッションを止め続けることがなくなる（既定の 8 時間で失効する）。issue と文書の登録は従来どおり `refresh` で延びる。台帳の書式（列）は変えていない。
 - **生成する workflow の `actions/checkout@v4` を `@v7` へ上げた**（ojos/ai-packages-dev#432）。対象は `.github/workflows/identity-guard.yml` と `.github/workflows/verify.yml`。v4 は Node.js 20 で動き、GitHub Actions で非推奨の警告が出る。v5 以降は Node.js 24 で動く。`verify.yml` のコメントにある例も `actions/setup-node@v7`・`node-version: '24'` に揃えた。README の該当する記述も合わせた。
 
 ### 移行
+- 更新前の台帳（`lstart` の cksum のキー）に書かれた登録は、キーが一致しないため失効として扱う（誤って止める側には倒れない）。更新したあとは、動いているセッションも新しい識別子（`pid-<PID>-<新しいキー>`）の台帳ファイルへ書く。更新の直後は、それまでの登録（着手した issue など）が他のセッションから見えなくなるので、必要なら `scripts/session-ledger.sh claim issue <番号>` で登録し直してください。
 - 生成済みの workflow は `--upgrade` で追従できる（手を入れていれば `.dcb-new` が置かれる）。手で直す場合は `actions/checkout@v4` を `@v7` へ書き換えてください。セルフホストのランナーでは、Actions Runner v2.327.1 以降が要る。
 
 ## v0.15.0
