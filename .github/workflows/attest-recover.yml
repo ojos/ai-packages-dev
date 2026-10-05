@@ -65,7 +65,7 @@ jobs:
           echo "digest=sha256:${RAW}" >> "$GITHUB_OUTPUT"
 
       - name: Attest the published digest
-        uses: actions/attest-build-provenance@v1
+        uses: actions/attest-build-provenance@v4
         with:
           subject-name: ${{ inputs.subject-name }}
           subject-digest: ${{ steps.validate.outputs.digest }}

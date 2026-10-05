@@ -107,7 +107,7 @@ jobs:
 
           exit $fail
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # ── 配るコミットが検証済みであることを確かめる ──────────────────────
       #
@@ -150,9 +150,9 @@ jobs:
       # 保存しない。トークンはジョブ終了後に失効する。
       - name: Generate a release bot token
         id: app-token
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@v3
         with:
-          app-id: ${{ secrets.RELEASE_APP_ID }}
+          client-id: ${{ secrets.RELEASE_APP_CLIENT_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
           # 配布先の 2 リポジトリだけに絞る。App が他リポジトリへ install されても、
@@ -242,7 +242,7 @@ jobs:
 
       - name: Attest the checksum file
         if: steps.subject.outputs.digest != ''
-        uses: actions/attest-build-provenance@v1
+        uses: actions/attest-build-provenance@v4
         with:
           subject-name: SHA256SUMS
           subject-digest: ${{ steps.subject.outputs.digest }}

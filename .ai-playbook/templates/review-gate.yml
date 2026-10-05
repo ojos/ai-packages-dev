@@ -124,7 +124,7 @@ jobs:
       github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - name: Checkout the default branch (not the PR under judgment)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           # **判定コード（scripts/review-usable.sh）は既定ブランチから取る。**
           # ref を指定しないと、checkout は pull_request イベントで PR のマージ結果

@@ -19,7 +19,7 @@ jobs:
     name: Shell syntax and lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Syntax check
         run: |
@@ -41,7 +41,7 @@ jobs:
     name: Self devcontainer credential isolation
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # このリポジトリ自身の devcontainer も、生成物と同じ「資格情報をホストから
       # 注入しない」構造を保つ。remoteEnv は作業ディレクトリの受け渡しだけを担い、
@@ -75,7 +75,7 @@ jobs:
     name: Project tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Run tests
         run: bash tests/run-tests.sh
@@ -84,7 +84,7 @@ jobs:
     name: devcontainer-bootstrap tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Run tests
         run: bash packages/devcontainer-bootstrap/tests/run-tests.sh
@@ -93,7 +93,7 @@ jobs:
     name: devhost tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Run selftest
         run: bash packages/devhost/selftest.sh
@@ -102,7 +102,7 @@ jobs:
     name: Docs and catalog consistency
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: CATALOG lists every tracked file
         run: |
@@ -136,7 +136,7 @@ jobs:
     name: Package neutrality
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # プロジェクト固有の値がパッケージ層と規範層へ混入していないことを検証する。
       # 検査対象・除外条件の正本は scripts/check-neutrality.sh。CI・ローカルゲート

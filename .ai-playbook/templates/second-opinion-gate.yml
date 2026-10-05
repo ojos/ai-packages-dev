@@ -111,7 +111,7 @@ jobs:
       # 除外の判定（scripts/second-opinion-gate-exempt.sh）を読むために取る。**PR の側ではなく
       # 既定ブランチの側を取る。** PR の側を取ると、判定を書き換えた PR が自分自身を除外できる。
       # 既定ブランチにまだ無い間（この変更を入れる PR 自身）は、除外せずにいつもどおり判定する。
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.repository.default_branch }}
 

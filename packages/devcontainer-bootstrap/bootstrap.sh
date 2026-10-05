@@ -726,7 +726,7 @@ jobs:
   verify-commit-identity:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # 範囲指定で履歴を辿るため全履歴が要る。
           fetch-depth: 0
@@ -830,7 +830,7 @@ jobs:
     # if: github.event.pull_request.head.repo.fork != true
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # 全履歴・全 ref を取る。
           #
@@ -856,9 +856,9 @@ jobs:
       # 毎回消す作業をさせることになる。
       #
       # 例（そのまま貼らず、実態に合わせて書く）:
-      #   - uses: actions/setup-node@v4
+      #   - uses: actions/setup-node@v7
       #     with:
-      #       node-version: '20'
+      #       node-version: '24'
       #   - run: npm ci
       #   - run: sudo apt-get update && sudo apt-get install -y shellcheck
 

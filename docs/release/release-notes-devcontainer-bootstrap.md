@@ -6,6 +6,14 @@
 >
 > 同じ理由で、issue 参照は `ojos/ai-packages-dev#NNN` の形で書いてください。裸の `#NNN` は GitHub のオートリンクが**配布先リポジトリの issue** として解決するため、配布後は存在しない issue や無関係な issue を指します。
 
+## 未リリース
+
+### Summary
+- **生成する workflow の `actions/checkout@v4` を `@v7` へ上げた**（ojos/ai-packages-dev#432）。対象は `.github/workflows/identity-guard.yml` と `.github/workflows/verify.yml`。v4 は Node.js 20 で動き、GitHub Actions で非推奨の警告が出る。v5 以降は Node.js 24 で動く。`verify.yml` のコメントにある例も `actions/setup-node@v7`・`node-version: '24'` に揃えた。README の該当する記述も合わせた。
+
+### 移行
+- 生成済みの workflow は `--upgrade` で追従できる（手を入れていれば `.dcb-new` が置かれる）。手で直す場合は `actions/checkout@v4` を `@v7` へ書き換えてください。セルフホストのランナーでは、Actions Runner v2.327.1 以降が要る。
+
 ## v0.15.0
 
 ### Summary
