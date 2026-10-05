@@ -262,6 +262,7 @@ fi
 - `--no-gitignore`（既定: 無効＝`.gitignore` の managed セクションを更新する。指定すると `.gitignore` に一切触れません）
 - `--gitignore-targets <csv>`（既定: 空。暗黙ターゲットに**追加で合成**する github/gitignore テンプレート名。下記「`.gitignore` と github/gitignore の連携」参照）
 - `--with-playbook` / `--without-playbook`（AI 共通ルールの配置。既定: 配置しない）
+- `--without-aws` / `--without-gcp` / `--without-claude` / `--without-gemini` / `--without-antigravity` / `--without-codex` / `--without-copilot` / `--without-copilot-review`（`--with-<名前>` のそれぞれと対になる打ち消し。`--upgrade` では、記録した集合から外し、外したフラグでだけ生成していたファイルのうち手を入れていないものを削除します。`--upgrade` 以外では「付けない」と同じなので受け付けるだけで、既存のファイルには触れません。同じ名前の `--with-<名前>` と同時に指定するとエラーで止まり、何も書きません。下記「`--upgrade` の注意」参照）
 - `--playbook-version <tag>`（既定: 空。既定ソース `ojos/ai-playbook` のタグ tarball への糖衣。`--playbook-from` とは排他。`<tag>` は GitHub の実タグ名をそのまま指定します。例: `v0.1.4`（先頭の `v` を含む）。存在しないタグを指定すると、**ファイルを 1 つも書かずに**明示エラーで終了します）
 - `--playbook-from <path|url>`（既定: 空。ルールの取得元。ディレクトリまたはアーカイブ URL。別 owner・任意 URL・ローカル用）
 - `--playbook-conflict-policy <skip|overwrite|prompt>`（既定: `skip`。**規範ファイル**に既存がある場合の扱い）
@@ -326,8 +327,10 @@ fi
 
 `--upgrade` の注意:
 
-- **`--with-*` は足せるが外せません。** 引数で渡した `--with-*` は記録した集合へ足されます。外したいときは、生成し直してください。
-- **生成されなくなったファイルは報告するだけで、削除しません。** 不要なら手で消してください。
+- **`--with-*` は足せます。外すには `--without-<名前>` を使います。** 引数で渡した `--with-*` は記録した集合へ足されます。`--upgrade --without-<名前>` は記録した集合から外し、ORIGIN の `flags=` からも消えます。生成し直す必要はありません。同じ名前の `--with-` と `--without-` を同時に渡すとエラーで止まります。
+- **外すときは、外したフラグでだけ生成していたファイルを、手を入れていないものに限って削除します。** ORIGIN に記録したハッシュと現物が一致するものを削除し（`remove: <path> (flag removed, unmodified)`）、手を入れたものは残して `keep (modified, no longer generated): <path>` と報告します。`--dry-run` では `plan: remove <path>` と出すだけで、何も消しません。ORIGIN は外した結果で書き直すため、残したファイルは記録から外れ、次の `--upgrade` の対象にも出ません（不要なら手で消してください）。外していないフラグで生成されるファイルは対象外です。`--upgrade` 以外で `--without-<名前>` を渡した場合は、新規生成なら付けないのと同じで、既存のファイルは削除しません。
+- **リモート最終ゲート（`--without-copilot-review`）を外すときは、生成物以外の作業が残ります。** DCB は次を変えません。(1) `.github/project-ai-rules.md` の「リモート最終ゲート」の記述を、置かない構成に合わせて直す。(2) リポジトリの required check（ブランチ保護・ruleset）に `review-gate` を入れていれば外す（ワークフローが無くなると、その check は永久に待ち状態になりマージが止まります）。(3) GitHub 側の Copilot の自動レビュー（ruleset の「Automatically request Copilot code review」など）の設定を止める。
+- **ほかの理由で生成されなくなったファイルは報告するだけで、削除しません。** 不要なら手で消してください（`--without-<名前>` で外したフラグのファイルだけが例外です）。
 - **規範の取得元が `local` の場合は、`--playbook-from` の明示が要ります。** ローカルのパスは記録しないため再現できません（`@` `?` `#` を含む URL も同じです。取得元の種類が `tag` / `adjacent` なら引数なしで再現します）。
 - **記録に入力が無い古い ORIGIN、または ORIGIN が無い出力先では、引数を明示しないと止まります。** `--project-name` / `--languages`（必須）と、使っていた `--with-*` や規範の取得元を明示した初回の `--upgrade` で、記録が書き直されます。
 - 追従先は、実行した `bootstrap.sh` の版です。ネットワークへ最新版を問い合わせません。
@@ -886,7 +889,7 @@ hash:.env.example=<sha256>
 | 入力 | 扱い | 理由 |
 |---|---|---|
 | `--project-name` / `--languages` | 記録する（`input:project-name` / `input:languages`） | 生成結果を決める必須の入力 |
-| `--with-*` | `flags=` に記録する | 同上。`--upgrade` は記録した集合へ、引数で渡した分を足す |
+| `--with-*` | `flags=` に記録する | 同上。`--upgrade` は記録した集合へ、引数で渡した分を足し、`--without-<名前>` で渡した分を外す |
 | `--base-image` | 指定の有無（`input:base-image-mode=override` / `auto`）と、そのとき使った値（`input:base-image`）を記録する | `auto` のときの値は、生成時の環境（docker の有無・アーキテクチャ・レジストリの応答）で決まった観測記録で、再現すべき入力ではない。`override` のときだけ `--upgrade` が再現する |
 | `--no-gitignore` / `--gitignore-targets` | 記録する（`input:manage-gitignore` / `input:gitignore-targets`） | 生成結果（`.gitignore`）を決める |
 | 規範の取得元（`--playbook-version` / `--playbook-from` / `--with-playbook`） | 種類（`input:playbook-source` = `tag` / `url` / `local` / `adjacent`）と、記録できる場合の値（`input:playbook-ref`）を記録する。配置しないときは `input:playbook=none` | `tag` と、`@` `?` `#` を含まない URL だけ値を記録する。ローカルのパスは、絶対パスがコミットされると困り、相対パスは実行した場所で意味が変わるため記録しない。`@` `?` `#` を含む URL は資格情報や署名を含みうるため記録しない（これらは `--upgrade` で `--playbook-from` の明示が要る） |

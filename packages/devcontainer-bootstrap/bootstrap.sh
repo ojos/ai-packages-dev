@@ -17,6 +17,10 @@ LANGUAGES=()
 # 例: aws gcp claude gemini copilot copilot-review。has_with で参照する。
 # 判定は完全一致なので、copilot-review を足しても copilot の判定には影響しない。
 WITH_SET=()
+# --without-<名前> で打ち消された装備の集合。--upgrade が記録した集合から外す。
+WITHOUT_SET=()
+# --upgrade で、外す前の集合（記録 + 明示）。外したフラグが生成していたファイルの特定に使う。
+UPGRADE_PREV_WITH=()
 FORCE="false"
 DRY_RUN="false"
 MANAGE_GITIGNORE="true"
@@ -92,6 +96,13 @@ options:
   --with-copilot              Install GitHub Copilot CLI + extensions (persisted)
   --with-copilot-review       Place the remote review-gate workflows only
                               (requires rules placement; no local tooling)
+  --without-<name>            Counterpart of each --with-<name> above (aws, gcp, claude,
+                              gemini, antigravity, codex, copilot, copilot-review).
+                              With --upgrade, removes it from the recorded set and deletes
+                              the files only it generated, if unmodified (modified ones
+                              are kept and reported; --dry-run prints plan: remove).
+                              Without --upgrade it is the same as not passing --with-<name>.
+                              Passing both for one name is an error.
   --output-dir <path>         Output directory (default: $PWD/<project-name>)
   --base-image <image>        Override auto-selected devcontainer base image
   --dry-run                   Show planned outputs without writing files
@@ -235,6 +246,17 @@ while [[ $# -gt 0 ]]; do
     # （手元の開発ツール / リモートのレビュー機構）、片方だけ欲しい構成が実在する。
     # 1 つのフラグで束ねると「リモートのゲートだけ欲しい」を機構で表現できない。
     --with-copilot-review) WITH_SET+=("copilot-review"); shift ;;
+    # --with-<名前> と対になる打ち消し。--upgrade では記録した集合から外し、外したフラグ
+    # でだけ生成していたファイルのうち手を入れていないものを削除する（#444）。--upgrade
+    # 以外では「付けない」と同じなので受け付けるだけで、既存のファイルには触れない。
+    --without-aws)               WITHOUT_SET+=("aws"); shift ;;
+    --without-gcp)               WITHOUT_SET+=("gcp"); shift ;;
+    --without-claude)            WITHOUT_SET+=("claude"); shift ;;
+    --without-gemini)            WITHOUT_SET+=("gemini"); shift ;;
+    --without-antigravity)       WITHOUT_SET+=("antigravity"); shift ;;
+    --without-codex)             WITHOUT_SET+=("codex"); shift ;;
+    --without-copilot)           WITHOUT_SET+=("copilot"); shift ;;
+    --without-copilot-review)    WITHOUT_SET+=("copilot-review"); shift ;;
     --output-dir)       OUTPUT_DIR="$2"; shift 2 ;;
     # 廃止フラグは黙殺せず、移行先を示して停止する。黙って無視すると
     # 「指定したのに注入されない」状態を作り、資格情報の所在をふたたび曖昧にする。
@@ -261,6 +283,17 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# 同じ名前の --with- と --without- を同時に渡されたら、どちらを採るか決められないので
+# 何も書かずに止める（指定の順序で勝敗を決めない）。
+for w in ${WITHOUT_SET[@]+"${WITHOUT_SET[@]}"}; do
+  for x in ${WITH_SET[@]+"${WITH_SET[@]}"}; do
+    if [[ "$w" == "$x" ]]; then
+      echo "error: --with-$w と --without-$w は同時に指定できません。" >&2
+      exit 1
+    fi
+  done
+done
+
 # --upgrade は「手を入れたものを上書きしない」が前提。--force は「手を入れたものも
 # 上書きする」なので、同時に指定すると意味が両立しない。片方優先にせず指定の時点で止める。
 if [[ "$UPGRADE" == "true" && "$FORCE" == "true" ]]; then
@@ -284,7 +317,7 @@ require_cmd curl
 # --upgrade の入力の決定。ORIGIN に記録した入力を読み、引数で明示されたものだけを上書きする。
 # 規則:
 #   project-name / languages / base-image / gitignore-targets  明示があればそれ、無ければ記録
-#   --with-*   記録した集合へ明示分を足す（外す手段は無い。外したいときは再生成する）
+#   --with-*   記録した集合へ明示分を足す。--without-<名前> は、足したあとの集合から外す
 #   --no-gitignore  明示があれば false、無ければ記録
 #   規範  --playbook-from / --playbook-version の明示は取得元ごと置き換える。
 #         --without-playbook は none。それ以外は記録の取得元を再現する
@@ -362,6 +395,17 @@ if [[ "$UPGRADE" == "true" ]]; then
   # $PWD/<name> を導くと、記録から読む名前と出力先の関係が循環する。
   [[ -n "$OUTPUT_DIR" ]] || OUTPUT_DIR="$PWD"
   upgrade_merge_inputs
+  # 外す前の集合を残してから、--without-<名前> の分を外す（同名の --with- との同時指定は検査で除いてある）。
+  UPGRADE_PREV_WITH=(${WITH_SET[@]+"${WITH_SET[@]}"})
+  if [[ ${#WITHOUT_SET[@]} -gt 0 ]]; then
+    kept=()
+    for w in ${WITH_SET[@]+"${WITH_SET[@]}"}; do
+      drop="false"
+      for x in "${WITHOUT_SET[@]}"; do [[ "$w" == "$x" ]] && drop="true"; done
+      [[ "$drop" == "true" ]] || kept+=("$w")
+    done
+    WITH_SET=(${kept[@]+"${kept[@]}"})
+  fi
 fi
 
 [[ -n "$PROJECT_NAME" ]] || { echo "error: --project-name is required" >&2; usage; exit 1; }
@@ -9921,16 +9965,58 @@ upgrade_diff_summary() {
   diff -u "$cur" "$new" | sed -n '3,12p' | sed 's/^/    /' || true
 }
 
-# 記録にあって、新しい版では生成されなくなったファイルを報告する（削除はしない）。
+# 記録にあって、新しい版では生成されなくなったファイルを報告する（原則として削除しない）。
+# 例外: --without-<名前> で外したフラグでだけ生成していたファイル（外す前の集合で生成
+# されていて、外した後の集合では生成されないもの）は、ORIGIN に記録したハッシュと現物が
+# 一致する（手を入れていない）ときに限り削除する。手を入れたものは残して報告する。
+# ほかの理由で生成されなくなったファイルは、従来どおり報告だけにする。
 upgrade_report_removed() {
-  local origin="$OUTPUT_DIR/$ORIGIN_REL_PATH" new_rels rel
+  local origin="$OUTPUT_DIR/$ORIGIN_REL_PATH" new_rels rel dest rec curh off_rels="" cur_with=()
   [[ -f "$origin" ]] || return 0
   new_rels="$( { printf '%s\n' "$sorted_rels"; playbook_installed_rel_paths; playbook_rules_rel_paths; } | sort -u)"
+  if [[ ${#WITHOUT_SET[@]} -gt 0 ]]; then
+    # フラグだけの差を取る。--without-playbook を併せて渡されても、規範経由の出力
+    # （review-gate.yml など）が候補から落ちないよう、どちらの側も規範は配置する扱いで
+    # 数える（規範の有無による差は、フラグの差ではないので打ち消し合う）。
+    local prev_rels cur_rels saved_pb="$WITH_PLAYBOOK"
+    cur_with=(${WITH_SET[@]+"${WITH_SET[@]}"})
+    WITH_PLAYBOOK="true"
+    WITH_SET=(${UPGRADE_PREV_WITH[@]+"${UPGRADE_PREV_WITH[@]}"})
+    prev_rels="$( { template_rel_paths; conditional_template_rel_paths; playbook_installed_rel_paths; } | sort -u)"
+    WITH_SET=(${cur_with[@]+"${cur_with[@]}"})
+    cur_rels="$( { template_rel_paths; conditional_template_rel_paths; playbook_installed_rel_paths; } | sort -u)"
+    WITH_PLAYBOOK="$saved_pb"
+    off_rels="$(comm -23 <(printf '%s\n' "$prev_rels") <(printf '%s\n' "$cur_rels"))"
+  fi
   while IFS= read -r rel; do
     [[ -n "$rel" ]] || continue
-    if ! printf '%s\n' "$new_rels" | grep -Fxq -- "$rel"; then
-      echo "no longer generated (not deleted): $OUTPUT_DIR/$rel"
+    if printf '%s\n' "$new_rels" | grep -Fxq -- "$rel"; then continue; fi
+    dest="$OUTPUT_DIR/$rel"
+    if [[ -n "$off_rels" ]] && printf '%s\n' "$off_rels" | grep -Fxq -- "$rel"; then
+      if [[ -L "$dest" || ( -e "$dest" && ! -f "$dest" ) ]]; then
+        echo "keep (symlink or not a regular file, no longer generated): $dest"
+      elif [[ ! -e "$dest" ]]; then
+        continue
+      else
+        rec="$(dcb_origin_get "$origin" "hash:$rel" 2>/dev/null || true)"
+        curh="$(dcb_file_sha256 "$dest")"
+        if [[ -n "$rec" && "$curh" == "$rec" ]]; then
+          if [[ "$DRY_RUN" == "true" ]]; then
+            echo "plan: remove $dest"
+          else
+            upgrade_parent_inside_output "$dest" || { echo "error: $dest の親ディレクトリが出力先の外を指しています（シンボリックリンク）。" >&2; exit 1; }
+            rm -f "$dest"
+            echo "remove: $dest (flag removed, unmodified)"
+          fi
+        elif [[ "$DRY_RUN" == "true" ]]; then
+          echo "plan: keep (modified, no longer generated) $dest"
+        else
+          echo "keep (modified, no longer generated): $dest"
+        fi
+      fi
+      continue
     fi
+    echo "no longer generated (not deleted): $dest"
   done < <(sed -n 's/^hash://p' "$origin" | sed 's/=[^=]*$//')
 }
 
