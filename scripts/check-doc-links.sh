@@ -166,15 +166,22 @@ function normalize(p,   parts, n, out, m, i, s) {
   for (i = 1; i <= m; i++) s = (s == "") ? out[i] : s "/" out[i]
   return s
 }
-BEGIN { infence = 0; fmark = ""; fline = 0 }
+BEGIN { infence = 0; fmark = ""; flen = 0; fline = 0 }
 # フェンスはマーカーの種類（``` / ~~~）まで見て、開いたときと同じ種類でだけ閉じる
 # （数の偶奇では見ない。一方の中にもう一方を書く形があると偶奇では状態が反転する）。
+# 閉じるのは CommonMark どおり、**開きと同じ文字で、開き以上の長さを持ち、後ろに
+# 空白しか無い**行だけである（#439）。種類だけで見ると、4 連のフェンスの中に書いた
+# ``` や ```sh の例でフェンスが早く閉じ、続くコードの中のリンクを検査してしまう。
 /^[[:space:]]*(```|~~~)/ {
   fl = $0
   sub(/^[[:space:]]*/, "", fl)
   mk = substr(fl, 1, 1)
-  if (!infence) { infence = 1; fmark = mk; fline = FNR; next }
-  if (mk == fmark) { infence = 0; fmark = ""; next }
+  match(fl, (mk == "`") ? "^`+" : "^~+")
+  ml = RLENGTH
+  if (!infence) { infence = 1; fmark = mk; flen = ml; fline = FNR; next }
+  if (mk == fmark && ml >= flen && substr(fl, ml + 1) ~ /^[[:space:]]*$/) {
+    infence = 0; fmark = ""; flen = 0; next
+  }
   next
 }
 infence { next }

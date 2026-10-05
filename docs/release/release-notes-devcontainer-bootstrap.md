@@ -9,6 +9,7 @@
 ## 未リリース
 
 ### Summary
+- **`scripts/check-doc-links.sh` が、コードフェンスの閉じを CommonMark どおりに判定するようにした**（ojos/ai-packages-dev#439）。閉じるのは、開きと同じ文字で開き以上の長さを持ち、後ろに空白しか無い行だけ。従来は文字の種類だけで見ていたため、4 連のバッククォートのフェンスの中に書いた ``` や ```sh の例でフェンスが早く閉じ、続くコードの中のリンクを検査し、最後のフェンスを「閉じていない」と報告していた。
 - **共有台帳 `scripts/session-ledger.sh` の開始時刻のキーを、ホストの時刻の付け直しやタイムゾーンで変わらない値にした**（ojos/ai-packages-dev#433）。従来は `ps -o lstart=` の cksum で、Docker Desktop の VM のようにスリープや復帰で時刻が付け直される環境では、同じプロセスでもキーが変わった。そのため、動いているセッションの登録が他のセッションの check から失効とみなされ、マージ・git 操作・重いゲートの同時実行を止める保護が黙って切れていた。Linux では `/proc/<PID>/stat` の 22 列目（起動からの経過のクロック数）を使い、`/proc` が無い環境（macOS）では `TZ=UTC`・`LC_ALL=C` で読んだ `lstart` の cksum に落とす。
 - **台帳の `refresh` が、マージ・git 操作・重いゲートの登録を生かし続けないようにした**（ojos/ai-packages-dev#433）。これらは実行のあいだだけ持つ登録なので、`refresh` で claim し直さず、失効もセッションの最後の更新ではなく、その登録の時刻から数える。フックの版の切り替えや確認（`ask`）の拒否で解放し損ねた登録が、セッションが続く限り他のセッションを止め続けることがなくなる（既定の 8 時間で失効する）。issue と文書の登録は従来どおり `refresh` で延びる。台帳の書式（列）は変えていない。
 - **生成する workflow の `actions/checkout@v4` を `@v7` へ上げた**（ojos/ai-packages-dev#432）。対象は `.github/workflows/identity-guard.yml` と `.github/workflows/verify.yml`。v4 は Node.js 20 で動き、GitHub Actions で非推奨の警告が出る。v5 以降は Node.js 24 で動く。`verify.yml` のコメントにある例も `actions/setup-node@v7`・`node-version: '24'` に揃えた。README の該当する記述も合わせた。
