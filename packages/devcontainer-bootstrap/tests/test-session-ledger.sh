@@ -94,7 +94,10 @@ start_key() { # pid
   if [[ -r "/proc/$1/stat" ]]; then
     sed 's/.*) //' "/proc/$1/stat" | awk '{ print $20 }'
   else
-    TZ=UTC LC_ALL=C ps -o lstart= -p "$1" | cksum | cut -d" " -f1
+    # 台帳と同じく、コマンド置換で末尾の改行を落としてから cksum へ渡す。
+    local lstart
+    lstart="$(TZ=UTC LC_ALL=C ps -o lstart= -p "$1")"
+    printf '%s' "$lstart" | cksum | cut -d" " -f1
   fi
 }
 
