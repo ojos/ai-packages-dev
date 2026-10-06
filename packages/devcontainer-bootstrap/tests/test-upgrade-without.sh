@@ -150,7 +150,7 @@ for mode in real dry-run; do
   gen "$out" --with-claude
   # 古い版の写し（更新の対象）を 1 つ作る。事前検査が無ければ、これが先に更新される
   echo "# old version" >> "$out/scripts/on-attach.sh"
-  newh="$(sha256sum "$out/scripts/on-attach.sh" | cut -d' ' -f1)"
+  newh="$(dcb_file_sha256_for_test "$out/scripts/on-attach.sh")"
   sed "s|^hash:scripts/on-attach.sh=.*|hash:scripts/on-attach.sh=$newh|" "$out/$ORIGIN_REL" > "$out/$ORIGIN_REL.tmp" && mv "$out/$ORIGIN_REL.tmp" "$out/$ORIGIN_REL"
   mv "$out/.claude" "$w/outside"
   ln -s "$w/outside" "$out/.claude"
