@@ -30,13 +30,24 @@ BAR="|"
 # パイプの直後（空白可）の grep が、-q を含む短いオプションの束または --quiet を持つ行。
 # `||` の後ろは別のコマンドの連結なので除く（先頭がパイプ 1 本のものだけを対象にする）。
 # `# bsd-ok:` を付けた行（検出器のフィクスチャとして綴りを持つ行）とコメント行は除く。
-PATTERN="(^|[^|])[|][[:space:]]*${G}[[:space:]]+(-[A-Za-z]+[[:space:]]+)*(-[A-Za-z]*q|--quiet)"
+# `||` を除く条件（パイプの前に何も無いか、パイプ以外の文字で終わる）は、行番号の
+# 接頭辞を付けた後で判定するため、find_offenders 側で前置する（行頭の ^ は接頭辞の
+# 後ろでは効かない）。
+PATTERN="[|][[:space:]]*${G}[[:space:]]+(-[A-Za-z]+[[:space:]]+)*(-[A-Za-z]*q|--quiet)"
 
 # find_offenders <ファイル...> — 該当行を「ファイル:行番号:本文」で出す。
 find_offenders() {
   local f
   for f in "$@"; do
-    grep -nE "$PATTERN" "$f" 2>/dev/null \
+    # パイプで行を折り返した書き方（`x |` の次の行が grep -q）も拾うため、前の行が
+    # 単独のパイプ（行継続の \ 付きを含む。|| は除く）で終わる行には、判定用に
+    # 「| 」を前置する。出力する行番号と本文は元の行のまま。
+    awk '
+      { cont = (prev ~ /(^|[^|])[|][[:space:]]*\\?[[:space:]]*$/) }
+      { print NR ":" (cont ? "| " : "") $0; prev = $0 }
+    ' "$f" 2>/dev/null \
+      | grep -E "^[0-9]+:(.*[^|])?$PATTERN" \
+      | sed -E 's/^([0-9]+):\| /\1:/' \
       | grep -vE '^[0-9]+:[[:space:]]*#' \
       | grep -v '# bsd-ok:' \
       | sed "s|^|$f:|"
@@ -61,9 +72,13 @@ tmp="$(new_workdir)/fixture.sh"
   printf '%s\n' "x | ${G} -q -- -a"
   printf '%s\n' "x | ${G} --quiet a"
   printf '%s\n' "x |${G} -q a"
+  printf '%s\n' "x |"
+  printf '%s\n' "  ${G} -q a"
+  printf '%s\n' "x | \\"
+  printf '%s\n' "  ${G} -qF a"
 } > "$tmp"
 found="$(find_offenders "$tmp" | wc -l | tr -d ' ')"
-if [[ "$found" == "6" ]]; then pass; else fail "6 行を期待したが ${found} 行"; fi
+if [[ "$found" == "8" ]]; then pass; else fail "8 行を期待したが ${found} 行"; fi
 
 it "検出は -q を持たない grep・連結の ||・コメント行・bsd-ok の行を拾わない"
 tmp="$(new_workdir)/fixture-ok.sh"
@@ -72,6 +87,8 @@ tmp="$(new_workdir)/fixture-ok.sh"
   printf '%s\n' "x | ${G} -E a"
   printf '%s\n' "x ${BAR}${BAR} ${G} -q a"
   printf '%s\n' "${G} -q a file"
+  printf '%s\n' "x ${BAR}${BAR}"
+  printf '%s\n' "  ${G} -q a file"
   printf '%s\n' "# x | ${G} -q a"
   printf '%s\n' "x | ${G} -q a  # bsd-ok: フィクスチャ"
 } > "$tmp"
