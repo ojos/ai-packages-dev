@@ -9301,10 +9301,15 @@ upsert_gitignore() {
   [[ -f "$gitignore_path" ]] && prev_mode="$(file_mode_octal "$gitignore_path")"
 
   if [[ -f "$gitignore_path" ]]; then
+    # 管理区画を取り除き、末尾の空行も落とす。前回足した区切りの空行は区画の
+    # 外にあるため、落とさないと実行のたびに 1 行ずつ累積する（#460）。
+    # 空行は直後に空でない行が来たときだけ出力する。
     awk -v start="$GITIGNORE_BEGIN" -v end="$GITIGNORE_END" '
       $0 == start {skip=1; next}
       $0 == end {skip=0; next}
-      !skip {print}
+      skip {next}
+      /^[[:space:]]*$/ {pending = pending $0 "\n"; next}
+      {printf "%s", pending; pending=""; print}
     ' "$gitignore_path" > "$tmp"
     if [[ -s "$tmp" ]]; then
       printf '\n' >> "$tmp"
