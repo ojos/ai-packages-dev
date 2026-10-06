@@ -32,6 +32,7 @@ done
 cat >"$W/tests/test-dummy-ng.sh" <<'DUMMY'
 #!/usr/bin/env bash
 echo "dummy-output $(basename "$0")"
+echo "dummy-fail-detail" >&2
 exit 1
 DUMMY
 
@@ -51,6 +52,10 @@ if [[ "$R_RC" == "1" ]] && printf '%s' "$R_OUT" | grep -q '失敗: test-dummy-ng
 it "各ファイルの出力が、ファイル名順にまとめて表示される"
 order="$(printf '%s' "$R_OUT" | grep -o 'dummy-output test-dummy-[a-z-]*' | tr '\n' ' ')"
 assert_eq "dummy-output test-dummy-ng dummy-output test-dummy-ok-a dummy-output test-dummy-ok-b " "$order"
+
+it "失敗の詳細（テストの stderr）は、ランナーの stdout を捨てても stderr に出る"
+err="$(env -u TEST_TMP_ROOT DCB_TEST_JOBS=4 bash "$RUNNER" 2>&1 >/dev/null)"
+assert_contains "$err" "dummy-fail-detail"
 
 it "すべて成功なら exit 0 になる"
 run DCB_TEST_JOBS=4 bash "$RUNNER" ok

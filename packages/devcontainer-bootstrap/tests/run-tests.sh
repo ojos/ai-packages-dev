@@ -116,33 +116,51 @@ if [[ "$total" -eq 0 ]]; then
   exit 1
 fi
 
-# 最も古い実行中テストを待ち、配列から外す。bash 3.2 には wait -n が無いため、
-# 起動順に待つ（先に終わった後続のテストがあっても、枠の空きが遅れるだけ）。
-reap_oldest() {
-  wait "${RUNNING_PIDS[0]}" 2>/dev/null || true
-  RUNNING_PIDS=(${RUNNING_PIDS[@]+"${RUNNING_PIDS[@]:1}"})
+# 終わったテストを 1 つ以上待って配列から外す。bash 3.2 には wait -n が無いため、
+# kill -0 で生存を確かめて回る。最も古いテストだけを待つと、長いテスト（2 分超の
+# ものがある）が終わるまで、先に空いた枠へ次のテストを入れられない。
+reap_finished() {
+  local p alive
+  while :; do
+    alive=()
+    for p in "${RUNNING_PIDS[@]}"; do
+      if kill -0 "$p" 2>/dev/null; then
+        alive+=("$p")
+      else
+        wait "$p" 2>/dev/null || true
+      fi
+    done
+    if [[ "${#alive[@]}" -lt "${#RUNNING_PIDS[@]}" ]]; then
+      RUNNING_PIDS=(${alive[@]+"${alive[@]}"})
+      return 0
+    fi
+    sleep 0.2
+  done
 }
 
 for name in "${names[@]}"; do
   if [[ "${#RUNNING_PIDS[@]}" -ge "$JOBS" ]]; then
-    reap_oldest
+    reap_finished
   fi
   mkdir -p "$ROOT_BASE/$name"
   (
     TEST_TMP_ROOT="$ROOT_BASE/$name"
     export TEST_TMP_ROOT
-    bash "$TESTS_DIR/$name.sh" >"$RESULTS_DIR/$name.out" 2>&1
+    bash "$TESTS_DIR/$name.sh" >"$RESULTS_DIR/$name.out" 2>"$RESULTS_DIR/$name.err"
     echo $? >"$RESULTS_DIR/$name.rc"
   ) &
   RUNNING_PIDS+=("$!")
 done
 while [[ "${#RUNNING_PIDS[@]}" -gt 0 ]]; do
-  reap_oldest
+  reap_finished
 done
 
+# stdout と stderr は別々に戻す。失敗の詳細（lib.sh の fail）は stderr に出るため、
+# 呼び出し側が stdout を捨てても（release-packages.sh の run_dcb_tests）見える。
 failed_names=()
 for name in "${names[@]}"; do
   cat "$RESULTS_DIR/$name.out"
+  cat "$RESULTS_DIR/$name.err" >&2
   rc="$(cat "$RESULTS_DIR/$name.rc" 2>/dev/null || echo 1)"
   if [[ "$rc" != "0" ]]; then
     failed_files=$((failed_files + 1))

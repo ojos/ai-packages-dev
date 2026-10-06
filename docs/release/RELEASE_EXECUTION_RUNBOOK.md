@@ -139,7 +139,7 @@ ai-playbook には devhost を載せない（devhost は DCB のリリースに�
 | 4 | 指定バージョンが未公開（DCB は Release の有無、ai-playbook はタグの有無で判定） | 指定した版ごと | `require_version_unpublished` / `require_tag_unpublished` |
 | 5 | DCB のバージョン正本照合（5 箇所。「バージョンの正本」節を参照） | `--dcb-version` 指定時 | `validate_dcb_docs` |
 | 6 | Markdown の相対リンク・アンカー検証（配下の `README*.md` が対象） | `--dcb-version` 時は `packages/devcontainer-bootstrap/` と `.ai-playbook/`、`--playbook-version` 時は `.ai-playbook/` | `validate_markdown_links_in_tree` |
-| 7 | DCB 機能テスト `packages/devcontainer-bootstrap/tests/run-tests.sh`（直列で約 19 分、14 並列の既定で約 6 分かかる。`DCB_TEST_JOBS` で並列度を変えられる） | `--dcb-version` 指定時 | `run_dcb_tests` |
+| 7 | DCB 機能テスト `packages/devcontainer-bootstrap/tests/run-tests.sh`（直列で約 19 分、14 コアの既定の並列で約 4 分かかる。`DCB_TEST_JOBS` で並列度を変えられる） | `--dcb-version` 指定時 | `run_dcb_tests` |
 
 検査は安い順に並ぶ。版の重複（#4）は問い合わせ 1 回で判定できるため、重い DCB 機能テスト（#7）より先に落ちる。
 
@@ -257,7 +257,7 @@ gh workflow run release.yml --ref main -f dcb-version=v0.7.4 -f playbook-version
 GitHub の Actions 画面から `Run workflow` で起動してもよい。実行ログは `gh run watch` か Actions 画面で追う。
 
 ログに `[ok] preflight checks passed` と `[plan]` 行、末尾の `[info] dry-run mode. add --execute to publish releases` が出れば通過。
-`dcb-version` を含む dry-run は DCB 機能テスト（ゲート条件 #7）を含むため、直列で約 19 分、14 並列の既定で約 6 分かかる（実測。並列度は CPU 数に依存する）。
+`dcb-version` を含む dry-run は DCB 機能テスト（ゲート条件 #7）を含むため、直列で約 19 分、14 コアの既定の並列で約 4 分かかる（実測。並列度は CPU 数に依存する）。
 
 ### 3) リリースを実行する
 
