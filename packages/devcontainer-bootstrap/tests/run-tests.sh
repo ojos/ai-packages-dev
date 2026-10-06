@@ -117,11 +117,19 @@ if [[ "$total" -eq 0 ]]; then
   exit 1
 fi
 
+# 並列度はファイル数を上限にする。桁数で先に切るのは、算術の桁あふれで比較が
+# 狂う（負になって「枠が埋まっている」と判定され続ける）値を比較へ渡さないため。
+if [[ "${#JOBS}" -gt 6 ]] || [[ "$JOBS" -gt "$total" ]]; then
+  JOBS="$total"
+fi
+
 # 終わったテストを 1 つ以上待って配列から外す。bash 3.2 には wait -n が無いため、
 # kill -0 で生存を確かめて回る。最も古いテストだけを待つと、長いテスト（2 分超の
 # ものがある）が終わるまで、先に空いた枠へ次のテストを入れられない。
 reap_finished() {
   local p alive
+  # 待つ相手が無いのに回り続けないよう、空なら何もしない。
+  [[ "${#RUNNING_PIDS[@]}" -gt 0 ]] || return 0
   while :; do
     alive=()
     for p in "${RUNNING_PIDS[@]}"; do

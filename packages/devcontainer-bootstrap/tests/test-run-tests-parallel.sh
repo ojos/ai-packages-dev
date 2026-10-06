@@ -73,6 +73,14 @@ for bad in abc 0 -1 1.5; do
      && ! printf '%s' "$R_OUT" | grep -q 'dummy-output'; then pass; else fail "rc=$R_RC"; fi
 done
 
+it "桁あふれするほど大きい DCB_TEST_JOBS でも止まらずに完走する"
+run DCB_TEST_JOBS=99999999999999999999 timeout 60 bash "$RUNNER" ok
+if [[ "$R_RC" == "0" ]] && printf '%s' "$R_OUT" | grep -q '全 2 ファイル 成功'; then pass; else fail "rc=$R_RC"; fi
+
+it "ランナーは実行権限を持つ（git のモードが 100755）"
+mode="$(git -C "$TESTS_DIR" ls-files -s run-tests.sh 2>/dev/null | cut -d' ' -f1)"
+if [[ -z "$mode" || "$mode" == "100755" ]]; then pass; else fail "mode=$mode"; fi
+
 it "フィルタに一致するテストが無ければ exit 1 になる"
 run DCB_TEST_JOBS=2 bash "$RUNNER" nomatch
 if [[ "$R_RC" == "1" ]] && printf '%s' "$R_OUT" | grep -q 'no tests matched'; then pass; else fail "rc=$R_RC"; fi
