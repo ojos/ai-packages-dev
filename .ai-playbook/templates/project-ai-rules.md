@@ -138,7 +138,7 @@ push / PR 作成後にリモート最終ゲートを置くかどうかを、こ�
 
 **置く場合も置かない場合も、第二意見の記録の投稿を手順へ組み込みます。** 記録と確認側は、リモート最終ゲートの有無にかかわらず置く標準の機構層だからです。
 
-- `scripts/loop-gate.sh` が第二意見の実行直後に記録（`save`）を自動で残しますが、PR へ投稿する `post` は push が終わってからでないと打てません（記録は head SHA に紐づくため）。**push のたびに**次を実行します。
+- `scripts/loop-gate.sh` が第二意見の実行直後に記録（`save`）を自動で残しますが、PR へ投稿する `post` は push が終わり、PR を作ってからでないと打てません（記録は head SHA に紐づき、投稿先の PR が要るため）。**push のたびに**次を実行します。
 
   ```bash
   bash scripts/second-opinion-record.sh post

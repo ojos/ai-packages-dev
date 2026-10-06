@@ -62,7 +62,8 @@
 #
 #   ふだんの流れ: save は loop-gate.sh が第二意見の直後に自動で呼ぶ。利用者が叩くのは、
 #   push して PR ができた後の post だけである（bash scripts/loop-gate.sh → git push →
-#   bash scripts/second-opinion-record.sh post）。修正を push し直したら post もし直す。
+#   PR を作る → bash scripts/second-opinion-record.sh post）。PR が無いうちの post は
+#   失敗する。修正を push し直したら post もし直す。
 #   記録は head SHA に紐づくので、古い head への投稿では確認側を通らない。
 #
 # 終了コード: 0 = 成功 / 1 = 失敗（理由を標準エラーへ）

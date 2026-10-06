@@ -9262,7 +9262,12 @@ render_content() {
       sed_args+=(-e "/\"__IF_WITH_${wf_upper}__\"/d")
     fi
   done
-  printf '%s' "$content" | sed "${sed_args[@]}"
+  # 中身は $(...) を通る過程で末尾の改行が剥がれている。POSIX のテキストファイルとして
+  # 末尾を改行で終えるため、空でなければ 1 つ補う（#462）。補わないと、利用者が手で
+  # 整えた版や .dcb-new との diff に「\ No newline at end of file」が出る。
+  if [[ -n "$content" ]]; then
+    printf '%s\n' "$content" | sed "${sed_args[@]}"
+  fi
 }
 
 build_gitignore_block() {
