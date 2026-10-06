@@ -284,7 +284,7 @@ push / PR 作成後のリモート最終ゲートは、このリポジトリで�
 
 - リモート最終ゲートの有無にかかわらず置く標準の機構層として、下記「第二意見（クロスモデル）」の記録と確認側（`.github/workflows/second-opinion-gate.yml`）、および CI（`ci.yml` / `identity-guard.yml`）の受け入れ検証の再実行を、標準の機構層とします。
 - **失う性質**は、著者の操作なしに記録が作られること・記録を著者が消せないこと・内容が著者を通らないことの 3 つです（`.ai-playbook/review-workflow.md`「リモート最終ゲート（任意の層）」の表）。このリポジトリは外部からの PR を受け付けない方針（`CONTRIBUTING.md`）で、既定ブランチへ入るコミットの author は常に許可した identity に限られるため、この妥協を受け入れます。
-- **push のたびに、記録を投稿します。** `scripts/loop-gate.sh` が第二意見の実行直後に記録（`save`）を自動で残しますが、PR へ投稿する `post` は push が終わってからでないと打てません（記録は head SHA に紐づくため）。
+- **push のたびに、記録を投稿します。** `scripts/loop-gate.sh` が第二意見の実行直後に記録（`save`）を自動で残しますが、PR へ投稿する `post` は push が終わり、PR を作ってからでないと打てません（記録は head SHA に紐づき、投稿先の PR が要るため）。
 
   ```bash
   bash scripts/second-opinion-record.sh post
