@@ -7,8 +7,9 @@
 #   DCB_TEST_JOBS=1 bash tests/run-tests.sh # 並列度を指定（1 なら直列）
 #
 # テストファイルは並列に実行する。並列度の既定は CPU 数（nproc、無ければ
-# getconf _NPROCESSORS_ONLN、どちらも無ければ 1）。環境変数 DCB_TEST_JOBS で変える。
-# 正の整数以外は、実行前にエラーで止める。
+# getconf _NPROCESSORS_ONLN、どちらも無ければ 1）。環境変数 DCB_TEST_JOBS で変える
+# （未設定または空なら既定）。
+# 空でない値が正の整数でなければ、実行前にエラーで止める。
 #
 # 依存: bash, python3（URL 経路の検証にローカル HTTP サーバを使う）, tar, curl,
 #       timeout（副作用の前で停止することを検証するテストが使う）,
