@@ -9,13 +9,15 @@
 
 | パッケージ | リポジトリ | 現行バージョン | 配布形態 |
 |---|---|---|---|
-| devcontainer-bootstrap | `ojos/devcontainer-bootstrap` | v0.15.0 | GitHub Release + 資産 5 点（配布スクリプト 2: `bootstrap.sh` / `doctor.sh`、生成物 3: `SHA256SUMS` / `RELEASE-MANIFEST.json` / `PACKAGE_ARCHIVE.tar.gz`） |
-| ai-playbook | `ojos/ai-playbook` | v0.7.0 | git タグのみ |
+| devcontainer-bootstrap | `ojos/devcontainer-bootstrap` | v0.16.0 | GitHub Release + 資産 5 点（配布スクリプト 2: `bootstrap.sh` / `doctor.sh`、生成物 3: `SHA256SUMS` / `RELEASE-MANIFEST.json` / `PACKAGE_ARCHIVE.tar.gz`） |
+| ai-playbook | `ojos/ai-playbook` | v0.8.0 | git タグのみ |
 
 ### 新世代の版更新
 
 | パッケージ | 版 | 公開日 | 要点 |
 |---|---|---|---|
+| devcontainer-bootstrap | v0.16.0 | 2026-10-06 | **`--upgrade --without-<名前>` で装備を外せるようにした**（#444 / #453）。外したフラグでだけ生成していたファイルは、手を入れていなければ削除する。リモート最終ゲートの「置く / 置かない」を生成後も両方向へ切り替えられる。**生成する `CLAUDE.md` が規範 2 つを `@` で全文取り込む**（#441）。協調フックが add / commit / rm / mv も拒否の対象にする（#438）。check-doc-links.sh のフェンスの閉じ判定（#439）。identity の検査が空の範囲で通ったときの案内（#442）。最初の push の順番の案内（#443）。台帳の開始時刻のキー（#433）。workflow の `actions/checkout` を v7 へ（#432） |
+| ai-playbook | v0.8.0 | 2026-10-06 | **第二意見の記録の経路を直した**。確認側は作者の一致だけで記録を数える（#436。組織のメンバーシップが非公開の作者で常に赤になっていた）。記録と確認側は、リモート最終ゲートの有無にかかわらず求める（#437）。`post` は作者のアカウントでだけ投稿する（#440）。`templates/claude-entry-imports.md` を足した（#441。雛形は 16 種）。台帳の開始時刻と失効（#433）。雛形の `actions/checkout` を v7 へ（#432） |
 | devcontainer-bootstrap | v0.15.0 | 2026-10-04 | **`bootstrap.sh --upgrade` を追加した**（#396）。`.devcontainer/ORIGIN` に入力とハッシュを記録し、手を入れていないファイルだけを新しい版へ更新、手を入れたものは `<path>.dcb-new` を隣へ置く（終了コード 0 / 2 / 1）。`doctor.sh` が残った `*.dcb-new` を WARN で報告する。**並行セッションの共有台帳 `session-ledger.sh` と協調フック `session-coord-hook.sh` を生成物へ足した**（#395 / #425）。規範を置くとき入口ファイルに `AGENTS.md` を加えた（#397）。生成先のシンボリックリンクをたどって出力先の外へ書かない（#418）。リンク検査の括弧の扱い（#415）、PAT の権限の例（#416）。要求する ai-playbook は v0.5.0 以降のまま（v0.7.0 を推奨）。既存フラグの挙動は変わらない |
 | ai-playbook | v0.7.0 | 2026-10-04 | **セッション間の協調を足した**（#395 / #425。`shared-ai-rules.md` 16 章、intake / land の雛形に台帳の手順）。実行環境ごとの対応範囲の表と `entry.md` の例示（#397）。レビュー往復の打ち切りを重大でない指摘に限った（#414）。land の CI 待ちを Checks の権限なしで成り立たせた（#416）。破壊的変更なし。雛形は 15 種のまま |
 | devcontainer-bootstrap | v0.14.0 | 2026-10-03 | **devhost を同梱した最初の版**（#375 / #376）。SSH で届く外部の機械で devcontainer を保ち、どの端末からも入って AI コーディングを続ける道具一式を `PACKAGE_ARCHIVE.tar.gz` の `devhost/` に入れた（個別の資産にはしない）。**`--with-codex` の生成物で codex のサンドボックスが動くようにした**（#392。`security_opt: [apparmor=unconfined, seccomp=unconfined]`。Docker の既定の seccomp が Mac でも Linux でも bwrap を止め、Linux ではさらに AppArmor が止めていた）。**loop-gate で第二意見を差し替えたときの偽の緑を塞いだ**（#402）。要求する ai-playbook は v0.5.0 以降のまま（v0.6.0 を推奨）。既存フラグの挙動は変わらない |
