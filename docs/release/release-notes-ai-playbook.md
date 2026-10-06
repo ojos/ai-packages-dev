@@ -6,7 +6,7 @@
 >
 > 同じ理由で、issue 参照は `ojos/ai-packages-dev#NNN` の形で書いてください。裸の `#NNN` は GitHub のオートリンクが**配布先リポジトリの issue** として解決するため、配布後は存在しない issue や無関係な issue を指します。
 
-## 未リリース
+## v0.8.0
 
 ### Summary
 - **`templates/claude-entry-imports.md` を足した**（ojos/ai-packages-dev#441）。Claude Code の `CLAUDE.md` の末尾に足す節で、`@.ai-playbook/shared-ai-rules.md` と `@.github/project-ai-rules.md` の 2 行で規範の全文を毎セッションの文脈へ取り込む。パスを挙げるだけでは、エージェントが自分から読みにいかない限り規範は文脈に載らない。`templates/entry.md` は実行環境に中立のまま変えていない。README の単独導入の手順に `cat .ai-playbook/templates/claude-entry-imports.md >> CLAUDE.md` を足した。雛形は 16 種になった。

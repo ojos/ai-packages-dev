@@ -6,9 +6,10 @@
 >
 > 同じ理由で、issue 参照は `ojos/ai-packages-dev#NNN` の形で書いてください。裸の `#NNN` は GitHub のオートリンクが**配布先リポジトリの issue** として解決するため、配布後は存在しない issue や無関係な issue を指します。
 
-## 未リリース
+## v0.16.0
 
 ### Summary
+- **この版が要求する ai-playbook は v0.5.0 以降のまま**（新しい雛形を必須にしない）。`CLAUDE.md` に規範を取り込む節（ojos/ai-packages-dev#441）は ai-playbook v0.8.0 の `templates/claude-entry-imports.md` を使い、それより前の版では節なしで置いて `note:` で案内する。第二意見の記録の経路の修正（ojos/ai-packages-dev#436 / ojos/ai-packages-dev#437 / ojos/ai-packages-dev#440）も ai-playbook v0.8.0 に入っているので、`--playbook-version v0.8.0` を勧める。
 - **生成する `CLAUDE.md` に、規範 2 つを全文取り込む節を足した**（ojos/ai-packages-dev#441）。末尾に `@.ai-playbook/shared-ai-rules.md` と `@.github/project-ai-rules.md` の 2 行を置き、Claude Code が規範を毎セッションの文脈へ載せる（生成物で約 53KB）。従来はパスを挙げるだけで、エージェントが読みにいかない限り規範は文脈に載らなかった（ツールを使わせない問いに、規範の中身を「不明」と答えた）。`AGENTS.md` / `copilot-instructions.md` は雛形のまま。節の中身は ai-playbook の `templates/claude-entry-imports.md` が持ち、DCB は `entry.md` の後ろへつなげるだけ。この雛形が無い ai-playbook（v0.8.0 より前）では、従来どおり節なしで置き、`note:` で案内する（要求する ai-playbook の版は上げない）。
 - **`scripts/verify-commit-identity.sh` が、範囲が空で何も検査せずに通ったときに、そのことと `--full` の案内を出すようにした**（ojos/ai-packages-dev#442）。push した後に loop-gate を回すと範囲（`origin/main..HEAD`）が空になり、`IDENTITY_PASS` だけでは検査が済んだと取り違えやすかった。`IDENTITY_PASS` の行と終了コードは変えない（読む側の loop-gate・CI はそのまま）。
 - **README の「利用側の設定手順（許可 author email）」に、新しいリポジトリでの順番を足した**（ojos/ai-packages-dev#443）。リポジトリ変数 `ALLOWED_AUTHOR_EMAILS` はリポジトリを作ってからでないと設定できないため、生成物をそのまま最初に push すると identity-guard が必ず失敗する。リポジトリを作る → 変数を設定する → push する、の順を案内し、先に push した場合の再実行の手順も書いた。
