@@ -68,8 +68,8 @@ fi
 it "PACKAGE_ARCHIVE.tar.gz に devhost 一式が含まれる（サブディレクトリを含む）"
 if [[ -f "$rel/PACKAGE_ARCHIVE.tar.gz" ]]; then
   listing="$(tar -tzf "$rel/PACKAGE_ARCHIVE.tar.gz")"
-  if printf '%s\n' "$listing" | grep -qE '^\./devhost/dev\.sh$' \
-     && printf '%s\n' "$listing" | grep -qE '^\./devhost/termux/shortcut\.example$'; then
+  if printf '%s\n' "$listing" | grep -E '^\./devhost/dev\.sh$' >/dev/null \
+     && printf '%s\n' "$listing" | grep -E '^\./devhost/termux/shortcut\.example$' >/dev/null; then
     pass
   else
     fail "PACKAGE_ARCHIVE.tar.gz が devhost 一式を含まない。中身:

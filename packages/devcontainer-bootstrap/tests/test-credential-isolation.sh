@@ -92,7 +92,7 @@ assert_deprecated_flag --gemini-key-env MY_GEMINI_KEY
 it "doctor: 資格情報の注入が無い生成物は --strict で exit 0"
 output="$(bash "$PKG_DIR/doctor.sh" --target-dir "$out" --strict 2>&1)"
 rc=$?
-if [[ "$rc" -eq 0 ]] && printf '%s' "$output" | grep -q 'no localEnv reference'; then
+if [[ "$rc" -eq 0 ]] && printf '%s' "$output" | grep 'no localEnv reference' >/dev/null; then
   pass
 else
   fail "clean な生成物が通らない (rc=$rc)"
@@ -105,7 +105,7 @@ tdc="$tainted/.devcontainer/devcontainer.json"
 jq '.remoteEnv.GITHUB_TOKEN_PRIMARY = "${localEnv:GITHUB_TOKEN_PRIMARY}"' "$tdc" > "$tdc.tmp" && mv "$tdc.tmp" "$tdc"
 output="$(bash "$PKG_DIR/doctor.sh" --target-dir "$tainted" 2>&1)"
 rc=$?
-if [[ "$rc" -ne 0 ]] && printf '%s' "$output" | grep -q 'localEnv reference found'; then
+if [[ "$rc" -ne 0 ]] && printf '%s' "$output" | grep 'localEnv reference found' >/dev/null; then
   pass
 else
   fail "注入経路の復活を検出できない (rc=$rc): $(printf '%s' "$output" | grep -i localenv)"

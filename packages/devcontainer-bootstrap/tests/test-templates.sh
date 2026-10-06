@@ -206,7 +206,7 @@ if [[ -z "$accepted_with" || -z "$mentioned_with" ]]; then
 else
   unknown=""
   for flag in $mentioned_with; do
-    if ! printf '%s\n' "$accepted_with" | grep -qx -- "$flag"; then
+    if ! printf '%s\n' "$accepted_with" | grep -x -- "$flag" >/dev/null; then
       # どの雛形に書かれているかまで出す。雛形は複数あり、名前だけでは直す先が
       # 分からない。
       where="$(grep -l -- "$flag" "$TPL"/*.md 2>/dev/null | xargs -n1 basename 2>/dev/null | tr '\n' ' ')"

@@ -124,8 +124,8 @@ it "push 側の concurrency グループ鍵が github.ref にフォールバッ�
 # 直列でキュー待ちする」状態になる（取り消さないことと直列化しないことは
 # 別の要求）。
 group_line="$(grep '^  group: ' "$WF")"
-if printf '%s' "$group_line" | grep -q 'github.sha' \
-  && ! printf '%s' "$group_line" | grep -q 'github.ref'; then
+if printf '%s' "$group_line" | grep 'github.sha' >/dev/null \
+  && ! printf '%s' "$group_line" | grep 'github.ref' >/dev/null; then
   pass
 else
   fail "group 行が github.sha を使っていない、または github.ref を含む: ${group_line}"
@@ -177,7 +177,7 @@ it "fork からの PR をスキップしない（job の if 条件が有効に�
 # ファイル全体から if: を探すと step-level の if（例: if: failure()）まで拾い、
 # fork の扱いとは無関係な変更で赤くなる。しかもメッセージは「fork をスキップしない
 # 判断が覆っている」と出るため、原因と違うことを言って次に踏んだ人を遠回りさせる。
-if printf '%s\n' "$active" | grep -Eq '^ {4}if:'; then
+if printf '%s\n' "$active" | grep -E '^ {4}if:' >/dev/null; then
   fail "job に有効な if 条件がある（fork をスキップしない判断が覆っている）"
 else
   pass
@@ -193,7 +193,7 @@ case "$active" in
 esac
 
 it "ツールの導入・依存のインストールを決め打たない"
-if printf '%s\n' "$active" | grep -Eq 'apt-get|npm (ci|install)|pip install|go mod download|bundle install'; then
+if printf '%s\n' "$active" | grep -E 'apt-get|npm (ci|install)|pip install|go mod download|bundle install' >/dev/null; then
   fail "依存・ツール導入の手順が有効な行として入っている"
 else
   pass

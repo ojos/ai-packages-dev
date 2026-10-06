@@ -114,10 +114,10 @@ it "land 雛形の手順（コードブロック）が check-runs・gh pr checks
 land_code="$(awk '/^[[:space:]]*```/{f=!f; next} f' "$land_skill")"
 if [[ -z "$land_code" ]]; then
   fail "land 雛形からコードブロックを取り出せない（検査が成立しない）"
-elif printf '%s\n' "$land_code" | grep -qE 'check-runs|gh[[:space:]]+pr[[:space:]]+checks|gh[[:space:]]+run[[:space:]]+watch'; then
+elif printf '%s\n' "$land_code" | grep -E 'check-runs|gh[[:space:]]+pr[[:space:]]+checks|gh[[:space:]]+run[[:space:]]+watch' >/dev/null; then
   fail "land 雛形のコードブロックが check-runs・gh pr checks・gh run watch のいずれかを使っている（非公開リポジトリの fine-grained PAT で 403）: $(printf '%s\n' "$land_code" | grep -nE 'check-runs|gh[[:space:]]+pr[[:space:]]+checks|gh[[:space:]]+run[[:space:]]+watch' | head -n 3 | tr '\n' '/')"
-elif ! printf '%s\n' "$land_code" | grep -qF 'actions/runs?head_sha=' \
-  || ! printf '%s\n' "$land_code" | grep -qF 'commits/$sha/status'; then
+elif ! printf '%s\n' "$land_code" | grep -F 'actions/runs?head_sha=' >/dev/null \
+  || ! printf '%s\n' "$land_code" | grep -F 'commits/$sha/status' >/dev/null; then
   fail "land 雛形が actions/runs?head_sha= と commits/\$sha/status の両方を使っていない"
 else
   pass
@@ -240,7 +240,7 @@ rm -f "$oldsrc/templates/claude-skill-intake.md"
 outo="$(new_workdir)/p"
 output="$(run_bootstrap "$outo" --with-claude --playbook-from "$oldsrc" 2>&1)"
 code=$?
-if [[ $code -ne 0 ]] && printf '%s' "$output" | grep -q 'template not found'; then
+if [[ $code -ne 0 ]] && printf '%s' "$output" | grep 'template not found' >/dev/null; then
   pass
 else
   fail "雛形不在でも失敗しなかった (code=$code)"
@@ -257,7 +257,7 @@ rm -f "$oldsrc2/templates/claude-skill-land.md"
 outo2="$(new_workdir)/p"
 output2="$(run_bootstrap "$outo2" --with-claude --playbook-from "$oldsrc2" 2>&1)"
 code2=$?
-if [[ $code2 -ne 0 ]] && printf '%s' "$output2" | grep -q 'template not found'; then
+if [[ $code2 -ne 0 ]] && printf '%s' "$output2" | grep 'template not found' >/dev/null; then
   pass
 else
   fail "land 雛形不在でも失敗しなかった (code=$code2)"

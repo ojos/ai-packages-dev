@@ -81,11 +81,11 @@ assert_fail() {
     fail "$what: 落ちるべきところで通過した: $CHECK_OUT"
     return
   fi
-  if ! printf '%s' "$CHECK_OUT" | grep -q 'TABLE_BREAKS_FAIL'; then
+  if ! printf '%s' "$CHECK_OUT" | grep 'TABLE_BREAKS_FAIL' >/dev/null; then
     fail "$what: TABLE_BREAKS_FAIL が出ていない: $CHECK_OUT"
     return
   fi
-  if [[ -n "$needle" ]] && ! printf '%s' "$CHECK_OUT" | grep -qF "$needle"; then
+  if [[ -n "$needle" ]] && ! printf '%s' "$CHECK_OUT" | grep -F "$needle" >/dev/null; then
     fail "$what: 期待した報告 '$needle' が無い: $CHECK_OUT"
     return
   fi
@@ -96,7 +96,7 @@ assert_pass() {
   local what="$1"
   if [[ "$CHECK_RC" -ne 0 ]]; then
     fail "$what: 通るべきところで落ちた: $CHECK_OUT"
-  elif ! printf '%s' "$CHECK_OUT" | grep -q 'TABLE_BREAKS_PASS'; then
+  elif ! printf '%s' "$CHECK_OUT" | grep 'TABLE_BREAKS_PASS' >/dev/null; then
     fail "$what: TABLE_BREAKS_PASS が出ていない: $CHECK_OUT"
   else
     pass
@@ -265,11 +265,11 @@ add_md "$repo" "no-separator.md" '# 見出し
 run_check "$repo"
 if [[ "$CHECK_RC" -eq 0 ]]; then
   fail "落ちるべきところで通過した: $CHECK_OUT"
-elif ! printf '%s' "$CHECK_OUT" | grep -q 'TABLE_BREAKS_FAIL'; then
+elif ! printf '%s' "$CHECK_OUT" | grep 'TABLE_BREAKS_FAIL' >/dev/null; then
   fail "TABLE_BREAKS_FAIL が出ていない: $CHECK_OUT"
-elif ! printf '%s' "$CHECK_OUT" | grep -qF 'no-separator.md'; then
+elif ! printf '%s' "$CHECK_OUT" | grep -F 'no-separator.md' >/dev/null; then
   fail "期待した報告 'no-separator.md' が無い: $CHECK_OUT"
-elif printf '%s' "$CHECK_OUT" | grep -q '正しい表を 1 つも数えられませんでした'; then
+elif printf '%s' "$CHECK_OUT" | grep '正しい表を 1 つも数えられませんでした' >/dev/null; then
   fail "fail-closed（正しい表 0 件）で落ちており、区切り行なしの検出を確認できない: $CHECK_OUT"
 else
   pass
@@ -416,9 +416,9 @@ chmod +x "$fake_git_dir/git"
 run_check "$repo" "PATH=$fake_git_dir:$PATH"
 if [[ "$CHECK_RC" -eq 0 ]]; then
   fail "落ちるべきところで通過した: $CHECK_OUT"
-elif ! printf '%s' "$CHECK_OUT" | grep -q 'TABLE_BREAKS_FAIL'; then
+elif ! printf '%s' "$CHECK_OUT" | grep 'TABLE_BREAKS_FAIL' >/dev/null; then
   fail "TABLE_BREAKS_FAIL が出ていない: $CHECK_OUT"
-elif ! printf '%s' "$CHECK_OUT" | grep -qF 'git ls-files に失敗しました'; then
+elif ! printf '%s' "$CHECK_OUT" | grep -F 'git ls-files に失敗しました' >/dev/null; then
   fail "既存の fatal 文言が無い: $CHECK_OUT"
 else
   pass
@@ -449,9 +449,9 @@ printf '%s' '| a | b |
 run_check "$repo"
 if [[ "$CHECK_RC" -eq 0 ]]; then
   fail "落ちるべきところで通過した: $CHECK_OUT"
-elif ! printf '%s' "$CHECK_OUT" | grep -q 'TABLE_BREAKS_FAIL'; then
+elif ! printf '%s' "$CHECK_OUT" | grep 'TABLE_BREAKS_FAIL' >/dev/null; then
   fail "TABLE_BREAKS_FAIL が出ていない: $CHECK_OUT"
-elif ! printf '%s' "$CHECK_OUT" | grep -qF 'broken.md'; then
+elif ! printf '%s' "$CHECK_OUT" | grep -F 'broken.md' >/dev/null; then
   fail "パス名の一部（broken.md）が報告に出ていない: $CHECK_OUT"
 else
   pass
@@ -470,9 +470,9 @@ run_check "$repo"
 chmod 644 "$repo/unreadable.md"
 if [[ "$CHECK_RC" -eq 0 ]]; then
   fail "落ちるべきところで通過した: $CHECK_OUT"
-elif ! printf '%s' "$CHECK_OUT" | grep -q 'TABLE_BREAKS_FAIL'; then
+elif ! printf '%s' "$CHECK_OUT" | grep 'TABLE_BREAKS_FAIL' >/dev/null; then
   fail "TABLE_BREAKS_FAIL が出ていない: $CHECK_OUT"
-elif ! printf '%s' "$CHECK_OUT" | grep -qF '走査に失敗しました'; then
+elif ! printf '%s' "$CHECK_OUT" | grep -F '走査に失敗しました' >/dev/null; then
   fail "走査失敗の fatal 文言が無い: $CHECK_OUT"
 else
   pass

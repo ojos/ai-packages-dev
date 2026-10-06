@@ -293,18 +293,18 @@ blocker="$(new_workdir)/not-a-dir"
 : > "$blocker"
 OUT="$(cd "$repo" && SESSION_LEDGER_DIR="$blocker/ledger" SESSION_LEDGER_ID=s-a SESSION_LEDGER_PID="$PID_A" bash "$LEDGER" check merge 2>&1)"
 RC=$?
-if [[ "$RC" -eq 0 ]] && printf '%s' "$OUT" | grep -q 'WARN' && printf '%s' "$OUT" | grep -q 'LEDGER_SKIP'; then pass; else fail "rc=$RC out=$OUT"; fi
+if [[ "$RC" -eq 0 ]] && printf '%s' "$OUT" | grep 'WARN' >/dev/null && printf '%s' "$OUT" | grep 'LEDGER_SKIP' >/dev/null; then pass; else fail "rc=$RC out=$OUT"; fi
 
 it "(h) claim も、置き場所を作れないときは警告を出して通す"
 OUT="$(cd "$repo" && SESSION_LEDGER_DIR="$blocker/ledger" SESSION_LEDGER_ID=s-a SESSION_LEDGER_PID="$PID_A" bash "$LEDGER" claim merge 2>&1)"
 RC=$?
-if [[ "$RC" -eq 0 ]] && printf '%s' "$OUT" | grep -q 'LEDGER_SKIP'; then pass; else fail "rc=$RC out=$OUT"; fi
+if [[ "$RC" -eq 0 ]] && printf '%s' "$OUT" | grep 'LEDGER_SKIP' >/dev/null; then pass; else fail "rc=$RC out=$OUT"; fi
 
 it "(h) git リポジトリの外では、警告を出して通す"
 nogit="$(new_workdir)"
 OUT="$(cd "$nogit" && GIT_CEILING_DIRECTORIES="$nogit/.." SESSION_LEDGER_ID=s-a SESSION_LEDGER_PID="$PID_A" bash "$LEDGER" check merge 2>&1)"
 RC=$?
-if [[ "$RC" -eq 0 ]] && printf '%s' "$OUT" | grep -q 'LEDGER_SKIP'; then pass; else fail "rc=$RC out=$OUT"; fi
+if [[ "$RC" -eq 0 ]] && printf '%s' "$OUT" | grep 'LEDGER_SKIP' >/dev/null; then pass; else fail "rc=$RC out=$OUT"; fi
 
 # ── 更新（長いセッションの失効を避ける）──────────────────────────────────────
 
@@ -400,7 +400,7 @@ lines_before="$(cat "$DIR"/*.tsv | grep -c .)"
 # shellcheck disable=SC1090,SC2034  # 生成物を読み込み、SELF_ID は読み込んだ関数が使う
 OUT="$(cd "$repo" && . "$LEDGER" && SELF_ID="" && { cmd_claim merge; echo "rc=$?"; cmd_check merge; echo "rc=$?"; cmd_release; echo "rc=$?"; } 2>&1)"
 skip_n="$(printf '%s\n' "$OUT" | grep -c '^LEDGER_SKIP$')"
-if [[ "$skip_n" -eq 2 ]] && printf '%s' "$OUT" | grep -q 'WARN' && ! printf '%s' "$OUT" | grep -q 'rc=[1-9]' \
+if [[ "$skip_n" -eq 2 ]] && printf '%s' "$OUT" | grep 'WARN' >/dev/null && ! printf '%s' "$OUT" | grep 'rc=[1-9]' >/dev/null \
    && [[ "$(cat "$DIR"/*.tsv | grep -c .)" -eq "$lines_before" ]]; then
   pass
 else
@@ -454,8 +454,8 @@ run s-rel "$repo" release
 rel_out="$OUT"
 rel_rc="$RC"
 rmdir "$DIR/s-rel.tsv"
-if [[ "$rel_rc" -eq 0 ]] && printf '%s' "$rel_out" | grep -q 'WARN' && printf '%s' "$rel_out" | grep -q 'release-failed' \
-   && ! printf '%s' "$rel_out" | grep -q 'released:'; then
+if [[ "$rel_rc" -eq 0 ]] && printf '%s' "$rel_out" | grep 'WARN' >/dev/null && printf '%s' "$rel_out" | grep 'release-failed' >/dev/null \
+   && ! printf '%s' "$rel_out" | grep 'released:' >/dev/null; then
   pass
 else
   fail "rc=$rel_rc out=$rel_out"

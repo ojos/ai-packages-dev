@@ -70,11 +70,11 @@ assert_fail() {
     fail "$what: 落ちるべきところで通過した: $CHECK_OUT"
     return
   fi
-  if ! printf '%s' "$CHECK_OUT" | grep -q 'DOC_LINKS_FAIL'; then
+  if ! printf '%s' "$CHECK_OUT" | grep 'DOC_LINKS_FAIL' >/dev/null; then
     fail "$what: DOC_LINKS_FAIL が出ていない: $CHECK_OUT"
     return
   fi
-  if [[ -n "$needle" ]] && ! printf '%s' "$CHECK_OUT" | grep -qF "$needle"; then
+  if [[ -n "$needle" ]] && ! printf '%s' "$CHECK_OUT" | grep -F "$needle" >/dev/null; then
     fail "$what: 期待した報告 '$needle' が無い: $CHECK_OUT"
     return
   fi
@@ -85,7 +85,7 @@ assert_pass() {
   local what="$1"
   if [[ "$CHECK_RC" -ne 0 ]]; then
     fail "$what: 通るべきところで落ちた: $CHECK_OUT"
-  elif ! printf '%s' "$CHECK_OUT" | grep -q 'DOC_LINKS_PASS'; then
+  elif ! printf '%s' "$CHECK_OUT" | grep 'DOC_LINKS_PASS' >/dev/null; then
     fail "$what: DOC_LINKS_PASS が出ていない: $CHECK_OUT"
   else
     pass

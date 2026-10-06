@@ -77,7 +77,7 @@ assert_contains "$INSTALL" "trap 'rm -rf" "導入手順"
 
 it "導入手順がカレントディレクトリへ資産を落としていない"
 # 旧形式（-o bootstrap.sh）の書き戻しを検出する。取得先は必ず作業ディレクトリ配下。
-if printf '%s\n' "$INSTALL_CODE" | grep -qE '^[^#]*curl[^#]*-o +[^"$]'; then
+if printf '%s\n' "$INSTALL_CODE" | grep -E '^[^#]*curl[^#]*-o +[^"$]' >/dev/null; then
   fail "導入手順にカレントディレクトリへ取得する curl が残っている"
 else
   pass
@@ -221,7 +221,7 @@ $unchained"
 fi
 
 it "導入手順が検証を省く curl | bash 形式を含まない"
-if printf '%s\n' "$INSTALL_CODE" | grep -qE 'curl[^|]*\| *(bash|sh)\b'; then
+if printf '%s\n' "$INSTALL_CODE" | grep -E 'curl[^|]*\| *(bash|sh)\b' >/dev/null; then
   fail "検証を挟まない curl | bash 形式が導入手順にある"
 else
   pass
@@ -269,7 +269,7 @@ if awk '
      /^## Doctor 自己診断/ { inside = 1; next }
      inside && /^## / { exit }
      inside { print }
-   ' "$README" | grep -q '#doctorsh-を後から取得する'; then
+   ' "$README" | grep '#doctorsh-を後から取得する' >/dev/null; then
   pass
 else
   fail "Doctor 自己診断の節に doctor.sh 入手手順へのリンクが無い"

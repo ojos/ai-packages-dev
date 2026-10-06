@@ -52,7 +52,7 @@ upgrade "$out" --without-copilot-review --dry-run
 missing=""; planned=""
 for f in $CR_FILES; do
   [[ -f "$out/$f" ]] || missing="$missing $f"
-  printf '%s' "$UP_OUT" | grep -q "plan: remove .*$f" || planned="$planned $f"
+  printf '%s' "$UP_OUT" | grep "plan: remove .*$f" >/dev/null || planned="$planned $f"
 done
 if [[ "$UP_RC" == "0" && -z "$missing" && -z "$planned" ]]; then pass; else fail "rc=$UP_RC 消えた:$missing 予定に無い:$planned"; fi
 
@@ -72,7 +72,7 @@ if [[ "$(tree_sans_origin "$out")" == "$(tree_sans_origin "$ref")" ]]; then pass
 
 it "次の --upgrade --dry-run の対象に 4 ファイルが出ない"
 upgrade "$out" --dry-run
-hit=""; for f in $CR_FILES; do printf '%s' "$UP_OUT" | grep -q "$f" && hit="$hit $f"; done
+hit=""; for f in $CR_FILES; do printf '%s' "$UP_OUT" | grep "$f" >/dev/null && hit="$hit $f"; done
 if [[ "$UP_RC" == "0" && -z "$hit" ]]; then pass; else fail "rc=$UP_RC 出た:$hit"; fi
 
 it "逆向き（あとから --with-copilot-review を足す）も通り、4 ファイルが戻る"
@@ -89,7 +89,7 @@ upgrade "$out" --without-copilot-review
 
 it "手を入れたファイルは残り、残したことを報告する"
 if [[ -f "$out/scripts/review-usable.sh" ]] && grep -q 'my edit' "$out/scripts/review-usable.sh" \
-   && printf '%s' "$UP_OUT" | grep -q 'keep (modified, no longer generated).*scripts/review-usable.sh'; then pass; else fail "rc=$UP_RC"; fi
+   && printf '%s' "$UP_OUT" | grep 'keep (modified, no longer generated).*scripts/review-usable.sh' >/dev/null; then pass; else fail "rc=$UP_RC"; fi
 
 it "手を入れていない残りの 3 ファイルは消える"
 left=""; for f in .github/workflows/copilot-review.yml .github/workflows/review-gate.yml scripts/check-review-usable.sh; do [[ -e "$out/$f" ]] && left="$left $f"; done
@@ -158,7 +158,7 @@ for mode in real dry-run; do
   if [[ "$mode" == "dry-run" ]]; then upgrade "$out" --without-claude --dry-run; else upgrade "$out" --without-claude; fi
   after="$(snapshot_all "$out")"
   if [[ "$UP_RC" == "1" && "$after" == "$before" && "$(snapshot_all "$w/outside")" == "$outside_before" ]] \
-     && printf '%s' "$UP_OUT" | grep -q '出力先の外を指しています'; then pass; else fail "rc=$UP_RC 変化:$(diff <(echo "$before") <(echo "$after") | head -5)"; fi
+     && printf '%s' "$UP_OUT" | grep '出力先の外を指しています' >/dev/null; then pass; else fail "rc=$UP_RC 変化:$(diff <(echo "$before") <(echo "$after") | head -5)"; fi
 done
 
 it "--with-* の全フラグに対になる --without-* がある"

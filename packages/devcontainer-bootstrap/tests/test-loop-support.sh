@@ -128,7 +128,7 @@ bashbin="$(command -v bash)"
 if out_txt="$(cd "$out" && PATH="$stub" "$bashbin" scripts/acceptance.sh 2>&1)"; then
   fail "ツール不在なのに合格した: $out_txt"
 else
-  if printf '%s' "$out_txt" | grep -q 'npm not found' && printf '%s' "$out_txt" | grep -qi 'install'; then
+  if printf '%s' "$out_txt" | grep 'npm not found' >/dev/null && printf '%s' "$out_txt" | grep -i 'install' >/dev/null; then
     pass
   else
     fail "導入手順付きのツール不在エラーが出ていない: $out_txt"
@@ -142,8 +142,8 @@ run_bootstrap "$out" --languages node >/dev/null 2>&1
 printf '{}\n' > "$out/package.json"   # ルート直下のマニフェスト
 sub="$out/nested/dir"; mkdir -p "$sub"
 out_txt="$(cd "$sub" && bash "$out/scripts/acceptance.sh" 2>&1)" || true
-if printf '%s' "$out_txt" | grep -q 'skip: package.json not found' \
-   || printf '%s' "$out_txt" | grep -q '受け入れ条件が未定義'; then
+if printf '%s' "$out_txt" | grep 'skip: package.json not found' >/dev/null \
+   || printf '%s' "$out_txt" | grep '受け入れ条件が未定義' >/dev/null; then
   fail "サブディレクトリ起動でルートのマニフェストを解決できていない: $out_txt"
 else
   pass
@@ -201,7 +201,7 @@ run_bootstrap "$out" >/dev/null 2>&1
 make_tracked_repo "$out"
 acc="$(new_workdir)/acc-pass.sh"; printf '#!/usr/bin/env bash\nexit 0\n' > "$acc"
 if out_txt="$(cd "$out" && ALLOWED_AUTHOR_EMAILS="$ALLOWED_EMAIL" VERIFY_ACCEPTANCE="$acc" bash scripts/loop-gate.sh 2>&1)"; then
-  if printf '%s' "$out_txt" | grep -q 'GATE_PASS' && printf '%s' "$out_txt" | grep -qi 'SKIP'; then
+  if printf '%s' "$out_txt" | grep 'GATE_PASS' >/dev/null && printf '%s' "$out_txt" | grep -i 'SKIP' >/dev/null; then
     pass
   else
     fail "GATE_PASS/SKIP が揃わない: $out_txt"
@@ -241,13 +241,13 @@ make_tracked_repo "$out"
 if out_txt="$(cd "$out" && ALLOWED_AUTHOR_EMAILS="other@example.com" VERIFY_ACCEPTANCE="$acc" bash scripts/loop-gate.sh 2>&1)"; then
   fail "許可外 identity なのに通過してしまった: $out_txt"
 else
-  if printf '%s' "$out_txt" | grep -q '\[loop-gate\] step 1' \
-     && printf '%s' "$out_txt" | grep -q 'commit identity not passed' \
-     && printf '%s' "$out_txt" | grep -q 'GATE_FAIL'; then
+  if printf '%s' "$out_txt" | grep '\[loop-gate\] step 1' >/dev/null \
+     && printf '%s' "$out_txt" | grep 'commit identity not passed' >/dev/null \
+     && printf '%s' "$out_txt" | grep 'GATE_FAIL' >/dev/null; then
     # 第二意見が誤って呼ばれていないこと（stub の出力 REVIEW_INVOKED も、
     # verify を示す step 2 のログも現れないこと）を両方で確かめる。
-    if printf '%s' "$out_txt" | grep -q 'REVIEW_INVOKED' \
-       || printf '%s' "$out_txt" | grep -q '\[loop-gate\] step 2'; then
+    if printf '%s' "$out_txt" | grep 'REVIEW_INVOKED' >/dev/null \
+       || printf '%s' "$out_txt" | grep '\[loop-gate\] step 2' >/dev/null; then
       fail "identity で落ちたのに後続の段まで進んでいる: $out_txt"
     else
       pass
@@ -262,7 +262,7 @@ it "許可内 identity のコミットだけなら、従来どおり後続の段
 # 「たまたま acceptance / 第二意見の設定不備で落ちた」のではなく、identity の
 # 許可・不許可だけで結果が変わることを確かめる。
 if out_txt="$(cd "$out" && ALLOWED_AUTHOR_EMAILS="$ALLOWED_EMAIL" VERIFY_ACCEPTANCE="$acc" bash scripts/loop-gate.sh 2>&1)"; then
-  if printf '%s' "$out_txt" | grep -q 'GATE_PASS' && printf '%s' "$out_txt" | grep -q 'REVIEW_INVOKED'; then
+  if printf '%s' "$out_txt" | grep 'GATE_PASS' >/dev/null && printf '%s' "$out_txt" | grep 'REVIEW_INVOKED' >/dev/null; then
     pass
   else
     fail "許可内 identity なのに後続の段が実行されていない: $out_txt"
@@ -287,9 +287,9 @@ else
   # 手前で check-no-secrets.sh も実行するため、それだけで GATE_FAIL になっても
   # 同じ形の出力になり得る。acceptance（$acc）が実際に起動されたことまで固定する
   # （verify.sh が acceptance の起動直前に出す "[verify] running acceptance:" を見る）。
-  if printf '%s' "$out_txt" | grep -q 'commit identity not passed'; then
+  if printf '%s' "$out_txt" | grep 'commit identity not passed' >/dev/null; then
     fail "acceptance 不合格を検証する前に identity で落ちている: $out_txt"
-  elif ! printf '%s' "$out_txt" | grep -q '\[verify\] running acceptance:'; then
+  elif ! printf '%s' "$out_txt" | grep '\[verify\] running acceptance:' >/dev/null; then
     fail "acceptance が起動された痕跡が無い（identity 以外の別段で落ちている疑い）: $out_txt"
   else
     assert_contains "$out_txt" "GATE_FAIL" "loop-gate 出力"
@@ -304,7 +304,7 @@ acc="$(new_workdir)/acc-pass.sh"; printf '#!/usr/bin/env bash\nexit 0\n' > "$acc
 printf '#!/usr/bin/env bash\necho stub-lgtm\nexit 0\n' > "$out/scripts/second-opinion-review.sh"
 chmod +x "$out/scripts/second-opinion-review.sh"
 if out_txt="$(cd "$out" && ALLOWED_AUTHOR_EMAILS="$ALLOWED_EMAIL" VERIFY_ACCEPTANCE="$acc" bash scripts/loop-gate.sh 2>&1)"; then
-  if printf '%s' "$out_txt" | grep -q 'stub-lgtm' && printf '%s' "$out_txt" | grep -q 'GATE_PASS'; then
+  if printf '%s' "$out_txt" | grep 'stub-lgtm' >/dev/null && printf '%s' "$out_txt" | grep 'GATE_PASS' >/dev/null; then
     pass
   else
     fail "第二意見が直列化されていない: $out_txt"
@@ -325,8 +325,8 @@ if out_txt="$(cd "$out" && ALLOWED_AUTHOR_EMAILS="$ALLOWED_EMAIL" VERIFY_ACCEPTA
 else
   # identity / verify（step 1・2）は通過しており、第二意見（step 3）が原因で
   # 落ちていることを確かめる。
-  if printf '%s' "$out_txt" | grep -q 'commit identity not passed' \
-     || printf '%s' "$out_txt" | grep -q 'verify not passed'; then
+  if printf '%s' "$out_txt" | grep 'commit identity not passed' >/dev/null \
+     || printf '%s' "$out_txt" | grep 'verify not passed' >/dev/null; then
     fail "第二意見の不合格を検証する前に別の段で落ちている: $out_txt"
   else
     assert_contains "$out_txt" "GATE_FAIL" "loop-gate 出力"
@@ -342,7 +342,7 @@ acc="$(new_workdir)/acc-pass.sh"; printf '#!/usr/bin/env bash\nexit 0\n' > "$acc
 printf '#!/usr/bin/env bash\necho SHOULD_NOT_RUN\nexit 1\n' > "$out/scripts/second-opinion-review.sh"
 chmod +x "$out/scripts/second-opinion-review.sh"
 if out_txt="$(cd "$out" && ALLOWED_AUTHOR_EMAILS="$ALLOWED_EMAIL" LOOP_GATE_REVIEW_CMD='' VERIFY_ACCEPTANCE="$acc" bash scripts/loop-gate.sh 2>&1)"; then
-  if printf '%s' "$out_txt" | grep -q 'GATE_PASS' && ! printf '%s' "$out_txt" | grep -q 'SHOULD_NOT_RUN'; then
+  if printf '%s' "$out_txt" | grep 'GATE_PASS' >/dev/null && ! printf '%s' "$out_txt" | grep 'SHOULD_NOT_RUN' >/dev/null; then
     pass
   else
     fail "空文字指定でも reviewer が走った、または通過しない: $out_txt"
@@ -376,9 +376,9 @@ chmod +x "$out/scripts/second-opinion-review.sh"
 ) >/dev/null 2>&1
 if out_txt="$(cd "$out" && ALLOWED_AUTHOR_EMAILS="$ALLOWED_EMAIL" VERIFY_ACCEPTANCE="$acc" bash scripts/loop-gate.sh 2>&1)"; then
   lines="$(printf '%s' "$out_txt" | sed -n 's/^REVIEW_DIFF_LINES://p')"
-  if printf '%s' "$out_txt" | grep -q 'REVIEW_ARGV:--range ' \
+  if printf '%s' "$out_txt" | grep 'REVIEW_ARGV:--range ' >/dev/null \
      && [[ -n "$lines" && "$lines" -gt 0 ]] \
-     && printf '%s' "$out_txt" | grep -q 'GATE_PASS'; then
+     && printf '%s' "$out_txt" | grep 'GATE_PASS' >/dev/null; then
     pass
   else
     fail "ステージ空で範囲が渡っていない、または差分が空 (lines=${lines:-none}): $out_txt"
@@ -392,7 +392,7 @@ it "ステージ済み差分があるときは範囲を渡さない（reviewer �
 printf 'change\n' > "$out/STAGED.txt"
 ( cd "$out" && git add STAGED.txt ) >/dev/null 2>&1
 if out_txt="$(cd "$out" && ALLOWED_AUTHOR_EMAILS="$ALLOWED_EMAIL" VERIFY_ACCEPTANCE="$acc" bash scripts/loop-gate.sh 2>&1)"; then
-  if printf '%s' "$out_txt" | grep -q 'REVIEW_ARGV:$' && printf '%s' "$out_txt" | grep -q 'GATE_PASS'; then
+  if printf '%s' "$out_txt" | grep 'REVIEW_ARGV:$' >/dev/null && printf '%s' "$out_txt" | grep 'GATE_PASS' >/dev/null; then
     pass
   else
     fail "ステージ済みがあるのに範囲を渡している: $out_txt"
@@ -417,12 +417,12 @@ printf '#!/usr/bin/env bash\necho "REVIEW_ARGV:$*"\nexit 0\n' > "$out/scripts/se
 chmod +x "$out/scripts/second-opinion-review.sh"
 if out_txt="$(cd "$out" && VERIFY_ACCEPTANCE="$acc" bash scripts/loop-gate.sh 2>&1)"; then
   fail "git 管理外で通過してしまった: $out_txt"
-elif printf '%s' "$out_txt" | grep -q 'GATE_FAIL' \
-     && printf '%s' "$out_txt" | grep -q 'commit identity not passed'; then
+elif printf '%s' "$out_txt" | grep 'GATE_FAIL' >/dev/null \
+     && printf '%s' "$out_txt" | grep 'commit identity not passed' >/dev/null; then
   # verify（step 2）・第二意見（step 3）のどちらも走らないことを確かめる。
   # 走ってしまうと、identity 未検証のまま先の段へ進めることになる。
-  if printf '%s' "$out_txt" | grep -q 'REVIEW_ARGV' \
-     || printf '%s' "$out_txt" | grep -q '\[loop-gate\] step 2'; then
+  if printf '%s' "$out_txt" | grep 'REVIEW_ARGV' >/dev/null \
+     || printf '%s' "$out_txt" | grep '\[loop-gate\] step 2' >/dev/null; then
     fail "identity で止まったのに後続の段が走っている: $out_txt"
   else
     pass
@@ -502,11 +502,11 @@ if out_txt="$(cd "$out" && ALLOWED_AUTHOR_EMAILS="$ALLOWED_EMAIL" VERIFY_ACCEPTA
   lines="$(printf '%s' "$out_txt" | sed -n 's/^REVIEW_DIFF_LINES://p')"
   names="$(printf '%s' "$out_txt" | sed -n 's/^REVIEW_DIFF_NAMES://p')"
   if [[ -n "$lines" && "$lines" -gt 0 ]] \
-     && printf '%s' "$names" | grep -q 'FEATURE.txt' \
-     && printf '%s' "$out_txt" | grep -q 'GATE_PASS'; then
+     && printf '%s' "$names" | grep 'FEATURE.txt' >/dev/null \
+     && printf '%s' "$out_txt" | grep 'GATE_PASS' >/dev/null; then
     # 分岐点起点であること。既定ブランチにしか無いファイル（生成物一式）が
     # 差分へ混じるなら、範囲がブランチの変更を超えて広がっている。
-    if printf '%s' "$names" | grep -q 'scripts/verify.sh'; then
+    if printf '%s' "$names" | grep 'scripts/verify.sh' >/dev/null; then
       fail "範囲が分岐点を超えて広がっている: $names"
     else
       pass
@@ -529,9 +529,9 @@ printf '#!/usr/bin/env bash\necho REVIEW_INVOKED\nexit 0\n' > "$out/scripts/seco
 chmod +x "$out/scripts/second-opinion-review.sh"
 make_pushed_repo "$out" main
 if out_txt="$(cd "$out" && ALLOWED_AUTHOR_EMAILS="$ALLOWED_EMAIL" VERIFY_ACCEPTANCE="$acc" bash scripts/loop-gate.sh 2>&1)"; then
-  if printf '%s' "$out_txt" | grep -q 'no reviewable diff' \
-     && printf '%s' "$out_txt" | grep -q 'GATE_PASS' \
-     && ! printf '%s' "$out_txt" | grep -q 'REVIEW_INVOKED'; then
+  if printf '%s' "$out_txt" | grep 'no reviewable diff' >/dev/null \
+     && printf '%s' "$out_txt" | grep 'GATE_PASS' >/dev/null \
+     && ! printf '%s' "$out_txt" | grep 'REVIEW_INVOKED' >/dev/null; then
     pass
   else
     fail "対象なしが明示されない、または対象の無い reviewer を呼んでいる: $out_txt"
@@ -577,9 +577,9 @@ it "LOOP_GATE_REVIEW_CMD が範囲を使わず「対象なし」を返したと�
 out="$(new_workdir)/p"; acc="$(new_workdir)/acc.sh"
 mk_custom_gate_repo "$out" "$acc"
 out_txt="$(cd "$out" && ALLOWED_AUTHOR_EMAILS="$ALLOWED_EMAIL" LOOP_GATE_REVIEW_CMD='bash scripts/fake-review.sh' VERIFY_ACCEPTANCE="$acc" bash scripts/loop-gate.sh 2>&1)"
-if ! printf '%s' "$out_txt" | grep -q 'RECORD_SAVED' \
-   && printf '%s' "$out_txt" | grep -q 'GATE_FAIL' \
-   && ! printf '%s' "$out_txt" | grep -q 'GATE_PASS'; then
+if ! printf '%s' "$out_txt" | grep 'RECORD_SAVED' >/dev/null \
+   && printf '%s' "$out_txt" | grep 'GATE_FAIL' >/dev/null \
+   && ! printf '%s' "$out_txt" | grep 'GATE_PASS' >/dev/null; then
   pass
 else
   fail "レビューしていないのに通過した、または記録が作られた: $out_txt"
@@ -590,9 +590,9 @@ out="$(new_workdir)/p"; acc="$(new_workdir)/acc.sh"
 mk_custom_gate_repo "$out" "$acc"
 ( cd "$out" && git init -q --bare ../origin402.git && git remote add origin ../origin402.git && git push -q -u origin main && git remote set-head origin main ) >/dev/null 2>&1
 if out_txt="$(cd "$out" && ALLOWED_AUTHOR_EMAILS="$ALLOWED_EMAIL" LOOP_GATE_REVIEW_CMD='false' VERIFY_ACCEPTANCE="$acc" bash scripts/loop-gate.sh 2>&1)" \
-   && printf '%s' "$out_txt" | grep -q 'no reviewable diff' \
-   && printf '%s' "$out_txt" | grep -q 'GATE_PASS' \
-   && ! printf '%s' "$out_txt" | grep -q 'RECORD_SAVED'; then
+   && printf '%s' "$out_txt" | grep 'no reviewable diff' >/dev/null \
+   && printf '%s' "$out_txt" | grep 'GATE_PASS' >/dev/null \
+   && ! printf '%s' "$out_txt" | grep 'RECORD_SAVED' >/dev/null; then
   pass
 else
   fail "対象が無いのに通過しない、または記録が作られた: $out_txt"
@@ -604,8 +604,8 @@ mk_custom_gate_repo "$out" "$acc"
 if out_txt="$(cd "$out" && ALLOWED_AUTHOR_EMAILS="$ALLOWED_EMAIL" LOOP_GATE_REVIEW_CMD='bash scripts/fake-review.sh ${LOOP_GATE_REVIEW_RANGE:+"$LOOP_GATE_REVIEW_RANGE"}' VERIFY_ACCEPTANCE="$acc" bash scripts/loop-gate.sh 2>&1)"; then
   lines="$(printf '%s' "$out_txt" | sed -n 's/^REVIEWED_RANGE:.* lines=//p')"
   if [[ -n "$lines" && "$lines" -gt 0 ]] \
-     && printf '%s' "$out_txt" | grep -q 'RECORD_SAVED:.*--scope range:' \
-     && printf '%s' "$out_txt" | grep -q 'GATE_PASS'; then
+     && printf '%s' "$out_txt" | grep 'RECORD_SAVED:.*--scope range:' >/dev/null \
+     && printf '%s' "$out_txt" | grep 'GATE_PASS' >/dev/null; then
     pass
   else
     fail "範囲が渡っていない、または記録の scope が範囲でない (lines=${lines:-none}): $out_txt"
@@ -619,8 +619,8 @@ out="$(new_workdir)/p"; acc="$(new_workdir)/acc.sh"
 mk_custom_gate_repo "$out" "$acc"
 ( cd "$out" && printf 'x\n' > staged-new.txt && git add staged-new.txt ) >/dev/null 2>&1
 if out_txt="$(cd "$out" && ALLOWED_AUTHOR_EMAILS="$ALLOWED_EMAIL" LOOP_GATE_REVIEW_CMD='bash scripts/fake-review.sh ${LOOP_GATE_REVIEW_RANGE:+"$LOOP_GATE_REVIEW_RANGE"}' VERIFY_ACCEPTANCE="$acc" bash scripts/loop-gate.sh 2>&1)" \
-   && printf '%s' "$out_txt" | grep -q 'REVIEWED_STAGED' \
-   && printf '%s' "$out_txt" | grep -q 'RECORD_SAVED:.*--scope staged'; then
+   && printf '%s' "$out_txt" | grep 'REVIEWED_STAGED' >/dev/null \
+   && printf '%s' "$out_txt" | grep 'RECORD_SAVED:.*--scope staged' >/dev/null; then
   pass
 else
   fail "ステージ済みの経路が変わった: $out_txt"
@@ -676,8 +676,8 @@ it "検査未定義の acceptance-remote.sh は VERIFY_FAIL / exit 1 になる"
 if out_txt="$(cd "$out" && VERIFY_ACCEPTANCE=scripts/acceptance-remote.sh bash scripts/verify.sh 2>&1)"; then
   fail "検査が未定義なのに通過してしまった: $out_txt"
 else
-  if printf '%s' "$out_txt" | grep -q 'VERIFY_FAIL' \
-     && printf '%s' "$out_txt" | grep -q '未定義'; then
+  if printf '%s' "$out_txt" | grep 'VERIFY_FAIL' >/dev/null \
+     && printf '%s' "$out_txt" | grep '未定義' >/dev/null; then
     pass
   else
     fail "未定義である旨と VERIFY_FAIL が揃わない: $out_txt"
@@ -691,9 +691,9 @@ it "acceptance-remote.sh の一時ログは mktemp のテンプレートで作�
 # 照合は grep -F で行う（パターン側が \$ や引用符を含み、正規表現として解釈させる
 # 理由が無い）。
 remote_code="$(grep -v '^[[:space:]]*#' "$REMOTE")"
-if printf '%s\n' "$remote_code" | grep -Fq 'mktemp "${TMPDIR:-/tmp}/acceptance-remote.XXXXXX"' \
-   && printf '%s\n' "$remote_code" | grep -Fq "trap 'rm -f \"\$LOG\"' EXIT" \
-   && ! printf '%s\n' "$remote_code" | grep -Fq '$$'; then
+if printf '%s\n' "$remote_code" | grep -F 'mktemp "${TMPDIR:-/tmp}/acceptance-remote.XXXXXX"' >/dev/null \
+   && printf '%s\n' "$remote_code" | grep -F "trap 'rm -f \"\$LOG\"' EXIT" >/dev/null \
+   && ! printf '%s\n' "$remote_code" | grep -F '$$' >/dev/null; then
   pass
 else
   fail "mktemp テンプレート / EXIT トラップが無い、または \$\$ 由来の名前を使っている"
@@ -705,8 +705,8 @@ it "acceptance-remote.sh は set -e を使わない代わりに失敗しうる�
 #         （ルート外で検査が走る）
 #   LOG   作成に失敗して空になると run の >"$LOG" が必ず失敗し、実行できていない
 #         検査が「失敗した検査」として報告される
-if printf '%s\n' "$remote_code" | grep -Fq 'HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" || exit 1' \
-   && printf '%s\n' "$remote_code" | grep -Fq 'LOG="$(mktemp "${TMPDIR:-/tmp}/acceptance-remote.XXXXXX")" || exit 1'; then
+if printf '%s\n' "$remote_code" | grep -F 'HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" || exit 1' >/dev/null \
+   && printf '%s\n' "$remote_code" | grep -F 'LOG="$(mktemp "${TMPDIR:-/tmp}/acceptance-remote.XXXXXX")" || exit 1' >/dev/null; then
   pass
 else
   fail "HERE / LOG の代入ガード（|| exit 1）が無い"
@@ -744,7 +744,7 @@ if inject_remote_checks "$work/scripts/acceptance-remote.sh" "$work/scripts/inje
   # 差し込んだ後に追跡させる（機密混入検査の前提。上の make_tracked_repo と同じ理由）。
   make_tracked_repo "$work"
   if out_txt="$(cd "$work" && VERIFY_ACCEPTANCE=scripts/injected.sh bash scripts/verify.sh 2>&1)"; then
-    if printf '%s' "$out_txt" | grep -q 'MUST_NOT_APPEAR'; then
+    if printf '%s' "$out_txt" | grep 'MUST_NOT_APPEAR' >/dev/null; then
       fail "成功した検査の出力が漏れている: $out_txt"
     else
       assert_contains "$out_txt" "VERIFY_PASS" "verify 出力"
@@ -767,10 +767,10 @@ if inject_remote_checks "$work/scripts/acceptance-remote.sh" "$work/scripts/inje
     fail "検査が失敗しているのに通過した: $out_txt"
   else
     # 1 件目の失敗で止めず全件を見てから落とす（失敗件数が 2 になる）。
-    if printf '%s' "$out_txt" | grep -q 'FAIL: bad one' \
-       && printf '%s' "$out_txt" | grep -q 'BOOM' \
-       && printf '%s' "$out_txt" | grep -q 'FAIL: bad two' \
-       && printf '%s' "$out_txt" | grep -q '2 件の検査が失敗'; then
+    if printf '%s' "$out_txt" | grep 'FAIL: bad one' >/dev/null \
+       && printf '%s' "$out_txt" | grep 'BOOM' >/dev/null \
+       && printf '%s' "$out_txt" | grep 'FAIL: bad two' >/dev/null \
+       && printf '%s' "$out_txt" | grep '2 件の検査が失敗' >/dev/null; then
       pass
     else
       fail "失敗の出力・件数の集計が揃わない: $out_txt"
@@ -817,7 +817,7 @@ out="$(new_workdir)/p"
 run_bootstrap "$out" >/dev/null 2>&1
 output="$(bash "$PKG_DIR/doctor.sh" --target-dir "$out" 2>&1)"
 rc=$?
-if [[ "$rc" -eq 0 ]] && printf '%s' "$output" | grep -q 'verify.sh syntax OK' && printf '%s' "$output" | grep -q 'FAIL=0'; then
+if [[ "$rc" -eq 0 ]] && printf '%s' "$output" | grep 'verify.sh syntax OK' >/dev/null && printf '%s' "$output" | grep 'FAIL=0' >/dev/null; then
   pass
 else
   fail "doctor が verify を検査していない、または FAIL がある (rc=$rc): $(printf '%s' "$output" | grep -iE 'verify|fail')"
