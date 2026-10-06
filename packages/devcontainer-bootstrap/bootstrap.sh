@@ -9882,7 +9882,9 @@ $(printf '%s\n' "$sorted_rels"
   if should_install_playbook; then
     playbook_installed_rel_paths
     playbook_rules_rel_paths
-  fi)
+  fi
+  # --upgrade --without-<名前> の削除候補も、削除の段より前に検査する。
+  [[ "$UPGRADE" == "true" ]] && upgrade_off_rels)
 EOF2
 }
 
@@ -9994,29 +9996,35 @@ upgrade_diff_summary() {
   diff -u "$cur" "$new" | sed -n '3,12p' | sed 's/^/    /' || true
 }
 
+# --without-<名前> で外したフラグでだけ生成していたファイルの一覧（外す前の集合で生成
+# されていて、外した後の集合では生成されないもの）を標準出力へ出す。--without-<名前> が
+# 無ければ空。削除の段（upgrade_report_removed）と書き込み前の事前検査が同じ一覧を使う。
+upgrade_off_rels() {
+  [[ ${#WITHOUT_SET[@]} -gt 0 ]] || return 0
+  # フラグだけの差を取る。--without-playbook を併せて渡されても、規範経由の出力
+  # （review-gate.yml など）が候補から落ちないよう、どちらの側も規範は配置する扱いで
+  # 数える（規範の有無による差は、フラグの差ではないので打ち消し合う）。
+  local prev_rels cur_rels saved_pb="$WITH_PLAYBOOK" cur_with=()
+  cur_with=(${WITH_SET[@]+"${WITH_SET[@]}"})
+  WITH_PLAYBOOK="true"
+  WITH_SET=(${UPGRADE_PREV_WITH[@]+"${UPGRADE_PREV_WITH[@]}"})
+  prev_rels="$( { template_rel_paths; conditional_template_rel_paths; playbook_installed_rel_paths; } | sort -u)"
+  WITH_SET=(${cur_with[@]+"${cur_with[@]}"})
+  cur_rels="$( { template_rel_paths; conditional_template_rel_paths; playbook_installed_rel_paths; } | sort -u)"
+  WITH_PLAYBOOK="$saved_pb"
+  comm -23 <(printf '%s\n' "$prev_rels") <(printf '%s\n' "$cur_rels")
+}
+
 # 記録にあって、新しい版では生成されなくなったファイルを報告する（原則として削除しない）。
 # 例外: --without-<名前> で外したフラグでだけ生成していたファイル（外す前の集合で生成
 # されていて、外した後の集合では生成されないもの）は、ORIGIN に記録したハッシュと現物が
 # 一致する（手を入れていない）ときに限り削除する。手を入れたものは残して報告する。
 # ほかの理由で生成されなくなったファイルは、従来どおり報告だけにする。
 upgrade_report_removed() {
-  local origin="$OUTPUT_DIR/$ORIGIN_REL_PATH" new_rels rel dest rec curh off_rels="" cur_with=()
+  local origin="$OUTPUT_DIR/$ORIGIN_REL_PATH" new_rels rel dest rec curh off_rels=""
   [[ -f "$origin" ]] || return 0
   new_rels="$( { printf '%s\n' "$sorted_rels"; playbook_installed_rel_paths; playbook_rules_rel_paths; } | sort -u)"
-  if [[ ${#WITHOUT_SET[@]} -gt 0 ]]; then
-    # フラグだけの差を取る。--without-playbook を併せて渡されても、規範経由の出力
-    # （review-gate.yml など）が候補から落ちないよう、どちらの側も規範は配置する扱いで
-    # 数える（規範の有無による差は、フラグの差ではないので打ち消し合う）。
-    local prev_rels cur_rels saved_pb="$WITH_PLAYBOOK"
-    cur_with=(${WITH_SET[@]+"${WITH_SET[@]}"})
-    WITH_PLAYBOOK="true"
-    WITH_SET=(${UPGRADE_PREV_WITH[@]+"${UPGRADE_PREV_WITH[@]}"})
-    prev_rels="$( { template_rel_paths; conditional_template_rel_paths; playbook_installed_rel_paths; } | sort -u)"
-    WITH_SET=(${cur_with[@]+"${cur_with[@]}"})
-    cur_rels="$( { template_rel_paths; conditional_template_rel_paths; playbook_installed_rel_paths; } | sort -u)"
-    WITH_PLAYBOOK="$saved_pb"
-    off_rels="$(comm -23 <(printf '%s\n' "$prev_rels") <(printf '%s\n' "$cur_rels"))"
-  fi
+  off_rels="$(upgrade_off_rels)"
   while IFS= read -r rel; do
     [[ -n "$rel" ]] || continue
     if printf '%s\n' "$new_rels" | grep -Fxq -- "$rel"; then continue; fi

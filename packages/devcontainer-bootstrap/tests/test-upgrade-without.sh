@@ -134,6 +134,33 @@ rc=$?
 gen "$ref"
 if [[ "$rc" == "0" && "$(tree_sans_origin "$out")" == "$(tree_sans_origin "$ref")" ]]; then pass; else fail "rc=$rc"; fi
 
+# ── 削除候補の親が出力先の外を指すリンクなら、何も書かずに止まる（#453） ────
+
+# 出力先の中の全ファイルとリンク（パスと中身。リンクは先を含めず印だけ）
+snapshot_all() {
+  (cd "$1" && find . \( -type f -o -type l \) | sort | while IFS= read -r f; do
+    if [[ -L "$f" ]]; then printf '%s link\n' "$f"; else printf '%s %s\n' "$f" "$(cksum < "$f")"; fi
+  done)
+}
+
+for mode in real dry-run; do
+  it "削除候補の親が外を指すリンクなら、--upgrade --without-claude は何も書かず終了コード 1（$mode）"
+  w="$(new_workdir)"
+  out="$w/p"
+  gen "$out" --with-claude
+  # 古い版の写し（更新の対象）を 1 つ作る。事前検査が無ければ、これが先に更新される
+  echo "# old version" >> "$out/scripts/on-attach.sh"
+  newh="$(sha256sum "$out/scripts/on-attach.sh" | cut -d' ' -f1)"
+  sed "s|^hash:scripts/on-attach.sh=.*|hash:scripts/on-attach.sh=$newh|" "$out/$ORIGIN_REL" > "$out/$ORIGIN_REL.tmp" && mv "$out/$ORIGIN_REL.tmp" "$out/$ORIGIN_REL"
+  mv "$out/.claude" "$w/outside"
+  ln -s "$w/outside" "$out/.claude"
+  before="$(snapshot_all "$out")"; outside_before="$(snapshot_all "$w/outside")"
+  if [[ "$mode" == "dry-run" ]]; then upgrade "$out" --without-claude --dry-run; else upgrade "$out" --without-claude; fi
+  after="$(snapshot_all "$out")"
+  if [[ "$UP_RC" == "1" && "$after" == "$before" && "$(snapshot_all "$w/outside")" == "$outside_before" ]] \
+     && printf '%s' "$UP_OUT" | grep -q '出力先の外を指しています'; then pass; else fail "rc=$UP_RC 変化:$(diff <(echo "$before") <(echo "$after") | head -5)"; fi
+done
+
 it "--with-* の全フラグに対になる --without-* がある"
 miss=""
 for n in $(grep -o -- '--with-[a-z-]*)' "$BOOTSTRAP" | sed 's/^--with-//; s/)$//' | sort -u); do
