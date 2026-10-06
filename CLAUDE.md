@@ -24,3 +24,10 @@
 - `.claude/skills/intake/SKILL.md`: `/intake` の起動点です。推奨配線を採用済みで、`.gitignore` は `.claude/*` を除外しつつ `!.claude/skills/` で再包含するため追跡対象です。判定基準・票の項目定義は複製せず、`.github/project-ai-rules.md`「intake フロー」と `.ai-playbook/intake/` を参照します。
 - `.claude/skills/land/SKILL.md`: `/land` の起動点です。この会話で PR を作ったら、指示を待たずに使います。判定基準は複製せず、`.ai-playbook/review-workflow.md` と `.ai-playbook/task-playbooks/pr-review.md` を参照します。マージ直前の承認は `scripts/confirm-merge-hook.sh`（`.claude/settings.json` の PreToolUse フックとして配線済み）が機構で保証します（`.ai-playbook/role-contracts/closer.md`「手動承認は機構で保証する」）。
 - `.claude/settings.json`: 追跡しています（`.gitignore` は `!.claude/settings.json` で再包含。#312）。マージの確認フック（`scripts/confirm-merge-hook.sh`）とセッション協調フック（`scripts/session-coord-hook.sh`）の配線を持ちます。権限許可リストは持たず（追跡しない `settings.local.json` 側）、規範は定義しません。
+
+## 規範の取り込み
+
+次の 2 行で、規範の全文を毎セッションの文脈へ取り込みます（Claude Code の `@パス` の取り込み。#441）。パスを挙げるだけでは、エージェントが自分から読みにいかない限り規範が文脈に載りません。
+
+@.ai-playbook/shared-ai-rules.md
+@.github/project-ai-rules.md

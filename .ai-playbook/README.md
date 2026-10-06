@@ -35,7 +35,7 @@
 | GitHub Copilot | `.github/copilot-instructions.md` | なし | なし | なし | 実行環境とは独立（下記） |
 | `AGENTS.md` を読む実行環境（Codex など） | `AGENTS.md` | なし | なし | なし | 実行環境とは独立（下記） |
 
-- 入口ファイルは 3 つとも同じ雛形（`templates/entry.md`）の写しで、プロジェクト共通ルールを経由して 3 層構造へつながります。規範を置かない生成では、どれも作りません。
+- 入口ファイルは 3 つとも同じ雛形（`templates/entry.md`）の写しで、プロジェクト共通ルールを経由して 3 層構造へつながります。`CLAUDE.md` だけは、末尾に規範 2 つを `@` で取り込む節が付きます（Claude Code は、これで規範の全文を毎セッションの文脈へ載せます）。規範を置かない生成では、どれも作りません。
 - 第二意見のエンジンは、実行環境ではなく `scripts/second-opinion-review.sh --engine` で選びます（`gemini`（既定）/ `antigravity` / `codex`）。第二意見は主レビューと別ベンダーのモデルで取ることが前提です。エンジンは実行環境から自動では決まらず、選び方の検査もしないため、**主レビューと同じベンダーのエンジンを選ばないでください**（例: Codex で実装するなら `codex` 以外）。
 - GitHub Copilot のリモートレビュー要求（`--with-copilot-review`）は、リモート最終ゲートの選択制の機構です。入口ファイルの有無とは別です。
 
@@ -50,7 +50,7 @@
 | `loop-workflow.md` | ループコーディング運用の規範（受け入れ検証の機械ゲート化・verify ランナー契約・収束） |
 | `loop-coding-guide.md` | ループコーディングの解説ガイド（従来ワークフローとの違い・考え方。`loop-workflow.md` の解説版） |
 | `intake/` | intake テンプレート、相談テンプレート、判定 reason code |
-| `templates/` | 導入用の雛形 15 種（`entry.md` 実行環境の入口ファイル / `project-ai-rules.md` プロジェクト共通ルール / `second-opinion-review.sh` 第二意見レビューの実装例 / `second-opinion-schema.json` 第二意見の回答の形（JSON スキーマ方式で判定するエンジン用） / `second-opinion-record.sh` 第二意見の記録・投稿の実装例 / `second-opinion-gate-exempt.sh` 記録を求めない PR の判定本体 / `second-opinion-gate.yml` 第二意見が回されたことの確認側の実装例 / `copilot-review.yml` リモート最終ゲートの要求側の実装例 / `review-gate.yml` リモート最終ゲートの確認側の実装例 / `review-usable.sh` 確認側が使う「読まれたか」の判定本体 / `check-review-usable.sh` 上記の表駆動の自己検査 / `claude-skill-intake.md` Claude Code の intake 起点スキル / `claude-skill-land.md` Claude Code の PR 確認・マージ起点スキル / `claude-agent-explorer.md`・`claude-agent-implementer.md` Claude Code の委譲先エージェント定義） |
+| `templates/` | 導入用の雛形 16 種（`entry.md` 実行環境の入口ファイル / `claude-entry-imports.md` Claude Code の入口ファイルの末尾に足す規範の取り込みの節 / `project-ai-rules.md` プロジェクト共通ルール / `second-opinion-review.sh` 第二意見レビューの実装例 / `second-opinion-schema.json` 第二意見の回答の形（JSON スキーマ方式で判定するエンジン用） / `second-opinion-record.sh` 第二意見の記録・投稿の実装例 / `second-opinion-gate-exempt.sh` 記録を求めない PR の判定本体 / `second-opinion-gate.yml` 第二意見が回されたことの確認側の実装例 / `copilot-review.yml` リモート最終ゲートの要求側の実装例 / `review-gate.yml` リモート最終ゲートの確認側の実装例 / `review-usable.sh` 確認側が使う「読まれたか」の判定本体 / `check-review-usable.sh` 上記の表駆動の自己検査 / `claude-skill-intake.md` Claude Code の intake 起点スキル / `claude-skill-land.md` Claude Code の PR 確認・マージ起点スキル / `claude-agent-explorer.md`・`claude-agent-implementer.md` Claude Code の委譲先エージェント定義） |
 | `.gitignore` | このパッケージを開発するときの追跡除外設定。規範ではないため配布・取り込みの対象外（`shared-ai-rules.md` 14 章） |
 
 共通ルールの補足として、AI からの質問は一問ずつ行い、各質問には意図を添え、回答は選択肢優先で提示します。
@@ -179,7 +179,13 @@ cp .ai-playbook/templates/project-ai-rules.md .github/project-ai-rules.md
 cp .ai-playbook/templates/entry.md CLAUDE.md
 cp .ai-playbook/templates/entry.md AGENTS.md
 cp .ai-playbook/templates/entry.md .github/copilot-instructions.md
+
+# Claude Code では、CLAUDE.md の末尾に規範 2 つを取り込む節を足す（`@パス` の取り込み）。
+# パスを挙げるだけでは、エージェントが自分から読みにいかない限り規範は文脈に載らない。
+cat .ai-playbook/templates/claude-entry-imports.md >> CLAUDE.md
 ```
+
+Claude Code の `CLAUDE.md` だけは、取り込みの 2 行で規範の全文を毎セッションの文脈へ載せます（2 つで約 50KB）。`AGENTS.md` と `copilot-instructions.md` には取り込みの構文が無いので、足しません。devcontainer-bootstrap で生成した場合は、この 2 行を含む節が最初から付いています。
 
 ### 3. プロジェクト固有の値を埋める
 
