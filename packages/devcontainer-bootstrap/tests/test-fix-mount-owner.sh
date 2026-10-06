@@ -34,8 +34,8 @@ it "install-ai-tools.sh より前に実行される"
 pcc="$(jq -r '.postCreateCommand' "$DC")"
 left="${pcc%%&&*}"
 right="${pcc#*&&}"
-if printf '%s' "$left" | grep -q 'fix-mount-owner.sh' \
-   && printf '%s' "$right" | grep -q 'install-ai-tools.sh'; then
+if printf '%s' "$left" | grep 'fix-mount-owner.sh' >/dev/null \
+   && printf '%s' "$right" | grep 'install-ai-tools.sh' >/dev/null; then
   pass
 else
   fail "postCreateCommand の順序が違う: $pcc"
@@ -44,7 +44,7 @@ fi
 it "doctor が fix-mount-owner.sh の存在を検査する"
 output="$(bash "$PKG_DIR/doctor.sh" --target-dir "$out" --strict 2>&1)"
 rc=$?
-if [[ "$rc" -eq 0 ]] && printf '%s' "$output" | grep -q 'scripts/fix-mount-owner.sh'; then
+if [[ "$rc" -eq 0 ]] && printf '%s' "$output" | grep 'scripts/fix-mount-owner.sh' >/dev/null; then
   pass
 else
   fail "doctor が検査していない、または --strict が非ゼロ (rc=$rc)"
@@ -55,7 +55,7 @@ missing="$(new_workdir)/m"
 cp -R "$out" "$missing"
 rm "$missing/scripts/fix-mount-owner.sh"
 output="$(bash "$PKG_DIR/doctor.sh" --target-dir "$missing" 2>&1)"
-if [[ $? -ne 0 ]] && printf '%s' "$output" | grep -q 'fix-mount-owner.sh missing'; then
+if [[ $? -ne 0 ]] && printf '%s' "$output" | grep 'fix-mount-owner.sh missing' >/dev/null; then
   pass
 else
   fail "欠落を検出できない"
@@ -106,7 +106,7 @@ fix_mount '$target'
 exit 0
 " 2>&1)"
   rc=$?
-  if [[ "$rc" -eq 0 ]] && printf '%s' "$output" | grep -q 'sudo not available'; then
+  if [[ "$rc" -eq 0 ]] && printf '%s' "$output" | grep 'sudo not available' >/dev/null; then
     pass
   else
     fail "sudo 不在の分岐を通っていない (rc=$rc): $output"
@@ -158,8 +158,8 @@ $fmo_funcs
 fix_mount '$work/never/created'
 exit 0
 " 2>&1)"
-if printf '%s' "$output" | grep -q 'does not exist, skipping' \
-   && ! printf '%s' "$output" | grep -q 'WARN'; then
+if printf '%s' "$output" | grep 'does not exist, skipping' >/dev/null \
+   && ! printf '%s' "$output" | grep 'WARN' >/dev/null; then
   pass
 else
   fail "不在パスの扱いが違う: $output"
@@ -174,7 +174,7 @@ $fmo_funcs
 fix_mount '$work/.config/gh'
 exit 0
 " 2>&1)"
-if printf '%s' "$output" | grep -q 'already owned by'; then
+if printf '%s' "$output" | grep 'already owned by' >/dev/null; then
   pass
 else
   fail "所有者一致時に skip していない: $output"

@@ -542,7 +542,7 @@ it "過半数に届かない指摘も出力に残る"
 d="$(new_workdir)/r"; b="$(new_workdir)/bin"
 mk_review_repo "$d"; mk_gemini_stub "$b" "LFL"
 out="$(run_review "$d" "$b" --runs 3)"
-if printf '%s' "$out" | grep -q '指摘 2' && printf '%s' "$out" | grep -q 'run 2/3: findings'; then
+if printf '%s' "$out" | grep '指摘 2' >/dev/null && printf '%s' "$out" | grep 'run 2/3: findings' >/dev/null; then
   pass
 else
   fail "少数意見が出力から消えている: $out"
@@ -565,7 +565,7 @@ for v in 0 -1 abc 1.5; do
   [[ "$rc" -eq 1 ]] || { echo "  runs=$v で停止しなかった (exit $rc)"; bad=1; }
   # 「--runs を知らないので unknown option で落ちた」を通過扱いにしない。
   # 理由まで見ないと、オプション未実装のまま検査が緑になる。
-  printf '%s' "$err" | grep -q 'runs は 1 以上の整数' \
+  printf '%s' "$err" | grep 'runs は 1 以上の整数' >/dev/null \
     || { echo "  runs=$v が runs の検査で落ちていない: $err"; bad=1; }
 done
 # 黙って既定へ落とすと、増やしたつもりのゲートが効いていない状態になる。
@@ -587,7 +587,7 @@ if [[ "$rc" -eq 0 && "$n" -eq 10 ]]; then
   mk_review_repo "$d2"; mk_gemini_stub "$b2" "LLLLLLLL"
   err="$(run_review "$d2" "$b2" --runs 08 2>&1 >/dev/null)"; rc2=$?
   n2="$(cat "$b2/.count" 2>/dev/null || echo 0)"
-  if [[ "$rc2" -eq 0 && "$n2" -eq 8 ]] && ! printf '%s' "$err" | grep -q 'value too great for base'; then
+  if [[ "$rc2" -eq 0 && "$n2" -eq 8 ]] && ! printf '%s' "$err" | grep 'value too great for base' >/dev/null; then
     pass
   else
     fail "runs=08 が壊れている (exit $rc2 / 呼び出し $n2 回): $err"
@@ -628,9 +628,9 @@ for opt in --runs --range --model --engine; do
   err="$( ( cd "$d" && PATH="$b:$PATH" GEMINI_API_KEY=dummy bash scripts/second-opinion-review.sh "$opt" ) 2>&1 >/dev/null )"
   rc=$?
   [[ "$rc" -eq 1 ]] || { echo "  $opt で exit 1 にならない (exit $rc)"; bad=1; }
-  printf '%s' "$err" | grep -q 'には値が必要です' \
+  printf '%s' "$err" | grep 'には値が必要です' >/dev/null \
     || { echo "  $opt が値不足として扱われていない: $err"; bad=1; }
-  printf '%s' "$err" | grep -q 'unbound variable' \
+  printf '%s' "$err" | grep 'unbound variable' >/dev/null \
     && { echo "  $opt で unbound variable が出ている: $err"; bad=1; }
 done
 if [[ "$bad" -eq 0 ]]; then pass; else fail "値なしオプションの扱いが不十分"; fi
@@ -666,8 +666,8 @@ err="$( ( cd "$d" && PATH="$b:$MIN_PATH" bash scripts/second-opinion-review.sh -
 rc=$?
 bad=0
 [[ "$rc" -eq 1 ]] || { echo "  exit 1 にならない (exit $rc)"; bad=1; }
-printf '%s' "$err" | grep -q 'agy' || { echo "  agy の案内が出ていない: $err"; bad=1; }
-printf '%s' "$err" | grep -q 'gemini CLI not found' && { echo "  gemini 側のメッセージに化けている: $err"; bad=1; }
+printf '%s' "$err" | grep 'agy' >/dev/null || { echo "  agy の案内が出ていない: $err"; bad=1; }
+printf '%s' "$err" | grep 'gemini CLI not found' >/dev/null && { echo "  gemini 側のメッセージに化けている: $err"; bad=1; }
 [[ -f "$b/.count" ]] && { echo "  agy 不在なのに gemini を呼んだ"; bad=1; }
 if [[ "$bad" -eq 0 ]]; then pass; else fail "agy 不在の扱いが誤っている"; fi
 
@@ -678,7 +678,7 @@ err="$( ( cd "$d" && PATH="$b:$MIN_PATH" GEMINI_API_KEY=dummy bash scripts/secon
 rc=$?
 bad=0
 [[ "$rc" -eq 1 ]] || { echo "  exit 1 にならない (exit $rc)"; bad=1; }
-printf '%s' "$err" | grep -q 'unknown engine' || { echo "  綴り間違いだと分かる形で落ちていない: $err"; bad=1; }
+printf '%s' "$err" | grep 'unknown engine' >/dev/null || { echo "  綴り間違いだと分かる形で落ちていない: $err"; bad=1; }
 [[ -f "$b/.count" ]] && { echo "  未知のエンジンなのに CLI を呼んだ"; bad=1; }
 if [[ "$bad" -eq 0 ]]; then pass; else fail "未知のエンジンが fail-closed になっていない"; fi
 
@@ -689,7 +689,7 @@ out="$( cd "$d" && PATH="$b:$MIN_PATH" bash scripts/second-opinion-review.sh --e
 bad=0
 [[ "$rc" -eq 0 ]] || { echo "  判定トークン付きなのに落ちた (exit $rc): $out"; bad=1; }
 [[ "$(cat "$b/.count" 2>/dev/null || echo 0)" == "1" ]] || { echo "  agy を 1 回呼んでいない"; bad=1; }
-printf '%s' "$out" | grep -q 'engine=antigravity' || { echo "  どのエンジンで実行したかが出ていない: $out"; bad=1; }
+printf '%s' "$out" | grep 'engine=antigravity' >/dev/null || { echo "  どのエンジンで実行したかが出ていない: $out"; bad=1; }
 if [[ "$bad" -eq 0 ]]; then pass; else fail "antigravity 経路が成立していない"; fi
 
 it "--engine antigravity は API キーを要求しない"
@@ -753,7 +753,7 @@ bad=0
 [[ "$rc" -eq 0 ]] || { echo "  exit $rc: $out"; bad=1; }
 [[ "$(cat "$b/.count" 2>/dev/null || echo 0)" == "1" ]] || { echo "  呼び出し回数が 1 でない"; bad=1; }
 case "$out" in *"chunk "*) echo "  分割が起きていないのに chunk 表記が出ている: $out"; bad=1 ;; esac
-printf '%s' "$out" | grep -q 'run 1/1: LGTM' || { echo "  従来の判定表記が無い: $out"; bad=1; }
+printf '%s' "$out" | grep 'run 1/1: LGTM' >/dev/null || { echo "  従来の判定表記が無い: $out"; bad=1; }
 if [[ "$bad" -eq 0 ]]; then pass; else fail "対照群の表示が分割導入前と変わっている"; fi
 
 it "境界: ちょうど budget に達するチャンクでも、実際に渡す引数は MAX_ARG_BYTES 以下に収まる"
@@ -917,7 +917,7 @@ mk_agy_history_stub "$b" "LGTM"
 err="$( cd "$d" && PATH="$b:/usr/bin:/bin" bash scripts/second-opinion-review.sh --engine antigravity --runs 1 2>&1 >/dev/null )"; rc=$?
 bad=0
 [[ "$rc" -ne 0 ]] || { echo "  exit 0 になっている（黙って通している）"; bad=1; }
-printf '%s' "$err" | grep -q 'huge.txt' || { echo "  該当ファイル名が stderr に出ていない: $err"; bad=1; }
+printf '%s' "$err" | grep 'huge.txt' >/dev/null || { echo "  該当ファイル名が stderr に出ていない: $err"; bad=1; }
 [[ -f "$b/.count" ]] && { echo "  分割に失敗したのに CLI を呼んでいる"; bad=1; }
 if [[ "$bad" -eq 0 ]]; then pass; else fail "1 ハンク超過の失敗処理が誤っている"; fi
 
@@ -940,7 +940,7 @@ mk_agy_history_stub "$b" "LGTM"
 err="$( cd "$d" && PATH="$g:$b:/usr/bin:/bin" bash scripts/second-opinion-review.sh --engine antigravity --runs 1 2>&1 >/dev/null )"; rc=$?
 bad=0
 [[ "$rc" -ne 0 ]] || { echo "  exit 0 になっている（黙って通している）"; bad=1; }
-printf '%s' "$err" | grep -q 'blob.bin' || { echo "  該当ファイル名が stderr に出ていない: $err"; bad=1; }
+printf '%s' "$err" | grep 'blob.bin' >/dev/null || { echo "  該当ファイル名が stderr に出ていない: $err"; bad=1; }
 [[ -f "$b/.count" ]] && { echo "  分割に失敗したのに CLI を呼んでいる"; bad=1; }
 if [[ "$bad" -eq 0 ]]; then pass; else fail "ハンクなし超過の失敗処理が誤っている"; fi
 

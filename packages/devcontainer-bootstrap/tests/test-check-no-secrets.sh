@@ -66,11 +66,11 @@ assert_fail() {
     fail "$what: 落ちるべきところで通過した: $CHECK_OUT"
     return
   fi
-  if ! printf '%s' "$CHECK_OUT" | grep -q 'SECRETS_FAIL'; then
+  if ! printf '%s' "$CHECK_OUT" | grep 'SECRETS_FAIL' >/dev/null; then
     fail "$what: SECRETS_FAIL が出ていない: $CHECK_OUT"
     return
   fi
-  if [[ -n "$needle" ]] && ! printf '%s' "$CHECK_OUT" | grep -qF "$needle"; then
+  if [[ -n "$needle" ]] && ! printf '%s' "$CHECK_OUT" | grep -F "$needle" >/dev/null; then
     fail "$what: 期待した報告 '$needle' が無い: $CHECK_OUT"
     return
   fi
@@ -82,7 +82,7 @@ assert_pass() {
   local what="$1"
   if [[ "$CHECK_RC" -ne 0 ]]; then
     fail "$what: 通るべきところで落ちた: $CHECK_OUT"
-  elif ! printf '%s' "$CHECK_OUT" | grep -q 'SECRETS_PASS'; then
+  elif ! printf '%s' "$CHECK_OUT" | grep 'SECRETS_PASS' >/dev/null; then
     fail "$what: SECRETS_PASS が出ていない: $CHECK_OUT"
   else
     pass
@@ -145,11 +145,11 @@ printf '{}\n' > "$repo/$NEWLINE_SECRET_NAME"
 run_check "$repo"
 if [[ "$CHECK_RC" -eq 0 ]]; then
   fail "落ちるべきところで通過した: $CHECK_OUT"
-elif ! printf '%s' "$CHECK_OUT" | grep -q 'SECRETS_FAIL'; then
+elif ! printf '%s' "$CHECK_OUT" | grep 'SECRETS_FAIL' >/dev/null; then
   fail "SECRETS_FAIL が出ていない: $CHECK_OUT"
-elif ! printf '%s' "$CHECK_OUT" | grep -q '追跡対象へ入ろうとしています'; then
+elif ! printf '%s' "$CHECK_OUT" | grep '追跡対象へ入ろうとしています' >/dev/null; then
   fail "追跡前の報告ラベルが無い: $CHECK_OUT"
-elif ! printf '%s' "$CHECK_OUT" | grep -qF 'credentials.json'; then
+elif ! printf '%s' "$CHECK_OUT" | grep -F 'credentials.json' >/dev/null; then
   fail "パス名が報告に出ていない: $CHECK_OUT"
 else
   pass
@@ -189,11 +189,11 @@ printf '{}\n' > "$repo/$NEWLINE_SECRET_NAME"
 run_check "$repo"
 if [[ "$CHECK_RC" -eq 0 ]]; then
   fail "落ちるべきところで通過した: $CHECK_OUT"
-elif ! printf '%s' "$CHECK_OUT" | grep -q 'SECRETS_FAIL'; then
+elif ! printf '%s' "$CHECK_OUT" | grep 'SECRETS_FAIL' >/dev/null; then
   fail "SECRETS_FAIL が出ていない: $CHECK_OUT"
-elif ! printf '%s' "$CHECK_OUT" | grep -q '追跡対象に含まれています'; then
+elif ! printf '%s' "$CHECK_OUT" | grep '追跡対象に含まれています' >/dev/null; then
   fail "追跡済みの報告ラベルが無い: $CHECK_OUT"
-elif ! printf '%s' "$CHECK_OUT" | grep -qF 'credentials.json'; then
+elif ! printf '%s' "$CHECK_OUT" | grep -F 'credentials.json' >/dev/null; then
   fail "パス名が報告に出ていない: $CHECK_OUT"
 else
   pass
@@ -225,8 +225,8 @@ it "非 ASCII を含むパスの報告がエスケープされていない生パ
 # いる。上の 2 件検知と対にして、`git ls-files -z` が非 -z（core.quotePath 既定の
 # true）へ戻ったことを検知できるようにする（戻ると 1 件が漏れ、もう 1 件は
 # .env.example の除外が崩れて誤検知へ化ける）。
-if printf '%s' "$CHECK_OUT" | grep -qF "$NON_ASCII_DIR/.env"; then
-  if printf '%s' "$CHECK_OUT" | grep -q '\\346'; then
+if printf '%s' "$CHECK_OUT" | grep -F "$NON_ASCII_DIR/.env" >/dev/null; then
+  if printf '%s' "$CHECK_OUT" | grep '\\346' >/dev/null; then
     fail "報告に 8 進エスケープが混じっている: $CHECK_OUT"
   else
     pass
@@ -345,7 +345,7 @@ assert_fail ".env.example の機密値" "MY_API_TOKEN"
 it ".env.example の検知報告に値そのものを出さない"
 # 検知層が機密をログへ書き出しては本末転倒（共通規範「ログ・PR 説明に機密を
 # 含めない」）。出すのはキー名だけであること。
-if printf '%s' "$CHECK_OUT" | grep -qF 'not-a-real-value-000'; then
+if printf '%s' "$CHECK_OUT" | grep -F 'not-a-real-value-000' >/dev/null; then
   fail "値が出力へ漏れている: $CHECK_OUT"
 else
   pass
@@ -397,7 +397,7 @@ grep -v '^ONLY_IN_EXAMPLE=' "$repo/.env" > "$repo/.env.tmp" && mv "$repo/.env.tm
 run_check "$repo"
 if [[ "$CHECK_RC" -ne 0 ]]; then
   fail "NOTICE に留めるべきところで落ちた: $CHECK_OUT"
-elif printf '%s' "$CHECK_OUT" | grep -q 'NOTICE.*ONLY_IN_EXAMPLE'; then
+elif printf '%s' "$CHECK_OUT" | grep 'NOTICE.*ONLY_IN_EXAMPLE' >/dev/null; then
   pass
 else
   fail "NOTICE が出ていない: $CHECK_OUT"
@@ -408,7 +408,7 @@ repo="$(new_repo)"
 run_check "$repo"
 if [[ "$CHECK_RC" -ne 0 ]]; then
   fail "通るべきところで落ちた: $CHECK_OUT"
-elif printf '%s' "$CHECK_OUT" | grep -q 'キー整合はスキップ'; then
+elif printf '%s' "$CHECK_OUT" | grep 'キー整合はスキップ' >/dev/null; then
   pass
 else
   fail "スキップの明示が無い: $CHECK_OUT"
@@ -458,11 +458,11 @@ printf 'garbage' > "$repo/.git/index"
 run_check "$repo"
 if [[ "$CHECK_RC" -eq 0 ]]; then
   fail "落ちるべきところで通過した: $CHECK_OUT"
-elif ! printf '%s' "$CHECK_OUT" | grep -q 'SECRETS_FAIL'; then
+elif ! printf '%s' "$CHECK_OUT" | grep 'SECRETS_FAIL' >/dev/null; then
   fail "SECRETS_FAIL が出ていない: $CHECK_OUT"
-elif ! printf '%s' "$CHECK_OUT" | grep -qF 'git status --porcelain -z に失敗しました'; then
+elif ! printf '%s' "$CHECK_OUT" | grep -F 'git status --porcelain -z に失敗しました' >/dev/null; then
   fail "既存の fatal 文言が無い: $CHECK_OUT"
-elif ! printf '%s' "$CHECK_OUT" | grep -qi 'index'; then
+elif ! printf '%s' "$CHECK_OUT" | grep -i 'index' >/dev/null; then
   fail "git 側の出力（index に関する内容）が出ていない: $CHECK_OUT"
 else
   pass
@@ -487,11 +487,11 @@ chmod +x "$fake_git_dir/git"
 run_check "$repo" "PATH=$fake_git_dir:$PATH"
 if [[ "$CHECK_RC" -eq 0 ]]; then
   fail "落ちるべきところで通過した: $CHECK_OUT"
-elif ! printf '%s' "$CHECK_OUT" | grep -q 'SECRETS_FAIL'; then
+elif ! printf '%s' "$CHECK_OUT" | grep 'SECRETS_FAIL' >/dev/null; then
   fail "SECRETS_FAIL が出ていない: $CHECK_OUT"
-elif ! printf '%s' "$CHECK_OUT" | grep -qF 'git ls-files に失敗しました'; then
+elif ! printf '%s' "$CHECK_OUT" | grep -F 'git ls-files に失敗しました' >/dev/null; then
   fail "既存の fatal 文言が無い: $CHECK_OUT"
-elif ! printf '%s' "$CHECK_OUT" | grep -qF 'stub: ls-files が失敗しました'; then
+elif ! printf '%s' "$CHECK_OUT" | grep -F 'stub: ls-files が失敗しました' >/dev/null; then
   fail "git 側の出力（スタブのメッセージ）が出ていない: $CHECK_OUT"
 else
   pass
@@ -502,7 +502,7 @@ repo="$(new_repo)"
 run_check "$repo"
 if [[ "$CHECK_RC" -ne 0 ]]; then
   fail "通るべきところで落ちた: $CHECK_OUT"
-elif printf '%s' "$CHECK_OUT" | grep -q '\[secrets\] git の出力:'; then
+elif printf '%s' "$CHECK_OUT" | grep '\[secrets\] git の出力:' >/dev/null; then
   fail "正常時にもかかわらず git の出力見出しが出ている（ノイズ化の回帰）: $CHECK_OUT"
 else
   pass
@@ -527,9 +527,9 @@ done
 run_check "$repo" "PATH=$stub"
 if [[ "$CHECK_RC" -eq 0 ]]; then
   fail "落ちるべきところで通過した: $CHECK_OUT"
-elif ! printf '%s' "$CHECK_OUT" | grep -q 'SECRETS_FAIL'; then
+elif ! printf '%s' "$CHECK_OUT" | grep 'SECRETS_FAIL' >/dev/null; then
   fail "SECRETS_FAIL が出ていない: $CHECK_OUT"
-elif ! printf '%s' "$CHECK_OUT" | grep -qF 'のキーを抽出できませんでした'; then
+elif ! printf '%s' "$CHECK_OUT" | grep -F 'のキーを抽出できませんでした' >/dev/null; then
   fail "抽出失敗の fatal 文言が出ていない: $CHECK_OUT"
 else
   pass
@@ -544,7 +544,7 @@ printf '#!/usr/bin/env bash\n' > "$repo/scripts/load-project-env.sh"
 run_check "$repo"
 if [[ "$CHECK_RC" -eq 0 ]]; then
   fail "落ちるべきところで通過した: $CHECK_OUT"
-elif ! printf '%s' "$CHECK_OUT" | grep -q 'SECRETS_FAIL'; then
+elif ! printf '%s' "$CHECK_OUT" | grep 'SECRETS_FAIL' >/dev/null; then
   fail "SECRETS_FAIL が出ていない: $CHECK_OUT"
 else
   assert_contains "$CHECK_OUT" "抽出が成立していない疑い" "空抽出の検出メッセージ"
@@ -560,7 +560,7 @@ printf 'MY_TOKEN=\n' > "$repo/.env.example"
 run_check "$repo"
 if [[ "$CHECK_RC" -eq 0 ]]; then
   fail "落ちるべきところで通過した: $CHECK_OUT"
-elif ! printf '%s' "$CHECK_OUT" | grep -q 'SECRETS_FAIL'; then
+elif ! printf '%s' "$CHECK_OUT" | grep 'SECRETS_FAIL' >/dev/null; then
   fail "SECRETS_FAIL が出ていない: $CHECK_OUT"
 else
   assert_contains "$CHECK_OUT" "抽出が成立していない疑い" "空抽出の検出メッセージ"

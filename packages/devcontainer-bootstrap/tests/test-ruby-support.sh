@@ -121,7 +121,7 @@ bashbin="$(command -v bash)"
 if out_txt="$(cd "$out" && PATH="$stub" "$bashbin" scripts/acceptance.sh 2>&1)"; then
   fail "ツール不在なのに合格した: $out_txt"
 else
-  if printf '%s' "$out_txt" | grep -q 'bundle not found' && printf '%s' "$out_txt" | grep -qi 'install'; then
+  if printf '%s' "$out_txt" | grep 'bundle not found' >/dev/null && printf '%s' "$out_txt" | grep -i 'install' >/dev/null; then
     pass
   else
     fail "導入手順付きのツール不在エラーが出ていない: $out_txt"
@@ -186,13 +186,13 @@ it "doctor は ruby feature を検出し ruby で検査する"
 out="$(new_workdir)/p"
 run_bootstrap "$out" --languages ruby >/dev/null 2>&1
 output="$(bash "$PKG_DIR/doctor.sh" --target-dir "$out" 2>&1)"
-if printf '%s' "$output" | grep -q 'ruby command .*(ruby)'; then pass; else fail "ruby の検査が行われていない: $(printf '%s' "$output" | grep -i ruby)"; fi
+if printf '%s' "$output" | grep 'ruby command .*(ruby)' >/dev/null; then pass; else fail "ruby の検査が行われていない: $(printf '%s' "$output" | grep -i ruby)"; fi
 
 it "doctor は ruby 非選択時に ruby を報告しない"
 out="$(new_workdir)/p"
 run_bootstrap "$out" --languages node >/dev/null 2>&1
 output="$(bash "$PKG_DIR/doctor.sh" --target-dir "$out" 2>&1)"
-if printf '%s' "$output" | grep -q 'ruby command'; then fail "非選択なのに ruby を報告している"; else pass; fi
+if printf '%s' "$output" | grep 'ruby command' >/dev/null; then fail "非選択なのに ruby を報告している"; else pass; fi
 
 # ── 入力検証 ──────────────────────────────────────────────────────────────────
 
@@ -204,7 +204,7 @@ it "未対応言語のエラーメッセージが ruby を列挙する"
 out="$(new_workdir)/p"
 if err="$(run_bootstrap "$out" --languages unsupported 2>&1)"; then
   fail "未対応言語が受理された: $err"
-elif printf '%s' "$err" | grep -q 'ruby'; then
+elif printf '%s' "$err" | grep 'ruby' >/dev/null; then
   pass
 else
   fail "対応言語の列挙に ruby が無い: $err"

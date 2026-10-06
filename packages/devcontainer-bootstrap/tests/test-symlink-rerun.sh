@@ -98,7 +98,7 @@ for kind in broken valid dir; do
   run "$out"
   msg="$(outside_intact "$outside" "$kind")" || true
   st="$(all_state "$out" L $ALL_RELS)" || true
-  if [[ "$RUN_RC" == "0" && -z "$msg" && -z "$st" ]] && printf '%s' "$RUN_OUT" | grep -q 'skip (exists): .*devcontainer.json'; then
+  if [[ "$RUN_RC" == "0" && -z "$msg" && -z "$st" ]] && printf '%s' "$RUN_OUT" | grep 'skip (exists): .*devcontainer.json' >/dev/null; then
     pass
   else fail "rc=$RUN_RC msg=$msg st=$st"; fi
 
@@ -150,7 +150,7 @@ for opt in "" "--force" "--playbook-conflict-policy overwrite"; do
     ln -s "$outside" "$out/$parent"
     # shellcheck disable=SC2086
     run "$out" $opt
-    if [[ "$RUN_RC" == "1" && -z "$(ls -A "$outside")" ]] && printf '%s' "$RUN_OUT" | grep -q '出力先の外'; then
+    if [[ "$RUN_RC" == "1" && -z "$(ls -A "$outside")" ]] && printf '%s' "$RUN_OUT" | grep '出力先の外' >/dev/null; then
       pass
     else fail "rc=$RUN_RC 外: $(ls -A "$outside")"; fi
   done

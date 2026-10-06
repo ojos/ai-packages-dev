@@ -199,7 +199,7 @@ dc="$out/.devcontainer/devcontainer.json"
 
 it "doctor: compose 配線が検査に通る"
 output="$(bash "$DOCTOR" --target-dir "$out" 2>&1)"
-if [[ $? -eq 0 ]] && printf '%s' "$output" | grep -q 'compose.yaml exists'; then
+if [[ $? -eq 0 ]] && printf '%s' "$output" | grep 'compose.yaml exists' >/dev/null; then
   pass
 else
   fail "doctor が compose 配線を検証できない"
@@ -209,7 +209,7 @@ it "doctor: 絶対パスの dockerComposeFile も検査できる"
 abs_compose="$out/.devcontainer/compose.yaml"
 jq --arg p "$abs_compose" '.dockerComposeFile = $p' "$dc" > "$dc.tmp" && mv "$dc.tmp" "$dc"
 output="$(bash "$DOCTOR" --target-dir "$out" 2>&1)"
-if [[ $? -eq 0 ]] && printf '%s' "$output" | grep -q "dockerComposeFile exists: $abs_compose"; then
+if [[ $? -eq 0 ]] && printf '%s' "$output" | grep "dockerComposeFile exists: $abs_compose" >/dev/null; then
   pass
 else
   fail "絶対パス参照を検査できない"
@@ -219,7 +219,7 @@ it "doctor: 参照先 compose が無いと失敗する"
 jq '.dockerComposeFile = "compose.yaml"' "$dc" > "$dc.tmp" && mv "$dc.tmp" "$dc"
 rm "$out/.devcontainer/compose.yaml"
 output="$(bash "$DOCTOR" --target-dir "$out" 2>&1)"
-if [[ $? -ne 0 ]] && printf '%s' "$output" | grep -q 'compose.yaml missing'; then
+if [[ $? -ne 0 ]] && printf '%s' "$output" | grep 'compose.yaml missing' >/dev/null; then
   pass
 else
   fail "compose 欠落を検出できない"
@@ -230,7 +230,7 @@ jq 'del(.dockerComposeFile, .service, .workspaceFolder, .shutdownAction)
     + {image: "mcr.microsoft.com/devcontainers/base:ubuntu"}' \
   "$dc" > "$dc.tmp" && mv "$dc.tmp" "$dc"
 output="$(bash "$DOCTOR" --target-dir "$out" 2>&1)"
-if [[ $? -eq 0 ]] && ! printf '%s' "$output" | grep -q 'compose'; then
+if [[ $? -eq 0 ]] && ! printf '%s' "$output" | grep 'compose' >/dev/null; then
   pass
 else
   fail "旧構成で compose 検査が走った、または doctor が失敗した"
@@ -242,7 +242,7 @@ for bad_name in 'a:b' 'a|b' 'a"b'; do
   it "生成物を壊すプロジェクト名は拒否される: $bad_name"
   out="$(new_workdir)/p"
   output="$(run_bootstrap "$out" --project-name "$bad_name" 2>&1)"
-  if [[ $? -ne 0 ]] && printf '%s' "$output" | grep -q 'must not contain'; then
+  if [[ $? -ne 0 ]] && printf '%s' "$output" | grep 'must not contain' >/dev/null; then
     pass
   else
     fail "'$bad_name' が拒否されない"

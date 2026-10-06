@@ -68,9 +68,9 @@ assert_file_absent "$outn/.claude"
 it "dry-run は --with-claude 時にフックと配線を計画に含める"
 outd="$(new_workdir)/p"
 plan="$(run_bootstrap "$outd" --with-claude --without-playbook --dry-run 2>&1)"
-if printf '%s' "$plan" | grep -q "$HOOK_REL" \
-  && printf '%s' "$plan" | grep -q "$SETTINGS_REL" \
-  && printf '%s' "$plan" | grep -q "$CLAUDE_IGNORE_REL"; then
+if printf '%s' "$plan" | grep "$HOOK_REL" >/dev/null \
+  && printf '%s' "$plan" | grep "$SETTINGS_REL" >/dev/null \
+  && printf '%s' "$plan" | grep "$CLAUDE_IGNORE_REL" >/dev/null; then
   pass
 else
   fail "dry-run の計画に 3 ファイルが揃っていない: $(printf '%s' "$plan" | grep -c 'plan:') plan 行"

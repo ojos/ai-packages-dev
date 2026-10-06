@@ -137,9 +137,9 @@ assert_contains "$(field "$out_txt" REASON)" "already reachable from" "範囲変
 it "分岐点起点にすると、取り込んだ他ブランチの成果が範囲から外れる"
 # これが目的。origin/feat..HEAD のままだと main 側の main-only.txt が差分に入る。
 names="$(cd "$repo" && git diff --name-only "$(field "$out_txt" RANGE)" | tr '\n' ',')"
-if printf '%s' "$names" | grep -q 'main-only.txt'; then
+if printf '%s' "$names" | grep 'main-only.txt' >/dev/null; then
   fail "他ブランチの成果が範囲へ残っている: $names"
-elif printf '%s' "$names" | grep -q 'f1.txt'; then
+elif printf '%s' "$names" | grep 'f1.txt' >/dev/null; then
   pass
 else
   fail "このブランチ自身の変更が範囲から落ちている: $names"
@@ -174,9 +174,9 @@ assert_contains "$(field "$out_txt" REASON)" "has advanced beyond the merge-base
 
 it "分岐点起点なら、既定ブランチ側だけの変更が差分に入らず、自分の変更は残る"
 names="$(cd "$repo" && git diff --name-only "$(field "$out_txt" RANGE)" | tr '\n' ',')"
-if printf '%s' "$names" | grep -q 'main-new.txt'; then
+if printf '%s' "$names" | grep 'main-new.txt' >/dev/null; then
   fail "既定ブランチ側だけの変更が範囲へ混ざっている: $names"
-elif printf '%s' "$names" | grep -q 'own.txt'; then
+elif printf '%s' "$names" | grep 'own.txt' >/dev/null; then
   pass
 else
   fail "このブランチ自身の変更が範囲から落ちている: $names"
@@ -282,7 +282,7 @@ it "source しただけではゲート本体が走らない"
 # ガードが無いと、テストが読み込んだだけで verify と第二意見が走り出す。
 # 上の各ケースの出力にゲートの痕跡が混じっていないことで確認する。
 src_txt="$(run_resolve "$repo")"
-if printf '%s' "$src_txt" | grep -q '\[loop-gate\]\|GATE_PASS\|GATE_FAIL'; then
+if printf '%s' "$src_txt" | grep '\[loop-gate\]\|GATE_PASS\|GATE_FAIL' >/dev/null; then
   fail "source だけでゲート本体が走っている: $src_txt"
 else
   pass
@@ -325,8 +325,8 @@ assert_contains "$fn_txt" "DEFINED" "関数定義"
 it "実行するとゲート本体が走り、合格なら GATE_PASS を出して 0 で終わる"
 acc_pass="$(new_workdir)/acc-pass.sh"; printf '#!/usr/bin/env bash\nexit 0\n' > "$acc_pass"
 if out_txt="$(cd "$GEN" && ALLOWED_AUTHOR_EMAILS="t@example.com" VERIFY_ACCEPTANCE="$acc_pass" LOOP_GATE_REVIEW_CMD='' bash scripts/loop-gate.sh 2>&1)"; then
-  if printf '%s' "$out_txt" | grep -q '\[loop-gate\] step 1' \
-     && printf '%s' "$out_txt" | grep -q 'GATE_PASS'; then
+  if printf '%s' "$out_txt" | grep '\[loop-gate\] step 1' >/dev/null \
+     && printf '%s' "$out_txt" | grep 'GATE_PASS' >/dev/null; then
     pass
   else
     fail "実行してもゲート本体が走っていない（偽の緑）: $out_txt"
@@ -347,9 +347,9 @@ else
   # check-no-secrets.sh も実行するため、それだけで GATE_FAIL になっても同じ形の
   # 出力になり得る。acceptance（$acc_fail）が実際に起動されたことまで固定する
   # （verify.sh が acceptance の起動直前に出す "[verify] running acceptance:" を見る）。
-  if printf '%s' "$out_txt" | grep -q 'commit identity not passed'; then
+  if printf '%s' "$out_txt" | grep 'commit identity not passed' >/dev/null; then
     fail "acceptance 不合格を検証する前に identity で落ちている: $out_txt"
-  elif ! printf '%s' "$out_txt" | grep -q '\[verify\] running acceptance:'; then
+  elif ! printf '%s' "$out_txt" | grep '\[verify\] running acceptance:' >/dev/null; then
     fail "acceptance が起動された痕跡が無い（identity 以外の別段で落ちている疑い）: $out_txt"
   else
     assert_contains "$out_txt" "GATE_FAIL" "不合格時の出力"
@@ -380,11 +380,11 @@ in_repo "$e2e" "git checkout -q main && printf 'other\n' > OTHER.txt && git add 
 in_repo "$e2e" "git checkout -q feat && git $GIT_AUTHOR merge -q --no-edit origin/main"
 if out_txt="$(cd "$e2e" && ALLOWED_AUTHOR_EMAILS="t@example.com" VERIFY_ACCEPTANCE="$acc" bash scripts/loop-gate.sh 2>&1)"; then
   names="$(printf '%s' "$out_txt" | sed -n 's/^REVIEW_DIFF_NAMES://p')"
-  if ! printf '%s' "$out_txt" | grep -q '\[loop-gate\].*already reachable from'; then
+  if ! printf '%s' "$out_txt" | grep '\[loop-gate\].*already reachable from' >/dev/null; then
     fail "範囲を変えた理由が出力されない: $out_txt"
-  elif printf '%s' "$names" | grep -q 'OTHER.txt'; then
+  elif printf '%s' "$names" | grep 'OTHER.txt' >/dev/null; then
     fail "他ブランチの成果が第二意見へ渡っている: $names"
-  elif printf '%s' "$names" | grep -q 'FEATURE.txt' && printf '%s' "$out_txt" | grep -q 'GATE_PASS'; then
+  elif printf '%s' "$names" | grep 'FEATURE.txt' >/dev/null && printf '%s' "$out_txt" | grep 'GATE_PASS' >/dev/null; then
     pass
   else
     fail "このブランチの変更が第二意見へ渡っていない: $out_txt"

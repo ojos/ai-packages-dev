@@ -33,8 +33,8 @@ out="$(base_out)"
 rm -f "$out$ORIGIN_REL"
 output="$(bash "$DOCTOR" --target-dir "$out" 2>&1)"
 code=$?
-if [[ $code -eq 0 ]] && printf '%s' "$output" | grep -q 'origin record missing' \
-   && printf '%s' "$output" | grep -q 'WARN=[1-9]'; then
+if [[ $code -eq 0 ]] && printf '%s' "$output" | grep 'origin record missing' >/dev/null \
+   && printf '%s' "$output" | grep 'WARN=[1-9]' >/dev/null; then
   pass
 else
   fail "記録欠落が報告されない、または WARN が 0 件:
@@ -42,7 +42,7 @@ $output"
 fi
 
 it "記録が無いことは「変化なし」と誤認されない（unchanged と言わない）"
-if printf '%s' "$output" | grep -q 'unchanged since generation'; then
+if printf '%s' "$output" | grep 'unchanged since generation' >/dev/null; then
   fail "記録が無いのに unchanged と報告した"
 else
   pass
@@ -55,7 +55,7 @@ out="$(base_out)"
 printf 'this is not a valid origin record\n' > "$out$ORIGIN_REL"
 output="$(bash "$DOCTOR" --target-dir "$out" 2>&1)"
 code=$?
-if [[ $code -ne 0 ]] && printf '%s' "$output" | grep -q 'origin record malformed'; then
+if [[ $code -ne 0 ]] && printf '%s' "$output" | grep 'origin record malformed' >/dev/null; then
   pass
 else
   fail "壊れた記録が合格してしまった（exit=$code）:
@@ -67,7 +67,7 @@ out="$(base_out)"
 : > "$out$ORIGIN_REL"
 output="$(bash "$DOCTOR" --target-dir "$out" 2>&1)"
 code=$?
-if [[ $code -ne 0 ]] && printf '%s' "$output" | grep -q 'origin record malformed'; then
+if [[ $code -ne 0 ]] && printf '%s' "$output" | grep 'origin record malformed' >/dev/null; then
   pass
 else
   fail "空の記録が合格してしまった（exit=$code）:
@@ -81,7 +81,7 @@ out="$(base_out)"
 printf 'X' >> "$out/scripts/on-attach.sh"
 output="$(bash "$DOCTOR" --target-dir "$out" 2>&1)"
 code=$?
-if [[ $code -ne 0 ]] && printf '%s' "$output" | grep -q 'changed since generation.*scripts/on-attach\.sh'; then
+if [[ $code -ne 0 ]] && printf '%s' "$output" | grep 'changed since generation.*scripts/on-attach\.sh' >/dev/null; then
   pass
 else
   fail "1 文字の変化を検出できない:
@@ -93,7 +93,7 @@ out="$(base_out)"
 output="$(bash "$DOCTOR" --target-dir "$out" 2>&1)"
 code=$?
 # "unchanged since generation" が部分一致してしまわないよう [FAIL] の接頭辞まで含めて照合する。
-if [[ $code -eq 0 ]] && ! printf '%s' "$output" | grep -q '\[FAIL\] changed since generation'; then
+if [[ $code -eq 0 ]] && ! printf '%s' "$output" | grep '\[FAIL\] changed since generation' >/dev/null; then
   pass
 else
   fail "変えていないのに変化したと報告した、または exit が非 0（exit=$code）:
@@ -101,7 +101,7 @@ $output"
 fi
 
 it "変化していない構成では unchanged と件数付きで報告する"
-if printf '%s' "$output" | grep -qE 'unchanged since generation \([0-9]+ file\(s\)\)'; then
+if printf '%s' "$output" | grep -E 'unchanged since generation \([0-9]+ file\(s\)\)' >/dev/null; then
   pass
 else
   fail "unchanged の報告が無い:
@@ -113,7 +113,7 @@ out="$(base_out)"
 rm -f "$out/scripts/on-attach.sh"
 output="$(bash "$DOCTOR" --target-dir "$out" 2>&1)"
 code=$?
-if [[ $code -ne 0 ]] && printf '%s' "$output" | grep -q 'recorded in origin but missing.*scripts/on-attach\.sh'; then
+if [[ $code -ne 0 ]] && printf '%s' "$output" | grep 'recorded in origin but missing.*scripts/on-attach\.sh' >/dev/null; then
   pass
 else
   fail "記録された生成物の消失を検出できない:
@@ -132,7 +132,7 @@ tmp_origin="$(mktemp "$TEST_TMP_ROOT/origin.XXXXXX")"
 } > "$tmp_origin"
 mv "$tmp_origin" "$out$ORIGIN_REL"
 output="$(bash "$DOCTOR" --target-dir "$out" 2>&1)"
-if printf '%s' "$output" | grep -q '\[WARN\] origin version is older than doctor.sh: recorded=v0.0.1'; then
+if printf '%s' "$output" | grep '\[WARN\] origin version is older than doctor.sh: recorded=v0.0.1' >/dev/null; then
   pass
 else
   fail "版の古さを検出できない（doctor.sh 自身の版: $self_version):
@@ -150,7 +150,7 @@ mv "$tmp_origin" "$out$ORIGIN_REL"
 # doctor.sh 自身の版が v0.9.1 以下だとこの検査は成立しない（現状 v0.11.0 を想定）。
 self_version="$(dcb_version_of "$DOCTOR")"
 output="$(bash "$DOCTOR" --target-dir "$out" 2>&1)"
-if printf '%s' "$output" | grep -q '\[WARN\] origin version is older than doctor.sh: recorded=v0.9.1'; then
+if printf '%s' "$output" | grep '\[WARN\] origin version is older than doctor.sh: recorded=v0.9.1' >/dev/null; then
   pass
 else
   fail "文字列比較で誤判定している可能性がある（doctor.sh 自身の版: $self_version）:
@@ -170,7 +170,7 @@ tmp_origin="$(mktemp "$TEST_TMP_ROOT/origin.XXXXXX")"
 mv "$tmp_origin" "$out$ORIGIN_REL"
 output="$(bash "$DOCTOR" --target-dir "$out" 2>&1)"
 code=$?
-if [[ $code -ne 0 ]] && printf '%s' "$output" | grep -q '\[FAIL\] origin record malformed.*v0\.11\.0garbage'; then
+if [[ $code -ne 0 ]] && printf '%s' "$output" | grep '\[FAIL\] origin record malformed.*v0\.11\.0garbage' >/dev/null; then
   pass
 else
   fail "壊れた版文字列を合格にしてしまった（exit=$code）:
@@ -180,7 +180,7 @@ fi
 it "版が一致すれば「上流が更新されている」と報告しない（対照群）"
 out="$(base_out)"
 output="$(bash "$DOCTOR" --target-dir "$out" 2>&1)"
-if printf '%s' "$output" | grep -q 'origin version is older than doctor.sh'; then
+if printf '%s' "$output" | grep 'origin version is older than doctor.sh' >/dev/null; then
   fail "版が一致するのに古いと報告した:
 $output"
 else
@@ -188,7 +188,7 @@ else
 fi
 
 it "版が一致すれば OK で明示的に報告する（黙って何も言わない、ではない）"
-if printf '%s' "$output" | grep -q '\[OK\] origin version matches or is newer than doctor.sh'; then
+if printf '%s' "$output" | grep '\[OK\] origin version matches or is newer than doctor.sh' >/dev/null; then
   pass
 else
   fail "版一致の OK 報告が無い:
@@ -200,7 +200,7 @@ fi
 it "入力の行がある新しい書式の記録を、そのまま合格として読める"
 out="$(base_out)"
 output="$(bash "$DOCTOR" --target-dir "$out" 2>&1)"; code=$?
-if [[ $code -eq 0 ]] && grep -q '^inputs-format=1' "$out$ORIGIN_REL" && ! printf '%s' "$output" | grep -q 'origin record malformed'; then pass; else fail "終了コード=$code
+if [[ $code -eq 0 ]] && grep -q '^inputs-format=1' "$out$ORIGIN_REL" && ! printf '%s' "$output" | grep 'origin record malformed' >/dev/null; then pass; else fail "終了コード=$code
 $output"; fi
 
 # 入力の行を 1 行書き換える補助。$1=生成先 $2=置換対象の行頭 $3=新しい行（空なら削除）
@@ -214,35 +214,35 @@ it "input:project-name が欠けていれば malformed（FAIL）"
 out="$(base_out)"
 mutate_origin "$out" "input:project-name=" ""
 output="$(bash "$DOCTOR" --target-dir "$out" 2>&1)"; code=$?
-if [[ $code -ne 0 ]] && printf '%s' "$output" | grep -q '\[FAIL\] origin record malformed.*input:project-name'; then pass; else fail "終了コード=$code
+if [[ $code -ne 0 ]] && printf '%s' "$output" | grep '\[FAIL\] origin record malformed.*input:project-name' >/dev/null; then pass; else fail "終了コード=$code
 $output"; fi
 
 it "input:base-image-mode が不正値なら malformed（FAIL）"
 out="$(base_out)"
 mutate_origin "$out" "input:base-image-mode=" "input:base-image-mode=maybe"
 output="$(bash "$DOCTOR" --target-dir "$out" 2>&1)"; code=$?
-if [[ $code -ne 0 ]] && printf '%s' "$output" | grep -q '\[FAIL\] origin record malformed.*base-image-mode'; then pass; else fail "終了コード=$code
+if [[ $code -ne 0 ]] && printf '%s' "$output" | grep '\[FAIL\] origin record malformed.*base-image-mode' >/dev/null; then pass; else fail "終了コード=$code
 $output"; fi
 
 it "値の中の不正な % の並びは malformed（FAIL）"
 out="$(base_out)"
 mutate_origin "$out" "input:gitignore-targets=" "input:gitignore-targets=a%zz"
 output="$(bash "$DOCTOR" --target-dir "$out" 2>&1)"; code=$?
-if [[ $code -ne 0 ]] && printf '%s' "$output" | grep -q '\[FAIL\] origin record malformed.*%'; then pass; else fail "終了コード=$code
+if [[ $code -ne 0 ]] && printf '%s' "$output" | grep '\[FAIL\] origin record malformed.*%' >/dev/null; then pass; else fail "終了コード=$code
 $output"; fi
 
 it "認識できない行（読み飛ばさない）は malformed（FAIL）"
 out="$(base_out)"
 printf 'garbage line without key\n' >> "$out$ORIGIN_REL"
 output="$(bash "$DOCTOR" --target-dir "$out" 2>&1)"; code=$?
-if [[ $code -ne 0 ]] && printf '%s' "$output" | grep -q '\[FAIL\] origin record malformed.*認識できない行'; then pass; else fail "終了コード=$code
+if [[ $code -ne 0 ]] && printf '%s' "$output" | grep '\[FAIL\] origin record malformed.*認識できない行' >/dev/null; then pass; else fail "終了コード=$code
 $output"; fi
 
 it "hash: 行の値が sha256 でなければ malformed（FAIL）"
 out="$(base_out)"
 printf 'hash:scripts/zzz.sh=notahash\n' >> "$out$ORIGIN_REL"
 output="$(bash "$DOCTOR" --target-dir "$out" 2>&1)"; code=$?
-if [[ $code -ne 0 ]] && printf '%s' "$output" | grep -q '\[FAIL\] origin record malformed.*hash'; then pass; else fail "終了コード=$code
+if [[ $code -ne 0 ]] && printf '%s' "$output" | grep '\[FAIL\] origin record malformed.*hash' >/dev/null; then pass; else fail "終了コード=$code
 $output"; fi
 
 it "inputs-format が 1 でなければ入力の検査を省いて WARN にする（未知の書式を FAIL にしない）"
@@ -250,14 +250,14 @@ out="$(base_out)"
 mutate_origin "$out" "inputs-format=" "inputs-format=2"
 mutate_origin "$out" "input:project-name=" ""
 output="$(bash "$DOCTOR" --target-dir "$out" 2>&1)"; code=$?
-if [[ $code -eq 0 ]] && printf '%s' "$output" | grep -q '\[WARN\] origin inputs-format is not 1'; then pass; else fail "終了コード=$code
+if [[ $code -eq 0 ]] && printf '%s' "$output" | grep '\[WARN\] origin inputs-format is not 1' >/dev/null; then pass; else fail "終了コード=$code
 $output"; fi
 
 it "未知の input: キーは malformed（FAIL）"
 out="$(base_out)"
 printf 'input:bogus=1\n' >> "$out$ORIGIN_REL"
 output="$(bash "$DOCTOR" --target-dir "$out" 2>&1)"; code=$?
-if [[ $code -ne 0 ]] && printf '%s' "$output" | grep -q '\[FAIL\] origin record malformed.*input:bogus'; then pass; else fail "終了コード=$code
+if [[ $code -ne 0 ]] && printf '%s' "$output" | grep '\[FAIL\] origin record malformed.*input:bogus' >/dev/null; then pass; else fail "終了コード=$code
 $output"; fi
 
 it "base-image-mode=auto でも input:base-image が欠けていれば malformed（FAIL）"
@@ -265,7 +265,7 @@ out="$(base_out)"
 mutate_origin "$out" "input:base-image-mode=" "input:base-image-mode=auto"
 mutate_origin "$out" "input:base-image=" ""
 output="$(bash "$DOCTOR" --target-dir "$out" 2>&1)"; code=$?
-if [[ $code -ne 0 ]] && printf '%s' "$output" | grep -q '\[FAIL\] origin record malformed.*input:base-image が無い'; then pass; else fail "終了コード=$code
+if [[ $code -ne 0 ]] && printf '%s' "$output" | grep '\[FAIL\] origin record malformed.*input:base-image が無い' >/dev/null; then pass; else fail "終了コード=$code
 $output"; fi
 
 for bad_langs in 'node,' ',node' 'node,,go'; do
@@ -273,7 +273,7 @@ for bad_langs in 'node,' ',node' 'node,,go'; do
   out="$(base_out)"
   mutate_origin "$out" "input:languages=" "input:languages=$bad_langs"
   output="$(bash "$DOCTOR" --target-dir "$out" 2>&1)"; code=$?
-  if [[ $code -ne 0 ]] && printf '%s' "$output" | grep -q '\[FAIL\] origin record malformed.*input:languages'; then pass; else fail "終了コード=$code
+  if [[ $code -ne 0 ]] && printf '%s' "$output" | grep '\[FAIL\] origin record malformed.*input:languages' >/dev/null; then pass; else fail "終了コード=$code
 $output"; fi
 done
 
@@ -283,25 +283,25 @@ mkdir -p "$out/dir=x"
 printf 'hello\n' > "$out/dir=x/f.txt"
 printf 'hash:dir=x/f.txt=%s\n' "$(dcb_file_sha256_for_test "$out/dir=x/f.txt")" >> "$out$ORIGIN_REL"
 output="$(bash "$DOCTOR" --target-dir "$out" 2>&1)"; code=$?
-if [[ $code -eq 0 ]] && ! printf '%s' "$output" | grep -q 'malformed'; then pass; else fail "正常な記録が通らない: 終了コード=$code
+if [[ $code -eq 0 ]] && ! printf '%s' "$output" | grep 'malformed' >/dev/null; then pass; else fail "正常な記録が通らない: 終了コード=$code
 $output"; fi
 printf 'X' >> "$out/dir=x/f.txt"
 output="$(bash "$DOCTOR" --target-dir "$out" 2>&1)"; code=$?
-if [[ $code -ne 0 ]] && printf '%s' "$output" | grep -qF 'changed since generation:' && printf '%s' "$output" | grep -qF 'dir=x/f.txt'; then pass; else fail "改変を changed と言わない: 終了コード=$code
+if [[ $code -ne 0 ]] && printf '%s' "$output" | grep -F 'changed since generation:' >/dev/null && printf '%s' "$output" | grep -F 'dir=x/f.txt' >/dev/null; then pass; else fail "改変を changed と言わない: 終了コード=$code
 $output"; fi
 
 it "input: の行があるのに inputs-format の行が無ければ malformed（旧形式として検査を省かない）"
 out="$(base_out)"
 mutate_origin "$out" "inputs-format=" ""
 output="$(bash "$DOCTOR" --target-dir "$out" 2>&1)"; code=$?
-if [[ $code -ne 0 ]] && printf '%s' "$output" | grep -q '\[FAIL\] origin record malformed.*inputs-format'; then pass; else fail "終了コード=$code
+if [[ $code -ne 0 ]] && printf '%s' "$output" | grep '\[FAIL\] origin record malformed.*inputs-format' >/dev/null; then pass; else fail "終了コード=$code
 $output"; fi
 
 it "改行で終わらない最終行も検査する（不正な input: 行が最終行でも malformed）"
 out="$(base_out)"
 printf 'input:bogus=1' >> "$out$ORIGIN_REL"
 output="$(bash "$DOCTOR" --target-dir "$out" 2>&1)"; code=$?
-if [[ $code -ne 0 ]] && printf '%s' "$output" | grep -q '\[FAIL\] origin record malformed.*input:bogus'; then pass; else fail "終了コード=$code
+if [[ $code -ne 0 ]] && printf '%s' "$output" | grep '\[FAIL\] origin record malformed.*input:bogus' >/dev/null; then pass; else fail "終了コード=$code
 $output"; fi
 
 it ".ai-playbook/** の規範ファイルを変えると changed と判定する"
@@ -310,7 +310,7 @@ run_bootstrap "$out" --playbook-from "$PLAYBOOK_SRC" >/dev/null 2>&1
 pb_file="$(cd "$out" && find .ai-playbook -type f -name '*.md' | sort | sed -n 1p)"
 printf '\nedited\n' >> "$out/$pb_file"
 output="$(bash "$DOCTOR" --target-dir "$out" 2>&1)"; code=$?
-if [[ $code -ne 0 ]] && printf '%s' "$output" | grep -qF "changed since generation: $pb_file"; then pass; else fail "終了コード=$code
+if [[ $code -ne 0 ]] && printf '%s' "$output" | grep -F "changed since generation: $pb_file" >/dev/null; then pass; else fail "終了コード=$code
 $output"; fi
 
 it ".ai-playbook/VERSION を消すと missing と判定する"
@@ -318,7 +318,7 @@ out="$(new_workdir)/p"
 run_bootstrap "$out" --playbook-from "$PLAYBOOK_SRC" >/dev/null 2>&1
 rm -f "$out/.ai-playbook/VERSION"
 output="$(bash "$DOCTOR" --target-dir "$out" 2>&1)"; code=$?
-if [[ $code -ne 0 ]] && printf '%s' "$output" | grep -q 'recorded in origin but missing.*\.ai-playbook/VERSION'; then pass; else fail "終了コード=$code
+if [[ $code -ne 0 ]] && printf '%s' "$output" | grep 'recorded in origin but missing.*\.ai-playbook/VERSION' >/dev/null; then pass; else fail "終了コード=$code
 $output"; fi
 
 # ── strict モードとの関係 ─────────────────────────────────────────────────────
@@ -336,13 +336,13 @@ it "新しい形式（inputs-format=1）で flags= の行が消えていれば m
 out="$(base_out)"
 mutate_origin "$out" "flags=" ""
 output="$(bash "$DOCTOR" --target-dir "$out" 2>&1)"; code=$?
-if [[ $code -ne 0 ]] && printf '%s' "$output" | grep -q '\[FAIL\] origin record malformed.*flags='; then pass; else fail "終了コード=$code
+if [[ $code -ne 0 ]] && printf '%s' "$output" | grep '\[FAIL\] origin record malformed.*flags=' >/dev/null; then pass; else fail "終了コード=$code
 $output"; fi
 
 it "flags= が空の値でも、行があれば通る（対照群）"
 out="$(base_out)"
 output="$(bash "$DOCTOR" --target-dir "$out" 2>&1)"; code=$?
-if grep -q '^flags=$' "$out$ORIGIN_REL" && [[ $code -eq 0 ]] && ! printf '%s' "$output" | grep -q 'origin record malformed'; then pass; else fail "終了コード=$code
+if grep -q '^flags=$' "$out$ORIGIN_REL" && [[ $code -eq 0 ]] && ! printf '%s' "$output" | grep 'origin record malformed' >/dev/null; then pass; else fail "終了コード=$code
 $output"; fi
 
 it "古い形式（inputs-format 無し）では flags= が無くても通る（後方互換）"
@@ -350,14 +350,14 @@ out="$(base_out)"
 mutate_origin "$out" "flags=" ""
 grep -v '^inputs-format=\|^input:' "$out$ORIGIN_REL" > "$out$ORIGIN_REL.tmp"; mv "$out$ORIGIN_REL.tmp" "$out$ORIGIN_REL"
 output="$(bash "$DOCTOR" --target-dir "$out" 2>&1)"; code=$?
-if [[ $code -eq 0 ]] && ! printf '%s' "$output" | grep -q 'origin record malformed'; then pass; else fail "終了コード=$code
+if [[ $code -eq 0 ]] && ! printf '%s' "$output" | grep 'origin record malformed' >/dev/null; then pass; else fail "終了コード=$code
 $output"; fi
 
 it "同じ input: のキーが重複していれば malformed（FAIL）"
 out="$(base_out)"
 printf 'input:project-name=other\n' >> "$out$ORIGIN_REL"
 output="$(bash "$DOCTOR" --target-dir "$out" 2>&1)"; code=$?
-if [[ $code -ne 0 ]] && printf '%s' "$output" | grep -q '\[FAIL\] origin record malformed.*重複.*input:project-name'; then pass; else fail "終了コード=$code
+if [[ $code -ne 0 ]] && printf '%s' "$output" | grep '\[FAIL\] origin record malformed.*重複.*input:project-name' >/dev/null; then pass; else fail "終了コード=$code
 $output"; fi
 
 it "残っている *.dcb-new を WARN で一覧し、取り込み方を出す"
@@ -367,16 +367,16 @@ mkdir -p "$out/.git" "$out/node_modules/x"
 echo ignored > "$out/.git/a.dcb-new"
 echo ignored > "$out/node_modules/x/b.dcb-new"
 output="$(bash "$DOCTOR" --target-dir "$out" 2>&1)"; code=$?
-if [[ $code -eq 0 ]] && printf '%s' "$output" | grep -q '\[WARN\] .*\.dcb-new' \
-  && printf '%s' "$output" | grep -q 'scripts/verify.sh.dcb-new' \
-  && printf '%s' "$output" | grep -q '手で混ぜて' \
-  && ! printf '%s' "$output" | grep -q 'a.dcb-new\|b.dcb-new'; then pass; else fail "終了コード=$code
+if [[ $code -eq 0 ]] && printf '%s' "$output" | grep '\[WARN\] .*\.dcb-new' >/dev/null \
+  && printf '%s' "$output" | grep 'scripts/verify.sh.dcb-new' >/dev/null \
+  && printf '%s' "$output" | grep '手で混ぜて' >/dev/null \
+  && ! printf '%s' "$output" | grep 'a.dcb-new\|b.dcb-new' >/dev/null; then pass; else fail "終了コード=$code
 $output"; fi
 
 it "*.dcb-new が無ければ WARN を出さない（対照群）"
 out="$(base_out)"
 output="$(bash "$DOCTOR" --target-dir "$out" 2>&1)"
-if printf '%s' "$output" | grep -q 'dcb-new が残'; then fail "$output"; else pass; fi
+if printf '%s' "$output" | grep 'dcb-new が残' >/dev/null; then fail "$output"; else pass; fi
 
 it "*.dcb-new の WARN は --strict で非 0 終了になる"
 out="$(base_out)"
@@ -394,9 +394,9 @@ else
   chmod 000 "$out/locked"
   output="$(bash "$DOCTOR" --target-dir "$out" 2>&1)"; code=$?
   chmod 755 "$out/locked"
-  if [[ $code -eq 0 ]] && printf '%s' "$output" | grep -q '\[WARN\] \*\.dcb-new を一部探索できませんでした' \
-    && printf '%s' "$output" | grep -q 'Summary:' \
-    && ! printf '%s' "$output" | grep -q 'no \*\.dcb-new left behind'; then pass; else fail "終了コード=$code
+  if [[ $code -eq 0 ]] && printf '%s' "$output" | grep '\[WARN\] \*\.dcb-new を一部探索できませんでした' >/dev/null \
+    && printf '%s' "$output" | grep 'Summary:' >/dev/null \
+    && ! printf '%s' "$output" | grep 'no \*\.dcb-new left behind' >/dev/null; then pass; else fail "終了コード=$code
 $output"; fi
 fi
 

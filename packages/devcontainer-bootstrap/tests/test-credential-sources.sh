@@ -50,7 +50,7 @@ assert_file_absent "$out/.env"
 it "doctor が .env.example の存在を検査する"
 output="$(bash "$PKG_DIR/doctor.sh" --target-dir "$out" --strict 2>&1)"
 rc=$?
-if [[ "$rc" -eq 0 ]] && printf '%s' "$output" | grep -q '.env.example exists'; then
+if [[ "$rc" -eq 0 ]] && printf '%s' "$output" | grep '.env.example exists' >/dev/null; then
   pass
 else
   fail "doctor が検査していない、または --strict が非ゼロ (rc=$rc)"
@@ -117,7 +117,7 @@ $strip_fn
 strip_docker_creds_store
 " 2>&1)"
 rc=$?
-if [[ "$rc" -eq 0 ]] && printf '%s' "$output" | grep -q 'jq'; then
+if [[ "$rc" -eq 0 ]] && printf '%s' "$output" | grep 'jq' >/dev/null; then
   pass
 else
   fail "jq 不在時の挙動が違う (rc=$rc): $output"
@@ -147,7 +147,7 @@ assert_eq "$effective" "!gh auth git-credential|" "実効ヘルパー"
 
 it "--check が固定を検査する"
 co="$(cd "$repo" && bash scripts/setup-git-identity.sh --check 2>&1)"; crc=$?
-if [[ "$crc" -eq 0 ]] && printf '%s' "$co" | grep -q '供給元は gh のみ'; then
+if [[ "$crc" -eq 0 ]] && printf '%s' "$co" | grep '供給元は gh のみ' >/dev/null; then
   pass
 else
   fail "--check に供給元の検査が無い (rc=$crc)"
@@ -159,7 +159,7 @@ it "--check は固定が崩れた状態を非ゼロで報告する"
 ( cd "$repo" && git config --global --unset-all credential.helper \
     && git config --global --add credential.helper '!gh auth git-credential' )
 co="$(cd "$repo" && bash scripts/setup-git-identity.sh --check 2>&1)"; crc=$?
-if [[ "$crc" -ne 0 ]] && printf '%s' "$co" | grep -q 'gh 以外の供給元が残っている'; then
+if [[ "$crc" -ne 0 ]] && printf '%s' "$co" | grep 'gh 以外の供給元が残っている' >/dev/null; then
   pass
 else
   fail "崩れた固定を検出できない (rc=$crc): $(printf '%s' "$co" | grep -i credential | head -2)"

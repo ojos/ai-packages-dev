@@ -95,7 +95,7 @@ out="$(cd "$REPO_ROOT" && PATH="$stub:$PATH" GITHUB_ACTIONS=true STUB_PUBLISHED=
 code=$?
 if [[ $code -eq 0 ]]; then
   fail "公開済みなのに成功してしまった"
-elif printf '%s' "$out" | grep -q 'GitHub Actions 上でのみ'; then
+elif printf '%s' "$out" | grep 'GitHub Actions 上でのみ' >/dev/null; then
   fail "Actions 上なのにガードで拒否された"
 else
   assert_contains "$out" "already has tag" "エラー出力"
