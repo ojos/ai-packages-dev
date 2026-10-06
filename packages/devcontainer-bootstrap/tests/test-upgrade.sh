@@ -57,6 +57,9 @@ origin="$out$ORIGIN_REL"
 
 # 手を入れる（実行ビット付きの scripts/verify.sh）
 echo "# my edit" >> "$out/scripts/verify.sh"
+# 雛形が変わった版を作る: 記録のハッシュを、新しい版と違う値へ書き換える。雛形が変わって
+# いないとき（新しい版 = 記録）は .dcb-new を置かない（test-accept.sh が担う）。
+set_record "$origin" "scripts/verify.sh" "$(printf '%064d' 0)"
 # 古い版の写し: 中身を変え、記録のハッシュも合わせる
 echo "# old version" >> "$out/scripts/on-attach.sh"
 set_record "$origin" "scripts/on-attach.sh" "$(sha_of "$out/scripts/on-attach.sh")"
@@ -223,6 +226,7 @@ if [[ ! -e "$outside/missing.txt" && -f "$o7/scripts/verify.sh.dcb-new" ]]; then
 it ".dcb-new がシンボリックリンクなら、たどらず消して通常ファイルとして作る"
 rm -f "$o7/scripts/verify.sh" "$o7/scripts/verify.sh.dcb-new"
 cp "$o7/scripts/check-no-secrets.sh" "$o7/scripts/verify.sh"
+set_record "$o7$ORIGIN_REL" "scripts/verify.sh" "$(printf '%064d' 0)"   # 雛形が変わった版にする
 echo "keep" > "$outside/dcbnew-target.txt"
 ln -s "$outside/dcbnew-target.txt" "$o7/scripts/verify.sh.dcb-new"
 upgrade "$o7"
