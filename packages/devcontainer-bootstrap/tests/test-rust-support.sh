@@ -128,7 +128,7 @@ out="$(new_workdir)/p"
 run_bootstrap "$out" --languages rust >/dev/null 2>&1
 output="$(bash "$PKG_DIR/doctor.sh" --target-dir "$out" 2>&1)"
 # cargo に言及し、かつ "rust command available/missing" が cargo 付きで出る。
-if printf '%s' "$output" | grep -q 'rust command .*(cargo)'; then pass; else fail "rust の検査が cargo で行われていない: $(printf '%s' "$output" | grep -i rust)"; fi
+if printf '%s' "$output" | grep 'rust command .*(cargo)' >/dev/null; then pass; else fail "rust の検査が cargo で行われていない: $(printf '%s' "$output" | grep -i rust)"; fi
 
 # ── 入力検証 ──────────────────────────────────────────────────────────────────
 

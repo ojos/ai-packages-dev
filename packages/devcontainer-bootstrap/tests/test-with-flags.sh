@@ -19,7 +19,7 @@ has_ext() { jq -e --arg e "$2" '.customizations.vscode.extensions|index($e) != n
 it "--mode を渡すと未知オプションとしてエラー終了する"
 out="$(new_workdir)/p"
 output="$(run_bootstrap "$out" --mode standard 2>&1)"
-if [[ $? -ne 0 ]] && printf '%s' "$output" | grep -q 'unknown option: --mode'; then
+if [[ $? -ne 0 ]] && printf '%s' "$output" | grep 'unknown option: --mode' >/dev/null; then
   pass
 else
   fail "--mode が拒否されない"
@@ -212,9 +212,9 @@ it "doctor: --with-aws --with-gcp の生成物で aws/gcloud/terraform を検出
 out="$(new_workdir)/p"
 run_bootstrap "$out" --with-aws --with-gcp >/dev/null 2>&1
 output="$(bash "$PKG_DIR/doctor.sh" --target-dir "$out" 2>&1)"
-if printf '%s' "$output" | grep -q 'aws command' \
-   && printf '%s' "$output" | grep -q 'gcloud command' \
-   && printf '%s' "$output" | grep -q 'terraform command'; then
+if printf '%s' "$output" | grep 'aws command' >/dev/null \
+   && printf '%s' "$output" | grep 'gcloud command' >/dev/null \
+   && printf '%s' "$output" | grep 'terraform command' >/dev/null; then
   pass
 else
   fail "cloud CLI 検出行が出ない（feature path 不一致の回帰）"

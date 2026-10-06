@@ -158,7 +158,7 @@ it "--playbook-version と --playbook-from の同時指定はエラー"
 out="$(new_workdir)/p"
 output="$(run_bootstrap "$out" --playbook-version v1.2.3 --playbook-from /some/dir 2>&1)"
 code=$?
-if [[ $code -ne 0 ]] && printf '%s' "$output" | grep -q '同時に指定できません'; then
+if [[ $code -ne 0 ]] && printf '%s' "$output" | grep '同時に指定できません' >/dev/null; then
   pass
 else
   fail "排他エラーにならなかった (code=$code)"

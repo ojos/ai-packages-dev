@@ -199,7 +199,7 @@ it "確認側は PR 更新の契機も持つ（synchronize / reopened / ready_fo
 types_line="$(grep -E '^[[:space:]]*types:' "$wf" || true)"
 missing=""
 for t in opened synchronize reopened ready_for_review; do
-  printf '%s' "$types_line" | grep -q "$t" || missing="$missing $t"
+  printf '%s' "$types_line" | grep "$t" >/dev/null || missing="$missing $t"
 done
 if [[ -z "$missing" ]]; then pass; else fail "types に不足:$missing"; fi
 

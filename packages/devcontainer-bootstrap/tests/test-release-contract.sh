@@ -260,7 +260,7 @@ out="$(cd "$REPO_ROOT" && PATH="$stub:$PATH" GITHUB_ACTIONS=true timeout 60 bash
 code=$?
 if [[ $code -eq 0 ]]; then
   fail "公開済みでも成功してしまった"
-elif printf '%s' "$out" | grep -q 'unexpected gh call'; then
+elif printf '%s' "$out" | grep 'unexpected gh call' >/dev/null; then
   fail "止まる前に gh の別コマンドが呼ばれた（副作用の恐れ）:
 $(printf '%s' "$out" | grep 'unexpected' | head -3)"
 else
@@ -281,7 +281,7 @@ fi
 it "ai-playbook は Release を作らない（タグのみ配布）"
 # ai-playbook の実行ブロックに generate_standard_assets / tag_and_release が無いこと。
 pb_block="$(sed -n '/if \[\[ -n "\$PLAYBOOK_TAG" \]\]; then/,/^fi$/p' "$RELEASE_SH" | tail -n +2)"
-if printf '%s' "$pb_block" | grep -qE 'generate_standard_assets|tag_and_release'; then
+if printf '%s' "$pb_block" | grep -E 'generate_standard_assets|tag_and_release' >/dev/null; then
   fail "ai-playbook が Release 資産を生成している（タグのみのはず）"
 else
   pass

@@ -93,8 +93,8 @@ it "改変されたファイル名が出力に現れる"
 assert_contains "$out" "bootstrap.sh — SHA256SUMS の記載と実ファイルが不一致" "検証出力"
 
 it "食い違った両方の値が出力に現れる"
-if printf '%s' "$out" | grep -q 'SHA256SUMS 記載:' \
-   && printf '%s' "$out" | grep -q '実ファイル再計算:'; then
+if printf '%s' "$out" | grep 'SHA256SUMS 記載:' >/dev/null \
+   && printf '%s' "$out" | grep '実ファイル再計算:' >/dev/null; then
   pass
 else
   fail "記載値と再計算値の対比が出力に無い:
@@ -323,7 +323,7 @@ it "総括行にも検査件数と範囲外の件数が現れる"
 assert_contains "$out" "検査 10 件 / 範囲外・未検査 3 件" "監査出力"
 
 it "監査は公開状態を変更しない（読み取り以外の gh を呼ばない）"
-if printf '%s' "$out" | grep -q 'unexpected gh call'; then
+if printf '%s' "$out" | grep 'unexpected gh call' >/dev/null; then
   fail "読み取り以外の gh 呼び出しがあった:
 $(printf '%s' "$out" | grep 'unexpected' | head -3)"
 else
@@ -365,7 +365,7 @@ fi
 rm -rf "$FIXTURE/releases/v0.0.13"
 
 it "通常の件数では取得上限の警告を出さない"
-if printf '%s' "$out" | grep -q '取得上限'; then
+if printf '%s' "$out" | grep '取得上限' >/dev/null; then
   fail "上限に達していないのに警告が出た"
 else
   pass

@@ -58,7 +58,7 @@ check_generated_scripts() {
   it "$label: zsh 固有展開を持つ scripts/load-project-env.sh が対象に含まれる"
   # この検査が生まれた原因のファイル。生成対象から外れても他のファイルが緑なら
   # 全体が緑になってしまうため、対象に含まれることを名指しで確かめる。
-  if printf '%s\n' "$list" | grep -q '/scripts/load-project-env\.sh$'; then
+  if printf '%s\n' "$list" | grep '/scripts/load-project-env\.sh$' >/dev/null; then
     pass
   else
     fail "$label: scripts/load-project-env.sh が生成されていない"

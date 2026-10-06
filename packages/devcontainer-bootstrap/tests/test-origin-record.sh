@@ -154,7 +154,7 @@ fi
 
 it "既知の限界: 上記の状態でも doctor.sh は当該ファイルを「変化した」と誤検知しない"
 output="$(bash "$DOCTOR" --target-dir "$out5" 2>&1)"
-if printf '%s' "$output" | grep -q 'changed since generation.*acceptance-remote'; then
+if printf '%s' "$output" | grep 'changed since generation.*acceptance-remote' >/dev/null; then
   fail "記録に無いファイルを誤って変化したと報告した"
 else
   pass
@@ -192,10 +192,10 @@ assert_file_absent "$noop_out$ORIGIN_REL"
 
 it "遡及禁止のあとも doctor.sh は改造を「変化なし」と誤診断しない（記録が無いので診断できないと言う）"
 output_retro="$(bash "$DOCTOR" --target-dir "$retro_out" 2>&1)"
-if printf '%s' "$output_retro" | grep -q 'unchanged since generation'; then
+if printf '%s' "$output_retro" | grep 'unchanged since generation' >/dev/null; then
   fail "記録が無いのに unchanged と報告した:
 $output_retro"
-elif printf '%s' "$output_retro" | grep -q 'origin record missing'; then
+elif printf '%s' "$output_retro" | grep 'origin record missing' >/dev/null; then
   pass
 else
   fail "想定外の出力:

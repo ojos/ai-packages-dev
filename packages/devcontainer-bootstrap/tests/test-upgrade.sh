@@ -121,7 +121,7 @@ it "新しい版で生成されなくなった分は報告だけして削除せ�
 echo "hash:legacy/old-file.txt=0000" >> "$origin"
 mkdir -p "$out/legacy" && echo x > "$out/legacy/old-file.txt"
 upgrade "$out"
-if [[ -f "$out/legacy/old-file.txt" ]] && printf '%s' "$UP_OUT" | grep -q 'no longer generated (not deleted): .*legacy/old-file.txt' \
+if [[ -f "$out/legacy/old-file.txt" ]] && printf '%s' "$UP_OUT" | grep 'no longer generated (not deleted): .*legacy/old-file.txt' >/dev/null \
   && ! grep -q 'legacy/old-file.txt' "$origin"; then pass; else fail "報告・温存・記録からの除外のいずれかが違う"; fi
 
 # ── --dry-run ─────────────────────────────────────────────────────────────────
@@ -149,7 +149,7 @@ if [[ "$UP_RC" == "0" && -f "$o2/.env.example" ]] && grep -q '^flags=aws,claude$
 
 it "ローカルの規範ソースは記録から再現できず、--playbook-from の明示を求めて止まる"
 upgrade "$o2"
-if [[ "$UP_RC" == "1" ]] && printf '%s' "$UP_OUT" | grep -q -- '--playbook-from'; then pass; else fail "rc=$UP_RC"; fi
+if [[ "$UP_RC" == "1" ]] && printf '%s' "$UP_OUT" | grep -- '--playbook-from' >/dev/null; then pass; else fail "rc=$UP_RC"; fi
 
 it "引数で渡した --with-* は記録へ足される"
 upgrade "$out" --with-gemini
@@ -163,7 +163,7 @@ grep -v '^inputs-format=\|^input:' "$o3$ORIGIN_REL" > "$o3$ORIGIN_REL.tmp"; mv "
 
 it "条件の記録が無い古い ORIGIN では、引数を明示しないと止まり、案内を出す"
 upgrade "$o3"
-if [[ "$UP_RC" == "1" ]] && printf '%s' "$UP_OUT" | grep -q -- '--project-name' && printf '%s' "$UP_OUT" | grep -q -- '--languages'; then pass; else fail "rc=$UP_RC"; fi
+if [[ "$UP_RC" == "1" ]] && printf '%s' "$UP_OUT" | grep -- '--project-name' >/dev/null && printf '%s' "$UP_OUT" | grep -- '--languages' >/dev/null; then pass; else fail "rc=$UP_RC"; fi
 
 it "古い ORIGIN でも、引数を明示すれば生成でき、記録し直される"
 upgrade "$o3" --project-name upg --languages node --base-image "$IMG" --with-aws
@@ -182,7 +182,7 @@ if [[ "$UP_RC" == "1" && ! -e "$o4" ]]; then pass; else fail "rc=$UP_RC"; fi
 it "--upgrade と --force の同時指定はエラーで、何も書かない"
 o5="$(new_workdir)/none"
 UP_OUT="$(bash "$BOOTSTRAP" --upgrade --force --output-dir "$o5" 2>&1)"; UP_RC=$?
-if [[ "$UP_RC" == "1" && ! -e "$o5" ]] && printf '%s' "$UP_OUT" | grep -q -- '--force'; then pass; else fail "rc=$UP_RC"; fi
+if [[ "$UP_RC" == "1" && ! -e "$o5" ]] && printf '%s' "$UP_OUT" | grep -- '--force' >/dev/null; then pass; else fail "rc=$UP_RC"; fi
 
 # ── 従来の再実行・--force の挙動は変わらない ──────────────────────────────────
 
@@ -212,7 +212,7 @@ ln -s "$outside/target.txt" "$o7/scripts/verify.sh"
 upgrade "$o7"
 if [[ "$UP_RC" == "2" && "$(cat "$outside/target.txt")" == "target" && -L "$o7/scripts/verify.sh" \
   && -f "$o7/scripts/verify.sh.dcb-new" && ! -L "$o7/scripts/verify.sh.dcb-new" ]] \
-  && printf '%s' "$UP_OUT" | grep -q 'keep (symlink'; then pass; else fail "rc=$UP_RC target=$(cat "$outside/target.txt")"; fi
+  && printf '%s' "$UP_OUT" | grep 'keep (symlink' >/dev/null; then pass; else fail "rc=$UP_RC target=$(cat "$outside/target.txt")"; fi
 
 it "切れたシンボリックリンクの生成先でも、リンク先を作らない"
 rm -f "$o7/scripts/verify.sh" "$o7/scripts/verify.sh.dcb-new"
@@ -276,11 +276,11 @@ mkdir -p "$o10/legacy"
 echo x > "$o10/legacy/old-file.txt"
 echo y > "$o10/legacy/old-file.txt.dcb-new"
 upgrade "$o10"
-if [[ "$UP_RC" == "2" ]] && printf '%s' "$UP_OUT" | grep -q 'legacy/old-file.txt.dcb-new'; then pass; else fail "rc=$UP_RC"; fi
+if [[ "$UP_RC" == "2" ]] && printf '%s' "$UP_OUT" | grep 'legacy/old-file.txt.dcb-new' >/dev/null; then pass; else fail "rc=$UP_RC"; fi
 
 it "2 回目以降の --upgrade でも、生成対象から外れたファイルの .dcb-new を検出して 2 を返す"
 upgrade "$o10"
-if [[ "$UP_RC" == "2" ]] && printf '%s' "$UP_OUT" | grep -q 'legacy/old-file.txt.dcb-new'; then pass; else fail "rc=$UP_RC"; fi
+if [[ "$UP_RC" == "2" ]] && printf '%s' "$UP_OUT" | grep 'legacy/old-file.txt.dcb-new' >/dev/null; then pass; else fail "rc=$UP_RC"; fi
 
 it "出力先がまだ無くても、引数を明示した --upgrade は生成して 0 で終わる"
 o12="$(new_workdir)/not-yet/p"
@@ -290,7 +290,7 @@ if [[ "$UP_RC" == "0" && -f "$o12$ORIGIN_REL" && -f "$o12/scripts/verify.sh" ]];
 it "出力先がまだ無いときの --upgrade --dry-run は何も作らない"
 o13="$(new_workdir)/not-yet/p"
 upgrade "$o13" --project-name upg --languages node --base-image "$IMG" --dry-run
-if [[ "$UP_RC" == "0" && ! -e "$o13" && ! -e "$(dirname "$o13")" ]] && printf '%s' "$UP_OUT" | grep -q "plan: create $o13/scripts/verify.sh"; then pass; else fail "rc=$UP_RC"; fi
+if [[ "$UP_RC" == "0" && ! -e "$o13" && ! -e "$(dirname "$o13")" ]] && printf '%s' "$UP_OUT" | grep "plan: create $o13/scripts/verify.sh" >/dev/null; then pass; else fail "rc=$UP_RC"; fi
 
 it "TMPDIR が書き込み不可でも、--upgrade --dry-run は計画を出して 0 で終わる（一時ファイルを作らない）"
 ro_tmp="$(new_workdir)/ro"
@@ -299,7 +299,7 @@ chmod 555 "$ro_tmp"
 UP_OUT="$(TMPDIR="$ro_tmp" bash "$BOOTSTRAP" --upgrade --dry-run --output-dir "$out" 2>&1)"
 UP_RC=$?
 chmod 755 "$ro_tmp"
-if [[ "$UP_RC" == "0" ]] && printf '%s' "$UP_OUT" | grep -q '^plan: '; then pass; else fail "rc=$UP_RC: $(printf '%s' "$UP_OUT" | tail -3)"; fi
+if [[ "$UP_RC" == "0" ]] && printf '%s' "$UP_OUT" | grep '^plan: ' >/dev/null; then pass; else fail "rc=$UP_RC: $(printf '%s' "$UP_OUT" | tail -3)"; fi
 
 it "従来の経路（--upgrade なし）の --force は ORIGIN を 644 にし、終了コードは 0"
 o11="$(new_workdir)/p"
@@ -374,6 +374,6 @@ echo "# again" >> "$o14/AGENTS.md"
 before="$(tree_state "$o14")"
 upgrade "$o14" --playbook-from "$pb_new" --dry-run
 after="$(tree_state "$o14")"
-if [[ "$before" == "$after" && "$UP_RC" == "0" ]] && printf '%s' "$UP_OUT" | grep -q 'plan: '; then pass; else fail "ツリーが変わった、または rc=$UP_RC"; fi
+if [[ "$before" == "$after" && "$UP_RC" == "0" ]] && printf '%s' "$UP_OUT" | grep 'plan: ' >/dev/null; then pass; else fail "ツリーが変わった、または rc=$UP_RC"; fi
 
 exit_with_result

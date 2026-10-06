@@ -125,8 +125,8 @@ it "生成ワークフローは types: [opened] に限定される（synchronize
 # opened のみを契機とし、synchronize（PR 更新）を含めないこと。これが「1 回だけ」の実体。
 # 判定は設定行（types:）に限定する。コメント文言に synchronize が出ても誤検知しない。
 types_line="$(grep -E '^[[:space:]]*types:' "$wf" || true)"
-if printf '%s' "$types_line" | grep -Eq '\[[[:space:]]*opened[[:space:]]*\]' \
-   && ! printf '%s' "$types_line" | grep -q 'synchronize'; then
+if printf '%s' "$types_line" | grep -E '\[[[:space:]]*opened[[:space:]]*\]' >/dev/null \
+   && ! printf '%s' "$types_line" | grep 'synchronize' >/dev/null; then
   pass
 else
   fail "types が opened 限定でない、または synchronize を含む: '$types_line'"

@@ -334,7 +334,7 @@ it "新しい版が既に入っていれば skip する（npm を呼ばない）
 calls_file="$(new_workdir)/npm-calls"
 : > "$calls_file"
 out="$(PATH="$BEHAV_BIN:$PATH" FAKE_CODEX_VERSION="0.158.0" FAKE_NPM_CALLS="$calls_file" run_install_codex)"; rc=$?
-if [[ "$rc" -eq 0 ]] && [[ ! -s "$calls_file" ]] && printf '%s' "$out" | grep -q 'already installed'; then
+if [[ "$rc" -eq 0 ]] && [[ ! -s "$calls_file" ]] && printf '%s' "$out" | grep 'already installed' >/dev/null; then
   pass
 else
   fail "skip されていない (exit $rc, npm呼び出し=$(cat "$calls_file" 2>/dev/null | wc -l)): $out"

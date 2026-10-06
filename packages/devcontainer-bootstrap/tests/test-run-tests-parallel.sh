@@ -46,8 +46,8 @@ RUNNER="$W/tests/run-tests.sh"
 
 it "失敗が混じると exit 1 になり、失敗したファイル名が出る"
 run DCB_TEST_JOBS=4 bash "$RUNNER"
-if [[ "$R_RC" == "1" ]] && printf '%s' "$R_OUT" | grep -q '失敗: test-dummy-ng' \
-   && ! printf '%s' "$R_OUT" | grep -q '失敗: test-dummy-ok'; then pass; else fail "rc=$R_RC"; fi
+if [[ "$R_RC" == "1" ]] && printf '%s' "$R_OUT" | grep '失敗: test-dummy-ng' >/dev/null \
+   && ! printf '%s' "$R_OUT" | grep '失敗: test-dummy-ok' >/dev/null; then pass; else fail "rc=$R_RC"; fi
 
 it "各ファイルの出力が、ファイル名順にまとめて表示される"
 order="$(printf '%s' "$R_OUT" | grep -o 'dummy-output test-dummy-[a-z-]*' | tr '\n' ' ')"
@@ -59,23 +59,23 @@ assert_contains "$err" "dummy-fail-detail"
 
 it "すべて成功なら exit 0 になる"
 run DCB_TEST_JOBS=4 bash "$RUNNER" ok
-if [[ "$R_RC" == "0" ]] && printf '%s' "$R_OUT" | grep -q '全 2 ファイル 成功'; then pass; else fail "rc=$R_RC"; fi
+if [[ "$R_RC" == "0" ]] && printf '%s' "$R_OUT" | grep '全 2 ファイル 成功' >/dev/null; then pass; else fail "rc=$R_RC"; fi
 
 it "DCB_TEST_JOBS=1（直列）でも同じ結果になる"
 run DCB_TEST_JOBS=1 bash "$RUNNER"
-if [[ "$R_RC" == "1" ]] && printf '%s' "$R_OUT" | grep -q '3 ファイル中 1 ファイルで失敗' \
-   && printf '%s' "$R_OUT" | grep -q '失敗: test-dummy-ng'; then pass; else fail "rc=$R_RC"; fi
+if [[ "$R_RC" == "1" ]] && printf '%s' "$R_OUT" | grep '3 ファイル中 1 ファイルで失敗' >/dev/null \
+   && printf '%s' "$R_OUT" | grep '失敗: test-dummy-ng' >/dev/null; then pass; else fail "rc=$R_RC"; fi
 
 for bad in abc 0 -1 1.5; do
   it "DCB_TEST_JOBS=$bad は実行前にエラーで止まる"
   run DCB_TEST_JOBS="$bad" bash "$RUNNER"
-  if [[ "$R_RC" == "1" ]] && printf '%s' "$R_OUT" | grep -q 'DCB_TEST_JOBS' \
-     && ! printf '%s' "$R_OUT" | grep -q 'dummy-output'; then pass; else fail "rc=$R_RC"; fi
+  if [[ "$R_RC" == "1" ]] && printf '%s' "$R_OUT" | grep 'DCB_TEST_JOBS' >/dev/null \
+     && ! printf '%s' "$R_OUT" | grep 'dummy-output' >/dev/null; then pass; else fail "rc=$R_RC"; fi
 done
 
 it "桁あふれするほど大きい DCB_TEST_JOBS でも止まらずに完走する"
 run DCB_TEST_JOBS=99999999999999999999 timeout 60 bash "$RUNNER" ok
-if [[ "$R_RC" == "0" ]] && printf '%s' "$R_OUT" | grep -q '全 2 ファイル 成功'; then pass; else fail "rc=$R_RC"; fi
+if [[ "$R_RC" == "0" ]] && printf '%s' "$R_OUT" | grep '全 2 ファイル 成功' >/dev/null; then pass; else fail "rc=$R_RC"; fi
 
 it "ランナーは実行権限を持つ（git のモードが 100755）"
 mode="$(git -C "$TESTS_DIR" ls-files -s run-tests.sh 2>/dev/null | cut -d' ' -f1)"
@@ -83,6 +83,6 @@ if [[ -z "$mode" || "$mode" == "100755" ]]; then pass; else fail "mode=$mode"; f
 
 it "フィルタに一致するテストが無ければ exit 1 になる"
 run DCB_TEST_JOBS=2 bash "$RUNNER" nomatch
-if [[ "$R_RC" == "1" ]] && printf '%s' "$R_OUT" | grep -q 'no tests matched'; then pass; else fail "rc=$R_RC"; fi
+if [[ "$R_RC" == "1" ]] && printf '%s' "$R_OUT" | grep 'no tests matched' >/dev/null; then pass; else fail "rc=$R_RC"; fi
 
 exit_with_result
