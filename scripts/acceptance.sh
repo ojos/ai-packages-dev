@@ -19,7 +19,7 @@
 #   文書が実体なので、その実態に合わせて検証を定義している。
 #
 # 反復を速く回したい場合:
-#   DCB テスト（約 4 分）が所要時間の大半を占める。軽量な受け入れ条件へ
+#   DCB テスト（並列でも数分）が所要時間の大半を占める。軽量な受け入れ条件へ
 #   差し替えるには VERIFY_ACCEPTANCE を使う。
 #     VERIFY_ACCEPTANCE=scripts/acceptance-fast.sh bash scripts/verify.sh
 #
@@ -180,13 +180,13 @@ echo "[acceptance] (identity) commit identity guard"
 bash scripts/verify-commit-identity.sh
 
 # ── CI: Project tests ────────────────────────────────────────────────────────
-# 文書と実装のテキスト照合だけで、外部依存も無く秒で終わる。DCB テスト（約 4 分）
+# 文書と実装のテキスト照合だけで、外部依存も無く秒で終わる。DCB テスト（並列でも数分）
 # より前に置き、安い検査から落ちるようにする。
 echo "[acceptance] (project) tests"
 bash tests/run-tests.sh
 
 # ── CI: devcontainer-bootstrap tests ─────────────────────────────────────────
-# 所要時間が最も長い（約 4 分）ため最後に置く。手前の速い検査で落ちる差分は、
+# 所要時間が最も長い（並列でも数分）ため最後に置く。手前の速い検査で落ちる差分は、
 # ここへ到達する前に落として反復を短くする。
 echo "[acceptance] (dcb) tests"
 bash packages/devcontainer-bootstrap/tests/run-tests.sh
