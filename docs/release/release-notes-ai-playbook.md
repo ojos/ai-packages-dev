@@ -9,6 +9,7 @@
 ## 未リリース
 
 ### Summary
+- **`templates/claude-entry-imports.md` を足した**（ojos/ai-packages-dev#441）。Claude Code の `CLAUDE.md` の末尾に足す節で、`@.ai-playbook/shared-ai-rules.md` と `@.github/project-ai-rules.md` の 2 行で規範の全文を毎セッションの文脈へ取り込む。パスを挙げるだけでは、エージェントが自分から読みにいかない限り規範は文脈に載らない。`templates/entry.md` は実行環境に中立のまま変えていない。README の単独導入の手順に `cat .ai-playbook/templates/claude-entry-imports.md >> CLAUDE.md` を足した。雛形は 16 種になった。
 - **`templates/second-opinion-record.sh post` を、確認側が数える記録を作れたときだけ成功させた**（ojos/ai-packages-dev#440）。gh が認証しているアカウントが PR の作者でなければ、投稿せずに失敗する（確認側は作者のコメントしか数えないため、作者以外の投稿は成功と表示されても使えない記録になっていた）。既に投稿済みかの判定も、作者が書いたコメントに絞った（作者以外が同じ印を先に書いていると、作者の post が「投稿済み」で終わり、確認側は赤のままになっていた）。雛形は 15 種のまま。
 - **`templates/second-opinion-gate.yml` が数える記録を、書き手が PR の作者と一致するコメントに改めた（`author_association` を条件から外した）**（ojos/ai-packages-dev#436）。`author_association` は読む側の視点で変わり、組織のメンバーシップを公開していない作者は、Actions の `GITHUB_TOKEN` から `MEMBER` と返らない。そのため組織所有のリポジトリでは、その人の PR が記録を投稿しても常に `failure` になっていた（メンバーシップを公開して再実行すると緑になることを、利用側で実測した）。メンバーシップの非公開は GitHub の既定である。対象はフォークでない PR だけなので、作者の一致だけで「他人のコメントで緑にしない」（ojos/ai-packages-dev#370）は保てる。雛形は 15 種のまま。
 - **第二意見の記録と確認側を、リモート最終ゲートの有無にかかわらず置く標準の機構層へ改めた**（ojos/ai-packages-dev#437）。`review-workflow.md` が「置かない場合の代わり」としていた記述を「常に置く標準の機構層」へ改め、「置かない場合に失う性質」の表はリモート最終ゲート固有の性質として残した。`templates/claude-skill-land.md` は `second-opinion-gate` の確認と failure 時の `post`、push のたびの `post` を両方の構成に共通の手順にし、`templates/project-ai-rules.md` も両方の構成で投稿する前提にした。

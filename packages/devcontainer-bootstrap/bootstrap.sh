@@ -9620,9 +9620,32 @@ install_playbook_rules() {
   tpl="$(require_playbook_template project-ai-rules.md)"
   apply_file_with_policy "$tpl" "$OUTPUT_DIR/.github/project-ai-rules.md"
 
-  # 入口ファイルは実行環境ごとに 1 つ。内容は同一で、雛形も 1 つ。
+  # 入口ファイルは実行環境ごとに 1 つ。雛形は 1 つ（entry.md）。
+  #
+  # **CLAUDE.md にだけ、規範を全文取り込む節を足す**（#441）。entry.md は規範を
+  # パスで挙げるだけなので、エージェントが自分から読みにいかない限り規範は文脈に
+  # 載らない（利用側で、ツールを使わせない問いに規範の中身を答えられなかった）。
+  # 取り込みの節（Claude Code の `@パス`）も規範パッケージの雛形
+  # claude-entry-imports.md が持ち、DCB は entry.md の後ろへつなげるだけにする
+  # （取り込む先のファイル名を DCB が知らない。規範側の再編で黙って壊れない）。
+  # AGENTS.md / copilot-instructions.md には取り込みの構文が無いので足さない。
+  #
+  # 雛形が無い古い規範（v0.8.0 より前）では、取り込みの節なしで従来どおり置き、
+  # 案内だけを出す（この雛形のために要求する規範の版を上げない）。
   tpl="$(require_playbook_template entry.md)"
-  apply_file_with_policy "$tpl" "$OUTPUT_DIR/CLAUDE.md"
+  local imports="$PLAYBOOK_DIR/templates/claude-entry-imports.md" claude_entry
+  if [[ -f "$imports" ]]; then
+    claude_entry="$(mktemp "${TMPDIR:-/tmp}/dcb-claude-entry.XXXXXX")" || {
+      echo "error: 一時ファイルを作れません（CLAUDE.md の組み立て）。" >&2
+      exit 1
+    }
+    cat "$tpl" "$imports" > "$claude_entry"
+    apply_file_with_policy "$claude_entry" "$OUTPUT_DIR/CLAUDE.md"
+    rm -f "$claude_entry"
+  else
+    echo "note: 規範に templates/claude-entry-imports.md が無いため、CLAUDE.md に規範の取り込みの節を足しません（ai-playbook v0.8.0 以降で足します）。" >&2
+    apply_file_with_policy "$tpl" "$OUTPUT_DIR/CLAUDE.md"
+  fi
   apply_file_with_policy "$tpl" "$OUTPUT_DIR/AGENTS.md"
   apply_file_with_policy "$tpl" "$OUTPUT_DIR/.github/copilot-instructions.md"
 

@@ -62,8 +62,38 @@ fi
 out="$(new_workdir)/p"
 run_bootstrap "$out" --with-playbook >/dev/null 2>&1
 
-it "CLAUDE.md は雛形と完全一致する"
-if diff -q "$out/CLAUDE.md" "$TPL/entry.md" >/dev/null 2>&1; then pass; else fail "雛形と一致しない"; fi
+# CLAUDE.md だけは、雛形の後ろに規範 2 つを取り込む節が付く（#441）。雛形の部分は
+# そのまま写し、末尾に `@` の取り込みの 2 行がある。
+it "CLAUDE.md は雛形の写しで始まる"
+n="$(wc -l < "$TPL/entry.md")"
+if diff -q <(head -n "$n" "$out/CLAUDE.md") "$TPL/entry.md" >/dev/null 2>&1; then pass; else fail "雛形の部分が一致しない"; fi
+
+it "CLAUDE.md は規範 2 つを @ で取り込み、取り込み先が実在する（#441）"
+if grep -qx '@.ai-playbook/shared-ai-rules.md' "$out/CLAUDE.md" \
+   && grep -qx '@.github/project-ai-rules.md' "$out/CLAUDE.md" \
+   && [[ -f "$out/.ai-playbook/shared-ai-rules.md" && -f "$out/.github/project-ai-rules.md" ]]; then
+  pass
+else
+  fail "取り込みの行が無い、または取り込み先が無い"
+fi
+
+it "AGENTS.md / copilot-instructions.md には取り込みの行を足さない（取り込みの構文が無い）"
+if grep -q '^@' "$out/AGENTS.md" "$out/.github/copilot-instructions.md"; then fail "取り込みの行がある"; else pass; fi
+
+it "CLAUDE.md は entry.md と claude-entry-imports.md をつなげたものと完全一致する"
+if diff -q "$out/CLAUDE.md" <(cat "$TPL/entry.md" "$TPL/claude-entry-imports.md") >/dev/null 2>&1; then pass; else fail "つなげたものと一致しない"; fi
+
+it "claude-entry-imports.md が無い古い規範では、CLAUDE.md を entry.md のまま置き note で案内する"
+oldpb="$(new_workdir)/pb"
+cp -R "$PLAYBOOK_SRC" "$oldpb"
+rm -f "$oldpb/templates/claude-entry-imports.md"
+legacy="$(new_workdir)/p"
+legacy_err="$(run_bootstrap "$legacy" --with-playbook --playbook-from "$oldpb" 2>&1 >/dev/null)"
+if diff -q "$legacy/CLAUDE.md" "$TPL/entry.md" >/dev/null 2>&1 && [[ "$legacy_err" == *"claude-entry-imports.md"* ]]; then
+  pass
+else
+  fail "CLAUDE.md が entry.md と違う、または案内が無い: $legacy_err"
+fi
 
 it "copilot-instructions.md は雛形と完全一致する"
 if diff -q "$out/.github/copilot-instructions.md" "$TPL/entry.md" >/dev/null 2>&1; then pass; else fail "雛形と一致しない"; fi
