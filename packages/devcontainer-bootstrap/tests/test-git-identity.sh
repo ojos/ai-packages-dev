@@ -224,6 +224,16 @@ commit_as "$vr" "evil@other.example" "evil@other.example" c3
 vo="$(cd "$vr" && env ALLOWED_AUTHOR_EMAILS="allowed@example.com" bash scripts/verify-commit-identity.sh --full 2>&1)"; vrc=$?
 if [[ "$vrc" -eq 1 ]]; then assert_contains "$vo" "IDENTITY_FAIL" "verify 出力"; else fail "許可外を通した (exit $vrc)"; fi
 
+it "範囲が空なら IDENTITY_PASS のまま、何も検査していないことと --full の案内を出す（#442）"
+# push 後に loop-gate を回すと範囲（origin/main..HEAD）が空になる。通すのは筋だが、
+# 何も検査していないことが出力から読めないと、検査が済んだと取り違える。
+vo="$(cd "$vr" && env ALLOWED_AUTHOR_EMAILS="allowed@example.com" bash scripts/verify-commit-identity.sh HEAD..HEAD 2>&1)"; vrc=$?
+if [[ "$vrc" -eq 0 && "$vo" == *"IDENTITY_PASS"* && "$vo" == *"何も検査していません"* && "$vo" == *"--full"* ]]; then
+  pass
+else
+  fail "rc=$vrc out=$vo"
+fi
+
 it "許可 email を解決できない場合は fail-closed（exit 1）"
 vr2="$(new_workdir)/vr2"; mk_repo "$vr2" load-project-env.sh verify-commit-identity.sh
 commit_as "$vr2" "allowed@example.com" "allowed@example.com" c1

@@ -1923,6 +1923,12 @@ main() {
 
   if [[ -z "$records" ]]; then
     echo "[identity] 検査対象のコミットがありません（範囲: $range）"
+    # 判定は通過のまま変えない（push 前のゲートとしては、これから push するコミットが
+    # 無いだけである）。ただ、何も検査していないことを読み取れるよう、push 済みの
+    # 履歴を確かめる手段を示す（#442）。全履歴（HEAD）で空なら案内しても意味が無い。
+    if [[ "$range" != "HEAD" ]]; then
+      echo "[identity] この範囲では何も検査していません。push 済みの履歴まで確かめるなら: bash scripts/verify-commit-identity.sh --full"
+    fi
     echo "IDENTITY_PASS"
     exit 0
   fi
