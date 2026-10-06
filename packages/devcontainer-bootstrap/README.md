@@ -725,7 +725,15 @@ CI に固有の email を焼き込まないため、**利用側リポジトリ�
 1. GitHub リポジトリの **Settings → Secrets and variables → Actions → Variables** を開く。
 2. `ALLOWED_AUTHOR_EMAILS` という **Repository variable** を作成し、許可する author email を設定する（複数はカンマまたは空白区切り。例: `you@example.com`）。
 
-未設定のまま CI が走ると、`verify-commit-identity.sh` は許可 email を解決できず fail-closed で失敗します（検査を素通りさせないため）。コンテナ内・手元では `.env` の `GIT_IDENTITY_EMAIL` が自動でフォールバックとして使われるため、通常は追加設定なしで `bash scripts/verify-commit-identity.sh` を実行できます。
+未設定のまま CI が走ると、`verify-commit-identity.sh` は許可 email を解決できず fail-closed で失敗します（検査を素通りさせないため）。
+
+**新しいリポジトリでは、最初の push より前に変数を設定します。** リポジトリ変数はリポジトリを作ってからでないと設定できないため、生成物をそのまま最初に push すると、その push の identity-guard は必ず失敗します（失敗の理由は、ジョブのログに「リポジトリ変数 `ALLOWED_AUTHOR_EMAILS` を設定してください」と出ます）。順番は次のとおりです。
+
+1. GitHub でリポジトリを作る（まだ push しない）
+2. 上の手順で `ALLOWED_AUTHOR_EMAILS` を設定する
+3. push する
+
+先に push してしまった場合は、変数を設定してから、失敗した identity-guard の実行を再実行してください（`gh run rerun <実行 ID> --failed`、または Actions の画面の「Re-run failed jobs」）。fail-closed の動作としては正しく、設定すれば緑になります。コンテナ内・手元では `.env` の `GIT_IDENTITY_EMAIL` が自動でフォールバックとして使われるため、通常は追加設定なしで `bash scripts/verify-commit-identity.sh` を実行できます。
 
 ## 機密混入検査
 
