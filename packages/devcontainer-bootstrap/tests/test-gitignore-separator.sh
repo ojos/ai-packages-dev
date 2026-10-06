@@ -19,6 +19,14 @@ echo "test-gitignore-separator"
 IMG="mcr.microsoft.com/devcontainers/base:noble"
 BEGIN_MARK="# >>> devcontainer-bootstrap managed section >>>"
 
+# 管理区画には github/gitignore のテンプレートを curl で取得して入れる。取得の成否や
+# 公開内容が実行ごとに変わると「同じ入力」にならないため、curl を固定の出力へ差し替える。
+STUB_BIN="$(new_workdir)/bin"
+mkdir -p "$STUB_BIN"
+printf '#!/bin/sh\nprintf "%%s\\n" "stub-template-entry"\n' > "$STUB_BIN/curl"
+chmod +x "$STUB_BIN/curl"
+export PATH="$STUB_BIN:$PATH"
+
 gen() { # out [args...]
   local out="$1"; shift
   bash "$BOOTSTRAP" --project-name sep --languages node --base-image "$IMG" --output-dir "$out" "$@" >/dev/null 2>&1
@@ -26,11 +34,6 @@ gen() { # out [args...]
 upgrade() { # out — 終了コードは UP_RC
   bash "$BOOTSTRAP" --upgrade --output-dir "$1" >/dev/null 2>&1
   UP_RC=$?
-}
-# 管理区画より前の部分（プロジェクトの記述と区切りの空行）。区画の中身は
-# github/gitignore のテンプレートを取得するため実行ごとに変わり得るので比べない。
-before_section() {
-  awk -v start="$BEGIN_MARK" '$0 == start {exit} {print}' "$1" | cksum
 }
 # 管理区画の開始行の直前に並ぶ空行の数
 blank_lines_before_section() {
@@ -48,18 +51,21 @@ mkdir -p "$out"
 printf 'node_modules\nmy-local-file\n' > "$out/.gitignore"
 gen "$out"
 
+it "管理区画のテンプレートは差し替えた curl から入る（入力が固定されている）"
+if grep -qx 'stub-template-entry' "$out/.gitignore"; then pass; else fail "差し替えが効いていない"; fi
+
 it "生成直後、プロジェクトの記述と管理区画の間の空行は 1 行"
 assert_eq "$(blank_lines_before_section "$out/.gitignore")" "1"
 
 upgrade "$out"; rc1=$UP_RC
-first="$(before_section "$out/.gitignore")"
+first="$(cksum < "$out/.gitignore")"
 upgrade "$out"; rc2=$UP_RC
-second="$(before_section "$out/.gitignore")"
+second="$(cksum < "$out/.gitignore")"
 
 it "--upgrade は 2 回とも成功する"
 assert_eq "$rc1,$rc2" "0,0"
 
-it "--upgrade を 2 回続けても、2 回目で管理区画より前の部分が変わらない"
+it "--upgrade を 2 回続けても、2 回目で .gitignore が変わらない"
 assert_eq "$second" "$first"
 
 it "--upgrade を重ねても、区切りの空行は 1 行のまま"
