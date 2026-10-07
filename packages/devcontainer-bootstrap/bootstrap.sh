@@ -459,9 +459,10 @@ EOF2
   # 書き直す。対象パスの既存の accepted: 行を落とし、accept のぶんを末尾へ足す。
   # 中身だけを差し替える（cat > で、ORIGIN のモード・所有者を変えない）。
   tmp="$(mktemp "${TMPDIR:-/tmp}/dcb-accept.XXXXXX")"
-  awk -v acts="$actions" '
+  # 一覧は改行を含むので -v ではなく環境変数で渡す（macOS の awk は -v の値の改行を拒む）。
+  DCB_ACCEPT_ACTIONS="$actions" awk '
     BEGIN {
-      n = split(acts, a, "\n")
+      n = split(ENVIRON["DCB_ACCEPT_ACTIONS"], a, "\n")
       for (i = 1; i <= n; i++) {
         if (a[i] == "") continue
         split(a[i], f, "\t")
@@ -9996,7 +9997,8 @@ write_playbook_version_file() {
 #   現物が無い                                  -> 生成する（新しい版で増えた分・消えた分）
 #   現物 = 新しい版                             -> 更新済み（手を入れていても、同じ内容なら）
 #   現物 = 記録したハッシュ（手を入れていない） -> 新しい版で更新する（モードは変えない）
-#   新しい版 = 記録 かつ 現物 ≠ 記録（手を入れた）-> 雛形が変わっていないので、温存して報告するだけ
+#   新しい版 = 記録 かつ 現物 = accepted（手を入れ、取り込み済みにした）
+#                                               -> 雛形が変わっていないので、温存して報告するだけ
 #                                               （.dcb-new は置かず、残っている古い .dcb-new も消さない）
 #   上記以外（手を入れた。記録が無い現物も含む）-> 上書きせず <path>.dcb-new を置く
 #
@@ -10094,7 +10096,7 @@ upgrade_write_new() {
 }
 
 upgrade_apply_file() {
-  local dest="$1" src="$2" rel newh curh rec mode verb
+  local dest="$1" src="$2" rel newh curh rec acc mode verb
   rel="${dest#"$OUTPUT_DIR"/}"
   if ! upgrade_parent_inside_output "$dest"; then
     echo "error: $dest の親ディレクトリが出力先の外を指しています（シンボリックリンク）。書き込まずに止めます。" >&2
@@ -10159,9 +10161,13 @@ upgrade_apply_file() {
     return 0
   fi
 
-  # 雛形が変わっていない（新しい版 = 記録）。取り込むべき差分が無いので .dcb-new は置かない。
-  # 手を入れたことが取り込み済みかどうかは、ORIGIN の accepted:（--accept）が判断する。
-  if [[ -n "$rec" && "$newh" == "$rec" ]]; then
+  # 雛形が変わっておらず（新しい版 = 記録）、現物が取り込み済みの記録（accepted:）と一致する。
+  # 取り込むべき差分が無いので .dcb-new は置かない。
+  # accepted と一致しない現物には、雛形が変わっていなくても .dcb-new を置く。.dcb-new を置いた
+  # 時点で hash: は新しい版になり accepted: は外れるので、取り込む前に .dcb-new を失っても、
+  # 同じ版の --upgrade をやり直せば作り直される（hash: だけで判定すると作り直されない）。
+  acc="$(dcb_origin_get "$OUTPUT_DIR/$ORIGIN_REL_PATH" "accepted:$rel" 2>/dev/null || true)"
+  if [[ -n "$rec" && "$newh" == "$rec" && -n "$acc" && "$curh" == "$acc" ]]; then
     if [[ "$DRY_RUN" == "true" ]]; then
       echo "plan: keep (modified, template unchanged) $dest"
     else

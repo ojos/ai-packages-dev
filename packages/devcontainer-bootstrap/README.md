@@ -303,8 +303,8 @@ fi
 | 状態 | 動作 | 出力 |
 |---|---|---|
 | 手を入れていない（現物 = 記録したハッシュ） | 新しい版で更新する | `write: <path> (upgraded)` |
-| 手を入れた（現物 ≠ 記録）が、新しい版 = 記録（雛形が変わっていない） | 取り込むべき差分が無いので、現物を温存して報告するだけ。`.dcb-new` は置かず、残っている古い `.dcb-new` も消さない | `keep (modified, template unchanged)` |
-| 手を入れた（現物 ≠ 記録）、または記録が無く新しい版と違う（雛形が変わった） | 上書きせず `<path>.dcb-new` を隣へ置き、差分の要約を出す。`.dcb-new` のモードは元のファイルに揃える | `keep (modified)` / `keep (no record)` |
+| 手を入れて取り込み済みにした（現物 = `accepted:`）うえで、新しい版 = 記録（雛形が変わっていない） | 取り込むべき差分が無いので、現物を温存して報告するだけ。`.dcb-new` は置かず、残っている古い `.dcb-new` も消さない | `keep (modified, template unchanged)` |
+| 手を入れた（現物 ≠ 記録）が取り込み済みではない、または雛形が変わった、または記録が無く新しい版と違う | 上書きせず `<path>.dcb-new` を隣へ置き、差分の要約を出す。`.dcb-new` のモードは元のファイルに揃える | `keep (modified)` / `keep (no record)` |
 | 新しい版で増えた（現物が無い） | 生成する | `write: <path> (new)` |
 | 手を入れたが新しい版と同じ内容 | 更新済みとして扱い、古い `.dcb-new` があれば消す | `up-to-date` |
 | 新しい版で生成されなくなった | **報告するだけで削除しない**。記録からは外す | `no longer generated (not deleted)` |
@@ -342,7 +342,8 @@ bash bootstrap.sh --accept scripts/verify.sh --output-dir <生成先> --dry-run 
 - 現物が `hash:` と一致するパスは、`accepted:` を外して「変更なし」（`unchanged:`）と報告します。同じパスを再度渡すと、行を差し替えます（行は 1 行のまま）。
 - 生成の引数（`--project-name` / `--languages` / `--with-*` / `--without-*` / `--base-image` / `--force` / `--no-gitignore` / `--gitignore-targets` / 規範の取得元など）や `--upgrade` と一緒に渡すと、何も書かずに止まります。`--output-dir` と `--dry-run` は併用できます（`--dry-run` は `plan:` 行だけを出し、ORIGIN を変えません）。パスは出力先からの相対パスで指定します。
 - 取り込み済みの記録は、**その内容の現物だけ**を許します。記録したあとでさらに手を入れると、`doctor.sh` は再び FAIL を出します（本当の乖離は引き続き検知します）。
-- 雛形が変わっていない版への `--upgrade` では、手を入れたファイルに `.dcb-new` を置かず、`accepted:` も引き継ぎます。したがって、取り込みを済ませて `--accept` したファイルは、`--upgrade` を繰り返しても `doctor.sh --strict` が 0 で終わる状態を保てます。
+- 雛形が変わっていない版への `--upgrade` では、取り込み済みにしたファイル（現物 = `accepted:`）に `.dcb-new` を置かず、`accepted:` も引き継ぎます。したがって、取り込みを済ませて `--accept` したファイルは、`--upgrade` を繰り返しても `doctor.sh --strict` が 0 で終わる状態を保てます。
+- 手を入れても `--accept` していないファイルには、雛形が変わっていなくても `.dcb-new` を置きます。`.dcb-new` を取り込む前に失った場合も、同じ版で `--upgrade` をやり直せば作り直されます（`.dcb-new` を置いた時点で `accepted:` は外れるため）。
 
 `--upgrade` の注意:
 

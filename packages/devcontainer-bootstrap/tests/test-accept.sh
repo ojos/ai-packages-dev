@@ -5,7 +5,8 @@
 # 確かめること:
 #   - 手を入れて --accept したあと、doctor.sh --strict が 0 で終わる
 #   - accept したあとでさらに手を入れると FAIL に戻る
-#   - 雛形が変わっていない版への --upgrade では、手を入れたファイルに .dcb-new を置かない
+#   - 雛形が変わっていない版への --upgrade では、取り込み済みにしたファイルに .dcb-new を置かない
+#     （accept していないファイル・取り込む前に失った .dcb-new には、従来どおり置く）
 #   - 雛形が変わった版への --upgrade では .dcb-new を置き、accepted を外す（doctor は FAIL）
 #   - 受け付けない入力は 0 以外で止まり、ORIGIN を変えない
 #   - --accept --dry-run は ORIGIN を変えない
@@ -103,7 +104,7 @@ gen "$out"
 edit "$out" "$TARGET"
 accept "$out" "$TARGET"
 
-it "雛形が変わっていない版への --upgrade では、手を入れたファイルに .dcb-new を置かない"
+it "雛形が変わっていない版への --upgrade では、取り込み済みにしたファイルに .dcb-new を置かない"
 upgrade "$out"
 if [[ "$UP_RC" == "0" && ! -e "$out/$TARGET.dcb-new" && "$UP_OUT" == *"keep (modified, template unchanged): $out/$TARGET"* ]]; then pass; else fail "rc=$UP_RC $UP_OUT"; fi
 
@@ -119,15 +120,21 @@ it "--upgrade --dry-run も、雛形が変わっていなければ plan: keep �
 upgrade "$out" --dry-run
 if [[ "$UP_RC" == "0" && "$UP_OUT" == *"plan: keep (modified, template unchanged) $out/$TARGET"* && ! -e "$out/$TARGET.dcb-new" ]]; then pass; else fail "rc=$UP_RC"; fi
 
-it "accept せず手を入れただけのファイルも、雛形が変わっていなければ .dcb-new を置かない"
+it "残っている古い .dcb-new は、取り込み済みのファイルでも消さない（終了コード 2 で報告）"
+printf 'stale\n' > "$out/$TARGET.dcb-new"
+upgrade "$out"
+if [[ "$UP_RC" == "2" && "$(cat "$out/$TARGET.dcb-new")" == "stale" ]]; then pass; else fail "rc=$UP_RC"; fi
+rm -f "$out/$TARGET.dcb-new"
+
+it "accept せず手を入れただけのファイルには、雛形が変わっていなくても .dcb-new を置く"
 edit "$out" "$OTHER"
 upgrade "$out"
-if [[ "$UP_RC" == "0" && ! -e "$out/$OTHER.dcb-new" ]]; then pass; else fail "rc=$UP_RC"; fi
-
-it "残っている古い .dcb-new は、雛形が変わっていなくても消さない（終了コード 2 で報告）"
-printf 'stale\n' > "$out/$OTHER.dcb-new"
-upgrade "$out"
 if [[ "$UP_RC" == "2" && -f "$out/$OTHER.dcb-new" ]]; then pass; else fail "rc=$UP_RC"; fi
+
+it "取り込む前に失った .dcb-new は、同じ版の --upgrade をやり直すと作り直される"
+rm -f "$out/$OTHER.dcb-new"
+upgrade "$out"
+if [[ "$UP_RC" == "2" && -f "$out/$OTHER.dcb-new" ]]; then pass; else fail "rc=$UP_RC 出力: $UP_OUT"; fi
 rm -f "$out/$OTHER.dcb-new"
 
 # ── 雛形が変わった版への --upgrade ───────────────────────────────────────────
