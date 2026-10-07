@@ -672,8 +672,8 @@ image_supports_platform() {
   manifest="$(docker manifest inspect "$image" 2>/dev/null || true)"
   [[ -n "$manifest" ]] || return 1
 
-  printf '%s' "$manifest" | grep -q "\"os\": \"$os\"" || return 1
-  printf '%s' "$manifest" | grep -q "\"architecture\": \"$arch\"" || return 1
+  printf '%s' "$manifest" | grep "\"os\": \"$os\"" >/dev/null || return 1
+  printf '%s' "$manifest" | grep "\"architecture\": \"$arch\"" >/dev/null || return 1
   return 0
 }
 
@@ -2865,7 +2865,7 @@ fi
 
 while IFS= read -r key; do
   [[ -n "$key" ]] || continue
-  if printf '%s' "$key" | grep -Eqi "$SECRET_KEY_RE"; then
+  if printf '%s' "$key" | grep -Ei "$SECRET_KEY_RE" >/dev/null; then
     ng "$ENV_EXAMPLE に値が入っています（雛形はキー名だけを共有する）: $key"
   fi
 done <<<"$example_valued"
@@ -3697,20 +3697,20 @@ printf '%s\n' \
 diag="$(awk -v DIR="." -v FILE="selftest.md" -f "$EXTRACT" "$selftest")" \
   || fail "自己診断で抽出器が異常終了しました。検査が成立していないため失敗させます。"
 
-printf '%s\n' "$diag" | grep -q "^L	absent.md	" \
+printf '%s\n' "$diag" | grep "^L	absent.md	" >/dev/null \
   || fail "自己診断に失敗しました: 壊れたリンクを抽出できません。検査が成立していないため失敗させます。"
-printf '%s\n' "$diag" | grep -q "^L	present.md	" \
+printf '%s\n' "$diag" | grep "^L	present.md	" >/dev/null \
   || fail "自己診断に失敗しました: 正常なリンクを抽出できません。検査が成立していないため失敗させます。"
-if printf '%s\n' "$diag" | grep -q "nope-in-bt-fence.md"; then
+if printf '%s\n' "$diag" | grep "nope-in-bt-fence.md" >/dev/null; then
   fail "自己診断に失敗しました: 3 連バッククォートのフェンスの内側を拾っています。検査が成立していないため失敗させます。"
 fi
-if printf '%s\n' "$diag" | grep -q "nope-in-tilde-fence.md"; then
+if printf '%s\n' "$diag" | grep "nope-in-tilde-fence.md" >/dev/null; then
   fail "自己診断に失敗しました: ~~~ のフェンスの内側を拾っています。検査が成立していないため失敗させます。"
 fi
-if printf '%s\n' "$diag" | grep -q "tel:"; then
+if printf '%s\n' "$diag" | grep "tel:" >/dev/null; then
   fail "自己診断に失敗しました: スキーム付きのリンクを相対パスとして扱っています。検査が成立していないため失敗させます。"
 fi
-if printf '%s\n' "$diag" | grep -q "^U	"; then
+if printf '%s\n' "$diag" | grep "^U	" >/dev/null; then
   fail "自己診断に失敗しました: 閉じているフェンスを未閉と判定しています。検査が成立していないため失敗させます。"
 fi
 
@@ -3718,7 +3718,7 @@ unclosed_test="$WORK/selftest-unclosed.md"
 printf '%s\n' '```' '[in-open-fence](nope.md)' > "$unclosed_test"
 diag_unclosed="$(awk -v DIR="." -v FILE="selftest-unclosed.md" -f "$EXTRACT" "$unclosed_test")" \
   || fail "自己診断で抽出器が異常終了しました。検査が成立していないため失敗させます。"
-printf '%s\n' "$diag_unclosed" | grep -q "^U	" \
+printf '%s\n' "$diag_unclosed" | grep "^U	" >/dev/null \
   || fail "自己診断に失敗しました: 閉じていないフェンスを検出できません。検査が成立していないため失敗させます。"
 
 # ── 追跡対象の集合を作る ─────────────────────────────────────────────────────
@@ -10263,9 +10263,9 @@ upgrade_report_removed() {
   off_rels="$(upgrade_off_rels)"
   while IFS= read -r rel; do
     [[ -n "$rel" ]] || continue
-    if printf '%s\n' "$new_rels" | grep -Fxq -- "$rel"; then continue; fi
+    if printf '%s\n' "$new_rels" | grep -Fx -- "$rel" >/dev/null; then continue; fi
     dest="$OUTPUT_DIR/$rel"
-    if [[ -n "$off_rels" ]] && printf '%s\n' "$off_rels" | grep -Fxq -- "$rel"; then
+    if [[ -n "$off_rels" ]] && printf '%s\n' "$off_rels" | grep -Fx -- "$rel" >/dev/null; then
       if [[ -L "$dest" || ( -e "$dest" && ! -f "$dest" ) ]]; then
         echo "keep (symlink or not a regular file, no longer generated): $dest"
       elif [[ ! -e "$dest" ]]; then
@@ -10472,7 +10472,7 @@ write_origin_record() {
   while IFS= read -r rel; do
     [[ -n "$rel" ]] || continue
     [[ "$UPGRADE" == "true" ]] && break
-    if printf '%s' "$SKIPPED_DESTS" | grep -Fxq -- "$OUTPUT_DIR/$rel"; then
+    if printf '%s' "$SKIPPED_DESTS" | grep -Fx -- "$OUTPUT_DIR/$rel" >/dev/null; then
       skipped_rel="$rel"
       break
     fi

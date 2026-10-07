@@ -257,7 +257,7 @@ it "引数に read-only sandbox / color never / --output-schema / -o が含ま�
 argv="$(cat "$RECORD/argv" 2>/dev/null || true)"
 missing=""
 for needed in exec - --sandbox read-only --color never --output-schema -o; do
-  printf '%s\n' "$argv" | grep -qx -- "$needed" || missing="$missing $needed"
+  printf '%s\n' "$argv" | grep -x -- "$needed" >/dev/null || missing="$missing $needed"
 done
 if [[ -z "$missing" ]]; then pass; else fail "引数に無いトークン:$missing"; fi
 

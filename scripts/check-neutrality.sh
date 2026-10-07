@@ -48,12 +48,12 @@ while IFS= read -r line; do
   probe="${line//ojos\/devcontainer-bootstrap/$SENTINEL}"
   probe="${probe//ojos\/ai-playbook/$SENTINEL}"
 
-  if printf '%s' "$probe" | grep -qE "${SENTINEL}[A-Za-z0-9_-]"; then
+  if printf '%s' "$probe" | grep -E "${SENTINEL}[A-Za-z0-9_-]" >/dev/null; then
     hits="${hits}${line}"$'\n'
     continue
   fi
 
-  if printf '%s' "${probe//$SENTINEL/}" | grep -qiE "$FORBIDDEN"; then
+  if printf '%s' "${probe//$SENTINEL/}" | grep -iE "$FORBIDDEN" >/dev/null; then
     hits="${hits}${line}"$'\n'
   fi
 done <<< "$raw"

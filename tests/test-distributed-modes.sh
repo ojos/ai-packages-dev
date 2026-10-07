@@ -132,7 +132,7 @@ esac
 # in_dist <パス>
 #   配布物一覧に含まれるか。**判定をここ 1 つに置き、含む側と含まない側の両方を通す。**
 in_dist() {
-  printf '%s\n' "$DIST_SH" | grep -qxF "$1"
+  printf '%s\n' "$DIST_SH" | grep -xF "$1" >/dev/null
 }
 
 it "対照群に選んだ .sh が配布対象に含まれない（本体と対象が重なっていない）"

@@ -91,14 +91,14 @@ fi
 
 it "引数は @<パス> 参照で、差分を直接引数へ埋め込んでいない"
 argv="$(cat "$RECORD/argv" 2>/dev/null || true)"
-if printf '%s\n' "$argv" | grep -q '^@'; then
+if printf '%s\n' "$argv" | grep '^@' >/dev/null; then
   pass
 else
   fail "@ 参照が見つからない: $argv"
 fi
 
 it "プロンプトに判定トークンの指示（VERDICT: LGTM）が残っている（JSON スキーマ方式へ変わっていない）"
-if printf '%s\n' "$argv" | grep -q 'VERDICT: LGTM'; then
+if printf '%s\n' "$argv" | grep 'VERDICT: LGTM' >/dev/null; then
   pass
 else
   fail "判定トークンの指示が無い"
