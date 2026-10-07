@@ -535,8 +535,10 @@ expect_calls \
   "devcontainer [exec] [--workspace-folder] [$A] [tmux] [new-session] [-A] [-s] [main]"
 expect_err "dev doctor alpha"
 expect_err "dev rebuild alpha"
-# 入れたあとにセッションが異常終了した場合も、元の終了コードを捨てない（区別できないと言う）。
-run 7 "attach: 終了コードをそのまま返す" -- FAKE_TMUX_EXIT=7 -- attach alpha
+# 入れたあとにセッションが異常終了した場合も、dev は 1 で終わり（0/1/2 の取り決め）、
+# 元の終了コードは文面に出す（区別できないと言う）。
+run 1 "attach: 1 以外のコードでも 1 で終わり、元のコードを文面に出す" -- FAKE_TMUX_EXIT=7 -- attach alpha
+expect_err "dev doctor alpha"
 expect_err "終了コード 7"
 expect_err "区別できません"
 
@@ -738,10 +740,36 @@ mk_cg 4242 "$CG" 500 1000 0 0
 set_pids / 2 2   # 根の pids.max は本物には無いが、あっても遡れること
 run 1 "doctor: 根まで遡る" -- -- doctor alpha
 expect_out_line '階層: /）'
+# 上位の階層で pids.max が有限なのに pids.current が読めない／壊れているときは、黙って無視しない。
+mk_cg 4242 "$CG" 20 max 0 0
+mkdir -p "$WORK/cg/system.slice"
+printf '1000\n' >"$WORK/cg/system.slice/pids.max"
+run 3 "doctor: 上位の pids.current が読めない" -- -- doctor alpha
+expect_out_line '\[WARN\] pids.current を読めません（階層: /system.slice。pids.max は 1000）'
+if grep -qF '上限なし' "$OUT"; then ng "上位の pids.current が読めないのに「上限なし」と出ています"; fi
+mk_cg 4242 "$CG" 20 max 0 0
+mkdir -p "$WORK/cg/system.slice"
+printf 'bogus\n' >"$WORK/cg/system.slice/pids.max"
+run 3 "doctor: 上位の pids.max が壊れている" -- -- doctor alpha
+expect_out_line '\[WARN\] pids.max が数でも max でもありません: bogus（階層: /system.slice）'
+# DEV_EXEC_TIMEOUT は 1 以上の整数だけ（GNU の timeout 0 は無制限になり、返らなくなる）。
+for tv in 0 abc -5 1.5; do
+  run 2 "doctor: DEV_EXEC_TIMEOUT=$tv は使い方の誤り" -- DEV_EXEC_TIMEOUT="$tv" -- doctor alpha
+  expect_err "DEV_EXEC_TIMEOUT は 1 以上の整数"
+  expect_no_calls
+done
 # ゾンビが多い環境（issue の実測は 18000 超）でも、ゾンビの数に比例してプロセスを起こさず、
 # 短い時間で終わる（1 個ごとにサブシェルを起こすと数十秒かかる）。
 mk_cg 4242 "$CG" 20 1000 0 0
-mkdir -p "$WORK/proc/"{20000..37999}
+# mkdir の引数が長くなりすぎないよう（macOS の上限を超えうる）、1000 個ずつ作る。
+zdirs=()
+for ((zk = 20000; zk < 38000; zk++)); do
+  zdirs+=("$WORK/proc/$zk")
+  if [[ ${#zdirs[@]} -ge 1000 ]]; then
+    mkdir -p "${zdirs[@]}"
+    zdirs=()
+  fi
+done
 for ((zk = 20000; zk < 38000; zk++)); do
   printf '0::%s\n' "$CG" >"$WORK/proc/$zk/cgroup"
   printf '%s Z\n' "$zk" >>"$STATE/ps"

@@ -231,11 +231,11 @@ cmd_attach() {
     # 入れない（exec が通らない）ときの手がかりを出す。コンテナが running でも入れないことがある
     # （プロセス数の上限に達したときなど。dev ls の CONTAINER では見分けられない）。
     # 「入れなかった」と「入れたあとにセッションが異常終了した」は終了コードから区別できないので、
-    # どちらとも断定せず、元の終了コードをそのまま返す。
+    # どちらとも断定せず、元の終了コードは文面に出す。dev 自身は 1 で終わる（0/1/2 の取り決め）。
     echo "[$PROG] $1: 入れなかった、またはセッションが異常終了しました（終了コード $rc。この 2 つは区別できません）。" >&2
     echo "[$PROG] 原因の切り分け: dev doctor $1" >&2
     echo "[$PROG] 作り直し:       dev rebuild $1" >&2
-    return "$rc"
+    return 1
   fi
 }
 
@@ -394,6 +394,10 @@ cgroup_path_of() {
 # 「動いているのに入れない」を見分ける。1 つでも FAIL なら 1、WARN だけなら 3、無ければ 0。
 cmd_doctor() {
   [[ $# -eq 1 ]] || usage_error "使い方: dev doctor <名前>"
+  # GNU の timeout 0 は時間制限を無効にするので、0 や数でない値は受け付けない（返らなくなりうる）。
+  if [[ -n "${DEV_EXEC_TIMEOUT:-}" ]] && { ! is_uint "$DEV_EXEC_TIMEOUT" || [[ "$DEV_EXEC_TIMEOUT" -lt 1 ]]; }; then
+    usage_error "DEV_EXEC_TIMEOUT は 1 以上の整数（秒）で指定します: $DEV_EXEC_TIMEOUT"
+  fi
   load_projects
   find_project "$1"
   need_project_dir
@@ -418,7 +422,6 @@ cmd_doctor() {
 
   if [[ "$state" == "running" ]]; then
     local ec=0 eout tmp secs="${DEV_EXEC_TIMEOUT:-30}"
-    is_uint "$secs" || secs=30
     tmp="$(mktemp "${TMPDIR:-/tmp}/dev-doctor.XXXXXX" 2>/dev/null)" || tmp=/dev/null
     run_limited "$secs" "$tmp" devcontainer exec --workspace-folder "$path" true || ec=$?
     eout="$(tail -n 1 "$tmp" 2>/dev/null || true)"
@@ -500,6 +503,16 @@ doctor_pids() {
     max=""
     if [[ -r "$dir/pids.max" ]]; then read -r max <"$dir/pids.max" || true; fi
     if [[ -r "$dir/pids.current" ]]; then read -r cur <"$dir/pids.current" || true; fi
+    if [[ "$own" -eq 0 && -n "$max" && "$max" != "max" ]]; then
+      # 上位の階層は、上限があるのに読めない・壊れているときに黙って無視しない（上限なしと誤らない）。
+      if ! is_uint "$max"; then
+        doc_line WARN "pids.max が数でも max でもありません: $max（階層: $path）"
+        warned=1
+      elif ! is_uint "$cur"; then
+        doc_line WARN "pids.current を読めません（階層: $path。pids.max は $max）"
+        warned=1
+      fi
+    fi
     if [[ "$own" -eq 1 ]]; then
       # コンテナ自身の階層は、読めないこと自体を警告する（上位の階層の欠落は根で自然に起きる）。
       own=0
@@ -638,9 +651,8 @@ devcontainer exec で tmux new-session -A -s <セッション名> を呼ぶ。�
 設定ファイルの tmux_session=<名前> で変えられる。コンテナは起こさない（ユニットが起こし直している
 最中に 2 本目の up を重ねないため）。
 
-終了コード: 0 = 成功 / 1 = コンテナが動いていない / 2 = 使い方か設定の誤り /
-            それ以外 = 中へ入れなかった、または tmux のセッションが異常終了した（その終了コードをそのまま返す。
-            この 2 つは区別できない）
+終了コード: 0 = 成功 / 1 = コンテナが動いていない、または中へ入れなかった・セッションが異常終了した
+            （この 2 つは区別できない。元の終了コードは案内の文面に出す） / 2 = 使い方か設定の誤り
 失敗したとき:
   コンテナが動いていない  dev up <名前>（ユニットを有効にしていれば 30 秒ほどで戻る）
   入れなかった           dev doctor <名前> で切り分け、直らなければ dev rebuild <名前>
@@ -699,7 +711,7 @@ pids の上限に当たった回数 / ゾンビの数 / memory.events の oom_ki
 cgroup は /proc/<コンテナの PID>/cgroup から求める（cgroup v2）。
 pids の上限は、コンテナの cgroup から根まで遡り、上限のある階層のうち現在値 / 上限 の比が最大のもので
 判定して、その階層を表示する（systemd の slice の TasksMax などに当たっていても見逃さない）。
-exec は 30 秒（環境変数 DEV_EXEC_TIMEOUT で変えられる）で返らなければ FAIL にする。
+exec は 30 秒（環境変数 DEV_EXEC_TIMEOUT で変えられる。1 以上の整数）で返らなければ FAIL にする。
 
 判定:
   FAIL  exec が通らないか返らない / pids が上限の 90% 以上 / pids.max が 0 /
