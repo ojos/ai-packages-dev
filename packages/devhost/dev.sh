@@ -70,8 +70,9 @@ usage() {
   dev help [サブコマンド]
 
 サブコマンドごとの説明は dev help <サブコマンド>。
-プロジェクトの一覧は ${DEV_PROJECTS_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/dev/projects} から読む。
 EOF
+  # 設定ファイルのパスは機械ごとに変わるので、ここで展開して出す（説明文の正本 help_* には入れない）。
+  printf 'プロジェクトの一覧は %s から読む。\n' "$(projects_file)"
 }
 
 projects_file() {
@@ -201,6 +202,18 @@ cmd_up() {
   devcontainer up --workspace-folder "${P_PATHS[$IDX]}"
 }
 
+# systemd のユニットの状態の語（active / activating / inactive / failed など）を出す。
+# systemctl が無い、または何も出ないときは - （不明）。is-active は状態の語を 1 行出し、
+# active 以外では 0 以外で抜ける。
+unit_state() {
+  local s="-"
+  if command -v systemctl >/dev/null 2>&1; then
+    s="$(systemctl --user is-active "$1" 2>/dev/null || true)"
+    [[ -n "$s" ]] || s="-"
+  fi
+  printf '%s\n' "$s"
+}
+
 cmd_attach() {
   [[ $# -eq 1 ]] || usage_error "使い方: dev attach <名前>"
   load_projects
@@ -217,10 +230,12 @@ cmd_attach() {
   if [[ "$rc" -ne 0 ]]; then
     # 入れない（exec が通らない）ときの手がかりを出す。コンテナが running でも入れないことがある
     # （プロセス数の上限に達したときなど。dev ls の CONTAINER では見分けられない）。
-    echo "[$PROG] $1: コンテナの中へ入れませんでした（終了コード $rc）。" >&2
+    # 「入れなかった」と「入れたあとにセッションが異常終了した」は終了コードから区別できないので、
+    # どちらとも断定せず、元の終了コードをそのまま返す。
+    echo "[$PROG] $1: 入れなかった、またはセッションが異常終了しました（終了コード $rc。この 2 つは区別できません）。" >&2
     echo "[$PROG] 原因の切り分け: dev doctor $1" >&2
     echo "[$PROG] 作り直し:       dev rebuild $1" >&2
-    return 1
+    return "$rc"
   fi
 }
 
@@ -235,12 +250,7 @@ cmd_ls() {
     path="${P_PATHS[$i]}"
     row="$(container_of "$path" || true)"
     if [[ -z "$row" ]]; then state="none"; else state="${row#* }"; fi
-    unit="-"
-    if command -v systemctl >/dev/null 2>&1; then
-      # is-active は状態の語を 1 行出し、active 以外では 0 以外で抜ける。
-      unit="$(systemctl --user is-active "dev-up@${P_NAMES[$i]}.service" 2>/dev/null || true)"
-      [[ -n "$unit" ]] || unit="-"
-    fi
+    unit="$(unit_state "dev-up@${P_NAMES[$i]}.service")"
     tmux_s="-"
     if [[ "$state" == "running" ]] && command -v devcontainer >/dev/null 2>&1; then
       # =名前 は完全一致（tmux は -t の名前を前方一致でも引くため）。
@@ -277,6 +287,16 @@ cmd_supervise() {
   die "$1: コンテナ $id が止まりました（終了コード $code）。ユニットが起こし直します。"
 }
 
+# rebuild の途中で INT / HUP / TERM を受けたとき、止めたユニットを起こし直してから抜ける。
+# 子（devcontainer up）の実行中に届いたシグナルは、子が終わってから処理される。
+RB_UNIT=""
+rebuild_abort() {
+  trap - INT HUP TERM
+  echo "[$PROG] 中断されました（$2）。止めたユニット $RB_UNIT を起こし直します。" >&2
+  systemctl --user start "$RB_UNIT" || echo "[$PROG] ユニット $RB_UNIT を起こせませんでした。手で起こしてください。" >&2
+  exit "$1"
+}
+
 # コンテナを作り直す。ユニットが動いていれば先に止め、作り直したあとで起こし直す。
 # 止めずに作り直すと、ユニットの up（dev supervise）が作り直しの途中で重なりうる。
 cmd_rebuild() {
@@ -302,11 +322,23 @@ cmd_rebuild() {
     need git "git を入れてください。"
     git -C "$path" pull --ff-only || die "$name: git pull --ff-only が失敗したので、作り直しません: $path"
   fi
-  local had_unit=0 rc=0
-  if command -v systemctl >/dev/null 2>&1 && systemctl --user is-active "$unit" >/dev/null 2>&1; then
-    echo "[$PROG] $name: ユニット $unit を止めます（作り直しの途中で up が重ならないように）。"
-    systemctl --user stop "$unit" || die "$name: ユニット $unit を止められませんでした。何も作り直していません。"
-    had_unit=1
+  local had_unit=0 rc=0 ustate
+  ustate="$(unit_state "$unit")"
+  # 止めない状態は inactive / failed / 不明（systemctl が無い）だけ。Restart= の待機中（activating）や
+  # 停止処理中（deactivating）のユニットも、作り直しの途中で up を起こしうるので止める。
+  case "$ustate" in
+    inactive | failed | -) ;;
+    *) had_unit=1 ;;
+  esac
+  if [[ "$had_unit" -eq 1 ]]; then
+    echo "[$PROG] $name: ユニット $unit（$ustate）を止めます（作り直しの途中で up が重ならないように）。"
+    # 止めたあとの中断（ssh の切断など）でも起こし直す。止める前に張るのは、止めている最中の
+    # 中断でも戻せるようにするため（動いているユニットへの start は何も変えない）。
+    RB_UNIT="$unit"
+    trap 'rebuild_abort 130 INT' INT
+    trap 'rebuild_abort 129 HUP' HUP
+    trap 'rebuild_abort 143 TERM' TERM
+    systemctl --user stop "$unit" || { trap - INT HUP TERM; die "$name: ユニット $unit を止められませんでした。何も作り直していません。"; }
   fi
   echo "[$PROG] $name: コンテナを作り直します。"
   devcontainer up --workspace-folder "$path" --remove-existing-container || rc=$?
@@ -314,6 +346,7 @@ cmd_rebuild() {
     # 作り直しが失敗しても、止めたユニットは起こし直す（戻らないまま放置しない）。
     echo "[$PROG] $name: ユニット $unit を起こし直します。"
     systemctl --user start "$unit" || { echo "[$PROG] $name: ユニット $unit を起こせませんでした。" >&2; rc=1; }
+    trap - INT HUP TERM
   fi
   [[ "$rc" -eq 0 ]] || die "$name: 作り直しが失敗しました（終了コード $rc）。"
   echo "[$PROG] $name: 作り直しました。"
@@ -384,13 +417,18 @@ cmd_doctor() {
   fi
 
   if [[ "$state" == "running" ]]; then
-    local ec=0 eout tcmd=()
-    command -v timeout >/dev/null 2>&1 && tcmd=(timeout 30)
-    eout="$("${tcmd[@]+"${tcmd[@]}"}" devcontainer exec --workspace-folder "$path" true </dev/null 2>&1)" || ec=$?
+    local ec=0 eout tmp secs="${DEV_EXEC_TIMEOUT:-30}"
+    is_uint "$secs" || secs=30
+    tmp="$(mktemp "${TMPDIR:-/tmp}/dev-doctor.XXXXXX" 2>/dev/null)" || tmp=/dev/null
+    run_limited "$secs" "$tmp" devcontainer exec --workspace-folder "$path" true || ec=$?
+    eout="$(tail -n 1 "$tmp" 2>/dev/null || true)"
+    [[ "$tmp" == /dev/null ]] || rm -f "$tmp"
     if [[ "$ec" -eq 0 ]]; then
       doc_line OK "exec が通ります"
+    elif [[ "$ec" -eq 124 || "$ec" -eq 143 ]]; then
+      doc_line FAIL "exec が $secs 秒で返りません（止まっています）: $eout"
     else
-      doc_line FAIL "exec が通りません（終了コード $ec）: $(printf '%s\n' "$eout" | tail -n 1)"
+      doc_line FAIL "exec が通りません（終了コード $ec）: $eout"
     fi
 
     pid="$(docker inspect --format '{{.State.Pid}}' "$id" 2>/dev/null)" || pid=""
@@ -406,11 +444,8 @@ cmd_doctor() {
     fi
   fi
 
-  local ustate="-"
-  if command -v systemctl >/dev/null 2>&1; then
-    ustate="$(systemctl --user is-active "$unit" 2>/dev/null || true)"
-    [[ -n "$ustate" ]] || ustate="-"
-  fi
+  local ustate
+  ustate="$(unit_state "$unit")"
   doc_line INFO "ユニット $unit: $ustate"
   if command -v journalctl >/dev/null 2>&1; then
     echo "  ユニットのログの末尾:"
@@ -429,23 +464,86 @@ cmd_doctor() {
   echo "[$PROG] 判定: OK"
 }
 
+# 時間を区切って実行する。引数: 秒数 出力先のファイル コマンド...。終了コードを返す
+# （時間切れは timeout なら 124、代替（kill）なら 143）。出力をパイプでなくファイルへ受けるのは、
+# 殺しきれなかった子が出力の口を握ったまま、受け取る側が返らなくなるのを避けるため。
+# timeout が無い環境（macOS など）では、バックグラウンドで起こして指定の秒数で kill する。
+run_limited() {
+  local secs="$1" out="$2" pid killer rc=0
+  shift 2
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "$secs" "$@" </dev/null >"$out" 2>&1 || rc=$?
+    return "$rc"
+  fi
+  "$@" </dev/null >"$out" 2>&1 &
+  pid=$!
+  (
+    sleep "$secs"
+    kill "$pid"
+  ) </dev/null >/dev/null 2>&1 &
+  killer=$!
+  { wait "$pid"; } 2>/dev/null || rc=$?
+  kill "$killer" >/dev/null 2>&1 || true
+  { wait "$killer"; } 2>/dev/null || true
+  return "$rc"
+}
+
+# pids の上限を、コンテナ自身の cgroup から根まで遡って見る。上位（systemd の slice の TasksMax など）に
+# 上限があり、そちらに当たっていても見逃さないため。上限のある階層のうち、現在値 / 上限 の比が
+# 最大のものを判定に使い、どの階層かを表示する。
+doctor_pids() {
+  local path="$1" dir cur max own=1 own_cur="" warned=0 zero=0
+  local best_cur="" best_max="" best_path="" pct
+  while :; do
+    dir="$CGROUP_ROOT$path"
+    cur=""
+    max=""
+    if [[ -r "$dir/pids.max" ]]; then read -r max <"$dir/pids.max" || true; fi
+    if [[ -r "$dir/pids.current" ]]; then read -r cur <"$dir/pids.current" || true; fi
+    if [[ "$own" -eq 1 ]]; then
+      # コンテナ自身の階層は、読めないこと自体を警告する（上位の階層の欠落は根で自然に起きる）。
+      own=0
+      own_cur="$cur"
+      if ! is_uint "$cur"; then
+        doc_line WARN "pids.current を読めません（$dir）"
+        warned=1
+      fi
+      if [[ -z "$max" ]]; then
+        doc_line WARN "pids.max を読めません（$dir）"
+        warned=1
+      elif [[ "$max" != "max" ]] && ! is_uint "$max"; then
+        doc_line WARN "pids.max が数でも max でもありません: $max（$dir）"
+        warned=1
+      fi
+    fi
+    if is_uint "$max" && is_uint "$cur"; then
+      if [[ "$max" -eq 0 ]]; then
+        doc_line FAIL "pids.max が 0 です（階層: $path）。新しいタスクを作れません"
+        zero=1
+      elif [[ -z "$best_max" || $((cur * best_max)) -gt $((best_cur * max)) ]]; then
+        best_cur="$cur" best_max="$max" best_path="$path"
+      fi
+    fi
+    [[ "$path" == "/" ]] && break
+    path="${path%/*}"
+    [[ -n "$path" ]] || path="/"
+  done
+  if [[ -n "$best_max" ]]; then
+    pct=$((best_cur * 100 / best_max))
+    if [[ $((best_cur * 100)) -ge $((best_max * 90)) ]]; then
+      doc_line FAIL "pids が上限に近づいています: $best_cur / $best_max（${pct}%）（階層: $best_path）"
+    else
+      doc_line OK "pids: $best_cur / $best_max（${pct}%）（階層: $best_path）"
+    fi
+  elif [[ "$warned" -eq 0 && "$zero" -eq 0 ]]; then
+    doc_line OK "pids: $own_cur（上限なし）"
+  fi
+}
+
 # コンテナの cgroup から、pids・上限に当たった回数・OOM・ゾンビを出して判定する。
 doctor_cgroup() {
-  local cgdir="$1" cgpath="$2" cur="" max="" hits oom pct
-  if [[ -r "$cgdir/pids.current" ]]; then read -r cur <"$cgdir/pids.current" || true; fi
-  if [[ -r "$cgdir/pids.max" ]]; then read -r max <"$cgdir/pids.max" || true; fi
-  if ! is_uint "$cur"; then
-    doc_line WARN "pids.current を読めません（$cgdir）"
-  elif is_uint "$max" && [[ "$max" -gt 0 ]]; then
-    pct=$((cur * 100 / max))
-    if [[ $((cur * 100)) -ge $((max * 90)) ]]; then
-      doc_line FAIL "pids が上限に近づいています: $cur / $max（${pct}%）"
-    else
-      doc_line OK "pids: $cur / $max（${pct}%）"
-    fi
-  else
-    doc_line OK "pids: $cur / ${max:-不明}（上限なし）"
-  fi
+  local cgdir="$1" cgpath="$2" hits oom
+  doctor_pids "$cgpath"
 
   hits="$(event_value "$cgdir/pids.events" max)"
   if ! is_uint "$hits"; then
@@ -467,19 +565,29 @@ doctor_cgroup() {
 
   # ゾンビ = そのコンテナの cgroup（と配下）に属し、状態が Z のタスク。ps の `-eo pid=,stat=` は
   # 「PID 状態」を 1 行ずつ出す（見出しなし）。所属は /proc/<PID>/cgroup で引く。
-  local psout pp st zc=0 zpath
+  # ゾンビの数に比例してプロセスを起こさないよう、突き合わせは awk 1 回にまとめる
+  # （ゾンビが 18000 個ある環境で、1 個ごとにサブシェルを起こすと数十秒かかる）。
+  local psout zc
+  if ! command -v awk >/dev/null 2>&1; then
+    doc_line WARN "awk が無く、ゾンビを数えられません"
+    return 0
+  fi
   if ! psout="$(ps -eo pid=,stat= 2>/dev/null)"; then
     doc_line WARN "ps を実行できず、ゾンビを数えられません"
     return 0
   fi
-  while read -r pp st; do
-    [[ "$st" == Z* ]] || continue
-    is_uint "$pp" || continue
-    zpath="$(cgroup_path_of "$PROC_ROOT/$pp/cgroup")"
-    if [[ "$zpath" == "$cgpath" || "$zpath" == "$cgpath"/* ]]; then
-      zc=$((zc + 1))
-    fi
-  done <<<"$psout"
+  zc="$(awk -v root="$PROC_ROOT" -v cg="$cgpath" '
+    $2 ~ /^Z/ {
+      f = root "/" $1 "/cgroup"
+      p = ""
+      while ((getline line < f) > 0) {
+        if (substr(line, 1, 3) == "0::") { p = substr(line, 4); break }
+      }
+      close(f)
+      if (p == cg || index(p, cg "/") == 1) n++
+    }
+    END { print n + 0 }
+  ' <<<"$psout")"
   if [[ "$zc" -ge 100 ]]; then
     doc_line WARN "ゾンビ: $zc（100 以上）"
   else
@@ -530,10 +638,12 @@ devcontainer exec で tmux new-session -A -s <セッション名> を呼ぶ。�
 設定ファイルの tmux_session=<名前> で変えられる。コンテナは起こさない（ユニットが起こし直している
 最中に 2 本目の up を重ねないため）。
 
-終了コード: 0 = 成功 / 1 = コンテナが動いていない、または中へ入れなかった / 2 = 使い方か設定の誤り
+終了コード: 0 = 成功 / 1 = コンテナが動いていない / 2 = 使い方か設定の誤り /
+            それ以外 = 中へ入れなかった、または tmux のセッションが異常終了した（その終了コードをそのまま返す。
+            この 2 つは区別できない）
 失敗したとき:
   コンテナが動いていない  dev up <名前>（ユニットを有効にしていれば 30 秒ほどで戻る）
-  入れなかった            dev doctor <名前> で切り分け、直らなければ dev rebuild <名前>
+  入れなかった           dev doctor <名前> で切り分け、直らなければ dev rebuild <名前>
 EOF
 }
 
@@ -561,9 +671,11 @@ dev rebuild — コンテナを作り直す。
 
 呼ぶ順序:
   1. --pull のときだけ git -C <パス> pull --ff-only。失敗したら、何も止めずに終わる
-  2. ユニット dev-up@<名前> が動いていれば止める（動いていなければ触らない）
+  2. ユニット dev-up@<名前> が inactive / failed でなければ止める（起こし直しの待機中の activating も
+     止める。止める必要の無いとき、または systemctl が無いときは触らない）
   3. devcontainer up --workspace-folder <パス> --remove-existing-container
-  4. 2 で止めたときだけ、ユニットを起こし直す。3 が失敗しても起こし直す
+  4. 2 で止めたときだけ、ユニットを起こし直す。3 が失敗しても、INT / HUP / TERM で中断されても
+     （ssh の切断など）起こし直してから終わる（中断の終了コードは 130 / 129 / 143）
 ユニットを先に止めるのは、作り直しの途中でユニットの up が重ならないようにするため。
 各プロジェクトの compose や devcontainer.json は書き換えない。
 
@@ -585,11 +697,15 @@ dev doctor — 「コンテナは動いているのに入れない」を見分�
 出す項目: コンテナの有無と状態 / exec が実際に通るか / cgroup の pids.current と pids.max /
 pids の上限に当たった回数 / ゾンビの数 / memory.events の oom_kill / ユニットの状態 / ユニットのログの末尾。
 cgroup は /proc/<コンテナの PID>/cgroup から求める（cgroup v2）。
+pids の上限は、コンテナの cgroup から根まで遡り、上限のある階層のうち現在値 / 上限 の比が最大のもので
+判定して、その階層を表示する（systemd の slice の TasksMax などに当たっていても見逃さない）。
+exec は 30 秒（環境変数 DEV_EXEC_TIMEOUT で変えられる）で返らなければ FAIL にする。
 
 判定:
-  FAIL  exec が通らない / pids が上限の 90% 以上 / コンテナが無いか動いていない
+  FAIL  exec が通らないか返らない / pids が上限の 90% 以上 / pids.max が 0 /
+        コンテナが無いか動いていない
   WARN  pids の上限に当たった回数が 1 以上 / ゾンビが 100 以上 / oom_kill が 1 以上
-  （読めない項目も WARN）
+  （読めない項目、pids.max が数でも max でもない値のときも WARN）
 
 終了コード: 0 = 問題なし / 1 = FAIL がある / 2 = 使い方か設定ファイルの誤り / 3 = WARN だけ
 失敗したとき: FAIL なら dev rebuild <名前> で作り直す。WARN だけなら原因を調べてから判断する。
@@ -608,8 +724,13 @@ dev help — サブコマンドの説明を出す。
 EOF
 }
 
-# dev が受け付けるサブコマンド（dev help の対象）。
-SUBCOMMANDS="ls up attach supervise rebuild doctor"
+# help の対象は、help_<名前> の関数があるサブコマンド（一覧を別に持たない）。
+list_help_subcommands() {
+  local f
+  for f in $(compgen -A function help_); do
+    printf '%s\n' "${f#help_}"
+  done
+}
 
 cmd_help() {
   [[ $# -le 1 ]] || usage_error "使い方: dev help [サブコマンド]"
@@ -617,14 +738,11 @@ cmd_help() {
     usage
     return 0
   fi
-  local s
-  for s in $SUBCOMMANDS help; do
-    if [[ "$1" == "$s" ]]; then
-      "help_$s"
-      return 0
-    fi
-  done
-  usage_error "知らないサブコマンドです: $1（$SUBCOMMANDS）"
+  if [[ "$1" =~ ^[a-z]+$ ]] && declare -F "help_$1" >/dev/null; then
+    "help_$1"
+    return 0
+  fi
+  usage_error "知らないサブコマンドです: $1（$(list_help_subcommands | tr '\n' ' ')）"
 }
 
 main() {

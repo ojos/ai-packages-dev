@@ -57,7 +57,7 @@ TOOLBIN="$WORK/toolbin"
 mkdir -p "$FAKEBIN" "$TOOLBIN" "$WORK/home"
 
 # dev.sh と偽物が使う道具だけを置く。本物の docker などが入った環境でも PATH から見えない。
-for t in sed tail head cat rm mkdir grep tr env; do
+for t in sed tail head cat rm mkdir grep tr env awk sleep mktemp; do
   p="$(command -v "$t")" || { echo "[devhost-selftest] $t が見つかりません" >&2; exit 1; }
   ln -s "$p" "$TOOLBIN/$t"
 done
@@ -107,6 +107,11 @@ find_row() { grep -F "$wf	" "$STATE_FILE" | sed -n 1p || true; }
 case "$sub" in
   up)
     [[ $# -eq 0 ]] || { echo "fake devcontainer: up に余分な引数があります: $*" >&2; exit 2; }
+    if [[ -n "${FAKE_UP_SIGNAL:-}" ]]; then
+      # 作り直しの最中に、dev（親）がシグナルを受ける状況（ssh の切断など）を作る。
+      kill -s "$FAKE_UP_SIGNAL" "$PPID"
+      exit 1
+    fi
     if [[ "${FAKE_UP_FAIL:-0}" == "1" ]]; then
       echo "[fake] Error: docker compose up が失敗しました" >&2
       printf '{"outcome":"error","message":"Command failed: docker compose up -d","description":"An error occurred starting Docker Compose up."}\n'
@@ -141,6 +146,11 @@ case "$sub" in
     if [[ "${FAKE_EXEC_FAIL:-0}" == "1" ]]; then
       echo "OCI runtime exec failed: exec failed: unable to start container process: procReady not received: unknown" >&2
       exit 1
+    fi
+    if [[ "${FAKE_EXEC_HANG:-0}" == "1" ]]; then
+      # 応答が返らない状況（本物は exec が止まったまま）。sleep そのものに置き換わるので、
+      # 親が PID を kill すれば確実に終わる。
+      exec sleep 20
     fi
     [[ "$1" == "true" ]] && exit 0
     exec "$@"
@@ -222,7 +232,7 @@ case "${1:-}" in
     echo "can't find session: $name" >&2
     exit 1
     ;;
-  new-session) exit 0 ;;
+  new-session) exit "${FAKE_TMUX_EXIT:-0}" ;;
   *) echo "fake tmux: この試験が想定していない呼び出しです: $*" >&2; exit 2 ;;
 esac
 EOF
@@ -239,6 +249,13 @@ case "$2" in
   is-active)
     for u in ${FAKE_ACTIVE_UNITS:-}; do
       [[ "$u" == "$3" ]] && { echo active; exit 0; }
+    done
+    # Restart= の待機中は activating、失敗して止まったままのものは failed（どちらも 3 で抜ける）。
+    for u in ${FAKE_ACTIVATING_UNITS:-}; do
+      [[ "$u" == "$3" ]] && { echo activating; exit 3; }
+    done
+    for u in ${FAKE_FAILED_UNITS:-}; do
+      [[ "$u" == "$3" ]] && { echo failed; exit 3; }
     done
     echo inactive
     exit 3
@@ -518,6 +535,10 @@ expect_calls \
   "devcontainer [exec] [--workspace-folder] [$A] [tmux] [new-session] [-A] [-s] [main]"
 expect_err "dev doctor alpha"
 expect_err "dev rebuild alpha"
+# 入れたあとにセッションが異常終了した場合も、元の終了コードを捨てない（区別できないと言う）。
+run 7 "attach: 終了コードをそのまま返す" -- FAKE_TMUX_EXIT=7 -- attach alpha
+expect_err "終了コード 7"
+expect_err "区別できません"
 
 # ── 6b. rebuild ───────────────────────────────────────────────────────────────
 UP_RM="devcontainer [up] [--workspace-folder] [$A] [--remove-existing-container]"
@@ -572,6 +593,25 @@ expect_calls \
 run 1 "rebuild --pull: pull が失敗したら作り直さない（ユニットにも触らない）" -- FAKE_ACTIVE_UNITS=dev-up@alpha.service FAKE_GIT_FAIL=1 -- rebuild alpha --pull
 expect_calls "git [-C] [$A] [pull] [--ff-only]"
 expect_err "作り直しません"
+# Restart= の待機中（activating）のユニットも止める。failed は止めない。
+STOP_FLOW=(
+  "systemctl [--user] [is-active] [dev-up@alpha.service]"
+  "systemctl [--user] [stop] [dev-up@alpha.service]"
+  "$UP_RM"
+  "systemctl [--user] [start] [dev-up@alpha.service]"
+)
+run 0 "rebuild: activating のユニットも止めて、起こし直す" -- FAKE_ACTIVATING_UNITS=dev-up@alpha.service -- rebuild alpha
+expect_calls "${STOP_FLOW[@]}"
+run 0 "rebuild: failed のユニットは触らない" -- FAKE_FAILED_UNITS=dev-up@alpha.service -- rebuild alpha
+expect_calls \
+  "systemctl [--user] [is-active] [dev-up@alpha.service]" \
+  "$UP_RM"
+# 作り直しの最中の中断（ssh の切断など）でも、止めたユニットは起こし直してから抜ける。
+for sg in "TERM 143" "INT 130" "HUP 129"; do
+  run "${sg#* }" "rebuild: ${sg% *} で中断されても起こし直す" -- FAKE_ACTIVE_UNITS=dev-up@alpha.service FAKE_UP_SIGNAL="${sg% *}" -- rebuild alpha
+  expect_calls "${STOP_FLOW[@]}"
+  expect_err "起こし直します"
+done
 run 2 "rebuild: 知らないオプション" -- -- rebuild alpha --force
 expect_no_calls
 run 2 "rebuild: 名前が無い" -- -- rebuild --pull
@@ -669,6 +709,52 @@ expect_out_line '\[WARN\] pids の上限に当たった回数: 1'
 mk_cg 4242 "$CG" 20 1000 0 2
 run 3 "doctor: oom_kill が 2" -- -- doctor alpha
 expect_out_line '\[WARN\] OOM で殺された回数（oom_kill）: 2'
+# pids.max が読めない・壊れている・0。「上限なし」の OK にしない。
+mk_cg 4242 "$CG" 20 "" 0 0
+run 3 "doctor: pids.max が空" -- -- doctor alpha
+expect_out_line '\[WARN\] pids.max を読めません'
+if grep -qF '上限なし' "$OUT"; then ng "pids.max が空なのに「上限なし」と出ています"; fi
+mk_cg 4242 "$CG" 20 garbage 0 0
+run 3 "doctor: pids.max が数でも max でもない" -- -- doctor alpha
+expect_out_line '\[WARN\] pids.max が数でも max でもありません: garbage'
+mk_cg 4242 "$CG" 0 0 0 0
+run 1 "doctor: pids.max が 0" -- -- doctor alpha
+expect_out_line '\[FAIL\] pids.max が 0 です'
+# 上位の cgroup（systemd の slice の TasksMax など）の上限も見る。
+set_pids() { # cgroup のパス pids.current pids.max
+  mkdir -p "$WORK/cg$1"
+  printf '%s\n' "$2" >"$WORK/cg$1/pids.current"
+  printf '%s\n' "$3" >"$WORK/cg$1/pids.max"
+}
+mk_cg 4242 "$CG" 20 max 0 0
+set_pids /system.slice 950 1000
+run 1 "doctor: 上位の slice の上限に近い" -- -- doctor alpha
+expect_out_line '\[FAIL\] pids が上限に近づいています: 950 / 1000（95%）（階層: /system.slice）'
+mk_cg 4242 "$CG" 500 1000 0 0
+set_pids /system.slice 960 10000
+run 0 "doctor: 比が最大の階層を使う（自身 50% と上位 9%）" -- -- doctor alpha
+expect_out_line "\\[OK +\\] pids: 500 / 1000（50%）（階層: $CG）"
+mk_cg 4242 "$CG" 500 1000 0 0
+set_pids / 2 2   # 根の pids.max は本物には無いが、あっても遡れること
+run 1 "doctor: 根まで遡る" -- -- doctor alpha
+expect_out_line '階層: /）'
+# ゾンビが多い環境（issue の実測は 18000 超）でも、ゾンビの数に比例してプロセスを起こさず、
+# 短い時間で終わる（1 個ごとにサブシェルを起こすと数十秒かかる）。
+mk_cg 4242 "$CG" 20 1000 0 0
+mkdir -p "$WORK/proc/"{20000..37999}
+for ((zk = 20000; zk < 38000; zk++)); do
+  printf '0::%s\n' "$CG" >"$WORK/proc/$zk/cgroup"
+  printf '%s Z\n' "$zk" >>"$STATE/ps"
+done
+zstart=$SECONDS
+run 3 "doctor: ゾンビが 18000" -- -- doctor alpha
+expect_out_line '\[WARN\] ゾンビ: 18000（100 以上）'
+echo "[devhost-selftest] ゾンビ 18000 の doctor: $((SECONDS - zstart)) 秒" >&2
+if [[ $((SECONDS - zstart)) -ge "${DEVHOST_ZOMBIE_LIMIT:-2}" ]]; then ng "doctor: ゾンビ 18000 の処理に $((SECONDS - zstart)) 秒かかりました（${DEVHOST_ZOMBIE_LIMIT:-2} 秒未満のはず）"; fi
+# exec が返らないとき、timeout が無い環境でも時間で切る（この試験の PATH に timeout は無い）。
+mk_cg 4242 "$CG" 20 1000 0 0
+run 1 "doctor: exec が返らない（timeout 無し）" -- FAKE_EXEC_HANG=1 DEV_EXEC_TIMEOUT=1 -- doctor alpha
+expect_out_line '\[FAIL\] exec が 1 秒で返りません'
 mk_cg 4242 "$CG" 20 1000 1 0
 run 1 "doctor: WARN と FAIL が混ざれば FAIL（1）" -- FAKE_EXEC_FAIL=1 -- doctor alpha
 rm -rf "$WORK/proc" "$WORK/cg"
@@ -696,6 +782,10 @@ for sub in ls up attach supervise rebuild doctor help; do
   expect_out_line '^終了コード: '
 done
 run 0 "help（引数なし）は使い方の一覧" -- -- help
+expect_out_line "^プロジェクトの一覧は $CONF から読む。\$"
+run 0 "help: 設定ファイルの既定のパスを展開して出す" -- XDG_CONFIG_HOME=/xdg DEV_PROJECTS_FILE= -- help
+expect_out_line '^プロジェクトの一覧は /xdg/dev/projects から読む。$'
+if grep -qF '${' "$OUT"; then ng "help の出力に未展開の \${...} があります"; fi
 expect_out_line '^  dev rebuild <名前> \[--pull\]$'
 expect_out_line '^  dev doctor <名前>$'
 run 2 "help: 知らないサブコマンド" -- -- help stop
@@ -704,8 +794,8 @@ expect_no_calls
 run 2 "help: 引数が多い" -- -- help ls up
 expect_no_calls
 run 0 "rebuild の説明にユニットの扱いがある" -- -- help rebuild
-expect_out_line 'ユニット dev-up@<名前> が動いていれば止める'
-expect_out_line '3 が失敗しても起こし直す'
+expect_out_line 'ユニット dev-up@<名前> が inactive / failed でなければ止める'
+expect_out_line '3 が失敗しても、INT / HUP / TERM で中断されても'
 
 # ── 6e. README の「コマンドの説明」と dev help の照合 ─────────────────────────
 # README の各サブコマンドのブロック（### dev <名前> の次の ```text ... ```）が dev help <名前> の
@@ -713,15 +803,18 @@ expect_out_line '3 が失敗しても起こし直す'
 # dev の受け付ける集合は、dev help の一覧から取り、さらに 1 つずつ実際に受け付けることを確かめる。
 README="${DEV_README:-$HERE/README.md}"
 readme_check() {
-  local readme="$1" bad=0 usage_set readme_set s want got
+  local readme="$1" bad=0 usage_set help_set readme_set s want got
+  # dev が受け付ける集合は、dev help が判定に使う help_<名前> の定義（dev.sh）から取る。
+  # usage の一覧（dev help）も同じ集合でなければ落とす。
+  help_set="$(sed -n 's/^help_\([a-z][a-z]*\)() {$/\1/p' "$DEV" | sort -u)"
   usage_set="$("$BASH_BIN" "$DEV" help | sed -n 's/^  dev \([a-z][a-z]*\).*/\1/p' | sort -u)"
   readme_set="$(sed -n 's/^### dev \([a-z][a-z]*\)$/\1/p' "$readme" | sort -u)"
-  if [[ -z "$usage_set" || "$usage_set" != "$readme_set" ]]; then
+  if [[ -z "$help_set" || "$help_set" != "$readme_set" || "$help_set" != "$usage_set" ]]; then
     echo "サブコマンドの集合が違います" >&2
-    printf '  dev:    %s\n  README: %s\n' "$(echo $usage_set)" "$(echo $readme_set)" >&2
+    printf '  help_ 関数: %s\n  usage:      %s\n  README:     %s\n' "$(echo $help_set)" "$(echo $usage_set)" "$(echo $readme_set)" >&2
     bad=1
   fi
-  for s in $usage_set; do
+  for s in $help_set; do
     # 実際に受け付ける（知らないサブコマンドなら help が 2 で落ちる）。
     "$BASH_BIN" "$DEV" help "$s" >/dev/null 2>&1 || { echo "dev help $s が通りません" >&2; bad=1; }
     want="$("$BASH_BIN" "$DEV" help "$s" 2>&1 || true)"
