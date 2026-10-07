@@ -6,6 +6,15 @@
 >
 > 同じ理由で、issue 参照は `ojos/ai-packages-dev#NNN` の形で書いてください。裸の `#NNN` は GitHub のオートリンクが**配布先リポジトリの issue** として解決するため、配布後は存在しない issue や無関係な issue を指します。
 
+## v0.8.1
+
+### Summary
+- **`templates/second-opinion-record.sh` の使い方と `templates/project-ai-rules.md` の記録の投稿の手順に、PR を作る段を足した**（ojos/ai-packages-dev#462）。`post` は投稿先の PR が要るので、PR が無いうちは「このブランチに対応する PR が見つかりません」で失敗する。手順の矢印の列が `loop-gate → push → post` で、PR の作成が抜けていた。正しい順は `push → PR を作る → post`。
+- **`templates/second-opinion-review.sh` の「パイプの後ろの `grep -q`」を取り除いた**（ojos/ai-packages-dev#471）。`grep -q` は一致した時点で読むのをやめるので、生産側が SIGPIPE を受け、`pipefail` の下では一致を不一致と取り違えうる。`-q` を外して `>/dev/null` を付ける形にした。ふるまいは変わらない。破壊的変更なし。雛形は 16 種のまま。
+
+### 移行
+- 雛形から写した `scripts/second-opinion-review.sh` は自動では更新されない。DCB で規範を配置している場合は、`bootstrap.sh --upgrade --playbook-version v0.8.1` で更新される（`--upgrade` は、明示しなければ ORIGIN に記録した規範の版を使い回すので、`--playbook-version` を付けないと、記録した版（v0.8.0 など）の雛形のまま）。手で直す場合は、`grep -qx -- "$__category"` を `grep -x -- "$__category" >/dev/null` に書き換えてください。
+
 ## v0.8.0
 
 ### Summary
