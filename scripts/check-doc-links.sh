@@ -287,20 +287,20 @@ printf '%s\n' \
 diag="$(awk -v DIR="." -v FILE="selftest.md" -f "$EXTRACT" "$selftest")" \
   || fail "自己診断で抽出器が異常終了しました。検査が成立していないため失敗させます。"
 
-printf '%s\n' "$diag" | grep -q "^L	absent.md	" \
+printf '%s\n' "$diag" | grep "^L	absent.md	" >/dev/null \
   || fail "自己診断に失敗しました: 壊れたリンクを抽出できません。検査が成立していないため失敗させます。"
-printf '%s\n' "$diag" | grep -q "^L	present.md	" \
+printf '%s\n' "$diag" | grep "^L	present.md	" >/dev/null \
   || fail "自己診断に失敗しました: 正常なリンクを抽出できません。検査が成立していないため失敗させます。"
-if printf '%s\n' "$diag" | grep -q "nope-in-bt-fence.md"; then
+if printf '%s\n' "$diag" | grep "nope-in-bt-fence.md" >/dev/null; then
   fail "自己診断に失敗しました: 3 連バッククォートのフェンスの内側を拾っています。検査が成立していないため失敗させます。"
 fi
-if printf '%s\n' "$diag" | grep -q "nope-in-tilde-fence.md"; then
+if printf '%s\n' "$diag" | grep "nope-in-tilde-fence.md" >/dev/null; then
   fail "自己診断に失敗しました: ~~~ のフェンスの内側を拾っています。検査が成立していないため失敗させます。"
 fi
-if printf '%s\n' "$diag" | grep -q "tel:"; then
+if printf '%s\n' "$diag" | grep "tel:" >/dev/null; then
   fail "自己診断に失敗しました: スキーム付きのリンクを相対パスとして扱っています。検査が成立していないため失敗させます。"
 fi
-if printf '%s\n' "$diag" | grep -q "^U	"; then
+if printf '%s\n' "$diag" | grep "^U	" >/dev/null; then
   fail "自己診断に失敗しました: 閉じているフェンスを未閉と判定しています。検査が成立していないため失敗させます。"
 fi
 
@@ -308,7 +308,7 @@ unclosed_test="$WORK/selftest-unclosed.md"
 printf '%s\n' '```' '[in-open-fence](nope.md)' > "$unclosed_test"
 diag_unclosed="$(awk -v DIR="." -v FILE="selftest-unclosed.md" -f "$EXTRACT" "$unclosed_test")" \
   || fail "自己診断で抽出器が異常終了しました。検査が成立していないため失敗させます。"
-printf '%s\n' "$diag_unclosed" | grep -q "^U	" \
+printf '%s\n' "$diag_unclosed" | grep "^U	" >/dev/null \
   || fail "自己診断に失敗しました: 閉じていないフェンスを検出できません。検査が成立していないため失敗させます。"
 
 # ── 追跡対象の集合を作る ─────────────────────────────────────────────────────
