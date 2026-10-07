@@ -9,13 +9,15 @@
 
 | パッケージ | リポジトリ | 現行バージョン | 配布形態 |
 |---|---|---|---|
-| devcontainer-bootstrap | `ojos/devcontainer-bootstrap` | v0.16.0 | GitHub Release + 資産 5 点（配布スクリプト 2: `bootstrap.sh` / `doctor.sh`、生成物 3: `SHA256SUMS` / `RELEASE-MANIFEST.json` / `PACKAGE_ARCHIVE.tar.gz`） |
-| ai-playbook | `ojos/ai-playbook` | v0.8.0 | git タグのみ |
+| devcontainer-bootstrap | `ojos/devcontainer-bootstrap` | v0.17.0 | GitHub Release + 資産 5 点（配布スクリプト 2: `bootstrap.sh` / `doctor.sh`、生成物 3: `SHA256SUMS` / `RELEASE-MANIFEST.json` / `PACKAGE_ARCHIVE.tar.gz`） |
+| ai-playbook | `ojos/ai-playbook` | v0.8.1 | git タグのみ |
 
 ### 新世代の版更新
 
 | パッケージ | 版 | 公開日 | 要点 |
 |---|---|---|---|
+| devcontainer-bootstrap | v0.17.0 | 2026-10-08 | **生成する `compose.yaml` に `init: true`**（#469。PID 1 の `sleep infinity` が孤児を回収せず、ゾンビが溜まってプロセス数の上限に達し、`docker exec` もセッションも止まっていた。効かせるには作り直しが要る）。**`bootstrap.sh --accept <path>...` を追加**（#461。手を入れて取り込んだファイルを ORIGIN に記録し、`doctor.sh` の FAIL を解消できる。雛形が変わっていない版では、取り込み済みのファイルに `.dcb-new` を置かない）。生成物の末尾を改行で終える（#462。生成物の中身が変わる）。`.gitignore` の空行の累積（#460）。配布スクリプトの `grep -q` の SIGPIPE（#471）。**devhost に `dev rebuild` / `dev doctor` / `dev help`**（#472 / #475）。要求する ai-playbook は v0.5.0 以降のまま（v0.8.1 を推奨） |
+| ai-playbook | v0.8.1 | 2026-10-08 | 雛形の修正だけ。記録の投稿の手順に PR を作る段を足した（#462）。`second-opinion-review.sh` の `grep -q` の SIGPIPE（#471）。破壊的変更なし。雛形は 16 種のまま |
 | devcontainer-bootstrap | v0.16.0 | 2026-10-06 | **`--upgrade --without-<名前>` で装備を外せるようにした**（#444 / #453）。外したフラグでだけ生成していたファイルは、手を入れていなければ削除する。リモート最終ゲートの「置く / 置かない」を生成後も両方向へ切り替えられる。**生成する `CLAUDE.md` が規範 2 つを `@` で全文取り込む**（#441）。協調フックが add / commit / rm / mv も拒否の対象にする（#438）。check-doc-links.sh のフェンスの閉じ判定（#439）。identity の検査が空の範囲で通ったときの案内（#442）。最初の push の順番の案内（#443）。台帳の開始時刻のキー（#433）。workflow の `actions/checkout` を v7 へ（#432） |
 | ai-playbook | v0.8.0 | 2026-10-06 | **第二意見の記録の経路を直した**。確認側は作者の一致だけで記録を数える（#436。組織のメンバーシップが非公開の作者で常に赤になっていた）。記録と確認側は、リモート最終ゲートの有無にかかわらず求める（#437）。`post` は作者のアカウントでだけ投稿する（#440）。`templates/claude-entry-imports.md` を足した（#441。雛形は 16 種）。台帳の開始時刻と失効（#433）。雛形の `actions/checkout` を v7 へ（#432） |
 | devcontainer-bootstrap | v0.15.0 | 2026-10-04 | **`bootstrap.sh --upgrade` を追加した**（#396）。`.devcontainer/ORIGIN` に入力とハッシュを記録し、手を入れていないファイルだけを新しい版へ更新、手を入れたものは `<path>.dcb-new` を隣へ置く（終了コード 0 / 2 / 1）。`doctor.sh` が残った `*.dcb-new` を WARN で報告する。**並行セッションの共有台帳 `session-ledger.sh` と協調フック `session-coord-hook.sh` を生成物へ足した**（#395 / #425）。規範を置くとき入口ファイルに `AGENTS.md` を加えた（#397）。生成先のシンボリックリンクをたどって出力先の外へ書かない（#418）。リンク検査の括弧の扱い（#415）、PAT の権限の例（#416）。要求する ai-playbook は v0.5.0 以降のまま（v0.7.0 を推奨）。既存フラグの挙動は変わらない |
