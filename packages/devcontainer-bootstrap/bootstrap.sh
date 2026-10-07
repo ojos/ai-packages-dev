@@ -869,6 +869,12 @@ services:
       - /var/run/docker.sock:/var/run/docker-host.sock
 __VOLUME_MOUNTS__
     command: sleep infinity
+    # PID 1 を Docker の組み込みの init にして、孤児になったプロセスを回収させる。
+    # sleep は子を回収しないため、これが無いと、コンテナの中で親を失ったプロセス
+    # （シェル・git・テストの子など）がゾンビとして溜まり続け、数日でプロセス数の
+    # 上限に達する。そうなると docker exec（エディタの接続）もコンテナ内のセッションも
+    # 止まる。消さないこと。効かせるにはコンテナの作り直しが要る。
+    init: true
 __SECURITY_OPT__
 __VOLUME_SECTION__
 TMPL
