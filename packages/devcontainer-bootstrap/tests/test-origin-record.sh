@@ -280,7 +280,10 @@ if [[ "$(printf '%s\n' "$line" | wc -l | tr -d ' ')" == "1" && "$got" == "$weird
 
 it "--base-image 無しは mode=auto（値は観測記録で、読み戻しでは再現すべき入力として返さない）"
 auto_out="$(new_workdir)/p"
-bash "$BOOTSTRAP" --project-name auto1 --languages node --output-dir "$auto_out" >/dev/null 2>&1
+# 自動選択の経路を通すが、レジストリへは出ないよう偽の docker を先頭に置く。
+auto_fake="$(make_fake_docker)"
+PATH="$auto_fake:$PATH" FAKE_DOCKER_MANIFEST_OK="mcr.microsoft.com/devcontainers/base:noble" \
+  bash "$BOOTSTRAP" --project-name auto1 --languages node --output-dir "$auto_out" >/dev/null 2>&1
 if dcb_origin_load_inputs "$auto_out$ORIGIN_REL" \
   && [[ "$ORIGIN_IN_BASE_IMAGE_MODE" == "auto" && -z "$ORIGIN_IN_BASE_IMAGE" ]] \
   && grep -q '^input:base-image=.\+' "$auto_out$ORIGIN_REL"; then
@@ -291,7 +294,7 @@ fi
 
 it "--no-gitignore は manage-gitignore=false として読み戻せる"
 ng_out="$(new_workdir)/p"
-bash "$BOOTSTRAP" --project-name ng1 --languages node --no-gitignore --output-dir "$ng_out" >/dev/null 2>&1
+bash "$BOOTSTRAP" --project-name ng1 --languages node --base-image "$TEST_BASE_IMAGE" --no-gitignore --output-dir "$ng_out" >/dev/null 2>&1
 if dcb_origin_load_inputs "$ng_out$ORIGIN_REL" && [[ "$ORIGIN_IN_MANAGE_GITIGNORE" == "false" ]]; then pass; else fail "manage-gitignore=[$ORIGIN_IN_MANAGE_GITIGNORE]"; fi
 
 it "規範の取得元: --playbook-version は tag として、ref にタグを記録する（関数単位で確かめる）"
@@ -316,7 +319,7 @@ assert_eq "$res" "|tag,v0.6.0,|url,https://example.com/pb.tar.gz,|url,,|local,,|
 
 it "規範の取得元: ローカルのパスは ORIGIN へ書かない（絶対パスを利用側リポジトリへ残さない）"
 pbl="$(new_workdir)/p"
-bash "$BOOTSTRAP" --project-name pbl --languages node --playbook-from "$PLAYBOOK_SRC" --output-dir "$pbl" >/dev/null 2>&1
+bash "$BOOTSTRAP" --project-name pbl --languages node --base-image "$TEST_BASE_IMAGE" --playbook-from "$PLAYBOOK_SRC" --output-dir "$pbl" >/dev/null 2>&1
 if dcb_origin_load_inputs "$pbl$ORIGIN_REL" \
   && [[ "$ORIGIN_IN_PLAYBOOK" == "installed" && "$ORIGIN_IN_PLAYBOOK_SOURCE" == "local" && -z "$ORIGIN_IN_PLAYBOOK_REF" ]] \
   && ! grep -qF -- "$PLAYBOOK_SRC" "$pbl$ORIGIN_REL" \
@@ -333,14 +336,14 @@ if grep -qi 'conflict' "$pbl$ORIGIN_REL"; then fail "conflict-policy が記録�
 
 it "入力の行が無い古い ORIGIN は読み戻しに失敗する（--upgrade が「引数の明示を求めて止める」判定に使う）"
 old_out="$(new_workdir)/p"
-bash "$BOOTSTRAP" --project-name old1 --languages node --output-dir "$old_out" >/dev/null 2>&1
+bash "$BOOTSTRAP" --project-name old1 --languages node --base-image "$TEST_BASE_IMAGE" --output-dir "$old_out" >/dev/null 2>&1
 grep -v -e '^inputs-format=' -e '^input:' "$old_out$ORIGIN_REL" > "$old_out$ORIGIN_REL.new"
 mv "$old_out$ORIGIN_REL.new" "$old_out$ORIGIN_REL"
 if dcb_origin_load_inputs "$old_out$ORIGIN_REL"; then fail "古い ORIGIN を読み戻せてしまった"; else pass; fi
 
 it "inputs-format が 1 でない記録は読み戻しに失敗する（未知の書式を読まない）"
 fmt_out="$(new_workdir)/p"
-bash "$BOOTSTRAP" --project-name fmt1 --languages node --output-dir "$fmt_out" >/dev/null 2>&1
+bash "$BOOTSTRAP" --project-name fmt1 --languages node --base-image "$TEST_BASE_IMAGE" --output-dir "$fmt_out" >/dev/null 2>&1
 dcb_origin_load_inputs "$fmt_out$ORIGIN_REL" || fail "対照: 正常な記録を読めない"
 awk '/^inputs-format=/ { print "inputs-format=2"; next } { print }' "$fmt_out$ORIGIN_REL" > "$fmt_out$ORIGIN_REL.new"
 mv "$fmt_out$ORIGIN_REL.new" "$fmt_out$ORIGIN_REL"

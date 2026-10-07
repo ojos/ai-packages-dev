@@ -100,6 +100,7 @@ bash "$BOOTSTRAP" \
   --project-name test --languages node,go,python,php,rust,ruby \
   --with-aws --with-gcp --with-claude --with-gemini --with-antigravity --with-copilot --with-copilot-review \
   --playbook-from "$PLAYBOOK_SRC" \
+  --base-image "$TEST_BASE_IMAGE" \
   --output-dir "$outf" >/dev/null 2>&1
 check_generated_scripts "$outf" "全部入りの構成"
 

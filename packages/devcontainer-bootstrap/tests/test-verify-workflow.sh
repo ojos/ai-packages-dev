@@ -63,7 +63,7 @@ it "verify.yml が template_rel_paths() に登録されている（--dry-run の
 # 存在の検査だけでは、条件付き配置の別経路で置かれた場合と区別できない。無条件の
 # 一覧に載っていることを、生成経路と同じ関数を通る --dry-run から確かめる。
 plan="$(bash "$BOOTSTRAP" --project-name test --languages node \
-  --output-dir "$(new_workdir)/dry" --dry-run 2>/dev/null)"
+  --base-image "$TEST_BASE_IMAGE" --output-dir "$(new_workdir)/dry" --dry-run 2>/dev/null)"
 assert_contains "$plan" ".github/workflows/verify.yml" "--dry-run の plan 行"
 
 it "規範パッケージ側に雛形の正本を持たない（配置が rules に従属しない）"

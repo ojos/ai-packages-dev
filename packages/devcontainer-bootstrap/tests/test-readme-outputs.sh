@@ -79,6 +79,7 @@ impl_outputs() {
     --with-aws --with-gcp --with-claude --with-gemini --with-copilot \
     --with-copilot-review \
     --with-playbook \
+    --base-image "$TEST_BASE_IMAGE" \
     --output-dir "$out_root" \
     --dry-run 2>/dev/null \
     | sed -n 's|^plan: ||p' \

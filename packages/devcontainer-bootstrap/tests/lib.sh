@@ -241,13 +241,85 @@ count_rules() {
   find "$1" -type f -name '*.md' 2>/dev/null | grep -v '/README\.md$' | wc -l | tr -d ' '
 }
 
+# 試験が bootstrap.sh を起動するときに固定するベースイメージ。
+# --base-image を渡さないと bootstrap.sh は起動のたびにレジストリへ問い合わせる
+# （docker manifest inspect。1 回 1〜2.5 秒）。試験の所要時間と結果がネットワークに
+# 左右されないよう、既定で固定する。
+TEST_BASE_IMAGE="mcr.microsoft.com/devcontainers/base:noble"
+
 # bootstrap.sh を最小構成で実行する。追加引数はそのまま渡す。
 # --mode は廃止。装備は --with-* で選択する（既定は素の環境）。
+# 呼び出し側が --base-image を渡したときは、そちらを優先する（二重に渡さない）。
+# 自動選択そのものを確かめる試験は、docker を偽物に差し替えた上で
+# run_bootstrap_auto を使う。
 run_bootstrap() {
+  local out="$1"; shift
+  local arg has_image=0
+  for arg in "$@"; do
+    case "$arg" in
+      --base-image|--base-image=*) has_image=1 ;;
+    esac
+  done
+  if [[ "$has_image" -eq 1 ]]; then
+    bash "$BOOTSTRAP" \
+      --project-name test --languages node \
+      --output-dir "$out" "$@"
+  else
+    bash "$BOOTSTRAP" \
+      --project-name test --languages node \
+      --base-image "$TEST_BASE_IMAGE" \
+      --output-dir "$out" "$@"
+  fi
+}
+
+# --base-image を渡さずに bootstrap.sh を起動する（自動選択の経路を通す）。
+# 呼び出し側は、PATH の先頭に偽の docker（make_fake_docker）を置いてから使うこと。
+# 偽物なしで呼ぶと、本物の docker でレジストリへ問い合わせ、試験全体の
+# 「問い合わせ 0 件」の確認（run-tests.sh）で落ちる。
+run_bootstrap_auto() {
   local out="$1"; shift
   bash "$BOOTSTRAP" \
     --project-name test --languages node \
     --output-dir "$out" "$@"
+}
+
+# 偽の docker を置くディレクトリを作って、そのパスを返す。呼び出し側は
+# PATH="$dir:$PATH" で先頭に置く。本物と同じ形の出力を返すのは次の 2 つだけで、
+# ほかのサブコマンドは失敗（exit 1）にする。
+#   docker version --format ...   : $FAKE_DOCKER_PLATFORM（既定 linux/amd64）を返す
+#   docker manifest inspect IMAGE : IMAGE が $FAKE_DOCKER_MANIFEST_OK（空白区切り）に
+#                                   含まれるときだけ、そのプラットフォームの
+#                                   マニフェスト形の JSON を返す（無ければ空で exit 1）
+# 呼び出しは $FAKE_DOCKER_LOG があれば 1 行ずつ追記する。
+make_fake_docker() {
+  local dir
+  dir="$(new_workdir)/fakebin"
+  mkdir -p "$dir"
+  cat > "$dir/docker" <<'FAKE'
+#!/usr/bin/env bash
+platform="${FAKE_DOCKER_PLATFORM:-linux/amd64}"
+[[ -n "${FAKE_DOCKER_LOG:-}" ]] && printf '%s\n' "$*" >> "$FAKE_DOCKER_LOG"
+case "${1:-}" in
+  version)
+    printf '%s\n' "$platform"
+    exit 0
+    ;;
+  manifest)
+    if [[ "${2:-}" == "inspect" ]]; then
+      for ok in ${FAKE_DOCKER_MANIFEST_OK:-}; do
+        if [[ "$ok" == "${3:-}" ]]; then
+          printf '{\n  "manifests": [\n    {\n      "platform": {\n        "architecture": "%s",\n        "os": "%s"\n      }\n    }\n  ]\n}\n' "${platform#*/}" "${platform%/*}"
+          exit 0
+        fi
+      done
+      exit 1
+    fi
+    ;;
+esac
+exit 1
+FAKE
+  chmod +x "$dir/docker"
+  printf '%s' "$dir"
 }
 
 # ── 実装の抽出 ────────────────────────────────────────────────────────────────

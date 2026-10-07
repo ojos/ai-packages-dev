@@ -305,7 +305,7 @@ cwd="$work/cwd"
 out="$work/myapp"
 mkdir -p "$cwd"
 ( cd "$cwd" && bash "$script_dir/bootstrap.sh" \
-    --project-name myapp --languages node --output-dir "$out" ) >/dev/null 2>&1
+    --project-name myapp --languages node --base-image "$TEST_BASE_IMAGE" --output-dir "$out" ) >/dev/null 2>&1
 rc=$?
 if [[ "$rc" -ne 0 ]]; then
   fail "bootstrap.sh が終了コード $rc で失敗した"
