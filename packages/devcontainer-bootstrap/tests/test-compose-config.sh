@@ -249,4 +249,33 @@ for bad_name in 'a:b' 'a|b' 'a"b'; do
   fi
 done
 
+# ── PID 1 の init（#469） ─────────────────────────────────────────────────────
+#
+# app サービスの PID 1 は sleep infinity で、sleep は孤児になったプロセスを回収しない。
+# init: true が無いとゾンビが溜まり、数日でプロセス数の上限に達して docker exec も
+# コンテナ内のセッションも止まる。構成（--with-*）に依らず入ることを確かめる。
+
+# app サービスの直下（4 字下げ）に init: true があるか
+has_app_init() {
+  awk '/^  app:$/ { inapp = 1; next } /^  [^ ]/ || /^[^ ]/ { inapp = 0 } inapp && $0 == "    init: true" { found = 1 } END { exit !found }' "$1"
+}
+
+it "素の生成物の app サービスに init: true がある"
+# 上の節で compose は別の構成の生成物へ置き換わっているので、素の生成物をここで作り直す。
+out_init="$(new_workdir)/p"
+run_bootstrap "$out_init" >/dev/null 2>&1
+if grep -E '^    command: sleep infinity$' "$out_init/.devcontainer/compose.yaml" >/dev/null && has_app_init "$out_init/.devcontainer/compose.yaml"; then pass; else fail "init: true が無い"; fi
+
+for combo in "--with-claude" "--with-codex" "--with-claude --with-gemini --with-aws"; do
+  it "$combo の生成物の app サービスにも init: true がある"
+  out_init="$(new_workdir)/p"
+  # shellcheck disable=SC2086 # combo は空白区切りのフラグ列として展開する
+  run_bootstrap "$out_init" $combo >/dev/null 2>&1
+  if has_app_init "$out_init/.devcontainer/compose.yaml"; then pass; else fail "init: true が無い"; fi
+done
+
+it "検出は app の外の init: true を拾わない（検査が死んでいない）"
+printf 'services:\n  app:\n    image: x\n  other:\n    init: true\n' > "$TEST_TMP_ROOT/init-neg.yaml"
+if has_app_init "$TEST_TMP_ROOT/init-neg.yaml"; then fail "app の外を拾った"; else pass; fi
+
 exit_with_result

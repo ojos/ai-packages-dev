@@ -15,6 +15,12 @@ services:
       - gemini-storage:/home/vscode/.gemini
       - codex-storage:/home/vscode/.codex
     command: sleep infinity
+    # PID 1 を Docker の組み込みの init にして、孤児になったプロセスを回収させる。
+    # sleep は子を回収しないため、これが無いと、コンテナの中で親を失ったプロセス
+    # （シェル・git・テストの子など）がゾンビとして溜まり続け、数日でプロセス数の
+    # 上限に達する。そうなると docker exec（エディタの接続）もコンテナ内のセッションも
+    # 止まる。消さないこと。効かせるにはコンテナの作り直しが要る。DCB の生成物と同じ（#469）。
+    init: true
     # codex のサンドボックス（bwrap）のために、AppArmor と seccomp の既定の制限を外す。
     # Docker の既定の seccomp が namespace の作成を止め（Docker Desktop でも同じ）、
     # ネイティブ Linux ではさらに AppArmor が mount を止める（片方だけ外しても動かない）。
