@@ -157,6 +157,57 @@ it "雛形が変わった版への --upgrade のあと、doctor.sh --strict は 
 doctor_strict "$out"; rc=$?
 if [[ "$rc" != "0" ]]; then pass; else fail "rc=0"; fi
 
+# ── 温存しなかったパスの accepted: は引き継がない ──────────────────────────────
+# 引き継ぐのは「雛形が変わっておらず、現物 = accepted:」で温存したパスだけ。古い記録が
+# 残ると、あとで現物を古い内容へ戻したときに、doctor が取り込み済みとして通してしまう。
+
+out="$(new_workdir)/p"
+gen "$out"
+edit "$out" "$TARGET"
+edit "$out" "$OTHER"
+accept "$out" "$TARGET" "$OTHER"
+saved="$(cat "$out/$TARGET")"
+rm -f "$out/$TARGET"
+cp "$out/$OTHER" "$TEST_TMP_ROOT/other.saved"
+change_template_hash "$out" "$OTHER"
+# 現物を新しい版（= 生成し直した内容）と一致させる: 作り直したファイルの中身を写す
+ref="$(new_workdir)/ref"
+gen "$ref"
+cp "$ref/$OTHER" "$out/$OTHER"
+upgrade "$out"
+
+it "現物が無く作り直したパスの accepted: は落とす"
+if [[ "$UP_RC" == "0" && -z "$(accepted_of "$out" "$TARGET")" ]]; then pass; else fail "rc=$UP_RC accepted=$(accepted_of "$out" "$TARGET")"; fi
+
+it "現物が新しい版と一致した（up-to-date）パスの accepted: は落とす"
+if [[ -z "$(accepted_of "$out" "$OTHER")" ]]; then pass; else fail "accepted=$(accepted_of "$out" "$OTHER")"; fi
+
+it "そのあと現物を以前の取り込み済みの内容へ戻すと、doctor.sh --strict は FAIL"
+printf '%s\n' "$saved" > "$out/$TARGET"
+doctor_strict "$out"; rc=$?
+if [[ "$rc" != "0" ]]; then pass; else fail "rc=0（古い accepted: で通った）"; fi
+
+it "同じパスを 1 回の --accept に重ねて渡しても accepted: は 1 行"
+out="$(new_workdir)/p"
+gen "$out"
+edit "$out" "$TARGET"
+accept "$out" "$TARGET" "./$TARGET" "$TARGET"
+n="$(grep -c "^accepted:$TARGET=" "$out/$ORIGIN_REL")"
+if [[ "$AC_RC" == "0" && "$n" == "1" ]]; then pass; else fail "rc=$AC_RC 行数=$n"; fi
+
+it "親ディレクトリが出力先の外を指すパスは 0 以外で止まり、ORIGIN を変えない"
+out="$(new_workdir)/p"
+gen "$out"
+outside="$(new_workdir)/outside"
+mkdir -p "$outside"
+cp -R "$out/scripts/." "$outside/"
+printf '\n# outside\n' >> "$outside/$(basename "$TARGET")"
+rm -rf "$out/scripts"
+ln -s "$outside" "$out/scripts"
+before_link="$(cksum < "$out/$ORIGIN_REL")"
+accept "$out" "$TARGET"
+if [[ "$AC_RC" != "0" && "$(cksum < "$out/$ORIGIN_REL")" == "$before_link" ]]; then pass; else fail "rc=$AC_RC: $AC_OUT"; fi
+
 # ── 受け付けない入力は、止まって ORIGIN を変えない ────────────────────────────
 
 out="$(new_workdir)/p"

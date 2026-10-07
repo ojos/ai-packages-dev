@@ -34,9 +34,11 @@ GITIGNORE_TARGETS_EXPLICIT="false"
 # （温存したファイルにも新しい版のハッシュを記録するため、現物ではなくこちらを ORIGIN へ書く）。
 UPGRADE_HASHES=""
 UPGRADE_LEFTOVER=""
-# --upgrade が <path>.dcb-new を置いた、または新しい版で更新した相対パスの一覧（改行区切り）。
-# ORIGIN の accepted: 行（取り込み済みの記録）のうち、これらのパスの分は引き継がず落とす。
-UPGRADE_ACCEPT_DROP=""
+# --upgrade が「雛形が変わっておらず、現物 = accepted:」として温存した相対パスの一覧（改行区切り）。
+# ORIGIN の accepted: 行（取り込み済みの記録）は、これらのパスの分だけを引き継ぐ。許可の一覧に
+# するのは、更新・新規作成・up-to-date・.dcb-new など、ほかのどの分岐でも古い記録を残さないため
+# （落とす側を列挙すると、分岐を足したときに漏れて古い記録が生き残る）。
+UPGRADE_ACCEPT_KEEP=""
 # --accept <path>...: 手を入れたファイルを取り込み済みとして ORIGIN へ記録する（3 つ目の動作）。
 ACCEPT="false"
 ACCEPT_PATHS=()
@@ -405,8 +407,8 @@ accept_guard_origin() {
 }
 
 accept_run() {
-  local origin="$OUTPUT_DIR/$ORIGIN_REL_PATH" raw rel dest curh rec bad="" tmp kind h
-  local actions="" plan_prefix=""
+  local origin="$OUTPUT_DIR/$ORIGIN_REL_PATH" raw rel dest curh rec bad="" tmp kind h real root
+  local actions="" plan_prefix="" seen=$'\n'
   accept_guard_origin "$origin"
   [[ "$DRY_RUN" == "true" ]] && plan_prefix="plan: "
   # 検査（何も書かない）。結果は actions へ「accept|unchanged<TAB>パス<TAB>ハッシュ」で積む。
@@ -417,12 +419,23 @@ accept_run() {
       bad="$bad"$'\n'"  - '$raw': パスが空です"
       continue
     fi
+    # 同じパスを重ねて渡しても、accepted: の行は 1 行にする。
+    case "$seen" in *$'\n'"$rel"$'\n'*) continue ;; esac
+    seen="$seen$rel"$'\n'
     if ! rec="$(dcb_origin_get "$origin" "hash:$rel" 2>/dev/null)"; then
       bad="$bad"$'\n'"  - $rel: ORIGIN に hash: の記録がありません（DCB が生成したファイルではありません）"
       continue
     fi
     if [[ -L "$dest" || ! -f "$dest" ]]; then
       bad="$bad"$'\n'"  - $rel: 現物が通常のファイルとして存在しません"
+      continue
+    fi
+    # 親ディレクトリがリンクで出力先の外を指していれば拒む（--upgrade と同じ判定）。外の
+    # ファイルのハッシュを、生成先の取り込み済みとして記録しないため。
+    real="$(cd -P "$(dirname "$dest")" 2>/dev/null && pwd -P)" || real=""
+    root="$(cd -P "$OUTPUT_DIR" 2>/dev/null && pwd -P)" || root=""
+    if [[ -z "$real" || -z "$root" || ( "$real" != "$root" && "$real" != "$root"/* ) ]]; then
+      bad="$bad"$'\n'"  - $rel: 親ディレクトリが出力先の外を指しています（シンボリックリンク）"
       continue
     fi
     if [[ -e "$dest.dcb-new" || -L "$dest.dcb-new" ]]; then
@@ -10156,7 +10169,6 @@ upgrade_apply_file() {
     # cat で中身だけ差し替える（mv / cp だとモード・所有者が変わりうる）。
     cat "$src" > "$dest"
     rm -f "$dest.dcb-new"
-    UPGRADE_ACCEPT_DROP="${UPGRADE_ACCEPT_DROP}${rel}"$'\n'
     echo "write: $dest (upgraded)"
     return 0
   fi
@@ -10168,6 +10180,7 @@ upgrade_apply_file() {
   # 同じ版の --upgrade をやり直せば作り直される（hash: だけで判定すると作り直されない）。
   acc="$(dcb_origin_get "$OUTPUT_DIR/$ORIGIN_REL_PATH" "accepted:$rel" 2>/dev/null || true)"
   if [[ -n "$rec" && "$newh" == "$rec" && -n "$acc" && "$curh" == "$acc" ]]; then
+    UPGRADE_ACCEPT_KEEP="${UPGRADE_ACCEPT_KEEP}${rel}"$'\n'
     if [[ "$DRY_RUN" == "true" ]]; then
       echo "plan: keep (modified, template unchanged) $dest"
     else
@@ -10191,8 +10204,6 @@ upgrade_apply_file() {
 # 先に消す。モードは元のファイルに揃える（元がリンク等でモードが読めなければ 644）。
 upgrade_place_dcbnew() {
   local dest="$1" src="$2" mode=""
-  # 雛形が変わって .dcb-new を置いたので、そのファイルの取り込み済みの記録（accepted:）は引き継がない。
-  UPGRADE_ACCEPT_DROP="${UPGRADE_ACCEPT_DROP}${dest#"$OUTPUT_DIR"/}"$'\n'
   if [[ -e "$dest.dcb-new" || -L "$dest.dcb-new" ]]; then
     rm -f "$dest.dcb-new"
     if [[ -e "$dest.dcb-new" || -L "$dest.dcb-new" ]]; then
@@ -10514,15 +10525,15 @@ EOF
     done <<EOF
 $origin_rels
 EOF
-    # --upgrade は取り込み済みの記録（accepted:）を引き継ぐ。ただし、記録の対象から外れたパスと、
-    # 今回 .dcb-new を置いた（または新しい版で更新した）パスの分は落とす。
+    # --upgrade は取り込み済みの記録（accepted:）のうち、今回「雛形が変わっておらず、現物 =
+    # accepted:」として温存したパスの分だけを引き継ぐ（UPGRADE_ACCEPT_KEEP。それ以外は落とす）。
     if [[ "$UPGRADE" == "true" && -f "$dest" ]]; then
       while IFS= read -r line; do
         [[ -n "$line" ]] || continue
         rel="${line#accepted:}"
         rel="${rel%=*}"
         case $'\n'"$origin_rels"$'\n' in *$'\n'"$rel"$'\n'*) ;; *) continue ;; esac
-        case $'\n'"$UPGRADE_ACCEPT_DROP" in *$'\n'"$rel"$'\n'*) continue ;; esac
+        case $'\n'"$UPGRADE_ACCEPT_KEEP" in *$'\n'"$rel"$'\n'*) ;; *) continue ;; esac
         echo "$line"
       done < <(grep '^accepted:' "$dest" || true)
     fi
