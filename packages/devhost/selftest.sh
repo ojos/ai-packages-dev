@@ -1032,6 +1032,12 @@ expect_out_line '戻す: dev up alpha$'
 if grep -qF 'systemctl --user start' "$OUT"; then ng "stop: enable されていないのに systemctl --user start を案内しています"; fi
 run 0 "stop: 止まっているコンテナには docker stop しない" -- -- stop alpha
 expect_calls "$IS_ACTIVE" "$DOCKER_PS_A" "systemctl [--user] [is-enabled] [$UNIT_A]"
+for st in paused restarting; do
+  printf '%s\t%s\t%s\n' "$A" "$id_a" "$st" >"$STATE/containers"
+  run 0 "stop: running でなくても $st のコンテナは止める" -- -- stop alpha
+  expect_calls "$IS_ACTIVE" "$DOCKER_PS_A" "docker [stop] [$id_a]" "systemctl [--user] [is-enabled] [$UNIT_A]"
+  grep -qF "$A	$id_a	exited" "$STATE/containers" || ng "stop: $st のコンテナが exited になっていません"
+done
 run 0 "up alpha（stop の仕込み 2）" -- -- up alpha
 run 0 "stop: 動いていないユニットは止めない" -- -- stop alpha
 expect_calls "$IS_ACTIVE" "$DOCKER_PS_A" "docker [stop] [$id_a]" "systemctl [--user] [is-enabled] [$UNIT_A]"

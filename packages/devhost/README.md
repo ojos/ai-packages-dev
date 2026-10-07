@@ -146,7 +146,8 @@ devcontainer.json が `shutdownAction: stopCompose` のプロジェクトでは�
 
 **引き換えに、意図して止めたいときはユニットを先に止めます。** 止めるだけなら `dev stop <名前>`
 （ユニットを止めてからコンテナを止める。disable はしないので、外部の機械の再起動の後は戻ります。
-戻すのは `dev up <名前>` か `systemctl --user start dev-up@<名前>.service`）、作り直さずに再起動するなら
+ユニットが有効なら、戻すのは `systemctl --user start dev-up@<名前>.service` です。`dev up <名前>` は
+コンテナを起こすだけで、止めたユニットは起き直りません）、作り直さずに再起動するなら
 `dev restart <名前>` を使います。作り直しは `dev rebuild <名前>` が
 ユニットの停止と起こし直しまで行います（止めずに作り直すと、30 秒後にユニットの `up` が作り直しの
 途中に重なりえます。VS Code の Rebuild Container も同じなので、VS Code から作り直すときは先に

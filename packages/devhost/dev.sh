@@ -464,12 +464,17 @@ cmd_stop() {
   else
     id="${row%% *}"
     state="${row#* }"
-    if [[ "$state" != "running" ]]; then
-      rb_say "[$PROG] $name: コンテナ $id は動いていません（$state）。"
-    else
-      rb_say "[$PROG] $name: コンテナ $id を止めます。"
-      docker stop "$id" >/dev/null || die "$name: docker stop が失敗しました（コンテナ $id）。ユニットは止めたままです。戻す: dev up $name"
-    fi
+    # 止めずに済ませるのは、止まりきった状態だけにする。paused / restarting などは running でなくても
+    # コンテナが残り、また動きうるので止める。
+    case "$state" in
+      exited | created | dead)
+        rb_say "[$PROG] $name: コンテナ $id は動いていません（$state）。"
+        ;;
+      *)
+        rb_say "[$PROG] $name: コンテナ $id（$state）を止めます。"
+        docker stop "$id" >/dev/null || die "$name: docker stop が失敗しました（コンテナ $id）。ユニットは止めたままです。戻す: dev up $name"
+        ;;
+    esac
   fi
   if command -v systemctl >/dev/null 2>&1 && systemctl --user is-enabled "$unit" >/dev/null 2>&1; then
     rb_say "[$PROG] $name: 止めました。ユニットは disable していないので、外部の機械の再起動の後は戻ります。"
