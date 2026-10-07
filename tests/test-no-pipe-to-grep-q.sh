@@ -54,7 +54,7 @@ find_offenders() {
   done
 }
 
-WORK="$(mktemp -d)"
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/no-pipe-grep-q.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
 
 it "追跡ファイルの *.sh と workflow の YAML に、パイプの後ろの grep -q が無い"
