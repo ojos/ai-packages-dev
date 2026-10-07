@@ -14,7 +14,15 @@
 # 依存: bash, python3（URL 経路の検証にローカル HTTP サーバを使う）, tar, curl,
 #       timeout（副作用の前で停止することを検証するテストが使う）,
 #       静的解析器 shellcheck（生成物が素で解析を通ることを検証するテストが使う）
-# ネットワークには出ない。
+# 試験はレジストリ（docker manifest inspect）へ問い合わせない。bootstrap.sh は
+# --base-image が無いと問い合わせるため、lib.sh の run_bootstrap が既定で固定する。
+# これを機械で担保するため、本物の docker の前に記録だけする薄い包みを PATH の先頭へ
+# 置き、試験全体のあとで manifest inspect の呼び出しが 0 件であることを確かめる
+# （1 件でもあれば、呼んだ試験の名前を出して失敗にする）。自動選択を確かめる試験は
+# 偽の docker（lib.sh の make_fake_docker）を更にその前に置くので、数えない。
+# ネットワークに出るのは次の箇所に限る。ほかには出ない。
+#   - 本物の docker が無い環境では何も問い合わせない（自動選択が既定へ戻るだけ）。
+#   - URL 経路の試験は、ローカルの HTTP サーバ（127.0.0.1）へだけ接続する。
 #
 # この一覧は下の依存チェックと同じ内容を持つ。片方だけを更新しないこと。
 
@@ -100,6 +108,43 @@ ROOT_BASE="$TEST_TMP_ROOT"
 RESULTS_DIR="$ROOT_BASE/.results"
 mkdir -p "$RESULTS_DIR"
 
+# ── docker への問い合わせの記録 ───────────────────────────────────────────────
+#
+# 本物の docker の前に置く包み。manifest inspect が呼ばれたら、呼び出しをテスト
+# ごとの記録ファイル（DCB_DOCKER_CALL_LOG）へ 1 行追記し、**本物には渡さずに失敗を返す**
+# （ベースイメージの固定を忘れた試験が足されても、レジストリへは出ない。bootstrap.sh は
+# 問い合わせの失敗を受けて先頭の候補へ倒すので試験は進み、全体のあとの確認で落ちる）。
+# それ以外の docker の呼び出しは本物に渡す。
+# 記録をテストごとのファイルに分けるのは、並列実行（DCB_TEST_JOBS）で 1 つの
+# ファイルへ同時に書いて行が壊れるのを避けるため。
+DOCKER_GUARD_DIR="$ROOT_BASE/.docker-guard"
+mkdir -p "$DOCKER_GUARD_DIR"
+cat > "$DOCKER_GUARD_DIR/docker" <<'GUARD'
+#!/usr/bin/env bash
+if [[ "${1:-}" == "manifest" && "${2:-}" == "inspect" && -n "${DCB_DOCKER_CALL_LOG:-}" ]]; then
+  printf 'docker %s\n' "$*" >> "$DCB_DOCKER_CALL_LOG"
+  echo "[docker-guard] 試験からのレジストリへの問い合わせを止めました: docker $*" >&2
+  exit 1
+fi
+exec "$DCB_REAL_DOCKER" "$@"
+GUARD
+chmod +x "$DOCKER_GUARD_DIR/docker"
+# 本物の docker が無い環境では包みを置かない（command -v docker の結果を変えない）。
+DCB_REAL_DOCKER="$(command -v docker 2>/dev/null || true)"
+if [[ -n "$DCB_REAL_DOCKER" ]]; then
+  export DCB_REAL_DOCKER
+  PATH="$DOCKER_GUARD_DIR:$PATH"
+  export PATH
+  # 包みが記録できることを先に確かめる。記録できない包みは「0 件」を偽って通す。
+  guard_probe="$ROOT_BASE/.guard-probe"
+  : > "$guard_probe"
+  DCB_DOCKER_CALL_LOG="$guard_probe" DCB_REAL_DOCKER=true docker manifest inspect probe >/dev/null 2>&1
+  if [[ ! -s "$guard_probe" ]]; then
+    echo "error: docker の記録用の包みが manifest inspect を記録できない" >&2
+    exit 1
+  fi
+fi
+
 names=()
 for f in "$TESTS_DIR"/test-*.sh; do
   [[ -f "$f" ]] || continue
@@ -155,6 +200,8 @@ for name in "${names[@]}"; do
   (
     TEST_TMP_ROOT="$ROOT_BASE/$name"
     export TEST_TMP_ROOT
+    DCB_DOCKER_CALL_LOG="$RESULTS_DIR/$name.docker"
+    export DCB_DOCKER_CALL_LOG
     bash "$TESTS_DIR/$name.sh" >"$RESULTS_DIR/$name.out" 2>"$RESULTS_DIR/$name.err"
     echo $? >"$RESULTS_DIR/$name.rc"
   ) &
@@ -174,6 +221,17 @@ for name in "${names[@]}"; do
   if [[ "$rc" != "0" ]]; then
     failed_files=$((failed_files + 1))
     failed_names+=("$name")
+  fi
+done
+
+# 試験全体で、レジストリへの問い合わせ（docker manifest inspect）が 0 件であること。
+# 呼んだ試験の名前と呼び出しを出す。--base-image を渡していない起動が原因。
+for name in "${names[@]}"; do
+  if [[ -s "$RESULTS_DIR/$name.docker" ]]; then
+    failed_files=$((failed_files + 1))
+    failed_names+=("$name（docker manifest inspect を呼んだ。bootstrap.sh に --base-image を渡す）")
+    echo "error: $name がレジストリへ問い合わせた:" >&2
+    sed 's/^/  /' "$RESULTS_DIR/$name.docker" >&2
   fi
 done
 

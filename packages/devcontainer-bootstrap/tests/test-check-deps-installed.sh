@@ -32,7 +32,7 @@ fi
 it "node を選ばない構成では生成されない"
 # 常に「対象が無い」で飛ばすだけのスクリプトを配らない。
 NONODE="$(new_workdir)/nonode"
-bash "$BOOTSTRAP" --project-name test --languages go --output-dir "$NONODE" >/dev/null 2>&1
+bash "$BOOTSTRAP" --project-name test --languages go --base-image "$TEST_BASE_IMAGE" --output-dir "$NONODE" >/dev/null 2>&1
 assert_file_absent "$NONODE/$REL"
 
 it "生成された acceptance.sh が、テストの手前でこの検査を呼ぶ"
