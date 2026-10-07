@@ -331,7 +331,8 @@ dev stop — 意図してコンテナを止める。
      （コンテナだけを止めると、ユニットが 30 秒後に起こし直すため）。止められなければ、コンテナには触らない
   2. docker stop <コンテナ>（無い・動いていないときは何もしない）
 ユニットは disable しない。外部の機械を再起動すれば、ユニットが戻ってコンテナも戻る。
-戻すとき: dev up <名前>、またはユニットを起こす systemctl --user start dev-up@<名前>.service
+戻すとき: ユニットが有効なら systemctl --user start dev-up@<名前>.service（dev up ではユニットが
+起き直らない）。有効でなければ dev up <名前>。
 再起動の後も戻したくないときは、dev disable <名前> も行う。
 
 終了コード: 0 = 止めた（元から無い・止まっているときも 0） / 1 = 失敗（ユニットの停止・docker stop） / 2 = 使い方か設定の誤り
@@ -411,11 +412,12 @@ dev self-update — dev 自身を、DCB の公開リリースの版へ置き換�
   dev self-update [--version <vX.Y.Z>]
 
 呼ぶ順序:
-  1. 置き換え先（この dev）が、リンクでなく、devhost の dev.sh であることを確かめる（先頭 2 行）
+  1. 置き換え先（この dev）が、リンクでも git の作業ツリーの中でもなく、devhost の dev.sh であることを
+     確かめる（1 行目が bash の shebang、2 行目が「# dev — 」で始まる）
   2. 公開リリースから RELEASE-MANIFEST.json と PACKAGE_ARCHIVE.tar.gz を取得する
      （既定は最新。--version でその版に固定する）
   3. マニフェストに記録された archive の SHA-256 と、取得した archive のハッシュを照合する
-  4. archive から ./devhost/dev.sh を取り出し、devhost の dev.sh であることと構文を確かめる
+  4. archive から ./devhost/dev.sh を取り出し、1 と同じ形（bash の shebang と「# dev — 」）であることと構文を確かめる
   5. 同じディレクトリの一時ファイルへ写し、mv で置き換える
 どれか 1 つでも外れたら、何も置き換えずに 1 で止まる。手動の入手（README の「devhost を入手する」）と
 同じ照合。dev.sh だけを置き換える（dev-up@.service や設定ファイルには触らない）。

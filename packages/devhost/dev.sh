@@ -426,7 +426,8 @@ cmd_restart() {
   need_project_dir
   need docker "Docker Engine を入れてください。"
   local name="$1" path="${P_PATHS[$IDX]}" unit="dev-up@${1}.service" row id rc=0
-  row="$(container_of "$path" || true)"
+  # docker ps の失敗は「コンテナが無い」と区別する（失敗を空として扱うと、在るコンテナを無いと取り違える）。
+  row="$(container_of "$path")" || die "$name: コンテナの状態を引けませんでした（docker ps が失敗）。何も再起動していません。"
   # コンテナが無いなら、ユニットにも触らずに止まる（作るのは dev up / dev rebuild の役目）。
   [[ -n "$row" ]] || die "$name: コンテナがありません。dev up $name で起こしてください（再起動は在るコンテナだけを対象にします）。"
   id="${row%% *}"
@@ -456,7 +457,8 @@ cmd_stop() {
     rb_say "[$PROG] $name: ユニット $unit（$USTATE）を止めます（コンテナだけを止めると起こし直されるため、先に止める）。"
     systemctl --user stop "$unit" || die "$name: ユニット $unit を止められませんでした。コンテナには触っていません。"
   fi
-  row="$(container_of "$path" || true)"
+  # docker ps の失敗は「コンテナが無い」と区別する。ユニットは止めたあとなので、その旨を添える。
+  row="$(container_of "$path")" || die "$name: コンテナの状態を引けませんでした（docker ps が失敗）。コンテナが止まったかは分かりません。ユニットは止めたままです。確かめる: docker ps"
   if [[ -z "$row" ]]; then
     rb_say "[$PROG] $name: コンテナがありません。止めるものはありません。"
   else
@@ -471,7 +473,8 @@ cmd_stop() {
   fi
   if command -v systemctl >/dev/null 2>&1 && systemctl --user is-enabled "$unit" >/dev/null 2>&1; then
     rb_say "[$PROG] $name: 止めました。ユニットは disable していないので、外部の機械の再起動の後は戻ります。"
-    rb_say "[$PROG] 戻す: dev up $name、またはユニットを起こす systemctl --user start $unit"
+    # dev up はコンテナを起こすだけで、止めたユニットは起き直らない。ユニットを起こせばコンテナも戻る。
+    rb_say "[$PROG] 戻す: systemctl --user start $unit（dev up $name ではユニットは起き直りません）"
   else
     # ユニットが無い、または enable されていないときは、再起動の後も戻らない。ユニットの案内も出さない。
     rb_say "[$PROG] $name: 止めました。ユニットは有効になっていないので、外部の機械の再起動の後も戻りません。"
@@ -557,19 +560,22 @@ cmd_exec() {
 # devhost は DCB のリリースに同梱されて配られる（README.md の「devhost を入手する」）。
 # 取得先は DCB の公開リリース。既定は最新、--version で版を固定する。
 RELEASE_BASE_URL="https://github.com/ojos/devcontainer-bootstrap/releases"
-# 置き換え先（いま置いてある dev）が devhost の dev.sh である確かめ。1 行目が shebang、2 行目が
-# 「# dev — 」で始まること。2 行目を全文で照合しないのは、将来の版が説明文を変えても、
+# devhost の dev.sh である確かめ。1 行目が bash の shebang、2 行目が「# dev — 」で始まること。2 行目を全文で照合しないのは、将来の版が説明文を変えても、
 # 古い版から更新できなくなるのを避けるため（接頭辞は版をまたいで変えない約束にする）。
-# 取り出した新しい dev には課さない。取得物の正当性は、ハッシュの照合と構文の検査で担保する。
-SELF_SHEBANG='#!/usr/bin/env bash'
+# 置き換え先（いま置いてある dev）と、取り出した新しい dev の両方に課す（取得物は、ハッシュの照合と
+# 構文の検査に加えて、sh や無関係なスクリプトを dev として置かないための確かめ）。
 SELF_HEADER_PREFIX='# dev — '
 
-# ファイルの先頭 2 行が devhost の dev.sh のものであること（置き換え先の確かめ）。
+# ファイルの先頭 2 行が devhost の dev.sh のものであること。
 is_devhost_dev_sh() {
   local f="$1" l1 l2
   [[ -f "$f" ]] || return 1
   { IFS= read -r l1 && IFS= read -r l2; } <"$f" || return 1
-  [[ "$l1" == "$SELF_SHEBANG" && "$l2" == "$SELF_HEADER_PREFIX"* ]]
+  case "$l1" in
+    '#!/usr/bin/env bash' | '#!/bin/bash' | '#!/usr/bin/bash') ;;
+    *) return 1 ;;
+  esac
+  [[ "$l2" == "$SELF_HEADER_PREFIX"* ]]
 }
 
 # ファイルの SHA-256（16 進の小文字 64 桁）を出す。sha256sum は GNU coreutils のコマンドで macOS には無いので、
@@ -637,7 +643,7 @@ cmd_self_update() {
   self="${DEV_SELF_PATH:-${BASH_SOURCE[0]}}"
   [[ ! -L "$self" ]] || die "置き換え先 $self はリンクです。リンクの先は書き換えません（README.md の「dev を置く」のとおり、写しで置いてください）。何も置き換えていません。"
   ! in_git_worktree "$self" || die "置き換え先 $self は git の作業ツリーの中です（リポジトリのチェックアウトや、展開しただけのディレクトリは書き換えません。~/.local/bin/dev などへ写して置いたものを更新してください）。何も置き換えていません。"
-  is_devhost_dev_sh "$self" || die "置き換え先 $self が devhost の dev.sh だと確かめられません（1 行目が shebang、2 行目が「# dev — 」で始まる形ではない、または読めない）。何も置き換えていません。"
+  is_devhost_dev_sh "$self" || die "置き換え先 $self が devhost の dev.sh だと確かめられません（1 行目が bash の shebang、2 行目が「# dev — 」で始まる形ではない、または読めない）。何も置き換えていません。"
   selfdir="$(cd "$(dirname "$self")" && pwd)"
 
   SU_TMP="$(mktemp -d "${TMPDIR:-/tmp}/dev-self-update.XXXXXX")" || die "作業ディレクトリを作れません。何も置き換えていません。"
@@ -663,7 +669,7 @@ cmd_self_update() {
 
   # archive の中の名前は ./devhost/... なので、./ を付けて指定する（GNU tar は devhost/ だと一致しない）。
   mkdir "$SU_TMP/x" && tar -xzf "$SU_TMP/PACKAGE_ARCHIVE.tar.gz" -C "$SU_TMP/x" ./devhost/dev.sh || die "archive から ./devhost/dev.sh を取り出せません。何も置き換えていません。"
-  [[ -s "$SU_TMP/x/devhost/dev.sh" ]] || die "取り出した devhost/dev.sh が空です。何も置き換えていません。"
+  is_devhost_dev_sh "$SU_TMP/x/devhost/dev.sh" || die "取り出した devhost/dev.sh が devhost の dev.sh だと確かめられません（1 行目が bash の shebang、2 行目が「# dev — 」で始まる形ではない）。何も置き換えていません。"
   "${BASH:-bash}" -n "$SU_TMP/x/devhost/dev.sh" || die "取り出した devhost/dev.sh に構文の誤りがあります。何も置き換えていません。"
 
   if cmp -s "$SU_TMP/x/devhost/dev.sh" "$self"; then
@@ -1095,7 +1101,8 @@ dev stop — 意図してコンテナを止める。
      （コンテナだけを止めると、ユニットが 30 秒後に起こし直すため）。止められなければ、コンテナには触らない
   2. docker stop <コンテナ>（無い・動いていないときは何もしない）
 ユニットは disable しない。外部の機械を再起動すれば、ユニットが戻ってコンテナも戻る。
-戻すとき: dev up <名前>、またはユニットを起こす systemctl --user start dev-up@<名前>.service
+戻すとき: ユニットが有効なら systemctl --user start dev-up@<名前>.service（dev up ではユニットが
+起き直らない）。有効でなければ dev up <名前>。
 再起動の後も戻したくないときは、dev disable <名前> も行う。
 
 終了コード: 0 = 止めた（元から無い・止まっているときも 0） / 1 = 失敗（ユニットの停止・docker stop） / 2 = 使い方か設定の誤り
@@ -1175,11 +1182,12 @@ dev self-update — dev 自身を、DCB の公開リリースの版へ置き換�
   dev self-update [--version <vX.Y.Z>]
 
 呼ぶ順序:
-  1. 置き換え先（この dev）が、リンクでなく、devhost の dev.sh であることを確かめる（先頭 2 行）
+  1. 置き換え先（この dev）が、リンクでも git の作業ツリーの中でもなく、devhost の dev.sh であることを
+     確かめる（1 行目が bash の shebang、2 行目が「# dev — 」で始まる）
   2. 公開リリースから RELEASE-MANIFEST.json と PACKAGE_ARCHIVE.tar.gz を取得する
      （既定は最新。--version でその版に固定する）
   3. マニフェストに記録された archive の SHA-256 と、取得した archive のハッシュを照合する
-  4. archive から ./devhost/dev.sh を取り出し、devhost の dev.sh であることと構文を確かめる
+  4. archive から ./devhost/dev.sh を取り出し、1 と同じ形（bash の shebang と「# dev — 」）であることと構文を確かめる
   5. 同じディレクトリの一時ファイルへ写し、mv で置き換える
 どれか 1 つでも外れたら、何も置き換えずに 1 で止まる。手動の入手（README の「devhost を入手する」）と
 同じ照合。dev.sh だけを置き換える（dev-up@.service や設定ファイルには触らない）。

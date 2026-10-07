@@ -181,6 +181,10 @@ sub="${1:-}"
 shift || true
 case "$sub" in
   ps)
+    if [[ "${FAKE_DOCKER_FAIL:-}" == "ps" ]]; then
+      echo "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?" >&2
+      exit 1
+    fi
     all=0 filter="" format=""
     while [[ $# -gt 0 ]]; do
       case "$1" in
@@ -1020,7 +1024,7 @@ expect_calls \
   "systemctl [--user] [is-enabled] [$UNIT_A]"
 grep -qF "$A	$id_a	exited" "$STATE/containers" || ng "stop: コンテナが exited になっていません"
 expect_out_line '外部の機械の再起動の後は戻ります'
-expect_out_line 'systemctl --user start dev-up@alpha.service'
+expect_out_line '戻す: systemctl --user start dev-up@alpha.service'
 run 0 "up alpha（stop の仕込み 0）" -- -- up alpha
 run 0 "stop: enable されていないユニットでは、再起動の後に戻る案内を出さない" -- -- stop alpha
 expect_out_line '再起動の後も戻りません'
@@ -1051,6 +1055,13 @@ expect_calls "$IS_ACTIVE"
 run 1 "stop: docker stop が失敗したら 1（ユニットは止めたまま）" -- FAKE_ACTIVE_UNITS="$UNIT_A" FAKE_DOCKER_FAIL=stop -- stop alpha
 expect_calls "$IS_ACTIVE" "systemctl [--user] [stop] [$UNIT_A]" "$DOCKER_PS_A" "docker [stop] [$id_a]"
 expect_err "戻す: dev up alpha"
+run 1 "stop: docker ps が失敗したら「コンテナが無い」にせず 1（ユニットは止めたあと）" -- FAKE_ACTIVE_UNITS="$UNIT_A" FAKE_DOCKER_FAIL=ps -- stop alpha
+expect_calls "$IS_ACTIVE" "systemctl [--user] [stop] [$UNIT_A]" "$DOCKER_PS_A"
+expect_err "コンテナの状態を引けませんでした"
+if grep -qF '止めるものはありません' "$OUT"; then ng "stop: docker ps の失敗を「コンテナが無い」と取り違えています"; fi
+run 1 "restart: docker ps が失敗したら 1（ユニットにも触らない）" -- FAKE_ACTIVE_UNITS="$UNIT_A" FAKE_DOCKER_FAIL=ps -- restart alpha
+expect_calls "$DOCKER_PS_A"
+expect_err "コンテナの状態を引けませんでした"
 reset_state
 run 0 "stop: コンテナが無ければ止めるものは無い（ユニットは止める）" -- FAKE_ACTIVE_UNITS="$UNIT_A" -- stop alpha
 expect_calls "$IS_ACTIVE" "systemctl [--user] [stop] [$UNIT_A]" "$DOCKER_PS_A" "systemctl [--user] [is-enabled] [$UNIT_A]"
@@ -1217,12 +1228,26 @@ mk_self
 run 1 "self-update: archive の dev.sh に構文の誤りがあれば置き換えない" -- DEV_SELF_PATH="$SELF" FAKE_CURL_DIR="$BADREL" -- self-update
 expect_err "構文の誤り"
 expect_self_unchanged
-# 取得物の先頭 2 行は照合しない（将来の版が説明文を変えても更新できる）。
-printf '#!/bin/sh\n# 別の説明\necho future\n' >"$BADREL/devhost/dev.sh"
+# 取得物も、bash の shebang と「# dev — 」で始まる 2 行目が要る（sh や無関係なスクリプトは置かない）。
+for badhead in '#!/bin/sh' '#!/bin/false'; do
+  printf '%s\n%s\necho x\n' "$badhead" "$HDR2" >"$BADREL/devhost/dev.sh"
+  (cd "$BADREL" && tar -czf PACKAGE_ARCHIVE.tar.gz ./devhost)
+  printf '{ "version": "1.0.0", "checksums": { "PACKAGE_ARCHIVE.tar.gz": "%s" } }\n' "$($sum_cmd "$BADREL/PACKAGE_ARCHIVE.tar.gz" | awk '{ print $1 }')" >"$BADREL/RELEASE-MANIFEST.json"
+  run 1 "self-update: 取得物の 1 行目が $badhead なら置き換えない" -- DEV_SELF_PATH="$SELF" FAKE_CURL_DIR="$BADREL" -- self-update
+  expect_err "devhost の dev.sh だと確かめられません"
+  expect_self_unchanged
+done
+printf '%s\n%s\necho x\n' "$HDR1" '# 別のスクリプト' >"$BADREL/devhost/dev.sh"
 (cd "$BADREL" && tar -czf PACKAGE_ARCHIVE.tar.gz ./devhost)
 printf '{ "version": "1.0.0", "checksums": { "PACKAGE_ARCHIVE.tar.gz": "%s" } }\n' "$($sum_cmd "$BADREL/PACKAGE_ARCHIVE.tar.gz" | awk '{ print $1 }')" >"$BADREL/RELEASE-MANIFEST.json"
-run 0 "self-update: 取得物の先頭 2 行が違っても、ハッシュと構文が通れば置き換える" -- DEV_SELF_PATH="$SELF" FAKE_CURL_DIR="$BADREL" -- self-update
-cmp -s "$BADREL/devhost/dev.sh" "$SELF" || ng "self-update: 先頭 2 行が違う取得物で置き換わっていません"
+run 1 "self-update: 取得物の 2 行目が「# dev — 」で始まらなければ置き換えない" -- DEV_SELF_PATH="$SELF" FAKE_CURL_DIR="$BADREL" -- self-update
+expect_self_unchanged
+# 2 行目の説明文が違っても、「# dev — 」で始まれば置き換わる（将来の版が説明文を変えても更新できる）。
+printf '%s\n%s\necho future\n' "$HDR1" '# dev — 将来の版の説明文' >"$BADREL/devhost/dev.sh"
+(cd "$BADREL" && tar -czf PACKAGE_ARCHIVE.tar.gz ./devhost)
+printf '{ "version": "1.0.0", "checksums": { "PACKAGE_ARCHIVE.tar.gz": "%s" } }\n' "$($sum_cmd "$BADREL/PACKAGE_ARCHIVE.tar.gz" | awk '{ print $1 }')" >"$BADREL/RELEASE-MANIFEST.json"
+run 0 "self-update: 取得物の 2 行目の説明文が違っても、「# dev — 」で始まれば置き換える" -- DEV_SELF_PATH="$SELF" FAKE_CURL_DIR="$BADREL" -- self-update
+cmp -s "$BADREL/devhost/dev.sh" "$SELF" || ng "self-update: 2 行目の説明文が違う取得物で置き換わっていません"
 mk_self
 # archive に ./devhost/dev.sh が無いとき。
 NOREL="$WORK/release-none"
