@@ -57,7 +57,7 @@ TOOLBIN="$WORK/toolbin"
 mkdir -p "$FAKEBIN" "$TOOLBIN" "$WORK/home"
 
 # dev.sh と偽物が使う道具だけを置く。本物の docker などが入った環境でも PATH から見えない。
-for t in sed tail head cat rm mkdir grep tr env awk sleep mktemp; do
+for t in sed tail head cat rm mkdir grep tr env awk sleep mktemp; do  # bsd-ok: mktemp は呼び出しではなく、偽の PATH へ写す道具の名前の一覧
   p="$(command -v "$t")" || { echo "[devhost-selftest] $t が見つかりません" >&2; exit 1; }
   ln -s "$p" "$TOOLBIN/$t"
 done
