@@ -628,7 +628,39 @@ expect_calls \
 for sg in "TERM 143" "INT 130" "HUP 129"; do
   run "${sg#* }" "rebuild: ${sg% *} で中断されても起こし直す" -- FAKE_ACTIVE_UNITS=dev-up@alpha.service FAKE_UP_SIGNAL="${sg% *}" -- rebuild alpha
   expect_calls "${STOP_FLOW[@]}"
-  expect_err "起こし直します"
+  expect_err "起こし直しました"
+done
+# ssh が切れると、標準出力・標準エラーが閉じる（#475）。閉じた出力への書き込みで抜けても、
+# 止めたユニットは起こし直していること。終了コードは問わない（出力の失敗をどう返すかより、
+# ユニットが戻ることが約束）。2 つの閉じ方を試す: fd を閉じる（EBADF）／読み手の居ないパイプ（SIGPIPE）。
+run_closed() { # 閉じ方 名前 -- [環境変数...] -- 引数...
+  local how="$1" name="$2"
+  shift 2
+  [[ "$1" == "--" ]] && shift
+  local envs=()
+  while [[ $# -gt 0 && "$1" != "--" ]]; do envs+=("$1"); shift; done
+  [[ $# -gt 0 ]] && shift
+  : >"$LOG"
+  n=$((n + 1))
+  CUR="$name"
+  if [[ "$how" == "fd" ]]; then
+    env -i HOME="$WORK/home" PATH="$FAKEBIN:$TOOLBIN" \
+      DEV_PROJECTS_FILE="${T_CONF:-$CONF}" FAKE_LOG="$LOG" FAKE_STATE="$STATE" \
+      ${envs[@]+"${envs[@]}"} \
+      "$BASH_BIN" "$DEV" "$@" </dev/null >&- 2>&- || true
+  else
+    # 読み手（:）がすぐ終わるので、書き込みは SIGPIPE / EPIPE になる。標準エラーも同じパイプへ。
+    { env -i HOME="$WORK/home" PATH="$FAKEBIN:$TOOLBIN" \
+      DEV_PROJECTS_FILE="${T_CONF:-$CONF}" FAKE_LOG="$LOG" FAKE_STATE="$STATE" \
+      ${envs[@]+"${envs[@]}"} \
+      "$BASH_BIN" "$DEV" "$@" </dev/null 2>&1 || true; } | sleep 0
+  fi
+}
+for how in fd pipe; do
+  run_closed "$how" "rebuild: 出力が閉じていても（$how）、止めたユニットを起こし直す" -- FAKE_ACTIVE_UNITS=dev-up@alpha.service -- rebuild alpha
+  expect_calls "${STOP_FLOW[@]}"
+  run_closed "$how" "rebuild: 出力が閉じたうえで HUP で中断されても（$how）、起こし直す" -- FAKE_ACTIVE_UNITS=dev-up@alpha.service FAKE_UP_SIGNAL=HUP -- rebuild alpha
+  expect_calls "${STOP_FLOW[@]}"
 done
 run 0 "rebuild: unknown（ユニットを入れていない）は触らずに作り直す" -- FAKE_UNKNOWN_UNITS=dev-up@alpha.service -- rebuild alpha
 expect_calls \

@@ -287,13 +287,26 @@ cmd_supervise() {
   die "$1: コンテナ $id が止まりました（終了コード $code）。ユニットが起こし直します。"
 }
 
+# ユニットを止めているあいだの出力。ssh が切れると標準出力・標準エラーが閉じ、echo が失敗する
+# （set -e でその場で抜ける）か、SIGPIPE で落ちる。どちらでもユニットが止まったまま残るので、
+# 出力の失敗は無視する（SIGPIPE は止めているあいだだけ無視し、書き込みの失敗として受ける）。
+# 書き込みが失敗したときの bash の苦情も閉じた標準エラーへ向かうだけなので、捨てる必要は無い。
+rb_say() { printf '%s\n' "$*" || true; }
+rb_err() { printf '%s\n' "$*" >&2 || true; }
+
 # rebuild の途中で INT / HUP / TERM を受けたとき、止めたユニットを起こし直してから抜ける。
 # 子（devcontainer up）の実行中に届いたシグナルは、子が終わってから処理される。
+# **出力より先に起こし直す。** 中断の理由が ssh の切断なら、出力先はもう閉じている。
 RB_UNIT=""
 rebuild_abort() {
+  local started=0
   trap - INT HUP TERM
-  echo "[$PROG] 中断されました（$2）。止めたユニット $RB_UNIT を起こし直します。" >&2
-  systemctl --user start "$RB_UNIT" || echo "[$PROG] ユニット $RB_UNIT を起こせませんでした。手で起こしてください。" >&2
+  systemctl --user start "$RB_UNIT" >/dev/null 2>&1 && started=1
+  if [[ "$started" -eq 1 ]]; then
+    rb_err "[$PROG] 中断されました（$2）。止めたユニット $RB_UNIT を起こし直しました。"
+  else
+    rb_err "[$PROG] 中断されました（$2）。ユニット $RB_UNIT を起こせませんでした。手で起こしてください。"
+  fi
   exit "$1"
 }
 
@@ -337,22 +350,28 @@ cmd_rebuild() {
     *) had_unit=1 ;;
   esac
   if [[ "$had_unit" -eq 1 ]]; then
-    echo "[$PROG] $name: ユニット $unit（$ustate）を止めます（作り直しの途中で up が重ならないように）。"
     # 止めたあとの中断（ssh の切断など）でも起こし直す。止める前に張るのは、止めている最中の
     # 中断でも戻せるようにするため（動いているユニットへの start は何も変えない）。
     RB_UNIT="$unit"
     trap 'rebuild_abort 130 INT' INT
     trap 'rebuild_abort 129 HUP' HUP
     trap 'rebuild_abort 143 TERM' TERM
-    systemctl --user stop "$unit" || { trap - INT HUP TERM; die "$name: ユニット $unit を止められませんでした。何も作り直していません。"; }
+    # ここから起こし直すまで SIGPIPE を無視する（閉じた出力への書き込みで落ちず、rb_say が失敗を受ける）。
+    trap '' PIPE
+    rb_say "[$PROG] $name: ユニット $unit（$ustate）を止めます（作り直しの途中で up が重ならないように）。"
+    systemctl --user stop "$unit" || { trap - INT HUP TERM PIPE; die "$name: ユニット $unit を止められませんでした。何も作り直していません。"; }
   fi
-  echo "[$PROG] $name: コンテナを作り直します。"
+  if [[ "$had_unit" -eq 1 ]]; then rb_say "[$PROG] $name: コンテナを作り直します。"; else echo "[$PROG] $name: コンテナを作り直します。"; fi
   devcontainer up --workspace-folder "$path" --remove-existing-container || rc=$?
   if [[ "$had_unit" -eq 1 ]]; then
-    # 作り直しが失敗しても、止めたユニットは起こし直す（戻らないまま放置しない）。
-    echo "[$PROG] $name: ユニット $unit を起こし直します。"
-    systemctl --user start "$unit" || { echo "[$PROG] $name: ユニット $unit を起こせませんでした。" >&2; rc=1; }
-    trap - INT HUP TERM
+    # 作り直しが失敗しても、止めたユニットは起こし直す（戻らないまま放置しない）。出力より先に起こす。
+    if systemctl --user start "$unit"; then
+      rb_say "[$PROG] $name: ユニット $unit を起こし直しました。"
+    else
+      rb_err "[$PROG] $name: ユニット $unit を起こせませんでした。"
+      rc=1
+    fi
+    trap - INT HUP TERM PIPE
   fi
   [[ "$rc" -eq 0 ]] || die "$name: 作り直しが失敗しました（終了コード $rc）。"
   echo "[$PROG] $name: 作り直しました。"
