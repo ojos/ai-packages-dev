@@ -111,7 +111,10 @@ mkdir -p "$RESULTS_DIR"
 # ── docker への問い合わせの記録 ───────────────────────────────────────────────
 #
 # 本物の docker の前に置く包み。manifest inspect が呼ばれたら、呼び出しをテスト
-# ごとの記録ファイル（DCB_DOCKER_CALL_LOG）へ 1 行追記してから本物に渡す。
+# ごとの記録ファイル（DCB_DOCKER_CALL_LOG）へ 1 行追記し、**本物には渡さずに失敗を返す**
+# （ベースイメージの固定を忘れた試験が足されても、レジストリへは出ない。bootstrap.sh は
+# 問い合わせの失敗を受けて先頭の候補へ倒すので試験は進み、全体のあとの確認で落ちる）。
+# それ以外の docker の呼び出しは本物に渡す。
 # 記録をテストごとのファイルに分けるのは、並列実行（DCB_TEST_JOBS）で 1 つの
 # ファイルへ同時に書いて行が壊れるのを避けるため。
 DOCKER_GUARD_DIR="$ROOT_BASE/.docker-guard"
@@ -120,6 +123,8 @@ cat > "$DOCKER_GUARD_DIR/docker" <<'GUARD'
 #!/usr/bin/env bash
 if [[ "${1:-}" == "manifest" && "${2:-}" == "inspect" && -n "${DCB_DOCKER_CALL_LOG:-}" ]]; then
   printf 'docker %s\n' "$*" >> "$DCB_DOCKER_CALL_LOG"
+  echo "[docker-guard] 試験からのレジストリへの問い合わせを止めました: docker $*" >&2
+  exit 1
 fi
 exec "$DCB_REAL_DOCKER" "$@"
 GUARD
