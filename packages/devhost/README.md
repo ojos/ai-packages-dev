@@ -239,9 +239,10 @@ dev rebuild — コンテナを作り直す。
 
 呼ぶ順序:
   1. --pull のときだけ git -C <パス> pull --ff-only。失敗したら、何も止めずに終わる
-  2. ユニット dev-up@<名前> が inactive / failed でなければ止める（起こし直しの待機中の activating も
-     止める。止める必要の無いとき、または systemctl が無いときは触らない）。systemctl はあるのに状態を
-     引けないときは、up と重なる危険を避けるため、何も作り直さずに 1 で止まる
+  2. ユニット dev-up@<名前> が inactive / failed / unknown（ユニットを入れていない）でなければ止める
+     （起こし直しの待機中の activating も止める。止める必要の無いとき、または systemctl が無いときは
+     触らない）。systemctl はあるのに状態の語が得られないとき（問い合わせの失敗）は、
+     up と重なる危険を避けるため、何も作り直さずに 1 で止まる
      （確かめる: systemctl --user status dev-up@<名前>）
   3. devcontainer up --workspace-folder <パス> --remove-existing-container
   4. 2 で止めたときだけ、ユニットを起こし直す。3 が失敗しても、INT / HUP / TERM で中断されても

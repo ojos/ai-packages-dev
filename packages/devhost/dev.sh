@@ -329,10 +329,11 @@ cmd_rebuild() {
     # 何も変えずに止まる（systemctl が無い機械は、ユニットを使わないので触らず進む）。
     die "$name: ユニット $unit の状態が分からないので、止めて終わります（何も作り直していません）。確かめる: systemctl --user status $unit"
   fi
-  # 止めない状態は inactive / failed / 不明（systemctl が無い）だけ。Restart= の待機中（activating）や
-  # 停止処理中（deactivating）のユニットも、作り直しの途中で up を起こしうるので止める。
+  # 止めない状態は inactive / failed / unknown（ユニットが無い。ユニットを入れずに dev だけを置く運用）/
+  # - （systemctl が無い）だけ。Restart= の待機中（activating）や停止処理中（deactivating）のユニットも、
+  # 作り直しの途中で up を起こしうるので止める。
   case "$ustate" in
-    inactive | failed | -) ;;
+    inactive | failed | unknown | -) ;;
     *) had_unit=1 ;;
   esac
   if [[ "$had_unit" -eq 1 ]]; then
@@ -694,9 +695,10 @@ dev rebuild — コンテナを作り直す。
 
 呼ぶ順序:
   1. --pull のときだけ git -C <パス> pull --ff-only。失敗したら、何も止めずに終わる
-  2. ユニット dev-up@<名前> が inactive / failed でなければ止める（起こし直しの待機中の activating も
-     止める。止める必要の無いとき、または systemctl が無いときは触らない）。systemctl はあるのに状態を
-     引けないときは、up と重なる危険を避けるため、何も作り直さずに 1 で止まる
+  2. ユニット dev-up@<名前> が inactive / failed / unknown（ユニットを入れていない）でなければ止める
+     （起こし直しの待機中の activating も止める。止める必要の無いとき、または systemctl が無いときは
+     触らない）。systemctl はあるのに状態の語が得られないとき（問い合わせの失敗）は、
+     up と重なる危険を避けるため、何も作り直さずに 1 で止まる
      （確かめる: systemctl --user status dev-up@<名前>）
   3. devcontainer up --workspace-folder <パス> --remove-existing-container
   4. 2 で止めたときだけ、ユニットを起こし直す。3 が失敗しても、INT / HUP / TERM で中断されても

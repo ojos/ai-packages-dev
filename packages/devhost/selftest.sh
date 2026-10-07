@@ -266,6 +266,10 @@ case "$2" in
     for u in ${FAKE_ACTIVATING_UNITS:-}; do
       [[ "$u" == "$3" ]] && { echo activating; exit 3; }
     done
+    # ユニットを入れていない機械（dev だけを置く運用）。本物は unknown を出し、4 で抜ける。
+    for u in ${FAKE_UNKNOWN_UNITS:-}; do
+      [[ "$u" == "$3" ]] && { echo unknown; exit 4; }
+    done
     for u in ${FAKE_FAILED_UNITS:-}; do
       [[ "$u" == "$3" ]] && { echo failed; exit 3; }
     done
@@ -626,6 +630,10 @@ for sg in "TERM 143" "INT 130" "HUP 129"; do
   expect_calls "${STOP_FLOW[@]}"
   expect_err "起こし直します"
 done
+run 0 "rebuild: unknown（ユニットを入れていない）は触らずに作り直す" -- FAKE_UNKNOWN_UNITS=dev-up@alpha.service -- rebuild alpha
+expect_calls \
+  "systemctl [--user] [is-active] [dev-up@alpha.service]" \
+  "$UP_RM"
 # systemctl はあるのに状態を引けないときは、止めずに作り直さず、何も変えずに 1 で止まる。
 run 1 "rebuild: 状態を引けなければ作り直さない" -- FAKE_SYSTEMCTL_FAIL=is-active -- rebuild alpha
 expect_calls "systemctl [--user] [is-active] [dev-up@alpha.service]"
@@ -848,7 +856,7 @@ expect_no_calls
 run 2 "help: 引数が多い" -- -- help ls up
 expect_no_calls
 run 0 "rebuild の説明にユニットの扱いがある" -- -- help rebuild
-expect_out_line 'ユニット dev-up@<名前> が inactive / failed でなければ止める'
+expect_out_line 'ユニット dev-up@<名前> が inactive / failed / unknown（ユニットを入れていない）でなければ止める'
 expect_out_line '3 が失敗しても、INT / HUP / TERM で中断されても'
 
 # ── 6e. README の「コマンドの説明」と dev help の照合 ─────────────────────────
