@@ -240,7 +240,9 @@ dev rebuild — コンテナを作り直す。
 呼ぶ順序:
   1. --pull のときだけ git -C <パス> pull --ff-only。失敗したら、何も止めずに終わる
   2. ユニット dev-up@<名前> が inactive / failed でなければ止める（起こし直しの待機中の activating も
-     止める。止める必要の無いとき、または systemctl が無いときは触らない）
+     止める。止める必要の無いとき、または systemctl が無いときは触らない）。systemctl はあるのに状態を
+     引けないときは、up と重なる危険を避けるため、何も作り直さずに 1 で止まる
+     （確かめる: systemctl --user status dev-up@<名前>）
   3. devcontainer up --workspace-folder <パス> --remove-existing-container
   4. 2 で止めたときだけ、ユニットを起こし直す。3 が失敗しても、INT / HUP / TERM で中断されても
      （ssh の切断など）起こし直してから終わる（中断の終了コードは 130 / 129 / 143）
@@ -268,6 +270,7 @@ cgroup は /proc/<コンテナの PID>/cgroup から求める（cgroup v2）。
 pids の上限は、コンテナの cgroup から根まで遡り、上限のある階層のうち現在値 / 上限 の比が最大のもので
 判定して、その階層を表示する（systemd の slice の TasksMax などに当たっていても見逃さない）。
 exec は 30 秒（環境変数 DEV_EXEC_TIMEOUT で変えられる。1 以上の整数）で返らなければ FAIL にする。
+TERM を送っても止まらないときは、さらに 5 秒（DEV_EXEC_KILL_GRACE。1 以上の整数）後に KILL する。
 
 判定:
   FAIL  exec が通らないか返らない / pids が上限の 90% 以上 / pids.max が 0 /

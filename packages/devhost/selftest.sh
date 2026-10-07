@@ -147,6 +147,13 @@ case "$sub" in
       echo "OCI runtime exec failed: exec failed: unable to start container process: procReady not received: unknown" >&2
       exit 1
     fi
+    if [[ "${FAKE_EXEC_HANG:-0}" == "ignoreterm" ]]; then
+      # TERM を無視して居座る（KILL でしか止まらない）。20 秒で自分で終わる（直す前の dev.sh を
+      # 試験に当てたとき、いつまでも居座らないため）。
+      trap '' TERM
+      for ((hang_i = 0; hang_i < 20; hang_i++)); do sleep 1; done
+      exit 0
+    fi
     if [[ "${FAKE_EXEC_HANG:-0}" == "1" ]]; then
       # 応答が返らない状況（本物は exec が止まったまま）。sleep そのものに置き換わるので、
       # 親が PID を kill すれば確実に終わる。
@@ -247,6 +254,11 @@ log_call systemctl "$@"
 [[ "${1:-}" == "--user" && $# -eq 3 ]] || { echo "fake systemctl: 想定外の呼び出し: $*" >&2; exit 2; }
 case "$2" in
   is-active)
+    if [[ "${FAKE_SYSTEMCTL_FAIL:-}" == "is-active" ]]; then
+      # 問い合わせ自体の失敗（バスに繋がらないなど）。状態の語は出さない。
+      echo "Failed to connect to user scope bus via local transport: No medium found" >&2
+      exit 1
+    fi
     for u in ${FAKE_ACTIVE_UNITS:-}; do
       [[ "$u" == "$3" ]] && { echo active; exit 0; }
     done
@@ -614,6 +626,11 @@ for sg in "TERM 143" "INT 130" "HUP 129"; do
   expect_calls "${STOP_FLOW[@]}"
   expect_err "起こし直します"
 done
+# systemctl はあるのに状態を引けないときは、止めずに作り直さず、何も変えずに 1 で止まる。
+run 1 "rebuild: 状態を引けなければ作り直さない" -- FAKE_SYSTEMCTL_FAIL=is-active -- rebuild alpha
+expect_calls "systemctl [--user] [is-active] [dev-up@alpha.service]"
+expect_err "状態が分からない"
+expect_err "systemctl --user status dev-up@alpha.service"
 run 2 "rebuild: 知らないオプション" -- -- rebuild alpha --force
 expect_no_calls
 run 2 "rebuild: 名前が無い" -- -- rebuild --pull
@@ -752,6 +769,15 @@ mkdir -p "$WORK/cg/system.slice"
 printf 'bogus\n' >"$WORK/cg/system.slice/pids.max"
 run 3 "doctor: 上位の pids.max が壊れている" -- -- doctor alpha
 expect_out_line '\[WARN\] pids.max が数でも max でもありません: bogus（階層: /system.slice）'
+# TERM を無視する exec でも、猶予のあとに KILL して、doctor が時間内に FAIL で返る。
+mk_cg 4242 "$CG" 20 1000 0 0
+kstart=$SECONDS
+run 1 "doctor: TERM を無視する exec" -- FAKE_EXEC_HANG=ignoreterm DEV_EXEC_TIMEOUT=1 DEV_EXEC_KILL_GRACE=1 -- doctor alpha
+expect_out_line '\[FAIL\] exec が 1 秒で返りません'
+if [[ $((SECONDS - kstart)) -ge 10 ]]; then ng "doctor: TERM を無視する exec で $((SECONDS - kstart)) 秒かかりました（KILL で止まるはず）"; fi
+run 2 "doctor: DEV_EXEC_KILL_GRACE=0 は使い方の誤り" -- DEV_EXEC_KILL_GRACE=0 -- doctor alpha
+expect_err "DEV_EXEC_KILL_GRACE は 1 以上の整数"
+expect_no_calls
 # DEV_EXEC_TIMEOUT は 1 以上の整数だけ（GNU の timeout 0 は無制限になり、返らなくなる）。
 for tv in 0 abc -5 1.5; do
   run 2 "doctor: DEV_EXEC_TIMEOUT=$tv は使い方の誤り" -- DEV_EXEC_TIMEOUT="$tv" -- doctor alpha

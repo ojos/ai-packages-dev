@@ -324,6 +324,11 @@ cmd_rebuild() {
   fi
   local had_unit=0 rc=0 ustate
   ustate="$(unit_state "$unit")"
+  if [[ "$ustate" == "-" ]] && command -v systemctl >/dev/null 2>&1; then
+    # systemctl はあるのに状態を引けなかった。止めずに作り直すと、ユニットの up と重なりうるので、
+    # 何も変えずに止まる（systemctl が無い機械は、ユニットを使わないので触らず進む）。
+    die "$name: ユニット $unit の状態が分からないので、止めて終わります（何も作り直していません）。確かめる: systemctl --user status $unit"
+  fi
   # 止めない状態は inactive / failed / 不明（systemctl が無い）だけ。Restart= の待機中（activating）や
   # 停止処理中（deactivating）のユニットも、作り直しの途中で up を起こしうるので止める。
   case "$ustate" in
@@ -398,6 +403,9 @@ cmd_doctor() {
   if [[ -n "${DEV_EXEC_TIMEOUT:-}" ]] && { ! is_uint "$DEV_EXEC_TIMEOUT" || [[ "$DEV_EXEC_TIMEOUT" -lt 1 ]]; }; then
     usage_error "DEV_EXEC_TIMEOUT は 1 以上の整数（秒）で指定します: $DEV_EXEC_TIMEOUT"
   fi
+  if [[ -n "${DEV_EXEC_KILL_GRACE:-}" ]] && { ! is_uint "$DEV_EXEC_KILL_GRACE" || [[ "$DEV_EXEC_KILL_GRACE" -lt 1 ]]; }; then
+    usage_error "DEV_EXEC_KILL_GRACE は 1 以上の整数（秒）で指定します: $DEV_EXEC_KILL_GRACE"
+  fi
   load_projects
   find_project "$1"
   need_project_dir
@@ -421,14 +429,14 @@ cmd_doctor() {
   fi
 
   if [[ "$state" == "running" ]]; then
-    local ec=0 eout tmp secs="${DEV_EXEC_TIMEOUT:-30}"
+    local ec=0 eout tmp secs="${DEV_EXEC_TIMEOUT:-30}" grace="${DEV_EXEC_KILL_GRACE:-5}"
     tmp="$(mktemp "${TMPDIR:-/tmp}/dev-doctor.XXXXXX" 2>/dev/null)" || tmp=/dev/null
-    run_limited "$secs" "$tmp" devcontainer exec --workspace-folder "$path" true || ec=$?
+    run_limited "$secs" "$grace" "$tmp" devcontainer exec --workspace-folder "$path" true || ec=$?
     eout="$(tail -n 1 "$tmp" 2>/dev/null || true)"
     [[ "$tmp" == /dev/null ]] || rm -f "$tmp"
     if [[ "$ec" -eq 0 ]]; then
       doc_line OK "exec が通ります"
-    elif [[ "$ec" -eq 124 || "$ec" -eq 143 ]]; then
+    elif [[ "$ec" -eq 124 || "$ec" -eq 137 || "$ec" -eq 143 ]]; then
       doc_line FAIL "exec が $secs 秒で返りません（止まっています）: $eout"
     else
       doc_line FAIL "exec が通りません（終了コード $ec）: $eout"
@@ -468,14 +476,15 @@ cmd_doctor() {
 }
 
 # 時間を区切って実行する。引数: 秒数 出力先のファイル コマンド...。終了コードを返す
-# （時間切れは timeout なら 124、代替（kill）なら 143）。出力をパイプでなくファイルへ受けるのは、
+# （時間切れは timeout なら 124（KILL まで進めば 137）、代替（kill）なら 143（KILL なら 137））。
+# 期限で TERM を送り、TERM を無視されても猶予（秒）のあとに KILL する。出力をパイプでなくファイルへ受けるのは、
 # 殺しきれなかった子が出力の口を握ったまま、受け取る側が返らなくなるのを避けるため。
 # timeout が無い環境（macOS など）では、バックグラウンドで起こして指定の秒数で kill する。
 run_limited() {
-  local secs="$1" out="$2" pid killer rc=0
-  shift 2
+  local secs="$1" grace="$2" out="$3" pid killer rc=0
+  shift 3
   if command -v timeout >/dev/null 2>&1; then
-    timeout "$secs" "$@" </dev/null >"$out" 2>&1 || rc=$?
+    timeout -k "$grace" "$secs" "$@" </dev/null >"$out" 2>&1 || rc=$?
     return "$rc"
   fi
   "$@" </dev/null >"$out" 2>&1 &
@@ -483,6 +492,8 @@ run_limited() {
   (
     sleep "$secs"
     kill "$pid"
+    sleep "$grace"
+    kill -KILL "$pid"
   ) </dev/null >/dev/null 2>&1 &
   killer=$!
   { wait "$pid"; } 2>/dev/null || rc=$?
@@ -684,7 +695,9 @@ dev rebuild — コンテナを作り直す。
 呼ぶ順序:
   1. --pull のときだけ git -C <パス> pull --ff-only。失敗したら、何も止めずに終わる
   2. ユニット dev-up@<名前> が inactive / failed でなければ止める（起こし直しの待機中の activating も
-     止める。止める必要の無いとき、または systemctl が無いときは触らない）
+     止める。止める必要の無いとき、または systemctl が無いときは触らない）。systemctl はあるのに状態を
+     引けないときは、up と重なる危険を避けるため、何も作り直さずに 1 で止まる
+     （確かめる: systemctl --user status dev-up@<名前>）
   3. devcontainer up --workspace-folder <パス> --remove-existing-container
   4. 2 で止めたときだけ、ユニットを起こし直す。3 が失敗しても、INT / HUP / TERM で中断されても
      （ssh の切断など）起こし直してから終わる（中断の終了コードは 130 / 129 / 143）
@@ -712,6 +725,7 @@ cgroup は /proc/<コンテナの PID>/cgroup から求める（cgroup v2）。
 pids の上限は、コンテナの cgroup から根まで遡り、上限のある階層のうち現在値 / 上限 の比が最大のもので
 判定して、その階層を表示する（systemd の slice の TasksMax などに当たっていても見逃さない）。
 exec は 30 秒（環境変数 DEV_EXEC_TIMEOUT で変えられる。1 以上の整数）で返らなければ FAIL にする。
+TERM を送っても止まらないときは、さらに 5 秒（DEV_EXEC_KILL_GRACE。1 以上の整数）後に KILL する。
 
 判定:
   FAIL  exec が通らないか返らない / pids が上限の 90% 以上 / pids.max が 0 /
