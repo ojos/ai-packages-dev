@@ -25,6 +25,7 @@
 ### 移行
 - **`compose.yaml` の `init: true` は、`--upgrade` で取り込んだあと、コンテナを作り直すまで効かない。** 手を入れた `compose.yaml` には `.dcb-new` が置かれるので、`command: sleep infinity` の次の行へ `init: true` を写してください。作り直す前に溜まったゾンビは、作り直しで消える。
 - **生成物の末尾の改行（ojos/ai-packages-dev#462）で、手を入れたファイルには `.dcb-new` が置かれる。** 中身の違いが末尾の改行だけなら、`.dcb-new` で置き換えてから手を入れ直すか、末尾に改行を足して `.dcb-new` を消してください。取り込みが済んだら `bash bootstrap.sh --accept <path>` で取り込み済みにすると、次から `doctor.sh` が FAIL を出さなくなる。
+- **規範（ai-playbook）も v0.8.1 へ上げるには、`--upgrade --playbook-version v0.8.1` と指定する。** `--upgrade` は、明示しなければ ORIGIN に記録した規範の版（`input:playbook-ref`）を使い回す。指定しなくても、DCB 自身の生成物（`compose.yaml`・`scripts/*.sh` など）は新しい版になるが、規範から写す `scripts/second-opinion-review.sh` などは前の版のまま。
 - `--accept` を使わない場合のふるまい（手を入れたファイルに `.dcb-new` を置く・`doctor.sh` が FAIL を出す）は従来と同じ。
 
 ## v0.16.0

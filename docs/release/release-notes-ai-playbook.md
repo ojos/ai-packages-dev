@@ -13,7 +13,7 @@
 - **`templates/second-opinion-review.sh` の「パイプの後ろの `grep -q`」を取り除いた**（ojos/ai-packages-dev#471）。`grep -q` は一致した時点で読むのをやめるので、生産側が SIGPIPE を受け、`pipefail` の下では一致を不一致と取り違えうる。`-q` を外して `>/dev/null` を付ける形にした。ふるまいは変わらない。破壊的変更なし。雛形は 16 種のまま。
 
 ### 移行
-- 雛形から写した `scripts/second-opinion-review.sh` は自動では更新されない（DCB の `--upgrade` を使っていれば更新される）。手で直す場合は、`grep -qx -- "$__category"` を `grep -x -- "$__category" >/dev/null` に書き換えてください。
+- 雛形から写した `scripts/second-opinion-review.sh` は自動では更新されない。DCB で規範を配置している場合は、`bootstrap.sh --upgrade --playbook-version v0.8.1` で更新される（`--upgrade` は、明示しなければ ORIGIN に記録した規範の版を使い回すので、`--playbook-version` を付けないと v0.8.0 の雛形のまま）。手で直す場合は、`grep -qx -- "$__category"` を `grep -x -- "$__category" >/dev/null` に書き換えてください。
 
 ## v0.8.0
 
