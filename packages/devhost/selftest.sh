@@ -13,6 +13,24 @@
 #     `Dev container config (...) not found.` で失敗する
 #   - `exec`: **最初のオプションでない語で引数の解析を止め**（halt-at-non-option）、それより
 #     後をそのままコマンドに渡す。動いているコンテナが無ければ `Dev container not found.` で 1
+#   - `up --remove-existing-container`: 在るコンテナを消して**別の ID で**作り直す（本物は古い
+#     コンテナを削除して新しく作るので ID が変わる）
+#   - exec が通らないとき（FAKE_EXEC_FAIL=1）: docker exec の失敗（procReady not received）を
+#     1 で返す。本物の終了コードは確かめていない（dev は 0 以外を「入れない」とだけ読む）
+#   - `exec ... true`: 偽のコンテナには true が無いので、0 で抜ける
+#     （本物はコンテナの中の true を実行して 0 で抜ける）
+# - docker `inspect --format '{{.State.Pid}}' <id>`: 動いていれば PID、止まっていれば 0（本物は
+#   止まったコンテナの State.Pid を 0 で返す）。無い ID は 1。他の形は落とす
+# - ps: `-eo pid=,stat=`（`=` で見出しを消した「PID 状態」の列。PID は右寄せ。この環境の
+#   procps-ng 4.0.4 の出力に合わせた）。cgroup の所属は ps に出させず、dev が
+#   /proc/<PID>/cgroup を読む（ps の cgroup 列はルートの cgroup で `-` と出る環境があり、
+#   パスの形が信用できないため）
+# - git: `-C <dir> pull --ff-only` だけ。失敗は本物と同じ形の `fatal: ...` を 128 で返す
+# - journalctl: `--user -u <unit> -n <N> --no-pager` だけ。履歴が無ければ本物と同じ `-- No entries --`
+# - systemctl: `--user is-active|stop|start <unit>`。stop / start は何も出さず 0
+# - /proc と cgroup は偽の木（$WORK/proc と $WORK/cg）を DEV_PROC_ROOT / DEV_CGROUP_ROOT で渡す。
+#   cgroup v2 の形に合わせる（/proc/<PID>/cgroup は `0::/パス` の 1 行、pids.current / pids.max は
+#   数か `max`、pids.events は `max N`、memory.events は 1 行 1 キー）
 # - docker: `ps -a` / `--filter label=k=v`（値の完全一致）/ `--format '{{.ID}} {{.State}}'`、
 #   `wait <id>`（止まるまで待ち、終了コードを 1 行出して 0 で抜ける。無い ID は 1）。
 #   **知らない形の呼び出しは黙って通さずに落とす**（dev.sh が想定外の形で呼んだら赤にする）
@@ -70,10 +88,12 @@ touch_state
 sub="${1:-}"
 shift || true
 wf=""
+remove=0
 # オプションは --名前 値 の対で読む。最初のオプションでない語で止まる（exec の halt-at-non-option）。
 while [[ $# -gt 0 && "$1" == --* ]]; do
   case "$1" in
     --workspace-folder) wf="$2"; shift 2 ;;
+    --remove-existing-container) remove=1; shift ;;
     *) echo "fake devcontainer: この試験が想定していないオプションです: $1" >&2; exit 2 ;;
   esac
 done
@@ -83,7 +103,7 @@ if [[ ! -f "$wf/.devcontainer/devcontainer.json" && ! -f "$wf/.devcontainer.json
   [[ "$sub" == "up" ]] && printf '{"outcome":"error","message":"Dev container config (%s/.devcontainer/devcontainer.json) not found.","description":"Dev container config (%s/.devcontainer/devcontainer.json) not found."}\n' "$wf" "$wf"
   exit 1
 fi
-find_row() { grep -F "$wf	" "$STATE_FILE" | head -n 1 || true; }
+find_row() { grep -F "$wf	" "$STATE_FILE" | sed -n 1p || true; }
 case "$sub" in
   up)
     [[ $# -eq 0 ]] || { echo "fake devcontainer: up に余分な引数があります: $*" >&2; exit 2; }
@@ -93,7 +113,13 @@ case "$sub" in
       exit 1
     fi
     row="$(find_row)"
-    if [[ -n "$row" ]]; then
+    if [[ -n "$row" && "$remove" == 1 ]]; then
+      # 古いコンテナを消して、別の ID で作り直す。
+      id="$(printf '%s\n' "$row" | cut -f 2)"
+      grep -vF "$wf	" "$STATE_FILE" >"$STATE_FILE.new" || true
+      mv "$STATE_FILE.new" "$STATE_FILE"
+      id="${id}n"
+    elif [[ -n "$row" ]]; then
       id="$(printf '%s\n' "$row" | cut -f 2)"
       grep -vF "$wf	" "$STATE_FILE" >"$STATE_FILE.new" || true
       mv "$STATE_FILE.new" "$STATE_FILE"
@@ -112,6 +138,11 @@ case "$sub" in
       echo "Dev container not found." >&2
       exit 1
     fi
+    if [[ "${FAKE_EXEC_FAIL:-0}" == "1" ]]; then
+      echo "OCI runtime exec failed: exec failed: unable to start container process: procReady not received: unknown" >&2
+      exit 1
+    fi
+    [[ "$1" == "true" ]] && exit 0
     exec "$@"
     ;;
   *) echo "fake devcontainer: この試験が想定していないサブコマンドです: $sub" >&2; exit 2 ;;
@@ -147,6 +178,19 @@ case "$sub" in
       [[ "$all" == 1 || "$state" == "running" ]] || continue
       printf '%s %s\n' "$id" "$state"
     done <"$STATE_FILE"
+    ;;
+  inspect)
+    [[ $# -eq 3 && "$1" == "--format" && "$2" == '{{.State.Pid}}' ]] || { echo "fake docker: 想定外の inspect の引数: $*" >&2; exit 2; }
+    row="$(grep -F "	$3	" "$STATE_FILE" || true)"
+    if [[ -z "$row" ]]; then
+      echo "Error: No such object: $3" >&2
+      exit 1
+    fi
+    if [[ "$(printf '%s\n' "$row" | cut -f 3)" == "running" ]]; then
+      echo "${FAKE_CONTAINER_PID:-4242}"
+    else
+      echo 0
+    fi
     ;;
   wait)
     [[ $# -eq 1 ]] || { echo "fake docker: wait の引数は 1 つだけを想定しています" >&2; exit 2; }
@@ -190,14 +234,72 @@ set -euo pipefail
 EOF
 cat >>"$FAKEBIN/systemctl" <<'EOF'
 log_call systemctl "$@"
-[[ "${1:-}" == "--user" && "${2:-}" == "is-active" && $# -eq 3 ]] || { echo "fake systemctl: 想定外の呼び出し: $*" >&2; exit 2; }
-for u in ${FAKE_ACTIVE_UNITS:-}; do
-  [[ "$u" == "$3" ]] && { echo active; exit 0; }
-done
-echo inactive
-exit 3
+[[ "${1:-}" == "--user" && $# -eq 3 ]] || { echo "fake systemctl: 想定外の呼び出し: $*" >&2; exit 2; }
+case "$2" in
+  is-active)
+    for u in ${FAKE_ACTIVE_UNITS:-}; do
+      [[ "$u" == "$3" ]] && { echo active; exit 0; }
+    done
+    echo inactive
+    exit 3
+    ;;
+  stop | start)
+    if [[ "${FAKE_SYSTEMCTL_FAIL:-}" == "$2" ]]; then
+      echo "Failed to $2 $3: Access denied" >&2
+      exit 1
+    fi
+    exit 0
+    ;;
+  *) echo "fake systemctl: 想定外のサブコマンド: $2" >&2; exit 2 ;;
+esac
 EOF
-chmod +x "$FAKEBIN/devcontainer" "$FAKEBIN/docker" "$FAKEBIN/tmux" "$FAKEBIN/systemctl"
+
+cat >"$FAKEBIN/git" <<EOF
+#!$BASH_BIN
+set -euo pipefail
+. "$FAKEBIN/_log"
+EOF
+cat >>"$FAKEBIN/git" <<'EOF'
+log_call git "$@"
+[[ $# -eq 4 && "$1" == "-C" && "$3" == "pull" && "$4" == "--ff-only" ]] || { echo "fake git: 想定外の呼び出し: $*" >&2; exit 2; }
+[[ -d "$2" ]] || { echo "fatal: cannot change to '$2': No such file or directory" >&2; exit 128; }
+if [[ "${FAKE_GIT_FAIL:-0}" == "1" ]]; then
+  echo "fatal: Not possible to fast-forward, aborting." >&2
+  exit 128
+fi
+echo "Already up to date."
+EOF
+
+cat >"$FAKEBIN/ps" <<EOF
+#!$BASH_BIN
+set -euo pipefail
+. "$FAKEBIN/_log"
+EOF
+cat >>"$FAKEBIN/ps" <<'EOF'
+log_call ps "$@"
+[[ $# -eq 2 && "$1" == "-eo" && "$2" == "pid=,stat=" ]] || { echo "fake ps: 想定外の呼び出し: $*" >&2; exit 2; }
+# 「PID 状態」の列を FAKE_STATE/ps（1 行 1 タスクで「PID 状態」）から、PID を右寄せで出す。
+[[ -f "$FAKE_STATE/ps" ]] || exit 0
+while read -r p s; do
+  printf '%7s %s\n' "$p" "$s"
+done <"$FAKE_STATE/ps"
+EOF
+
+cat >"$FAKEBIN/journalctl" <<EOF
+#!$BASH_BIN
+set -euo pipefail
+. "$FAKEBIN/_log"
+EOF
+cat >>"$FAKEBIN/journalctl" <<'EOF'
+log_call journalctl "$@"
+[[ $# -eq 6 && "$1" == "--user" && "$2" == "-u" && "$4" == "-n" && "$6" == "--no-pager" ]] || { echo "fake journalctl: 想定外の呼び出し: $*" >&2; exit 2; }
+if [[ -n "${FAKE_JOURNAL:-}" ]]; then
+  printf '%s\n' "$FAKE_JOURNAL"
+else
+  echo "-- No entries --"
+fi
+EOF
+chmod +x "$FAKEBIN/devcontainer" "$FAKEBIN/docker" "$FAKEBIN/tmux" "$FAKEBIN/systemctl" "$FAKEBIN/git" "$FAKEBIN/ps" "$FAKEBIN/journalctl"
 for t in cut cksum mv; do
   p="$(command -v "$t")" || { echo "[devhost-selftest] $t が見つかりません" >&2; exit 1; }
   ln -s "$p" "$TOOLBIN/$t"
@@ -245,6 +347,7 @@ run() {
   CUR="$name"
   env -i HOME="$WORK/home" PATH="$FAKEBIN:$TOOLBIN" \
     DEV_PROJECTS_FILE="${T_CONF:-$CONF}" FAKE_LOG="$LOG" FAKE_STATE="$STATE" \
+    DEV_PROC_ROOT="$WORK/proc" DEV_CGROUP_ROOT="$WORK/cg" \
     ${envs[@]+"${envs[@]}"} \
     "$BASH_BIN" "$DEV" "$@" >"$OUT" 2>"$ERR" </dev/null || code=$?
   if [[ "$code" != "$want" ]]; then
@@ -323,7 +426,7 @@ expect_calls \
   "tmux [new-session] [-A] [-s] [main]"
 
 # ── 2. 未登録のプロジェクトを拒む ─────────────────────────────────────────────
-for sub in up attach supervise; do
+for sub in up attach supervise rebuild doctor; do
   reset_state
   run 2 "未登録: $sub" -- -- "$sub" gamma
   expect_err "登録されていないプロジェクトです: gamma（登録済み: alpha beta）"
@@ -381,9 +484,10 @@ expect_calls \
 run 0 "ls（tmux 無し）" -- -- ls
 expect_out_line '^alpha +running +inactive +none$'
 # systemctl の無い機械（ユニットを使わない）では UNIT を - にする。
-rm "$FAKEBIN/systemctl"
+mv "$FAKEBIN/systemctl" "$WORK/systemctl.off"
 run 0 "ls（systemctl が無い）" -- -- ls
 expect_out_line '^alpha +running +- +none$'
+mv "$WORK/systemctl.off" "$FAKEBIN/systemctl"
 run 2 "ls に余分な引数" -- -- ls alpha
 
 # ── 6. supervise（ユニットの ExecStart）─────────────────────────────────────
@@ -403,6 +507,263 @@ expect_err "（終了コード 137）"
 run 1 "supervise: up が失敗したら待たない" -- FAKE_UP_FAIL=1 -- supervise alpha
 expect_calls "devcontainer [up] [--workspace-folder] [$A]"
 expect_err "devcontainer up が失敗しました"
+
+# ── 6a. attach: exec が通らなければ、doctor と rebuild を案内して 1 で終わる ──
+DOCKER_PS_A="docker [ps] [-a] [--filter] [label=devcontainer.local_folder=$A] [--format] [{{.ID}} {{.State}}]"
+reset_state
+run 0 "up alpha（attach の失敗の仕込み）" -- -- up alpha
+run 1 "attach: exec が通らない" -- FAKE_EXEC_FAIL=1 -- attach alpha
+expect_calls \
+  "$DOCKER_PS_A" \
+  "devcontainer [exec] [--workspace-folder] [$A] [tmux] [new-session] [-A] [-s] [main]"
+expect_err "dev doctor alpha"
+expect_err "dev rebuild alpha"
+
+# ── 6b. rebuild ───────────────────────────────────────────────────────────────
+UP_RM="devcontainer [up] [--workspace-folder] [$A] [--remove-existing-container]"
+reset_state
+run 0 "up alpha（rebuild の仕込み）" -- -- up alpha
+id_old="$(cut -f 2 "$STATE/containers")"
+run 0 "rebuild: 動いているユニットを止め → 作り直し → 起こし直す" -- FAKE_ACTIVE_UNITS=dev-up@alpha.service -- rebuild alpha
+expect_calls \
+  "systemctl [--user] [is-active] [dev-up@alpha.service]" \
+  "systemctl [--user] [stop] [dev-up@alpha.service]" \
+  "$UP_RM" \
+  "systemctl [--user] [start] [dev-up@alpha.service]"
+id_new="$(cut -f 2 "$STATE/containers")"
+[[ -n "$id_new" && "$id_new" != "$id_old" ]] || ng "rebuild: コンテナの ID が変わっていません（作り直していない）"
+run 0 "rebuild: 動いていないユニットは止めも起こしもしない" -- -- rebuild alpha
+expect_calls \
+  "systemctl [--user] [is-active] [dev-up@alpha.service]" \
+  "$UP_RM"
+run 1 "rebuild: 作り直しが失敗しても、止めたユニットは起こし直す" -- FAKE_ACTIVE_UNITS=dev-up@alpha.service FAKE_UP_FAIL=1 -- rebuild alpha
+expect_calls \
+  "systemctl [--user] [is-active] [dev-up@alpha.service]" \
+  "systemctl [--user] [stop] [dev-up@alpha.service]" \
+  "$UP_RM" \
+  "systemctl [--user] [start] [dev-up@alpha.service]"
+expect_err "作り直しが失敗しました"
+run 1 "rebuild: 作り直しが失敗し、ユニットも動いていなければ起こさない" -- FAKE_UP_FAIL=1 -- rebuild alpha
+expect_calls \
+  "systemctl [--user] [is-active] [dev-up@alpha.service]" \
+  "$UP_RM"
+run 1 "rebuild: ユニットを止められなければ作り直さない" -- FAKE_ACTIVE_UNITS=dev-up@alpha.service FAKE_SYSTEMCTL_FAIL=stop -- rebuild alpha
+expect_calls \
+  "systemctl [--user] [is-active] [dev-up@alpha.service]" \
+  "systemctl [--user] [stop] [dev-up@alpha.service]"
+run 1 "rebuild: 起こし直しに失敗したら 1" -- FAKE_ACTIVE_UNITS=dev-up@alpha.service FAKE_SYSTEMCTL_FAIL=start -- rebuild alpha
+expect_err "を起こせませんでした"
+mv "$FAKEBIN/systemctl" "$WORK/systemctl.off"
+run 0 "rebuild: systemctl が無い機械ではユニットに触らない" -- -- rebuild alpha
+expect_calls "$UP_RM"
+mv "$WORK/systemctl.off" "$FAKEBIN/systemctl"
+run 0 "rebuild --pull: 先に pull してから作り直す" -- FAKE_ACTIVE_UNITS=dev-up@alpha.service -- rebuild alpha --pull
+expect_calls \
+  "git [-C] [$A] [pull] [--ff-only]" \
+  "systemctl [--user] [is-active] [dev-up@alpha.service]" \
+  "systemctl [--user] [stop] [dev-up@alpha.service]" \
+  "$UP_RM" \
+  "systemctl [--user] [start] [dev-up@alpha.service]"
+run 0 "rebuild --pull（オプションが先でも同じ）" -- -- rebuild --pull alpha
+expect_calls \
+  "git [-C] [$A] [pull] [--ff-only]" \
+  "systemctl [--user] [is-active] [dev-up@alpha.service]" \
+  "$UP_RM"
+run 1 "rebuild --pull: pull が失敗したら作り直さない（ユニットにも触らない）" -- FAKE_ACTIVE_UNITS=dev-up@alpha.service FAKE_GIT_FAIL=1 -- rebuild alpha --pull
+expect_calls "git [-C] [$A] [pull] [--ff-only]"
+expect_err "作り直しません"
+run 2 "rebuild: 知らないオプション" -- -- rebuild alpha --force
+expect_no_calls
+run 2 "rebuild: 名前が無い" -- -- rebuild --pull
+expect_no_calls
+run 2 "rebuild: 名前が 2 つ" -- -- rebuild alpha beta
+expect_no_calls
+
+# ── 6c. doctor ────────────────────────────────────────────────────────────────
+CG="/system.slice/docker-abc.scope"
+# 偽の /proc と cgroup の木を作る。引数: コンテナの PID / cgroup のパス / pids.current / pids.max /
+# pids.events の max / memory.events の oom_kill
+mk_cg() {
+  local cgdir="$WORK/cg$2"
+  rm -rf "$WORK/proc" "$WORK/cg"
+  rm -f "$STATE/ps"
+  mkdir -p "$WORK/proc/$1" "$cgdir"
+  printf '0::%s\n' "$2" >"$WORK/proc/$1/cgroup"
+  printf '%s\n' "$3" >"$cgdir/pids.current"
+  printf '%s\n' "$4" >"$cgdir/pids.max"
+  printf 'max %s\n' "$5" >"$cgdir/pids.events"
+  printf 'low 0\nhigh 0\nmax 0\noom 0\noom_kill %s\noom_group_kill 0\n' "$6" >"$cgdir/memory.events"
+}
+# ゾンビ（や他の状態）のタスクを足す。引数: PID / 状態 / cgroup のパス
+add_task() {
+  mkdir -p "$WORK/proc/$1"
+  printf '0::%s\n' "$3" >"$WORK/proc/$1/cgroup"
+  printf '%s %s\n' "$1" "$2" >>"$STATE/ps"
+}
+add_zombies() {
+  local k
+  for ((k = 0; k < $1; k++)); do add_task $((5000 + k)) Z "$2"; done
+}
+doctor_up() {
+  reset_state
+  run 0 "up alpha（doctor の仕込み）" -- -- up alpha
+}
+
+doctor_up
+mk_cg 4242 "$CG" 20 1000 0 0
+add_task 1 Ss /init.scope
+add_task 4242 Ss "$CG"
+add_task 4300 S "$CG/child"
+add_zombies 3 "$CG"
+add_task 4400 Z "$CG/child"
+add_task 4401 Z "/system.slice/docker-abcdef.scope"   # 前方が同じだけの別の cgroup（数えない）
+add_task 4402 Z /user.slice
+run 0 "doctor: 正常" -- FAKE_ACTIVE_UNITS=dev-up@alpha.service FAKE_JOURNAL='Oct 07 12:00:00 host dev[1]: 起こしました' -- doctor alpha
+expect_out_line '\[OK +\] コンテナ [0-9a-z]+ は running'
+expect_out_line '\[OK +\] exec が通ります'
+expect_out_line '\[OK +\] pids: 20 / 1000（2%）'
+expect_out_line '\[OK +\] pids の上限に当たった回数: 0'
+expect_out_line '\[OK +\] oom_kill: 0'
+expect_out_line '\[OK +\] ゾンビ: 4$'
+expect_out_line 'ユニット dev-up@alpha.service: active'
+expect_out_line '^    Oct 07 12:00:00 host dev\[1\]: 起こしました'
+expect_out_line '判定: OK'
+id_a="$(cut -f 2 "$STATE/containers")"
+expect_calls \
+  "$DOCKER_PS_A" \
+  "devcontainer [exec] [--workspace-folder] [$A] [true]" \
+  "docker [inspect] [--format] [{{.State.Pid}}] [$id_a]" \
+  "ps [-eo] [pid=,stat=]" \
+  "systemctl [--user] [is-active] [dev-up@alpha.service]" \
+  "journalctl [--user] [-u] [dev-up@alpha.service] [-n] [10] [--no-pager]"
+
+run 1 "doctor: exec が通らない" -- FAKE_EXEC_FAIL=1 -- doctor alpha
+expect_out_line '\[FAIL\] exec が通りません（終了コード 1）: .*procReady not received'
+expect_out_line '判定: FAIL'
+expect_out_line 'dev rebuild alpha'
+mk_cg 4242 "$CG" 18034 18039 5 0
+run 1 "doctor: pids が上限に近い（issue の実測の値）" -- -- doctor alpha
+expect_out_line '\[FAIL\] pids が上限に近づいています: 18034 / 18039（99%）'
+expect_out_line '\[WARN\] pids の上限に当たった回数: 5'
+mk_cg 4242 "$CG" 900 1000 0 0
+run 1 "doctor: pids が上限のちょうど 90%" -- -- doctor alpha
+expect_out_line '\[FAIL\] pids が上限に近づいています: 900 / 1000'
+mk_cg 4242 "$CG" 899 1000 0 0
+run 0 "doctor: pids が 90% 未満" -- -- doctor alpha
+expect_out_line '\[OK +\] pids: 899 / 1000（89%）'
+mk_cg 4242 "$CG" 899 max 0 0
+run 0 "doctor: pids.max が max（上限なし）" -- -- doctor alpha
+expect_out_line '上限なし'
+mk_cg 4242 "$CG" 20 1000 0 0
+add_zombies 100 "$CG"
+run 3 "doctor: ゾンビが 100（WARN だけは 3）" -- -- doctor alpha
+expect_out_line '\[WARN\] ゾンビ: 100（100 以上）'
+expect_out_line '判定: WARN'
+mk_cg 4242 "$CG" 20 1000 0 0
+add_zombies 99 "$CG"
+run 0 "doctor: ゾンビが 99" -- -- doctor alpha
+expect_out_line '\[OK +\] ゾンビ: 99$'
+mk_cg 4242 "$CG" 20 1000 1 0
+run 3 "doctor: 上限に当たった回数が 1" -- -- doctor alpha
+expect_out_line '\[WARN\] pids の上限に当たった回数: 1'
+mk_cg 4242 "$CG" 20 1000 0 2
+run 3 "doctor: oom_kill が 2" -- -- doctor alpha
+expect_out_line '\[WARN\] OOM で殺された回数（oom_kill）: 2'
+mk_cg 4242 "$CG" 20 1000 1 0
+run 1 "doctor: WARN と FAIL が混ざれば FAIL（1）" -- FAKE_EXEC_FAIL=1 -- doctor alpha
+rm -rf "$WORK/proc" "$WORK/cg"
+run 3 "doctor: cgroup を読めない（偽の木が空）は WARN" -- -- doctor alpha
+expect_out_line '\[WARN\] .*cgroup v2 のパスを読めません'
+# 止まっているコンテナと、無いコンテナ。
+reset_state
+run 1 "doctor: コンテナが無い" -- -- doctor alpha
+expect_out_line '\[FAIL\] コンテナがありません'
+expect_calls \
+  "$DOCKER_PS_A" \
+  "systemctl [--user] [is-active] [dev-up@alpha.service]" \
+  "journalctl [--user] [-u] [dev-up@alpha.service] [-n] [10] [--no-pager]"
+printf '%s\tdead01\texited\n' "$A" >"$STATE/containers"
+run 1 "doctor: コンテナが止まっている" -- -- doctor alpha
+expect_out_line '\[FAIL\] コンテナ dead01 の状態が exited です'
+run 2 "doctor: 引数なし" -- -- doctor
+expect_no_calls
+
+# ── 6d. help ──────────────────────────────────────────────────────────────────
+for sub in ls up attach supervise rebuild doctor help; do
+  run 0 "help $sub" -- -- help "$sub"
+  expect_no_calls
+  expect_out_line "^dev $sub — "
+  expect_out_line '^終了コード: '
+done
+run 0 "help（引数なし）は使い方の一覧" -- -- help
+expect_out_line '^  dev rebuild <名前> \[--pull\]$'
+expect_out_line '^  dev doctor <名前>$'
+run 2 "help: 知らないサブコマンド" -- -- help stop
+expect_err "知らないサブコマンドです: stop"
+expect_no_calls
+run 2 "help: 引数が多い" -- -- help ls up
+expect_no_calls
+run 0 "rebuild の説明にユニットの扱いがある" -- -- help rebuild
+expect_out_line 'ユニット dev-up@<名前> が動いていれば止める'
+expect_out_line '3 が失敗しても起こし直す'
+
+# ── 6e. README の「コマンドの説明」と dev help の照合 ─────────────────────────
+# README の各サブコマンドのブロック（### dev <名前> の次の ```text ... ```）が dev help <名前> の
+# 出力と一致すること、README のサブコマンドの集合が dev の受け付ける集合と一致することを確かめる。
+# dev の受け付ける集合は、dev help の一覧から取り、さらに 1 つずつ実際に受け付けることを確かめる。
+README="${DEV_README:-$HERE/README.md}"
+readme_check() {
+  local readme="$1" bad=0 usage_set readme_set s want got
+  usage_set="$("$BASH_BIN" "$DEV" help | sed -n 's/^  dev \([a-z][a-z]*\).*/\1/p' | sort -u)"
+  readme_set="$(sed -n 's/^### dev \([a-z][a-z]*\)$/\1/p' "$readme" | sort -u)"
+  if [[ -z "$usage_set" || "$usage_set" != "$readme_set" ]]; then
+    echo "サブコマンドの集合が違います" >&2
+    printf '  dev:    %s\n  README: %s\n' "$(echo $usage_set)" "$(echo $readme_set)" >&2
+    bad=1
+  fi
+  for s in $usage_set; do
+    # 実際に受け付ける（知らないサブコマンドなら help が 2 で落ちる）。
+    "$BASH_BIN" "$DEV" help "$s" >/dev/null 2>&1 || { echo "dev help $s が通りません" >&2; bad=1; }
+    want="$("$BASH_BIN" "$DEV" help "$s" 2>&1 || true)"
+    got="$(awk -v h="### dev $s" '
+      $0 == h { f = 1; next }
+      f && !b && $0 == "```text" { b = 1; next }
+      f && b && $0 == "```" { exit }
+      f && b { print }
+    ' "$readme")"
+    if [[ -z "$got" || "$got" != "$want" ]]; then
+      echo "README の dev $s のブロックが dev help $s の出力と違います" >&2
+      bad=1
+    fi
+  done
+  return "$bad"
+}
+CUR="README の照合"
+n=$((n + 1))
+if ! readme_check "$README"; then ng "README が dev help と一致しません"; fi
+# dev が実際に受け付けるサブコマンドの確認: 一覧の各名前を引数なしで呼ぶと、使い方の誤り（2）で
+# 「使い方: dev <名前>」と返る（知らないサブコマンドなら一覧の usage が出る）。help だけは 0。
+for sub in ls up attach supervise rebuild doctor; do
+  if [[ "$sub" == "ls" ]]; then
+    run 2 "$sub は引数を受け付けない（使い方の誤り）" -- -- "$sub" x
+  else
+    run 2 "引数なしの $sub は使い方の誤り" -- -- "$sub"
+  fi
+  expect_err "使い方: dev $sub"
+  expect_no_calls
+done
+# 検査が死んでいないこと: 1 行を書き換えた README では落ちる。
+M="$WORK/readme.mut"
+sed 's/^dev ls — /dev ls ー /' "$README" >"$M"
+if readme_check "$M" >/dev/null 2>&1; then ng "README の説明の 1 行を書き換えても照合が通ります"; fi
+sed 's/^終了コード: 0 = 作り直した/終了コード: 9 = 作り直した/' "$README" >"$M"
+if readme_check "$M" >/dev/null 2>&1; then ng "README の終了コードの行を書き換えても照合が通ります"; fi
+sed '/^### dev doctor$/d' "$README" >"$M"
+if readme_check "$M" >/dev/null 2>&1; then ng "README からサブコマンドの見出しを消しても照合が通ります"; fi
+{ cat "$README"; printf '\n### dev stop\n\n```text\nx\n```\n'; } >"$M"
+if readme_check "$M" >/dev/null 2>&1; then ng "README へ dev に無いサブコマンドを足しても照合が通ります"; fi
+# 検査が元の README では通ること（変異のたびに通らなくなっただけ、を除く）。
+readme_check "$README" >/dev/null 2>&1 || ng "README の照合が、変異の後で通らなくなりました"
 
 # ── 7. 使い方 ─────────────────────────────────────────────────────────────────
 run 2 "引数なし" -- --
