@@ -432,7 +432,7 @@ fi
 
 while IFS= read -r key; do
   [[ -n "$key" ]] || continue
-  if printf '%s' "$key" | grep -Eqi "$SECRET_KEY_RE"; then
+  if printf '%s' "$key" | grep -Ei "$SECRET_KEY_RE" >/dev/null; then
     ng "$ENV_EXAMPLE に値が入っています（雛形はキー名だけを共有する）: $key"
   fi
 done <<<"$example_valued"

@@ -314,7 +314,7 @@ if [[ "$ENGINE_JSON" -eq 1 ]]; then
     exit 1
   fi
   for __category in $BLOCKING_CATEGORIES; do
-    if ! printf '%s\n' "$ALL_CATEGORIES" | grep -qx -- "$__category"; then
+    if ! printf '%s\n' "$ALL_CATEGORIES" | grep -x -- "$__category" >/dev/null; then
       echo "error: 落とす category '$__category' がスキーマの enum にありません（規則とスキーマがずれています）" >&2
       exit 1
     fi

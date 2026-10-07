@@ -58,7 +58,7 @@ jobs:
           RAW: ${{ inputs.subject-digest }}
         run: |
           set -euo pipefail
-          if ! printf '%s' "$RAW" | grep -qE '^[0-9a-f]{64}$'; then
+          if ! printf '%s' "$RAW" | grep -E '^[0-9a-f]{64}$' >/dev/null; then
             echo "error: subject-digest は 64 桁の小文字 16 進で渡してください（受け取った長さ: ${#RAW}）" >&2
             exit 1
           fi

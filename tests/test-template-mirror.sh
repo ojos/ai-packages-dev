@@ -280,7 +280,7 @@ for rel in $EXCLUDED_RELS; do
   it "$rel が置換プレースホルダを持つ（検査対象外である理由が保たれている）"
   # 除外理由は「生成時に展開されるので一致し得ない」の 1 点。プレースホルダが
   # 外れたらその理由は成立せず、一致必須へ移すべき状態になっている。
-  if printf '%s\n' "$body" | grep -q '^__[A-Z_]*LINES__$'; then
+  if printf '%s\n' "$body" | grep '^__[A-Z_]*LINES__$' >/dev/null; then
     pass
   else
     fail "$rel からプレースホルダが消えている（MIRRORED_RELS へ移すか、除外理由を書き直す）"

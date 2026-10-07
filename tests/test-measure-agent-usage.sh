@@ -75,14 +75,14 @@ it "フィクスチャに対して終了コード 0 で終わる"
 if [[ "$RC" -eq 0 ]]; then pass; else fail "rc=$RC / 出力: $OUT"; fi
 
 it "親とサブエージェントの記録件数を両方報告する"
-if printf '%s' "$OUT" | grep -q '親 1 件 / サブエージェント 1 件'; then
+if printf '%s' "$OUT" | grep '親 1 件 / サブエージェント 1 件' >/dev/null; then
   pass
 else
   fail "件数の報告が合わない: $(printf '%s' "$OUT" | grep 'セッション記録')"
 fi
 
 it "usage を持つレコードだけを数える（3 件）"
-if printf '%s' "$OUT" | grep -q '集計対象レコード: 3 件'; then
+if printf '%s' "$OUT" | grep '集計対象レコード: 3 件' >/dev/null; then
   pass
 else
   fail "$(printf '%s' "$OUT" | grep '集計対象レコード')"
@@ -90,7 +90,7 @@ fi
 
 it "サブエージェント側の役割（explorer）が集計に現れる"
 # 親ファイルだけを読む実装でも他の検査は通ってしまう。ここが唯一の歯止め。
-if printf '%s' "$OUT" | grep -q 'explorer'; then
+if printf '%s' "$OUT" | grep 'explorer' >/dev/null; then
   pass
 else
   fail "explorer が出力に無い（サブエージェントの記録を読んでいない）"
@@ -122,7 +122,7 @@ it "分母の異なる 2 つの比率を出す（全体 / サブエージェン�
 # explorer は全体の 33.3%、サブエージェント内では 100.0%。この 2 つが同じ行に
 # 並ぶことが、#255 の「どちらの分母か分からない」を繰り返さないための担保。
 exp_line="$(printf '%s\n' "$OUT" | awk '$1=="explorer" && $2 ~ /^[0-9]+$/')"
-if printf '%s' "$exp_line" | grep -q '33\.3%' && printf '%s' "$exp_line" | grep -q '100\.0%'; then
+if printf '%s' "$exp_line" | grep '33\.3%' >/dev/null && printf '%s' "$exp_line" | grep '100\.0%' >/dev/null; then
   pass
 else
   fail "explorer 行に 2 つの分母の比率が並んでいない: $exp_line"
@@ -130,14 +130,14 @@ fi
 
 it "main-loop にはサブエージェント内比率を出さない"
 main_line="$(printf '%s\n' "$OUT" | awk '$1=="main-loop" && $2 ~ /^[0-9]+$/')"
-if printf '%s' "$main_line" | grep -qE '\-$'; then
+if printf '%s' "$main_line" | grep -E '\-$' >/dev/null; then
   pass
 else
   fail "main-loop 行の SHARE_OF_SUBAGENTS が '-' でない: $main_line"
 fi
 
 it "出力にプロンプト本文が含まれない"
-if ! printf '%s' "$OUT" | grep -q "$SECRET_MARKER"; then
+if ! printf '%s' "$OUT" | grep "$SECRET_MARKER" >/dev/null; then
   pass
 else
   fail "記録の本文が出力へ漏れている"
@@ -164,8 +164,8 @@ printf '{"type":"assistant","timestamp":"2026-01-01T00:00:00.000Z","message":{"r
 out_zero="$(bash "$SCRIPT" --projects-dir "$ZERO" 2>&1)"
 rc_zero=$?
 if [[ "$rc_zero" -eq 0 ]] \
-   && ! printf '%s' "$out_zero" | grep -qi 'nan' \
-   && printf '%s' "$out_zero" | grep -q '0\.0%'; then
+   && ! printf '%s' "$out_zero" | grep -i 'nan' >/dev/null \
+   && printf '%s' "$out_zero" | grep '0\.0%' >/dev/null; then
   pass
 else
   fail "rc=$rc_zero / 出力: $out_zero"
@@ -175,8 +175,8 @@ fi
 
 it "--since で期間を絞れる"
 OUT_SINCE="$(bash "$SCRIPT" --projects-dir "$FIX" --since 2026-01-02 2>&1)"
-if printf '%s' "$OUT_SINCE" | grep -q '集計対象レコード: 1 件' \
-   && ! printf '%s' "$OUT_SINCE" | grep -q '2026-01-01'; then
+if printf '%s' "$OUT_SINCE" | grep '集計対象レコード: 1 件' >/dev/null \
+   && ! printf '%s' "$OUT_SINCE" | grep '2026-01-01' >/dev/null; then
   pass
 else
   fail "$(printf '%s' "$OUT_SINCE" | grep '集計対象レコード')"
@@ -184,8 +184,8 @@ fi
 
 it "--until で期間を絞れる"
 OUT_UNTIL="$(bash "$SCRIPT" --projects-dir "$FIX" --until 2026-01-01 2>&1)"
-if printf '%s' "$OUT_UNTIL" | grep -q '集計対象レコード: 2 件' \
-   && ! printf '%s' "$OUT_UNTIL" | grep -q '2026-01-02'; then
+if printf '%s' "$OUT_UNTIL" | grep '集計対象レコード: 2 件' >/dev/null \
+   && ! printf '%s' "$OUT_UNTIL" | grep '2026-01-02' >/dev/null; then
   pass
 else
   fail "$(printf '%s' "$OUT_UNTIL" | grep '集計対象レコード')"
@@ -200,7 +200,7 @@ printf '{"type":"user","timestamp":"2026-01-01T00:00:00.000Z","message":{"role":
   > "$EMPTY/sess.jsonl"
 out_empty="$(bash "$SCRIPT" --projects-dir "$EMPTY" 2>&1)"
 rc_empty=$?
-if [[ "$rc_empty" -ne 0 ]] && printf '%s' "$out_empty" | grep -q '1 件もありません'; then
+if [[ "$rc_empty" -ne 0 ]] && printf '%s' "$out_empty" | grep '1 件もありません' >/dev/null; then
   pass
 else
   fail "rc=$rc_empty / 出力: $out_empty"
@@ -227,7 +227,7 @@ fi
 it "未知のオプションを拒否する"
 out_unknown="$(bash "$SCRIPT" --nope 2>&1)"
 rc_unknown=$?
-if [[ "$rc_unknown" -ne 0 ]] && printf '%s' "$out_unknown" | grep -q 'unknown option'; then
+if [[ "$rc_unknown" -ne 0 ]] && printf '%s' "$out_unknown" | grep 'unknown option' >/dev/null; then
   pass
 else
   fail "rc=$rc_unknown / 出力: $out_unknown"

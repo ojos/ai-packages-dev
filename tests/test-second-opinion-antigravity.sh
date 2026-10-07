@@ -134,9 +134,9 @@ fi
 it "引数に --output-format json と --json-schema が含まれ、スキーマが実在する"
 argv="$(cat "$RECORD/argv" 2>/dev/null || true)"
 missing=""
-printf '%s\n' "$argv" | grep -qx -- "--output-format" || missing="$missing --output-format"
-printf '%s\n' "$argv" | grep -qx -- "json" || missing="$missing json"
-printf '%s\n' "$argv" | grep -qx -- "--json-schema" || missing="$missing --json-schema"
+printf '%s\n' "$argv" | grep -x -- "--output-format" >/dev/null || missing="$missing --output-format"
+printf '%s\n' "$argv" | grep -x -- "json" >/dev/null || missing="$missing json"
+printf '%s\n' "$argv" | grep -x -- "--json-schema" >/dev/null || missing="$missing --json-schema"
 schema_arg="$(awk '$0 == "--json-schema" { getline; print; exit }' "$RECORD/argv" 2>/dev/null)"
 if [[ -z "$missing" ]] && [[ -n "$schema_arg" && -f "$schema_arg" ]] && jq empty "$schema_arg" >/dev/null 2>&1; then
   pass

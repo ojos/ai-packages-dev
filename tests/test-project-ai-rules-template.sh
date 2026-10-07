@@ -141,9 +141,9 @@ $EXCLUDED
 " in *"
 $path
 "*) continue ;; esac
-    printf '%s\n' "$generated" | grep -Fxq "$path" && continue
-    printf '%s\n' "$playbook" | grep -Fxq "$path" && continue
-    printf '%s\n' "$placed" | grep -Fxq "$path" && continue
+    printf '%s\n' "$generated" | grep -Fx "$path" >/dev/null && continue
+    printf '%s\n' "$playbook" | grep -Fx "$path" >/dev/null && continue
+    printf '%s\n' "$placed" | grep -Fx "$path" >/dev/null && continue
     printf '%s\n' "$path"
   done
 }

@@ -141,7 +141,7 @@ mk_tree "$TMP_ROOT/ng" '# 見出し
 
 本文。'
 out="$(python3 "$VALIDATOR" "$TMP_ROOT/ng" 2>&1)"; rc=$?
-if [[ "$rc" -ne 0 ]] && printf '%s' "$out" | grep -q 'missing local anchor'; then
+if [[ "$rc" -ne 0 ]] && printf '%s' "$out" | grep 'missing local anchor' >/dev/null; then
   pass
 else
   fail "壊れたアンカーを見逃した (exit $rc): $out"

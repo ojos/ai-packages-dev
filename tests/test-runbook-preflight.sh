@@ -69,7 +69,7 @@ IMPL_CMDS="$(printf '%s\n' "$BLOCK" | grep -E '^require_cmd [a-z0-9]' | awk '{pr
 DEFINED_FUNCS="$(grep -oE '^[a-z_]+\(\) \{' "$RELEASE" | sed 's/() {//' | sort -u)"
 IMPL_FUNCS=""
 for fn in $DEFINED_FUNCS; do
-  if printf '%s\n' "$BLOCK" | grep -qE "(^|[^a-z_])$fn([^a-z_]|\$)"; then
+  if printf '%s\n' "$BLOCK" | grep -E "(^|[^a-z_])$fn([^a-z_]|\$)" >/dev/null; then
     IMPL_FUNCS="$IMPL_FUNCS$fn
 "
   fi

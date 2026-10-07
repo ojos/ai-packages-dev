@@ -130,7 +130,7 @@ after_mtime="$(mtime_of "$s")"
 bad=0
 [[ "$before" == "$after" ]] || { echo "  内容が変わった"; bad=1; }
 [[ "$before_mtime" == "$after_mtime" ]] || { echo "  書き込みが起きている（mtime が動いた）"; bad=1; }
-printf '%s' "$out" | grep -q 'already disabled' || { echo "  skip した旨が出ていない: $out"; bad=1; }
+printf '%s' "$out" | grep 'already disabled' >/dev/null || { echo "  skip した旨が出ていない: $out"; bad=1; }
 if [[ "$bad" -eq 0 ]]; then pass; else fail "冪等でない"; fi
 
 # ── 壊れた JSON ───────────────────────────────────────────────────────────────
@@ -148,7 +148,7 @@ out="$(run_install "$h")"; rc=$?
 bad=0
 [[ "$rc" -ne 0 ]] || { echo "  不正な JSON なのに成功した"; bad=1; }
 [[ "$(cat "$s")" == "$before" ]] || { echo "  上書きされている"; bad=1; }
-printf '%s' "$out" | grep -q 'JSON として読めない' || { echo "  理由が出ていない: $out"; bad=1; }
+printf '%s' "$out" | grep 'JSON として読めない' >/dev/null || { echo "  理由が出ていない: $out"; bad=1; }
 if [[ "$bad" -eq 0 ]]; then pass; else fail "壊れた JSON の扱いが誤っている"; fi
 
 it "一時ファイルを残さない"
@@ -177,7 +177,7 @@ BASH_BIN="$(command -v bash)"
 out="$( HOME="$h" PATH="$minbin" "$BASH_BIN" "$INSTALL" 2>&1 )"; rc=$?
 bad=0
 [[ "$rc" -ne 0 ]] || { echo "  jq 不在でも成功した"; bad=1; }
-printf '%s' "$out" | grep -q 'jq' || { echo "  jq 不在が理由として出ていない: $out"; bad=1; }
+printf '%s' "$out" | grep 'jq' >/dev/null || { echo "  jq 不在が理由として出ていない: $out"; bad=1; }
 if [[ "$bad" -eq 0 ]]; then pass; else fail "jq 不在が fail-closed になっていない"; fi
 
 exit_with_result
