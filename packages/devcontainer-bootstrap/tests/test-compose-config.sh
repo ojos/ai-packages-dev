@@ -261,7 +261,10 @@ has_app_init() {
 }
 
 it "素の生成物の app サービスに init: true がある"
-if has_app_init "$compose"; then pass; else fail "init: true が無い"; fi
+# 上の節で compose は別の構成の生成物へ置き換わっているので、素の生成物をここで作り直す。
+out_init="$(new_workdir)/p"
+run_bootstrap "$out_init" >/dev/null 2>&1
+if grep -E '^    command: sleep infinity$' "$out_init/.devcontainer/compose.yaml" >/dev/null && has_app_init "$out_init/.devcontainer/compose.yaml"; then pass; else fail "init: true が無い"; fi
 
 for combo in "--with-claude" "--with-codex" "--with-claude --with-gemini --with-aws"; do
   it "$combo の生成物の app サービスにも init: true がある"
