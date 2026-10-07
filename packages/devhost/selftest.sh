@@ -27,7 +27,10 @@
 #   パスの形が信用できないため）
 # - git: `-C <dir> pull --ff-only` だけ。失敗は本物と同じ形の `fatal: ...` を 128 で返す
 # - journalctl: `--user -u <unit> -n <N> --no-pager` だけ。履歴が無ければ本物と同じ `-- No entries --`
-# - systemctl: `--user is-active|stop|start <unit>`。stop / start は何も出さず 0
+# - systemctl: `--user is-active|is-enabled|stop|start <unit>` と `--user enable|disable --now <unit>`。stop / start / enable / disable は何も出さず 0
+# - docker `restart|stop <id>`: 状態を running / exited にする。無い ID は 1
+# - curl: `-fsSL <URL> -o <出力先>` だけ。リリースの取得先（latest/download か download/v*）以外の URL は落とす
+#   （ネットワークには出ない。URL の末尾のファイル名で、試験が用意したファイルを写す。-f の失敗は 22）
 # - /proc と cgroup は偽の木（$WORK/proc と $WORK/cg）を DEV_PROC_ROOT / DEV_CGROUP_ROOT で渡す。
 #   cgroup v2 の形に合わせる（/proc/<PID>/cgroup は `0::/パス` の 1 行、pids.current / pids.max は
 #   数か `max`、pids.events は `max N`、memory.events は 1 行 1 キー）
@@ -220,6 +223,26 @@ case "$sub" in
     mv "$STATE_FILE.new" "$STATE_FILE"
     echo "${FAKE_WAIT_CODE:-137}"
     ;;
+  restart | stop)
+    [[ $# -eq 1 ]] || { echo "fake docker: $sub の引数は 1 つだけを想定しています" >&2; exit 2; }
+    if ! grep -qF "	$1	" "$STATE_FILE"; then
+      echo "Error response from daemon: No such container: $1" >&2
+      exit 1
+    fi
+    if [[ -n "${FAKE_DOCKER_SIGNAL:-}" && "$sub" == "restart" ]]; then
+      # 再起動の最中に、dev（親）がシグナルを受ける状況（ssh の切断など）を作る。
+      kill -s "$FAKE_DOCKER_SIGNAL" "$PPID"
+      exit 1
+    fi
+    if [[ "${FAKE_DOCKER_FAIL:-}" == "$sub" ]]; then
+      echo "Error response from daemon: $sub に失敗しました" >&2
+      exit 1
+    fi
+    if [[ "$sub" == "restart" ]]; then new=running; else new=exited; fi
+    sed "s/	$1	[a-z]*\$/	$1	$new/" "$STATE_FILE" >"$STATE_FILE.new"
+    mv "$STATE_FILE.new" "$STATE_FILE"
+    echo "$1"
+    ;;
   *) echo "fake docker: この試験が想定していないサブコマンドです: $sub" >&2; exit 2 ;;
 esac
 EOF
@@ -251,8 +274,26 @@ set -euo pipefail
 EOF
 cat >>"$FAKEBIN/systemctl" <<'EOF'
 log_call systemctl "$@"
-[[ "${1:-}" == "--user" && $# -eq 3 ]] || { echo "fake systemctl: 想定外の呼び出し: $*" >&2; exit 2; }
+[[ "${1:-}" == "--user" ]] || { echo "fake systemctl: 想定外の呼び出し: $*" >&2; exit 2; }
+case "${2:-}" in
+  enable | disable)
+    [[ $# -eq 4 && "$3" == "--now" ]] || { echo "fake systemctl: 想定外の呼び出し: $*" >&2; exit 2; }
+    if [[ "${FAKE_SYSTEMCTL_FAIL:-}" == "$2" ]]; then
+      echo "Failed to $2 unit: Unit file $4 does not exist." >&2
+      exit 1
+    fi
+    exit 0
+    ;;
+esac
+[[ $# -eq 3 ]] || { echo "fake systemctl: 想定外の呼び出し: $*" >&2; exit 2; }
 case "$2" in
+  is-enabled)
+    for u in ${FAKE_ENABLED_UNITS:-}; do
+      [[ "$u" == "$3" ]] && { echo enabled; exit 0; }
+    done
+    echo disabled
+    exit 1
+    ;;
   is-active)
     if [[ "${FAKE_SYSTEMCTL_FAIL:-}" == "is-active" ]]; then
       # 問い合わせ自体の失敗（バスに繋がらないなど）。状態の語は出さない。
@@ -277,6 +318,10 @@ case "$2" in
     exit 3
     ;;
   stop | start)
+    if [[ "$2" == "stop" && -n "${FAKE_SYSTEMCTL_STOP_SIGNAL:-}" ]]; then
+      # ユニットを止めた直後に、dev（親）がシグナルを受ける状況（ssh の切断など）を作る。
+      kill -s "$FAKE_SYSTEMCTL_STOP_SIGNAL" "$PPID"
+    fi
     if [[ "${FAKE_SYSTEMCTL_FAIL:-}" == "$2" ]]; then
       echo "Failed to $2 $3: Access denied" >&2
       exit 1
@@ -332,10 +377,46 @@ else
   echo "-- No entries --"
 fi
 EOF
-chmod +x "$FAKEBIN/devcontainer" "$FAKEBIN/docker" "$FAKEBIN/tmux" "$FAKEBIN/systemctl" "$FAKEBIN/git" "$FAKEBIN/ps" "$FAKEBIN/journalctl"
-for t in cut cksum mv; do
+# コンテナの中で exec されるコマンド（dev exec の引数の素通しを見る）。
+cat >"$FAKEBIN/codex" <<EOF
+#!$BASH_BIN
+set -euo pipefail
+. "$FAKEBIN/_log"
+EOF
+cat >>"$FAKEBIN/codex" <<'EOF'
+log_call codex "$@"
+exit "${FAKE_CODEX_EXIT:-0}"
+EOF
+
+# curl: ネットワークに出ない。`-fsSL <URL> -o <出力先>` だけを受け、URL の末尾のファイル名で
+# $FAKE_CURL_DIR のファイルを写す（URL がリリースの取得先でなければ落とす）。FAKE_CURL_FAIL=1 は HTTP 404 相当（-f で 22）。
+cat >"$FAKEBIN/curl" <<EOF
+#!$BASH_BIN
+set -euo pipefail
+. "$FAKEBIN/_log"
+EOF
+cat >>"$FAKEBIN/curl" <<'EOF'
+log_call curl "$@"
+[[ $# -eq 4 && "$1" == "-fsSL" && "$3" == "-o" ]] || { echo "fake curl: 想定外の呼び出し: $*" >&2; exit 2; }
+case "$2" in
+  https://github.com/ojos/devcontainer-bootstrap/releases/latest/download/* | https://github.com/ojos/devcontainer-bootstrap/releases/download/v*/*) ;;
+  *) echo "fake curl: リリースの取得先ではない URL です: $2" >&2; exit 2 ;;
+esac
+if [[ "${FAKE_CURL_FAIL:-0}" == "1" ]]; then
+  echo "curl: (22) The requested URL returned error: 404" >&2
+  exit 22
+fi
+cp "$FAKE_CURL_DIR/${2##*/}" "$4"
+EOF
+
+chmod +x "$FAKEBIN/devcontainer" "$FAKEBIN/docker" "$FAKEBIN/tmux" "$FAKEBIN/systemctl" "$FAKEBIN/git" "$FAKEBIN/ps" "$FAKEBIN/journalctl" "$FAKEBIN/codex" "$FAKEBIN/curl"
+for t in cut cksum mv jq tar gzip cp chmod cmp dirname; do
   p="$(command -v "$t")" || { echo "[devhost-selftest] $t が見つかりません" >&2; exit 1; }
   ln -s "$p" "$TOOLBIN/$t"
+done
+# ハッシュの道具は、sha256sum（GNU coreutils）が無い環境では shasum を使う（dev.sh と同じ分岐）。
+for t in sha256sum shasum; do
+  if p="$(command -v "$t")"; then ln -s "$p" "$TOOLBIN/$t"; fi
 done
 
 # ── 仕込み ────────────────────────────────────────────────────────────────────
@@ -459,7 +540,7 @@ expect_calls \
   "tmux [new-session] [-A] [-s] [main]"
 
 # ── 2. 未登録のプロジェクトを拒む ─────────────────────────────────────────────
-for sub in up attach supervise rebuild doctor; do
+for sub in up attach supervise rebuild doctor restart stop logs enable disable; do
   reset_state
   run 2 "未登録: $sub" -- -- "$sub" gamma
   expect_err "登録されていないプロジェクトです: gamma（登録済み: alpha beta）"
@@ -868,8 +949,303 @@ expect_out_line '\[FAIL\] コンテナ dead01 の状態が exited です'
 run 2 "doctor: 引数なし" -- -- doctor
 expect_no_calls
 
+# ── 6c'. restart ──────────────────────────────────────────────────────────────
+UNIT_A="dev-up@alpha.service"
+IS_ACTIVE="systemctl [--user] [is-active] [$UNIT_A]"
+reset_state
+run 0 "up alpha（restart の仕込み）" -- -- up alpha
+id_a="$(cut -f 2 "$STATE/containers")"
+DOCKER_RESTART="docker [restart] [$id_a]"
+RESTART_FLOW=(
+  "$DOCKER_PS_A"
+  "$IS_ACTIVE"
+  "systemctl [--user] [stop] [$UNIT_A]"
+  "$DOCKER_RESTART"
+  "systemctl [--user] [start] [$UNIT_A]"
+)
+run 0 "restart: 動いているユニットを止め → docker restart → 起こし直す" -- FAKE_ACTIVE_UNITS="$UNIT_A" -- restart alpha
+expect_calls "${RESTART_FLOW[@]}"
+expect_out_line '再起動しました'
+run 0 "restart: 動いていないユニットは止めも起こしもしない" -- -- restart alpha
+expect_calls "$DOCKER_PS_A" "$IS_ACTIVE" "$DOCKER_RESTART"
+run 0 "restart: failed のユニットは触らない" -- FAKE_FAILED_UNITS="$UNIT_A" -- restart alpha
+expect_calls "$DOCKER_PS_A" "$IS_ACTIVE" "$DOCKER_RESTART"
+run 0 "restart: unknown（ユニットを入れていない）は触らない" -- FAKE_UNKNOWN_UNITS="$UNIT_A" -- restart alpha
+expect_calls "$DOCKER_PS_A" "$IS_ACTIVE" "$DOCKER_RESTART"
+run 0 "restart: activating のユニットも止めて、起こし直す" -- FAKE_ACTIVATING_UNITS="$UNIT_A" -- restart alpha
+expect_calls "${RESTART_FLOW[@]}"
+mv "$FAKEBIN/systemctl" "$WORK/systemctl.off"
+run 0 "restart: systemctl が無い機械ではユニットに触らない" -- -- restart alpha
+expect_calls "$DOCKER_PS_A" "$DOCKER_RESTART"
+mv "$WORK/systemctl.off" "$FAKEBIN/systemctl"
+run 1 "restart: docker restart が失敗しても、止めたユニットは起こし直す" -- FAKE_ACTIVE_UNITS="$UNIT_A" FAKE_DOCKER_FAIL=restart -- restart alpha
+expect_calls "${RESTART_FLOW[@]}"
+expect_err "再起動が失敗しました"
+run 1 "restart: ユニットを止められなければ再起動しない" -- FAKE_ACTIVE_UNITS="$UNIT_A" FAKE_SYSTEMCTL_FAIL=stop -- restart alpha
+expect_calls "$DOCKER_PS_A" "$IS_ACTIVE" "systemctl [--user] [stop] [$UNIT_A]"
+run 1 "restart: 起こし直しに失敗したら 1" -- FAKE_ACTIVE_UNITS="$UNIT_A" FAKE_SYSTEMCTL_FAIL=start -- restart alpha
+expect_err "を起こせませんでした"
+run 1 "restart: ユニットの状態を引けなければ再起動しない" -- FAKE_SYSTEMCTL_FAIL=is-active -- restart alpha
+expect_calls "$DOCKER_PS_A" "$IS_ACTIVE"
+expect_err "状態が分からない"
+# 再起動の最中の中断（ssh の切断など）でも、止めたユニットは起こし直してから抜ける。
+for sg in "TERM 143" "INT 130" "HUP 129"; do
+  run "${sg#* }" "restart: ${sg% *} で中断されても起こし直す" -- FAKE_ACTIVE_UNITS="$UNIT_A" FAKE_DOCKER_SIGNAL="${sg% *}" -- restart alpha
+  expect_calls "${RESTART_FLOW[@]}"
+  expect_err "起こし直しました"
+done
+for how in fd pipe; do
+  run_closed "$how" "restart: 出力が閉じていても（$how）、止めたユニットを起こし直す" -- FAKE_ACTIVE_UNITS="$UNIT_A" -- restart alpha
+  expect_calls "${RESTART_FLOW[@]}"
+  run_closed "$how" "restart: 出力が閉じたうえで HUP で中断されても（$how）、起こし直す" -- FAKE_ACTIVE_UNITS="$UNIT_A" FAKE_DOCKER_SIGNAL=HUP -- restart alpha
+  expect_calls "${RESTART_FLOW[@]}"
+done
+reset_state
+run 1 "restart: コンテナが無ければ、ユニットにも触らず止まる" -- FAKE_ACTIVE_UNITS="$UNIT_A" -- restart alpha
+expect_calls "$DOCKER_PS_A"
+expect_err "dev up alpha"
+run 2 "restart: 引数が多い" -- -- restart alpha beta
+expect_no_calls
+
+# ── 6c''. stop ────────────────────────────────────────────────────────────────
+reset_state
+run 0 "up alpha（stop の仕込み）" -- -- up alpha
+id_a="$(cut -f 2 "$STATE/containers")"
+run 0 "stop: ユニットを先に止めてから、コンテナを止める（起こし直さない）" -- FAKE_ACTIVE_UNITS="$UNIT_A" FAKE_ENABLED_UNITS="$UNIT_A" -- stop alpha
+expect_calls \
+  "$IS_ACTIVE" \
+  "systemctl [--user] [stop] [$UNIT_A]" \
+  "$DOCKER_PS_A" \
+  "docker [stop] [$id_a]" \
+  "systemctl [--user] [is-enabled] [$UNIT_A]"
+grep -qF "$A	$id_a	exited" "$STATE/containers" || ng "stop: コンテナが exited になっていません"
+expect_out_line '外部の機械の再起動の後は戻ります'
+expect_out_line 'systemctl --user start dev-up@alpha.service'
+run 0 "up alpha（stop の仕込み 0）" -- -- up alpha
+run 0 "stop: enable されていないユニットでは、再起動の後に戻る案内を出さない" -- -- stop alpha
+expect_out_line '再起動の後も戻りません'
+expect_out_line '戻す: dev up alpha$'
+if grep -qF 'systemctl --user start' "$OUT"; then ng "stop: enable されていないのに systemctl --user start を案内しています"; fi
+run 0 "stop: 止まっているコンテナには docker stop しない" -- -- stop alpha
+expect_calls "$IS_ACTIVE" "$DOCKER_PS_A" "systemctl [--user] [is-enabled] [$UNIT_A]"
+run 0 "up alpha（stop の仕込み 2）" -- -- up alpha
+run 0 "stop: 動いていないユニットは止めない" -- -- stop alpha
+expect_calls "$IS_ACTIVE" "$DOCKER_PS_A" "docker [stop] [$id_a]" "systemctl [--user] [is-enabled] [$UNIT_A]"
+run 0 "up alpha（stop の仕込み 3）" -- -- up alpha
+run 0 "stop: unknown（ユニットを入れていない）は触らずにコンテナを止める" -- FAKE_UNKNOWN_UNITS="$UNIT_A" -- stop alpha
+expect_calls "$IS_ACTIVE" "$DOCKER_PS_A" "docker [stop] [$id_a]" "systemctl [--user] [is-enabled] [$UNIT_A]"
+run 0 "up alpha（stop の仕込み 4）" -- -- up alpha
+# ユニットを止めた直後に HUP（ssh の切断）を受けても、docker stop まで走る。
+run 0 "stop: HUP を受けても docker stop まで走らせる" -- FAKE_ACTIVE_UNITS="$UNIT_A" FAKE_SYSTEMCTL_STOP_SIGNAL=HUP -- stop alpha
+expect_calls "$IS_ACTIVE" "systemctl [--user] [stop] [$UNIT_A]" "$DOCKER_PS_A" "docker [stop] [$id_a]" "systemctl [--user] [is-enabled] [$UNIT_A]"
+for how in fd pipe; do
+  run 0 "up alpha（stop の閉じた出力の仕込み）" -- -- up alpha
+  run_closed "$how" "stop: 出力が閉じていても（$how）、docker stop まで走らせる" -- FAKE_ACTIVE_UNITS="$UNIT_A" -- stop alpha
+  expect_calls "$IS_ACTIVE" "systemctl [--user] [stop] [$UNIT_A]" "$DOCKER_PS_A" "docker [stop] [$id_a]" "systemctl [--user] [is-enabled] [$UNIT_A]"
+done
+run 0 "up alpha（stop の仕込み 4b）" -- -- up alpha
+run 1 "stop: ユニットを止められなければ、コンテナには触らない" -- FAKE_ACTIVE_UNITS="$UNIT_A" FAKE_SYSTEMCTL_FAIL=stop -- stop alpha
+expect_calls "$IS_ACTIVE" "systemctl [--user] [stop] [$UNIT_A]"
+run 1 "stop: ユニットの状態を引けなければ止めない" -- FAKE_SYSTEMCTL_FAIL=is-active -- stop alpha
+expect_calls "$IS_ACTIVE"
+run 1 "stop: docker stop が失敗したら 1（ユニットは止めたまま）" -- FAKE_ACTIVE_UNITS="$UNIT_A" FAKE_DOCKER_FAIL=stop -- stop alpha
+expect_calls "$IS_ACTIVE" "systemctl [--user] [stop] [$UNIT_A]" "$DOCKER_PS_A" "docker [stop] [$id_a]"
+expect_err "戻す: dev up alpha"
+reset_state
+run 0 "stop: コンテナが無ければ止めるものは無い（ユニットは止める）" -- FAKE_ACTIVE_UNITS="$UNIT_A" -- stop alpha
+expect_calls "$IS_ACTIVE" "systemctl [--user] [stop] [$UNIT_A]" "$DOCKER_PS_A" "systemctl [--user] [is-enabled] [$UNIT_A]"
+expect_out_line '止めるものはありません'
+run 2 "stop: 名前が無い" -- -- stop
+expect_no_calls
+
+# ── 6c'''. logs / enable / disable ────────────────────────────────────────────
+reset_state
+JOURNAL_PREFIX="journalctl [--user] [-u] [$UNIT_A] [-n]"
+run 0 "logs: 既定は末尾 50 行" -- FAKE_JOURNAL='Oct 07 host dev[1]: ログ' -- logs alpha
+expect_calls "$JOURNAL_PREFIX [50] [--no-pager]"
+expect_out_line 'ログ'
+run 0 "logs: -n で行数を変える" -- -- logs alpha -n 7
+expect_calls "$JOURNAL_PREFIX [7] [--no-pager]"
+run 0 "logs: -n が名前より前でも同じ" -- -- logs -n 3 alpha
+expect_calls "$JOURNAL_PREFIX [3] [--no-pager]"
+for bad_n in 0 abc -2 1.5 08 007; do
+  run 2 "logs: -n $bad_n は使い方の誤り" -- -- logs alpha -n "$bad_n"
+  expect_no_calls
+done
+run 2 "logs: -n に行数が無い" -- -- logs alpha -n
+expect_no_calls
+run 2 "logs: 知らないオプション" -- -- logs alpha --since today
+expect_no_calls
+run 0 "enable" -- -- enable alpha
+expect_calls "systemctl [--user] [enable] [--now] [$UNIT_A]"
+run 0 "disable（コンテナは止めない）" -- -- disable alpha
+expect_calls "systemctl [--user] [disable] [--now] [$UNIT_A]"
+expect_out_line 'コンテナは止めていません'
+run 1 "enable: systemctl が失敗したら 1" -- FAKE_SYSTEMCTL_FAIL=enable -- enable alpha
+run 1 "disable: systemctl が失敗したら 1" -- FAKE_SYSTEMCTL_FAIL=disable -- disable alpha
+run 2 "enable: 引数が多い" -- -- enable alpha beta
+expect_no_calls
+
+# ── 6c''''. exec ──────────────────────────────────────────────────────────────
+reset_state
+run 1 "exec: コンテナが動いていなければ止まる（コマンドは呼ばない）" -- -- exec alpha -- codex login
+expect_calls "$DOCKER_PS_A"
+expect_err "alpha のコンテナが動いていません。dev up alpha"
+run 0 "up alpha（exec の仕込み）" -- -- up alpha
+run 0 "exec: -- より後ろをそのまま devcontainer exec に渡す" -- -- exec alpha -- codex login --device-auth "a b" -- x
+expect_calls \
+  "$DOCKER_PS_A" \
+  "devcontainer [exec] [--workspace-folder] [$A] [codex] [login] [--device-auth] [a b] [--] [x]" \
+  "codex [login] [--device-auth] [a b] [--] [x]"
+run 5 "exec: コマンドの終了コードをそのまま返す" -- FAKE_CODEX_EXIT=5 -- exec alpha -- codex login
+run 2 "exec: -- が無い" -- -- exec alpha codex login
+expect_no_calls
+run 2 "exec: コマンドが無い" -- -- exec alpha --
+expect_no_calls
+run 2 "exec: 名前だけ" -- -- exec alpha
+expect_no_calls
+run 2 "exec: コマンドの先頭が -" -- -- exec alpha -- --help
+expect_no_calls
+run 2 "exec: 未登録" -- -- exec gamma -- true
+expect_no_calls
+
+# ── 6c'''''. self-update ──────────────────────────────────────────────────────
+# 偽のリリース: 先頭 2 行が devhost の dev.sh のものである「新しい dev」を archive に入れ、
+# マニフェストにそのハッシュを記録する（本物のリリースと同じ形: ./devhost/dev.sh）。
+REL="$WORK/release"
+SELFDIR="$WORK/selfdir"
+SELF="$SELFDIR/dev"
+HDR1="$(sed -n '1p' "$DEV")"
+HDR2="$(sed -n '2p' "$DEV")"
+mkdir -p "$REL/devhost" "$SELFDIR"
+printf '%s\n%s\necho new\n' "$HDR1" "$HDR2" >"$REL/devhost/dev.sh"
+(cd "$REL" && tar -czf PACKAGE_ARCHIVE.tar.gz ./devhost)
+if command -v sha256sum >/dev/null 2>&1; then sum_cmd="sha256sum"; else sum_cmd="shasum -a 256"; fi
+good_sum="$($sum_cmd "$REL/PACKAGE_ARCHIVE.tar.gz" | awk '{ print $1 }')"
+write_manifest() { printf '{\n  "package": "devcontainer-bootstrap",\n  "version": "0.0.0",\n  "checksums": {\n    "PACKAGE_ARCHIVE.tar.gz": "%s",\n    "SHA256SUMS": "%s"\n  }\n}\n' "$1" "$(printf '%064d' 0)" >"$REL/RELEASE-MANIFEST.json"; }
+write_manifest "$good_sum"
+mk_self() { printf '%s\n%s\necho old\n' "$HDR1" "$HDR2" >"$SELF"; chmod 0644 "$SELF"; }
+expect_log_has() { grep -qF -- "$1" "$LOG" || { ng "$CUR: 呼び出しの記録に「$1」がありません"; sed 's/^/    /' "$LOG" >&2; }; }
+expect_self_unchanged() { [[ "$(cat "$SELF")" == "$(printf '%s\n%s\necho old' "$HDR1" "$HDR2")" ]] || ng "$CUR: 置き換えないはずが、置き換え先が変わっています"; }
+RELEASES="https://github.com/ojos/devcontainer-bootstrap/releases"
+
+mk_self
+run 0 "self-update: 照合が合えば、最新の dev.sh で置き換える" -- DEV_SELF_PATH="$SELF" FAKE_CURL_DIR="$REL" -- self-update
+expect_log_has "curl [-fsSL] [$RELEASES/latest/download/RELEASE-MANIFEST.json] [-o]"
+expect_log_has "curl [-fsSL] [$RELEASES/download/v0.0.0/PACKAGE_ARCHIVE.tar.gz] [-o]"
+if grep -qF "latest/download/PACKAGE_ARCHIVE" "$LOG"; then ng "self-update: アーカイブを latest から取っています（マニフェストの版から取るはず）"; fi
+cmp -s "$REL/devhost/dev.sh" "$SELF" || ng "self-update: 置き換え先が新しい dev.sh になっていません"
+[[ -x "$SELF" ]] || ng "self-update: 置き換え後の dev に実行権限がありません"
+[[ "$(ls -A "$SELFDIR")" == "dev" ]] || ng "self-update: 置き換え先のディレクトリに一時ファイルが残っています: $(ls -A "$SELFDIR")"
+expect_out_line '置き換えました'
+mk_self
+run 0 "self-update --version: 版を固定した取得先から取る" -- DEV_SELF_PATH="$SELF" FAKE_CURL_DIR="$REL" -- self-update --version v9.8.7
+expect_log_has "curl [-fsSL] [$RELEASES/download/v9.8.7/RELEASE-MANIFEST.json] [-o]"
+expect_log_has "curl [-fsSL] [$RELEASES/download/v9.8.7/PACKAGE_ARCHIVE.tar.gz] [-o]"
+cmp -s "$REL/devhost/dev.sh" "$SELF" || ng "self-update --version: 置き換え先が新しい dev.sh になっていません"
+run 0 "self-update: すでに同じなら置き換えない" -- DEV_SELF_PATH="$SELF" FAKE_CURL_DIR="$REL" -- self-update
+expect_out_line 'すでにこの版です'
+
+mk_self
+write_manifest "$(printf '%064d' 1)"
+run 1 "self-update: ハッシュが合わなければ置き換えない" -- DEV_SELF_PATH="$SELF" FAKE_CURL_DIR="$REL" -- self-update
+expect_err "ハッシュがマニフェストと合いません"
+expect_self_unchanged
+write_manifest "not-a-hash"
+run 1 "self-update: マニフェストのハッシュが 64 桁の 16 進でなければ置き換えない" -- DEV_SELF_PATH="$SELF" FAKE_CURL_DIR="$REL" -- self-update
+expect_self_unchanged
+printf '{ "checksums": {} }\n' >"$REL/RELEASE-MANIFEST.json"
+run 1 "self-update: マニフェストに archive のハッシュが無ければ置き換えない" -- DEV_SELF_PATH="$SELF" FAKE_CURL_DIR="$REL" -- self-update
+expect_self_unchanged
+write_manifest "$good_sum"
+
+# 版のないマニフェスト（最新を指定したとき）では、アーカイブをどの版から取るか決められないので止まる。
+printf '{ "checksums": { "PACKAGE_ARCHIVE.tar.gz": "%s" } }\n' "$good_sum" >"$REL/RELEASE-MANIFEST.json"
+run 1 "self-update: 最新で、マニフェストに版が無ければ置き換えない" -- DEV_SELF_PATH="$SELF" FAKE_CURL_DIR="$REL" -- self-update
+expect_err "--version vX.Y.Z で版を指定"
+expect_self_unchanged
+write_manifest "$good_sum"
+# 版を固定したときは、マニフェストに版が無くても取れる。
+run 0 "self-update --version: マニフェストに版が無くても固定した版で取る" -- DEV_SELF_PATH="$SELF" FAKE_CURL_DIR="$REL" -- self-update --version v1.2.3
+write_manifest "$good_sum"
+mk_self
+
+# git の作業ツリーの中（リポジトリのチェックアウトや、展開しただけのディレクトリ）は置き換えない。
+GITDIR="$WORK/checkout"
+mkdir -p "$GITDIR/.git" "$GITDIR/packages/devhost"
+printf '%s\n%s\necho old\n' "$HDR1" "$HDR2" >"$GITDIR/packages/devhost/dev.sh"
+run 1 "self-update: git の作業ツリーの中の dev.sh は置き換えない" -- DEV_SELF_PATH="$GITDIR/packages/devhost/dev.sh" FAKE_CURL_DIR="$REL" -- self-update
+expect_err "git の作業ツリーの中です"
+expect_no_calls
+[[ "$(cat "$GITDIR/packages/devhost/dev.sh")" == "$(printf '%s\n%s\necho old' "$HDR1" "$HDR2")" ]] || ng "self-update: git の作業ツリーの dev.sh が書き換わっています"
+# 作業ツリーが worktree / submodule のように .git がファイルの形でも同じ。
+rm -rf "$GITDIR/.git"
+printf 'gitdir: /elsewhere\n' >"$GITDIR/.git"
+run 1 "self-update: .git がファイルの作業ツリーの中も置き換えない" -- DEV_SELF_PATH="$GITDIR/packages/devhost/dev.sh" FAKE_CURL_DIR="$REL" -- self-update
+expect_no_calls
+
+# 置き換え先は、2 行目が説明文の全文と違っても「# dev — 」で始まれば devhost の dev.sh とみなす（版をまたいで更新できる）。
+printf '%s\n%s\necho old\n' "$HDR1" '# dev — 別の版の説明文' >"$SELF"
+run 0 "self-update: 置き換え先の 2 行目が別の版の説明文でも、更新できる" -- DEV_SELF_PATH="$SELF" FAKE_CURL_DIR="$REL" -- self-update
+cmp -s "$REL/devhost/dev.sh" "$SELF" || ng "self-update: 別の版の説明文の dev が更新されていません"
+mk_self
+
+# devhost の dev.sh でない置き場所には、取得もせずに止まる。
+printf '#!/bin/sh\necho other tool\n' >"$SELF"
+run 1 "self-update: 置き換え先が devhost の dev.sh でなければ、取得もしない" -- DEV_SELF_PATH="$SELF" FAKE_CURL_DIR="$REL" -- self-update
+expect_err "devhost の dev.sh だと確かめられません"
+expect_no_calls
+[[ "$(cat "$SELF")" == "$(printf '#!/bin/sh\necho other tool')" ]] || ng "self-update: devhost の dev.sh でない置き換え先が書き換わっています"
+run 1 "self-update: 置き換え先が無ければ止まる" -- DEV_SELF_PATH="$SELFDIR/none" FAKE_CURL_DIR="$REL" -- self-update
+expect_no_calls
+mk_self
+ln -s "$SELF" "$SELFDIR/link"
+run 1 "self-update: 置き換え先がリンクなら止まる" -- DEV_SELF_PATH="$SELFDIR/link" FAKE_CURL_DIR="$REL" -- self-update
+expect_err "リンクです"
+expect_no_calls
+expect_self_unchanged
+rm -f "$SELFDIR/link"
+
+# 取り出した dev.sh が devhost のものでなければ（ハッシュは合っていても）置き換えない。
+BADREL="$WORK/release-bad"
+mkdir -p "$BADREL/devhost"
+printf '%s\n%s\nif then fi (\n' "$HDR1" "$HDR2" >"$BADREL/devhost/dev.sh"
+(cd "$BADREL" && tar -czf PACKAGE_ARCHIVE.tar.gz ./devhost)
+bad_sum="$($sum_cmd "$BADREL/PACKAGE_ARCHIVE.tar.gz" | awk '{ print $1 }')"
+printf '{ "version": "1.0.0", "checksums": { "PACKAGE_ARCHIVE.tar.gz": "%s" } }\n' "$bad_sum" >"$BADREL/RELEASE-MANIFEST.json"
+mk_self
+run 1 "self-update: archive の dev.sh に構文の誤りがあれば置き換えない" -- DEV_SELF_PATH="$SELF" FAKE_CURL_DIR="$BADREL" -- self-update
+expect_err "構文の誤り"
+expect_self_unchanged
+# 取得物の先頭 2 行は照合しない（将来の版が説明文を変えても更新できる）。
+printf '#!/bin/sh\n# 別の説明\necho future\n' >"$BADREL/devhost/dev.sh"
+(cd "$BADREL" && tar -czf PACKAGE_ARCHIVE.tar.gz ./devhost)
+printf '{ "version": "1.0.0", "checksums": { "PACKAGE_ARCHIVE.tar.gz": "%s" } }\n' "$($sum_cmd "$BADREL/PACKAGE_ARCHIVE.tar.gz" | awk '{ print $1 }')" >"$BADREL/RELEASE-MANIFEST.json"
+run 0 "self-update: 取得物の先頭 2 行が違っても、ハッシュと構文が通れば置き換える" -- DEV_SELF_PATH="$SELF" FAKE_CURL_DIR="$BADREL" -- self-update
+cmp -s "$BADREL/devhost/dev.sh" "$SELF" || ng "self-update: 先頭 2 行が違う取得物で置き換わっていません"
+mk_self
+# archive に ./devhost/dev.sh が無いとき。
+NOREL="$WORK/release-none"
+mkdir -p "$NOREL/other"
+echo x >"$NOREL/other/file"
+(cd "$NOREL" && tar -czf PACKAGE_ARCHIVE.tar.gz ./other)
+no_sum="$($sum_cmd "$NOREL/PACKAGE_ARCHIVE.tar.gz" | awk '{ print $1 }')"
+printf '{ "version": "1.0.0", "checksums": { "PACKAGE_ARCHIVE.tar.gz": "%s" } }\n' "$no_sum" >"$NOREL/RELEASE-MANIFEST.json"
+run 1 "self-update: archive に devhost/dev.sh が無ければ置き換えない" -- DEV_SELF_PATH="$SELF" FAKE_CURL_DIR="$NOREL" -- self-update
+expect_self_unchanged
+run 1 "self-update: 取得に失敗したら置き換えない" -- DEV_SELF_PATH="$SELF" FAKE_CURL_DIR="$REL" FAKE_CURL_FAIL=1 -- self-update
+expect_err "取得できません"
+expect_self_unchanged
+run 2 "self-update: 版の形が違う" -- DEV_SELF_PATH="$SELF" -- self-update --version latest
+expect_no_calls
+run 2 "self-update: 版に URL の区切りが混ざる" -- DEV_SELF_PATH="$SELF" -- self-update --version 'v1.0.0/../x'
+expect_no_calls
+run 2 "self-update: --version に値が無い" -- DEV_SELF_PATH="$SELF" -- self-update --version
+run 2 "self-update: 知らない引数" -- DEV_SELF_PATH="$SELF" -- self-update alpha
+expect_no_calls
+
 # ── 6d. help ──────────────────────────────────────────────────────────────────
-for sub in ls up attach supervise rebuild doctor help; do
+for sub in ls up attach supervise rebuild doctor restart stop logs enable disable exec self-update help; do
   run 0 "help $sub" -- -- help "$sub"
   expect_no_calls
   expect_out_line "^dev $sub — "
@@ -882,8 +1258,8 @@ expect_out_line '^プロジェクトの一覧は /xdg/dev/projects から読む�
 if grep -qF '${' "$OUT"; then ng "help の出力に未展開の \${...} があります"; fi
 expect_out_line '^  dev rebuild <名前> \[--pull\]$'
 expect_out_line '^  dev doctor <名前>$'
-run 2 "help: 知らないサブコマンド" -- -- help stop
-expect_err "知らないサブコマンドです: stop"
+run 2 "help: 知らないサブコマンド" -- -- help bogus
+expect_err "知らないサブコマンドです: bogus"
 expect_no_calls
 run 2 "help: 引数が多い" -- -- help ls up
 expect_no_calls
@@ -900,9 +1276,9 @@ readme_check() {
   local readme="$1" bad=0 usage_set help_set readme_set s want got
   # dev が受け付ける集合は、dev help が判定に使う help_<名前> の定義（dev.sh）から取る。
   # usage の一覧（dev help）も同じ集合でなければ落とす。
-  help_set="$(sed -n 's/^help_\([a-z][a-z]*\)() {$/\1/p' "$DEV" | sort -u)"
-  usage_set="$("$BASH_BIN" "$DEV" help | sed -n 's/^  dev \([a-z][a-z]*\).*/\1/p' | sort -u)"
-  readme_set="$(sed -n 's/^### dev \([a-z][a-z]*\)$/\1/p' "$readme" | sort -u)"
+  help_set="$(sed -n 's/^help_\([a-z][a-z-]*\)() {$/\1/p' "$DEV" | sort -u)"
+  usage_set="$("$BASH_BIN" "$DEV" help | sed -n 's/^  dev \([a-z][a-z-]*\).*/\1/p' | sort -u)"
+  readme_set="$(sed -n 's/^### dev \([a-z][a-z-]*\)$/\1/p' "$readme" | sort -u)"
   if [[ -z "$help_set" || "$help_set" != "$readme_set" || "$help_set" != "$usage_set" ]]; then
     echo "サブコマンドの集合が違います" >&2
     printf '  help_ 関数: %s\n  usage:      %s\n  README:     %s\n' "$(echo $help_set)" "$(echo $usage_set)" "$(echo $readme_set)" >&2
@@ -930,7 +1306,7 @@ n=$((n + 1))
 if ! readme_check "$README"; then ng "README が dev help と一致しません"; fi
 # dev が実際に受け付けるサブコマンドの確認: 一覧の各名前を引数なしで呼ぶと、使い方の誤り（2）で
 # 「使い方: dev <名前>」と返る（知らないサブコマンドなら一覧の usage が出る）。help だけは 0。
-for sub in ls up attach supervise rebuild doctor; do
+for sub in ls up attach supervise rebuild doctor restart stop logs enable disable exec; do
   if [[ "$sub" == "ls" ]]; then
     run 2 "$sub は引数を受け付けない（使い方の誤り）" -- -- "$sub" x
   else
@@ -947,7 +1323,7 @@ sed 's/^終了コード: 0 = 作り直した/終了コード: 9 = 作り直し�
 if readme_check "$M" >/dev/null 2>&1; then ng "README の終了コードの行を書き換えても照合が通ります"; fi
 sed '/^### dev doctor$/d' "$README" >"$M"
 if readme_check "$M" >/dev/null 2>&1; then ng "README からサブコマンドの見出しを消しても照合が通ります"; fi
-{ cat "$README"; printf '\n### dev stop\n\n```text\nx\n```\n'; } >"$M"
+{ cat "$README"; printf '\n### dev bogus\n\n```text\nx\n```\n'; } >"$M"
 if readme_check "$M" >/dev/null 2>&1; then ng "README へ dev に無いサブコマンドを足しても照合が通ります"; fi
 # 検査が元の README では通ること（変異のたびに通らなくなっただけ、を除く）。
 readme_check "$README" >/dev/null 2>&1 || ng "README の照合が、変異の後で通らなくなりました"

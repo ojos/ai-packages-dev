@@ -6,7 +6,7 @@ devcontainer を起こし、入る**ための道具一式です。どのプロ�
 
 | ファイル | 置き場所（外部の機械 / 端末） | 役割 |
 |---|---|---|
-| `dev.sh` | `~/.local/bin/dev`（外部の機械） | 入口の道具。`ls` / `up` / `attach` / `supervise` / `rebuild` / `doctor` / `help` |
+| `dev.sh` | `~/.local/bin/dev`（外部の機械） | 入口の道具。`ls` / `up` / `attach` / `supervise` / `rebuild` / `doctor` / `restart` / `stop` / `logs` / `enable` / `disable` / `exec` / `self-update` / `help` |
 | `dev-up@.service` | `~/.config/systemd/user/`（外部の機械） | 起動時と、コンテナが止まったときに起こし直すユニット |
 | `projects.example` | `~/.config/dev/projects`（外部の機械） | 設定ファイルの雛形（名前 → パス） |
 | `ssh_config.plain.example` | 端末の `~/.ssh/config` | ssh の入口の断片（経路: 素の SSH） |
@@ -102,7 +102,11 @@ cp devhost/projects.example ~/.config/dev/projects   # 名前と絶対パスを�
 ```
 
 **リンクではなく写しで置きます。** リンクにすると、そのリポジトリのブランチを切り替えただけで
-外部の機械の道具が黙って変わるためです。道具を更新したら、同じ `install` をもう一度打ちます。
+外部の機械の道具が黙って変わるためです。道具を更新するには、同じ `install` をもう一度打つか、
+`dev self-update` を使います。`dev self-update` は上の「devhost を入手する」と同じ照合（マニフェストの
+ハッシュと archive の照合）を通してから、`dev.sh` だけを置き換えます（既定は最新、`--version v0.17.0` で固定）。
+置き換え先が devhost の `dev.sh` だと確かめられないとき（リンク、別の道具など）は、何も置き換えずに止まります。
+`dev-up@.service` と `projects` は更新しません（ユニットを更新したときは「ユニットを入れる」の `install` を打ち直します）。
 
 ### ユニットを入れる
 
@@ -140,7 +144,10 @@ devcontainer.json が `shutdownAction: stopCompose` のプロジェクトでは�
 （0 以外で抜けるので `on-failure` でも）30 秒後に起こし直します。VS Code の停止も、docker kill も、
 デーモンの再起動も同じ扱いです。
 
-**引き換えに、意図して止めたいときはユニットを先に止めます。** 作り直しは `dev rebuild <名前>` が
+**引き換えに、意図して止めたいときはユニットを先に止めます。** 止めるだけなら `dev stop <名前>`
+（ユニットを止めてからコンテナを止める。disable はしないので、外部の機械の再起動の後は戻ります。
+戻すのは `dev up <名前>` か `systemctl --user start dev-up@<名前>.service`）、作り直さずに再起動するなら
+`dev restart <名前>` を使います。作り直しは `dev rebuild <名前>` が
 ユニットの停止と起こし直しまで行います（止めずに作り直すと、30 秒後にユニットの `up` が作り直しの
 途中に重なりえます。VS Code の Rebuild Container も同じなので、VS Code から作り直すときは先に
 `systemctl --user stop dev-up@<名前>.service` で止め、終わったら `start` で戻します）。
@@ -156,6 +163,12 @@ devcontainer.json が `shutdownAction: stopCompose` のプロジェクトでは�
 | `dev supervise <名前>` | 起こして止まるまで待つ（ユニットから使う） |
 | `dev rebuild <名前> [--pull]` | コンテナを作り直す |
 | `dev doctor <名前>` | 「動いているのに入れない」を見分ける |
+| `dev restart <名前>` | 作り直さずに再起動する |
+| `dev stop <名前>` | 意図して止める（ユニットを先に止める） |
+| `dev logs <名前> [-n <行数>]` | ユニットのログの末尾（既定 50 行） |
+| `dev enable <名前>` / `dev disable <名前>` | ユニットを有効にして起こす / 無効にして止める |
+| `dev exec <名前> -- <コマンド...>` | tmux を介さずにコンテナの中でコマンドを 1 つ実行する |
+| `dev self-update [--version <vX.Y.Z>]` | dev 自身を DCB の公開リリースの版へ置き換える |
 | `dev help [サブコマンド]` | 説明を出す |
 
 オプション・呼ぶ順序・終了コード・失敗したときの案内は、次の「コマンドの説明」にあります。
@@ -283,6 +296,137 @@ TERM を送っても止まらないときは、さらに 5 秒（DEV_EXEC_KILL_G
 失敗したとき: FAIL なら dev rebuild <名前> で作り直す。WARN だけなら原因を調べてから判断する。
 ```
 
+### dev restart
+
+```text
+dev restart — 作り直さずにコンテナを再起動する。
+
+使い方:
+  dev restart <名前>
+
+呼ぶ順序:
+  1. コンテナを探す。無ければ、ユニットにも触らずに 1 で止まる（dev up <名前>）
+  2. ユニット dev-up@<名前> を、dev rebuild と同じ基準で止める（inactive / failed / unknown /
+     systemctl が無い、のときは触らない。状態の語が得られないときは、何も変えずに 1 で止まる）
+  3. docker restart <コンテナ>
+  4. 2 で止めたときだけ、ユニットを起こし直す。3 が失敗しても、INT / HUP / TERM で中断されても
+     （ssh の切断など）起こし直してから終わる（中断の終了コードは 130 / 129 / 143）
+ユニットを先に止めるのは、再起動でコンテナが一瞬止まったときに、ユニットが up を重ねないようにするため。
+作り直しはしない（定義を変えたときは dev rebuild）。各プロジェクトの compose や devcontainer.json は書き換えない。
+
+終了コード: 0 = 再起動した / 1 = 失敗（コンテナが無い・ユニットの停止・docker restart） / 2 = 使い方か設定の誤り
+失敗したとき: 出力を読み、dev doctor <名前>。直らなければ dev rebuild <名前>。
+```
+
+### dev stop
+
+```text
+dev stop — 意図してコンテナを止める。
+
+使い方:
+  dev stop <名前>
+
+呼ぶ順序:
+  1. ユニット dev-up@<名前> を、dev rebuild と同じ基準で先に止める
+     （コンテナだけを止めると、ユニットが 30 秒後に起こし直すため）。止められなければ、コンテナには触らない
+  2. docker stop <コンテナ>（無い・動いていないときは何もしない）
+ユニットは disable しない。外部の機械を再起動すれば、ユニットが戻ってコンテナも戻る。
+戻すとき: dev up <名前>、またはユニットを起こす systemctl --user start dev-up@<名前>.service
+再起動の後も戻したくないときは、dev disable <名前> も行う。
+
+終了コード: 0 = 止めた（元から無い・止まっているときも 0） / 1 = 失敗（ユニットの停止・docker stop） / 2 = 使い方か設定の誤り
+```
+
+### dev logs
+
+```text
+dev logs — ユニットのログの末尾を出す。
+
+使い方:
+  dev logs <名前> [-n <行数>]
+
+journalctl --user -u dev-up@<名前>.service -n <行数> --no-pager を呼ぶ。行数の既定は 50（1 以上の整数）。
+
+オプション:
+  -n <行数>   末尾から出す行数
+
+終了コード: 0 = 成功 / 1 = journalctl が失敗した（または無い） / 2 = 使い方か設定の誤り
+```
+
+### dev enable
+
+```text
+dev enable — ユニットを有効にして起こす。
+
+使い方:
+  dev enable <名前>
+
+systemctl --user enable --now dev-up@<名前>.service を呼ぶ。外部の機械の起動時から、
+ユニットがコンテナを起こして保つようになる。ユニットを入れる手順は README の「ユニットを入れる」。
+
+終了コード: 0 = 成功 / 1 = systemctl が失敗した（または無い） / 2 = 使い方か設定の誤り
+```
+
+### dev disable
+
+```text
+dev disable — ユニットを無効にして止める。
+
+使い方:
+  dev disable <名前>
+
+systemctl --user disable --now dev-up@<名前>.service を呼ぶ。コンテナは止めない
+（止めるときは dev stop <名前>）。無効にすると、コンテナが止まっても自動では戻らない。
+戻すときは dev enable <名前>。
+
+終了コード: 0 = 成功 / 1 = systemctl が失敗した（または無い） / 2 = 使い方か設定の誤り
+```
+
+### dev exec
+
+```text
+dev exec — tmux を介さずに、コンテナの中でコマンドを 1 つ実行する。
+
+使い方:
+  dev exec <名前> -- <コマンド...>
+
+コンテナが動いていなければ、dev attach と同じく案内して 1 で止まる（自分では起こさない）。
+動いていれば devcontainer exec --workspace-folder <パス> <コマンド...> を呼び、-- より後ろを
+そのまま渡す。コマンドの先頭が - で始まるものは渡せない（devcontainer 自身のオプションと読まれるため）。
+例: dev exec <名前> -- codex login --device-auth
+ssh 越し（ssh -t <ホスト> .local/bin/dev exec ...）では、外部の機械のログインシェルが引数を
+もう一度分割するので、ssh の引数のクォートが 1 段剥がれる。空白を含む引数や sh -c '...' は、
+ssh のコマンド全体をクォートして、外側と内側の二重に包む。
+
+終了コード: 0 = コマンドが成功 / 1 = コンテナが動いていない / 2 = 使い方か設定の誤り /
+            それ以外 = コンテナの中のコマンドの終了コードをそのまま返す
+```
+
+### dev self-update
+
+```text
+dev self-update — dev 自身を、DCB の公開リリースの版へ置き換える。
+
+使い方:
+  dev self-update [--version <vX.Y.Z>]
+
+呼ぶ順序:
+  1. 置き換え先（この dev）が、リンクでなく、devhost の dev.sh であることを確かめる（先頭 2 行）
+  2. 公開リリースから RELEASE-MANIFEST.json と PACKAGE_ARCHIVE.tar.gz を取得する
+     （既定は最新。--version でその版に固定する）
+  3. マニフェストに記録された archive の SHA-256 と、取得した archive のハッシュを照合する
+  4. archive から ./devhost/dev.sh を取り出し、devhost の dev.sh であることと構文を確かめる
+  5. 同じディレクトリの一時ファイルへ写し、mv で置き換える
+どれか 1 つでも外れたら、何も置き換えずに 1 で止まる。手動の入手（README の「devhost を入手する」）と
+同じ照合。dev.sh だけを置き換える（dev-up@.service や設定ファイルには触らない）。
+curl / jq / tar と、sha256sum または shasum が要る。
+
+オプション:
+  --version <vX.Y.Z>   取得する版（既定は最新）
+
+終了コード: 0 = 置き換えた（すでに同じ版なら置き換えずに 0） / 1 = 失敗（取得・照合・置き換え先の確認・置き換え） / 2 = 使い方の誤り
+```
+
 ### dev help
 
 ```text
@@ -290,7 +434,8 @@ dev help — サブコマンドの説明を出す。
 
 使い方:
   dev help                  使い方の一覧
-  dev help <サブコマンド>    ls / up / attach / supervise / rebuild / doctor の説明
+  dev help <サブコマンド>    ls / up / attach / supervise / rebuild / doctor /
+                            restart / stop / logs / enable / disable / exec / self-update の説明
 
 終了コード: 0 = 成功 / 2 = 知らないサブコマンド
 ```
@@ -380,9 +525,11 @@ grep -cF '<見分けの付く名前>' ~/.ssh/authorized_keys     # 0 である�
 bash devhost/selftest.sh   # DEVHOST_SELFTEST_PASS
 ```
 
-偽の devcontainer / docker / tmux / systemctl / git / ps / journalctl を PATH に置き、組み立てるコマンド・
-未登録の名前の拒否・設定ファイルの誤り・`rebuild` と `doctor` の振る舞い・ユニットの要の行を見ます。
+偽の devcontainer / docker / tmux / systemctl / git / ps / journalctl / curl を PATH に置き、組み立てるコマンド・
+未登録の名前の拒否・設定ファイルの誤り・`rebuild` / `restart` / `stop` / `exec` / `doctor` / `self-update` の振る舞い・ユニットの要の行を見ます。
 加えて、上の「コマンドの説明」の各ブロックが `dev help` の出力と一致すること、載せたサブコマンドの集合が
 `dev` の受け付ける集合と一致することを照合します（説明の 1 行を書き換えた複製では落ちることも確かめます）。偽物を本物に合わせたところは `selftest.sh` の冒頭にあります。
 `dev doctor` が読む /proc と cgroup の根は、環境変数 `DEV_PROC_ROOT` / `DEV_CGROUP_ROOT` で差し替えられます
 （自己試験が偽の木を渡すためで、既定は本物の `/proc` と `/sys/fs/cgroup` です）。
+`dev self-update` の置き換え先は環境変数 `DEV_SELF_PATH` で差し替えられます（自己試験が、偽の `curl` と
+一時ディレクトリの偽の `dev` に対して回すためで、既定は実行中の `dev.sh` 自身です）。

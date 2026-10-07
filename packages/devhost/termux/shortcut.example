@@ -1,7 +1,12 @@
 #!/data/data/com.termux/files/usr/bin/bash
 # Termux:Widget のショートカットの雛形。~/.shortcuts/ に 1 ボタン 1 ファイルで置き、chmod +x する。
-# <別名> は ~/.ssh/config の Host、<操作> は attach <名前> / up <名前> / ls / doctor <名前> / rebuild <名前> のどれか
-# （入れないときの切り分けと作り直しも、ボタンにできる。説明は dev help <サブコマンド>）。
+# <別名> は ~/.ssh/config の Host、<操作> は attach <名前> / up <名前> / ls / doctor <名前> / rebuild <名前> /
+# restart <名前> / stop <名前> / logs <名前> / exec <名前> -- <コマンド...> / self-update のどれか
+# （入れないときの切り分け・再起動・作り直し・停止・ログ、コンテナの中でのコマンド、dev 自身の更新も、
+# ボタンにできる。説明は dev help <サブコマンド>）。exec の -- の後ろは、コンテナの中のコマンドになる
+# （例: exec <名前> -- codex login --device-auth）。ssh の引数は外部の機械のログインシェルが
+# もう一度分割するので、クォートが 1 段剥がれる。空白を含む引数や sh -c '...' を渡すときは、
+# <操作> 全体を外側でクォートし、内側でもクォートする（例: "exec <名前> -- sh -c 'echo a b'"）。
 # dev を .local/bin/dev と書くのは、ssh の非対話のコマンドでは外部の機械の ~/.profile が
 # 読まれず、~/.local/bin が PATH に無いため（ssh のコマンドはホームディレクトリで動くので相対で届く）。
 exec ssh -t <別名> .local/bin/dev <操作>
