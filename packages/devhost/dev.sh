@@ -574,11 +574,12 @@ cmd_disable() {
   find_project "$1"
   # dev stop と同じく need_project_dir は見ない（登録先のディレクトリが無くても、ユニットを無効にできるように）。
   need systemctl "systemd の systemctl が要ります（dev-up@.service を使う機械で使う）。"
-  need docker "Docker Engine を入れてください。"
   # dev stop と同じく、止めるのが目的なので HUP と PIPE は無視する。
   trap '' HUP PIPE
   systemctl --user disable --now "dev-up@${1}.service" || die "$1: ユニット dev-up@${1}.service を無効にできませんでした。コンテナには触っていません。"
   rb_say "[$PROG] $1: ユニット dev-up@${1}.service を無効にして止めました。"
+  # docker の確かめはユニットを無効にした後。docker が無い機械でも、再起動の後に起こさないことは先に済ませる。
+  need docker "Docker Engine を入れてください（ユニットは無効にしました。コンテナは止めていません）。"
   stop_containers "$1" "${P_PATHS[$IDX]}"
   rb_say "[$PROG] $1: 止めました。ユニットが無効なので、外部の機械の再起動の後も戻りません。"
   rb_say "[$PROG] 戻す: dev enable $1"
