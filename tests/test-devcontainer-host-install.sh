@@ -370,6 +370,92 @@ ln -s "$H/elsewhere/unit" "$(UNIT)"
 run_install "$REL1"
 if [[ $RC -ne 0 && ! -e "$(BIN)" && "$(cat "$H/elsewhere/unit")" == "x" ]]; then pass; else fail "終了コード $RC"; fi
 
+# projects が通常のファイルでないとき（dev は -f で読むので、そのまま成功させると dev が止まる）。
+it "projects がディレクトリなら、何も置かずに非 0 で止まる"
+new_home
+mkdir -p "$(PROJ)"
+run_install "$REL1"
+if [[ $RC -ne 0 && "$(files_in_home)" == "0" && ! -e "$(BIN)" && ! -e "$(UNIT)" ]] && grep -q '通常のファイルではありません' "$ERR"; then pass; else fail "終了コード $RC、置かれたファイル: $(find "$H" -type f | tr '\n' ' ')"; fi
+
+it "projects がリンク切れなら、何も置かずに非 0 で止まる"
+new_home
+mkdir -p "$H/.config/dev"
+ln -s "$H/nowhere" "$(PROJ)"
+run_install "$REL1"
+if [[ $RC -ne 0 && "$(files_in_home)" == "0" && ! -e "$(BIN)" ]]; then pass; else fail "終了コード $RC"; fi
+
+it "projects が通常のファイルへのリンクなら、あるものとして触らずに入る"
+new_home
+mkdir -p "$H/.config/dev" "$H/elsewhere"
+printf 'alpha /home/me/alpha\n' > "$H/elsewhere/projects"
+ln -s "$H/elsewhere/projects" "$(PROJ)"
+run_install "$REL1"
+if [[ $RC -eq 0 && -L "$(PROJ)" && "$(cat "$H/elsewhere/projects")" == "alpha /home/me/alpha" && -f "$(BIN)" ]]; then pass; else fail "終了コード $RC: $(tail -3 "$ERR")"; fi
+
+# 内容が同じでも、権限が違えば直す。
+it "dev が同じ内容でも実行権限が無ければ、権限を直す（権限を直しました）"
+new_home
+run_install "$REL1"
+chmod 0644 "$(BIN)"
+run_install "$REL1"
+if [[ $RC -eq 0 && -x "$(BIN)" ]] && cmp -s "$REL1/dev.sh" "$(BIN)" && grep -q '権限を直しました' "$OUT"; then pass; else fail "終了コード $RC: $(cat "$OUT")"; fi
+
+it "ユニットが同じ内容でも権限が違えば、置くときと同じ 0644 に揃える"
+chmod 0600 "$(UNIT)"
+run_install "$REL1"
+if [[ $RC -eq 0 && -n "$(find "$(UNIT)" -maxdepth 0 -perm 0644)" ]] && grep -q '権限を直しました' "$OUT"; then pass; else fail "終了コード $RC: $(cat "$OUT")"; fi
+
+it "権限も内容も同じなら、権限を直したとは言わない"
+run_install "$REL1"
+if [[ $RC -eq 0 ]] && ! grep -q '権限を直しました' "$OUT"; then pass; else fail "出ている: $(cat "$OUT")"; fi
+
+it "--dry-run は、権限だけが違う置き先を計画に出し、直さない"
+chmod 0644 "$(BIN)"
+run_install "$REL1" --dry-run
+if [[ $RC -eq 0 && ! -x "$(BIN)" ]] && grep -q '権限が違うので、権限を直す' "$OUT"; then pass; else fail "終了コード $RC: $(cat "$OUT")"; fi
+
+# 何かを置く前に、すべての置き場所を検査する。
+if [[ "$(id -u)" != "0" ]]; then
+  it "projects の親に書き込めなければ、dev もユニットも置かず、daemon-reload も呼ばずに非 0 で止まる"
+  new_home
+  mkdir -p "$H/.config/dev"
+  chmod 0555 "$H/.config/dev"
+  run_install "$REL1"
+  chmod 0755 "$H/.config/dev"
+  if [[ $RC -ne 0 && "$(files_in_home)" == "0" ]] && ! grep -q 'daemon-reload' "$LOG" && grep -q '書き込めません' "$ERR"; then pass; else fail "終了コード $RC、置かれたファイル: $(find "$H" -type f | tr '\n' ' ')"; fi
+
+  it "dev の親に書き込めなければ、ユニットも projects も置かずに非 0 で止まる"
+  new_home
+  mkdir -p "$H/.local/bin"
+  chmod 0555 "$H/.local/bin"
+  run_install "$REL1"
+  chmod 0755 "$H/.local/bin"
+  if [[ $RC -ne 0 && "$(files_in_home)" == "0" ]] && ! grep -q 'daemon-reload' "$LOG"; then pass; else fail "終了コード $RC、置かれたファイル: $(find "$H" -type f | tr '\n' ' ')"; fi
+fi
+
+# 置く段（mv）で失敗したとき: 置いたものと失敗した箇所を示して非 0 で終わり、一時ファイルを残さず、daemon-reload を呼ばない。
+REAL_MV="$(command -v mv)"
+MVBIN="$WORK/mvbin"
+mkdir -p "$MVBIN"
+cat > "$MVBIN/mv" <<STUB
+#!/usr/bin/env bash
+last="\${!#}"
+case "\$last" in *dev-up@.service) echo "mv: 失敗させる: \$last" >&2; exit 1 ;; esac
+exec "$REAL_MV" "\$@"
+STUB
+chmod +x "$MVBIN/mv"
+
+it "置く段で途中の mv が失敗したら、置いたものと失敗した箇所を示して非 0 で終わり、一時ファイルも daemon-reload も残さない"
+new_home
+PATH="$MVBIN:$PATH" run_install "$REL1"
+if [[ $RC -ne 0 && -f "$(BIN)" && ! -e "$(UNIT)" && ! -e "$(PROJ)" && -z "$(find "$H" -name '.install.*')" ]] \
+   && ! grep -q 'daemon-reload' "$LOG" \
+   && grep -q "ここまでに置いたもの: $(BIN)" "$ERR" && grep -q "置けなかったもの: $(UNIT)" "$ERR"; then
+  pass
+else
+  fail "終了コード $RC、置かれたファイル: $(find "$H" -type f | tr '\n' ' ')、エラー: $(cat "$ERR")"
+fi
+
 # ── 4. --dry-run ──────────────────────────────────────────────────────────────
 
 it "--dry-run は何も書かず（HOME にファイルが増えない）、systemctl も呼ばず、計画を出して 0 で終わる"

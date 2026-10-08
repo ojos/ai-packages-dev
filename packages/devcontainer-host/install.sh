@@ -117,26 +117,74 @@ curl と jq と、sha256sum または shasum が要る。
 EOF
 }
 
-# 一時ファイルへ書いてから mv で置く（途中で切れても、半端なファイルが残らない）。
-# 使い方: place_file <元> <置き先> <モード>
-place_file() {
-  local src="$1" dst="$2" mode="$3" dir tmp
-  dir="$(dirname "$dst")"
-  mkdir -p "$dir" || die "$dir を作れません。"
-  tmp="$(mktemp "$dir/.install.XXXXXX")" || die "$dir に一時ファイルを作れません。"
-  if ! cp "$src" "$tmp" || ! chmod "$mode" "$tmp" || ! mv -f "$tmp" "$dst"; then
-    rm -f "$tmp"
-    die "$dst を置けませんでした。"
+# 置き先の親ディレクトリに書き込めるか（無ければ、いちばん近い既存の祖先を見る）。置く前に、すべての置き場所へ課す。
+# 使い方: check_parent_writable <置き先>
+check_parent_writable() {
+  local dst="$1" d
+  d="$(dirname "$dst")"
+  while [[ ! -e "$d" && "$d" != "/" && "$d" != "." ]]; do d="$(dirname "$d")"; done
+  [[ -d "$d" ]] || die "$dst の親 $d がディレクトリではありません。何も置いていません。"
+  [[ -w "$d" && -x "$d" ]] || die "$dst の親 $d に書き込めません。何も置いていません。"
+}
+
+# 置き先に対する計画の語を返す:
+#   new（無い）/ same（同じ内容で、権限も同じ）/ mode（同じ内容だが、権限が違う）/ update（違う内容）。
+# 使い方: state_of <元> <置き先> <モード>
+state_of() {
+  local src="$1" dst="$2" mode="$3"
+  if [[ ! -e "$dst" ]]; then echo new
+  elif ! cmp -s "$src" "$dst"; then echo update
+  elif [[ -n "$(find "$dst" -maxdepth 0 -perm "$mode" 2>/dev/null)" ]]; then echo same
+  else echo mode
   fi
 }
 
-# 置き先に対する計画の語を返す: new（無い）/ same（同じ内容）/ update（違う内容）。
-state_of() {
-  local src="$1" dst="$2"
-  if [[ ! -e "$dst" ]]; then echo new
-  elif cmp -s "$src" "$dst"; then echo same
-  else echo update
+# 置くものを、置き先と同じディレクトリの一時ファイルへ用意する（まだ置き先には触れない）。
+# 全部を用意してから、最後にまとめて mv する（途中で失敗して一部だけが更新される窓を小さくする）。
+STAGED_TMP=()
+STAGED_DST=()
+STAGED_NOTE=()
+# 使い方: stage_file <元> <置き先> <モード> <置いたあとの表示>
+stage_file() {
+  local src="$1" dst="$2" mode="$3" note="$4" dir tmp
+  dir="$(dirname "$dst")"
+  if ! mkdir -p "$dir"; then discard_staged; die "$dir を作れません。何も置いていません。"; fi
+  if ! tmp="$(mktemp "$dir/.install.XXXXXX")"; then discard_staged; die "$dir に一時ファイルを作れません。何も置いていません。"; fi
+  STAGED_TMP+=("$tmp")
+  STAGED_DST+=("$dst")
+  STAGED_NOTE+=("$note")
+  if ! cp "$src" "$tmp" || ! chmod "$mode" "$tmp"; then
+    discard_staged
+    die "$dst の一時ファイルを用意できませんでした。何も置いていません。"
   fi
+}
+
+discard_staged() {
+  local t
+  for t in ${STAGED_TMP[@]+"${STAGED_TMP[@]}"}; do rm -f "$t"; done
+  STAGED_TMP=()
+}
+
+# 用意した一時ファイルを、順に mv で置く。途中で失敗したら、置いたものと失敗した箇所を示して 1 で止まる。
+commit_staged() {
+  local i n placed=""
+  n=${#STAGED_TMP[@]}
+  i=0
+  while [[ $i -lt $n ]]; do
+    if mv -f "${STAGED_TMP[$i]}" "${STAGED_DST[$i]}"; then
+      placed="$placed ${STAGED_DST[$i]}"
+      echo "[$PROG]   ${STAGED_NOTE[$i]}: ${STAGED_DST[$i]}"
+    else
+      local j=$((i + 1))
+      while [[ $j -lt $n ]]; do rm -f "${STAGED_TMP[$j]}"; j=$((j + 1)); done
+      rm -f "${STAGED_TMP[$i]}"
+      echo "[$PROG] エラー: ${STAGED_DST[$i]} を置けませんでした。" >&2
+      echo "[$PROG]   ここまでに置いたもの:${placed:- なし}" >&2
+      echo "[$PROG]   置けなかったもの: ${STAGED_DST[$i]} 以降。原因を直して、install.sh を再実行してください（冪等です）。" >&2
+      exit 1
+    fi
+    i=$((i + 1))
+  done
 }
 
 IT_TMP=""
@@ -191,6 +239,16 @@ main() {
     die "置き換え先 $unit_path はディレクトリです。何も置いていません。"
   fi
 
+  # projects は、通常のファイル（リンクなら実体が通常のファイル）でなければ、「あるので触らない」にせず止める
+  # （dev は設定ファイルを -f で読むので、ディレクトリやリンク切れでは「設定ファイルがありません」で止まる）。
+  if [[ -e "$projects_path" || -L "$projects_path" ]]; then
+    [[ -f "$projects_path" ]] || die "$projects_path が通常のファイルではありません（ディレクトリ、またはリンク切れ）。dev は設定ファイルとして読めません。何も置いていません。"
+  fi
+  # すべての置き場所を、何かを置く前に検査する。
+  check_parent_writable "$bin_path"
+  check_parent_writable "$unit_path"
+  [[ -e "$projects_path" ]] || check_parent_writable "$projects_path"
+
   IT_TMP="$(mktemp -d "${TMPDIR:-/tmp}/devhost-install.XXXXXX")" || die "作業ディレクトリを作れません。何も置いていません。"
   trap cleanup EXIT
 
@@ -235,8 +293,8 @@ main() {
   grep -q '^ExecStart=.*dev supervise' "$IT_TMP/dev-up@.service" || die "取得した dev-up@.service が devhost のユニットだと確かめられません（ExecStart に dev supervise がありません）。何も置いていません。"
 
   local dev_state unit_state proj_state
-  dev_state="$(state_of "$IT_TMP/dev.sh" "$bin_path")"
-  unit_state="$(state_of "$IT_TMP/dev-up@.service" "$unit_path")"
+  dev_state="$(state_of "$IT_TMP/dev.sh" "$bin_path" 0755)"
+  unit_state="$(state_of "$IT_TMP/dev-up@.service" "$unit_path" 0644)"
   if [[ -e "$projects_path" || -L "$projects_path" ]]; then proj_state=keep; else proj_state=new; fi
 
   describe() { # $1 = 状態の語, $2 = 置き先
@@ -244,6 +302,7 @@ main() {
       new) echo "新規に置く: $2" ;;
       same) echo "すでにこの版（置き換えない）: $2" ;;
       update) echo "新しい版へ置き換える: $2" ;;
+      mode) echo "内容は同じだが権限が違うので、権限を直す: $2" ;;
       keep) echo "あるので触らない（上書きしない）: $2" ;;
     esac
   }
@@ -260,10 +319,19 @@ main() {
   if [[ "$dry_run" -eq 1 ]]; then
     echo "[$PROG] --dry-run のため、何も置いていません。"
   else
-    if [[ "$dev_state" != "same" ]]; then place_file "$IT_TMP/dev.sh" "$bin_path" 0755; fi
-    if [[ "$unit_state" != "same" ]]; then place_file "$IT_TMP/dev-up@.service" "$unit_path" 0644; fi
-    if [[ "$proj_state" == "new" ]]; then place_file "$IT_TMP/projects.example" "$projects_path" 0644; fi
-    echo "[$PROG] 置きました。"
+    # 全部の一時ファイルを用意してから、まとめて置く。
+    local note
+    if [[ "$dev_state" != "same" ]]; then
+      if [[ "$dev_state" == "mode" ]]; then note="権限を直しました"; else note="置きました"; fi
+      stage_file "$IT_TMP/dev.sh" "$bin_path" 0755 "$note"
+    fi
+    if [[ "$unit_state" != "same" ]]; then
+      if [[ "$unit_state" == "mode" ]]; then note="権限を直しました"; else note="置きました"; fi
+      stage_file "$IT_TMP/dev-up@.service" "$unit_path" 0644 "$note"
+    fi
+    if [[ "$proj_state" == "new" ]]; then stage_file "$IT_TMP/projects.example" "$projects_path" 0644 "置きました"; fi
+    commit_staged
+    echo "[$PROG] 置き終えました。"
     if command -v systemctl >/dev/null 2>&1; then
       if systemctl --user daemon-reload; then
         echo "[$PROG] systemctl --user daemon-reload を呼びました。"
