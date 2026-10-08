@@ -26,6 +26,29 @@
 そのため、AI ルールだけが必要な場合は、このパッケージを介さず ai-playbook を直接導入できます。
 このパッケージは devcontainer と対応言語（node / go / python / php / rust / ruby）を前提とするため、それ以外の環境では ai-playbook 側の導入手順を使ってください。
 
+## 3 パッケージの関係
+
+<!-- package-relations:begin -->
+ai-playbook・devcontainer-bootstrap（DCB）・devcontainer-host（devhost）は、それぞれ単体で使えます。DCB を中心に組み合わせると、効果が最大になります。
+
+| パッケージ | 単体での用途 | 配布先 |
+|---|---|---|
+| ai-playbook | AI 運用の規範（ルール）だけを、プロジェクトへ入れる | ojos/ai-playbook |
+| DCB | プロジェクトの devcontainer を 1 コマンドで生成する | ojos/devcontainer-bootstrap |
+| devhost | 任意の `devcontainer.json` を持つプロジェクトを、SSH で届く外部の機械で常駐させる | ojos/devcontainer-host |
+
+**DCB が中心です。** DCB は、ほかの 2 つが着地する場所（プロジェクトの devcontainer）を作ります。ai-playbook の規範はその中に置かれ（DCB が配布機構で、正本は ai-playbook です）、devhost はそのコンテナを外部の機械で動かし続けます。
+
+- **DCB と ai-playbook**: DCB の `--with-playbook` が、生成先のプロジェクトへ規範を配置します。DCB は規範の内容を持ちません。
+- **DCB と devhost**: DCB の生成物には、devhost が前提にする、または助かるもの（tmux、compose の `init: true`、codex のサンドボックスの設定、UID の合わせ込み）が入っています。devhost は DCB の生成物でなくても使えますが、DCB の生成物ならこれらが最初から揃います。理由と意味は devhost の README の「DCB と一緒に使うと揃うもの」にあります。
+- **ai-playbook と devhost**: 今は直接の関係がありません。
+
+**入れ方は 2 段です。** 置く場所と単位が違うため、DCB のオプションでは devhost は入りません（DCB は外部の機械のようなホスト側を扱いません）。
+
+1. プロジェクトごとに、プロジェクトの中へ DCB で devcontainer（と、必要なら規範）を生成する。
+2. 外部の機械ごとに、外部の機械のホームへ devhost を入れ、設定ファイル（`projects`）にそのプロジェクトを 1 行足す。
+<!-- package-relations:end -->
+
 ## 実行前提コマンド
 
 `bootstrap.sh` は起動直後に次のコマンドの実在を検査し、**1 つでも欠けていればファイルを 1 つも書かずにエラー終了**します（`error: required command not found: <cmd>`）。
@@ -171,12 +194,13 @@ jq -r '.checksums | to_entries[] | "\(.value)  \(.key)"' RELEASE-MANIFEST.json |
   && mkdir -p dcb && tar -xzf PACKAGE_ARCHIVE.tar.gz -C dcb && ls dcb/
 ```
 
-### devhost — 外部の機械で devcontainer を保つ道具
+### devhost — DCB で作った devcontainer を外部の機械で常駐させる道具
 
-SSH で届く外部の機械（自宅のラップトップ、社内のサーバーなど）の上で devcontainer を起動したまま保ち、
+DCB で作った devcontainer を、SSH で届く外部の機械（自宅のラップトップ、社内のサーバーなど）の上で起動したまま保ち、
 スマホやほかの端末から入って AI コーディングを続けるための道具一式（コマンド `dev`）です。
+生成物には、devhost が前提にする、または助かるもの（tmux、compose の `init: true` など）が入っています。関係の全体は上の「3 パッケージの関係」を参照してください。
 **DCB のリリースには同梱していません。** 独自の版を持つ公開リポジトリ `ojos/devcontainer-host` のリリースで配っています。
-入手の手順（マニフェストのハッシュの照合を含む）と使い方は、そのリポジトリの README を参照してください。
+外部の機械への導入の手順（マニフェストのハッシュの照合を含む）と使い方は、そのリポジトリの README の「外部の機械への導入」を参照してください。
 
 以前の DCB のリリース（v0.14.0〜v0.17.0）は `PACKAGE_ARCHIVE.tar.gz` の `devhost/` に同梱していました。
 その `dev` の `dev self-update` は更新できなくなり、何も置き換えずに止まります。**手で 1 度だけ入れ直してください**
