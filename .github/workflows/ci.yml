@@ -96,7 +96,7 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Run selftest
-        run: bash packages/devhost/selftest.sh
+        run: bash packages/devcontainer-host/selftest.sh
 
   consistency:
     name: Docs and catalog consistency

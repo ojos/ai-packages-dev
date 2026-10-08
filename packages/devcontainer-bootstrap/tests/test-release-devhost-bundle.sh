@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# devhost（packages/devhost/.）が DCB の配布ツリーと PACKAGE_ARCHIVE.tar.gz に
+# devhost（packages/devcontainer-host/.）が DCB の配布ツリーと PACKAGE_ARCHIVE.tar.gz に
 # サブディレクトリ構造（devhost/termux/）を保ったまま含まれることを検証する（#376）。
 #
 # devhost は複数ファイル・階層を持つため、既存の SHA256SUMS の対象
@@ -41,14 +41,14 @@ assert_file_exists "$rel/devhost/dev.sh"
 it "配布ツリーに devhost のサブディレクトリ（termux/）が保たれる"
 assert_file_exists "$rel/devhost/termux/shortcut.example"
 
-it "packages/devhost/ で追跡しているファイルがすべて配布ツリーに入る"
-# DCB_DISTRIBUTED_FILES はファイルを 1 つずつ列挙するので、packages/devhost/ に
+it "packages/devcontainer-host/ で追跡しているファイルがすべて配布ツリーに入る"
+# DCB_DISTRIBUTED_FILES はファイルを 1 つずつ列挙するので、packages/devcontainer-host/ に
 # ファイルを足して一覧への追加を忘れると、黙って配布から漏れる。ここで捕まえる。
 missing=""
 while IFS= read -r f; do
   [[ -n "$f" ]] || continue
-  [[ -f "$rel/devhost/${f#packages/devhost/}" ]] || missing="${missing} ${f}"
-done < <(git -C "$REPO_ROOT" ls-files packages/devhost)
+  [[ -f "$rel/devhost/${f#packages/devcontainer-host/}" ]] || missing="${missing} ${f}"
+done < <(git -C "$REPO_ROOT" ls-files packages/devcontainer-host)
 if [[ -z "$missing" ]]; then
   pass
 else
@@ -90,7 +90,7 @@ if [[ -f "$rel/PACKAGE_ARCHIVE.tar.gz" ]] \
 else
   fail "tar -xzf PACKAGE_ARCHIVE.tar.gz ./devhost で devhost を取り出せない"
 fi
-for readme in "$PKG_DIR/README.md" "$REPO_ROOT/packages/devhost/README.md"; do
+for readme in "$PKG_DIR/README.md" "$REPO_ROOT/packages/devcontainer-host/README.md"; do
   if grep -qE 'tar -xzf PACKAGE_ARCHIVE\.tar\.gz devhost/?$' "$readme"; then
     fail "$readme が ./ の無い指定（devhost/）で取り出している"
   fi
