@@ -88,7 +88,7 @@ bash "$d/bootstrap.sh" --project-name myapp --output-dir "$PWD/myapp" \
 >
 > `SHA256SUMS` はスクリプトと同じリリースから同じ経路で取得します。**リリースを書き換えられる立場なら、スクリプトと `SHA256SUMS` の両方を同時に差し替えられます。**
 >
-> 現在のリリースは署名されていません。**この手順は、リリース自体の改ざんには対抗しません。** 取得元のタグを固定し、公開リポジトリのリリース履歴を信頼できる範囲で使ってください。
+> **この手順だけでは、リリース自体の改ざんには対抗しません。** リリースには artifact attestation が付いており、任意で検証できます（[任意: 署名の検証](#任意-署名の検証artifact-attestation)。GitHub CLI が要ります）。これを検証しない場合は、リリースの書き換えを防げません。取得元のタグを固定し、公開リポジトリのリリース履歴を信頼できる範囲で使ってください。
 
 AI 共通ルールも配置する場合は、ルールの取得元を指定します。一時ディレクトリから実行すると隣接チェックアウトが存在しないため、`--playbook-version` または `--playbook-from` が必要です（[AI 共通ルールの配置](#ai-共通ルールの配置)）。
 
@@ -145,7 +145,8 @@ grep -E ' (bootstrap|doctor)\.sh$' SHA256SUMS | $sha256c -c -
 **どの検証が何を保証するか**は次のとおりです。
 
 - この 2 段（マニフェスト → `SHA256SUMS` → 各ファイル）が検出するのは、取得の破損と、公開物どうしの食い違いです。マニフェストも `SHA256SUMS` と同じ経路で取得するため、リリースを書き換えられる立場なら両方を揃えて差し替えられます。
-- 後述の attestation が保証するのは、`SHA256SUMS` 1 つです。`SHA256SUMS` が `bootstrap.sh` / `doctor.sh` / `PACKAGE_ARCHIVE.tar.gz` のハッシュを持つので、attestation の検証に続けて `SHA256SUMS` と取得物を照合すれば、この 3 つまで辿れます。**`RELEASE-MANIFEST.json` と `CHANGELOG.md` などアーカイブの外の資産は、attestation の保証に入りません。**
+- 後述の attestation が保証するのは、`SHA256SUMS` 1 つです。`SHA256SUMS` が `bootstrap.sh` / `doctor.sh` / `PACKAGE_ARCHIVE.tar.gz` のハッシュを持つので、attestation の検証に続けて `SHA256SUMS` と取得物を照合すれば、この 3 つと、アーカイブの中身（`CHANGELOG.md` や README など）まで辿れます。**個別の資産として添付される `RELEASE-MANIFEST.json` は `SHA256SUMS` に載らないため、attestation の保証に入りません**（アーカイブの中の `CHANGELOG.md` は保証の範囲内で、アーカイブの外に個別に添付されたものがあれば範囲外です）。
+- **`PACKAGE_ARCHIVE.tar.gz` が `SHA256SUMS` に載るのは、この変更を含むリリースからです。** それより前の版（v0.17.0 まで）の `SHA256SUMS` には、アーカイブの行がありません。その場合、`SHA256SUMS` の照合（下の 2 行目）はアーカイブを確かめず、attestation もアーカイブには及びません。アーカイブはマニフェストのハッシュ（1 行目）だけで確かめることになり、マニフェストも attestation の保証外です。古い版のアーカイブを attestation の保証つきで使うことはできないので、保証が要るときは、アーカイブの行がある版を使ってください（`grep PACKAGE_ARCHIVE.tar.gz SHA256SUMS` で行の有無を確かめられます）。
 
 照合と展開は `&&` でつなぎ、照合に失敗したら展開しません（行を分けると、失敗しても次の行が走ります）。
 
@@ -163,10 +164,11 @@ if command -v sha256sum >/dev/null 2>&1; then sha256c="sha256sum"; else sha256c=
 
 # 1. マニフェストが記録したハッシュと実物を突き合わせる
 # 2. 検証したいスクリプトとアーカイブを SHA256SUMS で検証する
-# 3. 展開する（1 と 2 の両方が通ったときだけ）。アーカイブの中身はリポジトリのルートそのものなので、専用のディレクトリへ展開する
+# 3. 展開する（1 と 2 の両方が通ったときだけ）。アーカイブの中身はリポジトリのルートそのものなので、専用のディレクトリへ展開する。
+#    再実行できるよう mkdir -p を使う。前回の展開物が残っていれば上書きされるが、新しい版で消えたファイルは残るので、版を変えるときは dcb/ を消してから実行する
 jq -r '.checksums | to_entries[] | "\(.value)  \(.key)"' RELEASE-MANIFEST.json | $sha256c -c - \
   && $sha256c -c SHA256SUMS \
-  && mkdir dcb && tar -xzf PACKAGE_ARCHIVE.tar.gz -C dcb && ls dcb/
+  && mkdir -p dcb && tar -xzf PACKAGE_ARCHIVE.tar.gz -C dcb && ls dcb/
 ```
 
 ### devhost — 外部の機械で devcontainer を保つ道具
@@ -184,7 +186,7 @@ SSH で届く外部の機械（自宅のラップトップ、社内のサーバ�
 
 **この手順は任意です。** 上の 2 段の検証は `curl` とチェックサム実装（`sha256sum` か `shasum -a 256`）だけで閉じていますが、こちらは [GitHub CLI](https://cli.github.com/) が要ります。
 
-リリースの `SHA256SUMS` には、GitHub Actions が発行した **artifact attestation**（SLSA provenance）が付いています。attestation の対象は `SHA256SUMS` 1 つで、`SHA256SUMS` が `bootstrap.sh` / `doctor.sh` / `PACKAGE_ARCHIVE.tar.gz` のハッシュを持ちます。**attestation の検証に続けて、上の手順で `SHA256SUMS` と取得物を照合してください**（attestation だけでは取得物までは確かめられません）。
+リリースの `SHA256SUMS` には、GitHub Actions が発行した **artifact attestation**（SLSA provenance）が付いています。attestation の対象は `SHA256SUMS` 1 つで、`SHA256SUMS` が `bootstrap.sh` / `doctor.sh` / `PACKAGE_ARCHIVE.tar.gz` のハッシュを持ちます（アーカイブの行は、この変更を含むリリースから。それより前の版では、attestation はスクリプトの 2 つまでしか及びません）。**attestation の検証に続けて、上の手順で `SHA256SUMS` と取得物を照合してください**（attestation だけでは取得物までは確かめられません）。
 
 ```bash
 # 取得元の owner を BASE から取り出す（固有名を手で書かない）

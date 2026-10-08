@@ -206,7 +206,7 @@ validate_host_docs() {
     echo "error: devcontainer-host README.md の取得手順の TAG= の行が $tag と一致しません" >&2
     exit 1
   fi
-  lines="$(grep -oE -- '--version v[0-9][0-9A-Za-z.+-]*' "$readme" | sed 's/^--version //' || true)"
+  lines="$(grep -oE -- '--version v[0-9][0-9A-Za-z.+-]*' "$readme" | sed 's/^--version //; s/[.]*$//' || true)"
   bad="$(printf '%s\n' "$lines" | grep -v '^$' | grep -Evx -- "$tag_re" || true)"
   if [[ -z "$lines" || -n "$bad" ]]; then
     echo "error: devcontainer-host README.md の self-update の例（--version の行）が $tag と一致しません" >&2

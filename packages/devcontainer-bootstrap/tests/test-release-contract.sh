@@ -322,9 +322,9 @@ extract_block() { # $1 = ファイル, $2 = needle
   ' "$1"
 }
 
-BLOCK="$(extract_block "$DCB_README" 'mkdir dcb && tar')"
+BLOCK="$(extract_block "$DCB_README" 'mkdir -p dcb && tar')"
 it "README の照合と展開の手順（&& でつないだ block）を抜き出せる"
-if [[ -n "$BLOCK" ]]; then pass; else fail "README に 'mkdir dcb && tar' を含むコードブロックが無い"; fi
+if [[ -n "$BLOCK" ]]; then pass; else fail "README に 'mkdir -p dcb && tar' を含むコードブロックが無い"; fi
 
 # 偽の curl: URL 末尾のファイル名で $FAKE_REL_DIR のファイルを写す（ネットワークには出ない）。
 stubbin="$(new_workdir)/bin"
@@ -341,9 +341,9 @@ chmod +x "$stubbin/curl"
 
 # README の block を、偽の curl と作業ディレクトリで実行する。$1 = リリース資産のディレクトリ。
 run_block() {
-  local reldir="$1" work
+  local reldir="$1" code="${2:-$BLOCK}" work
   work="$(new_workdir)"
-  ( cd "$work" && PATH="$stubbin:$PATH" FAKE_REL_DIR="$reldir" bash -c "$BLOCK" >/dev/null 2>&1 )
+  ( cd "$work" && PATH="$stubbin:$PATH" FAKE_REL_DIR="$reldir" bash -c "$code" >/dev/null 2>&1 )
   RUN_RC=$?
   RUN_WORK="$work"
 }
@@ -352,6 +352,15 @@ it "正しい資産では、照合が通り展開される（対照群）"
 if [[ -n "$BLOCK" && -f "$rel/RELEASE-MANIFEST.json" ]]; then
   run_block "$rel"
   if [[ $RUN_RC -eq 0 && -f "$RUN_WORK/dcb/bootstrap.sh" ]]; then pass; else fail "終了コード $RUN_RC、展開: $(ls "$RUN_WORK" 2>&1 | tr '\n' ' ')"; fi
+else
+  fail "block またはマニフェストが無い"
+fi
+
+it "同じ場所で 2 回実行しても、照合が通れば成功する（mkdir の失敗が照合の失敗に見えない）"
+if [[ -n "$BLOCK" && -f "$rel/RELEASE-MANIFEST.json" ]]; then
+  run_block "$rel" "$BLOCK
+$BLOCK"
+  if [[ $RUN_RC -eq 0 && -f "$RUN_WORK/dcb/bootstrap.sh" ]]; then pass; else fail "2 回目で失敗した（rc=$RUN_RC）"; fi
 else
   fail "block またはマニフェストが無い"
 fi

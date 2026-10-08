@@ -291,6 +291,9 @@ check_docs $'  TAG=v0.1.0\n`--version v0.1.0`' && bad="$bad TAG= が行頭でな
 check_docs $'TAG=v0.1.0\nTAG=v0.0.9\n`--version v0.1.0`' && bad="$bad 古い TAG= の行が残っている"
 check_docs $'TAG=v0.1.0\n`--version v0.0.9`' && bad="$bad --version の例が古い"
 check_docs $'TAG=v0.1.0\n`--version v0.0.9` と `--version v0.1.0`' && bad="$bad 古い --version の例が混ざっている"
+check_docs $'TAG=v0.1.0\n文末の例は `--version v0.1.0`.' || bad="$bad 文末の句点を版に含めた"
+check_docs $'TAG=v0.1.0\n例は --version v0.1.0. です' || bad="$bad 句点つきの版を落とした"
+check_docs $'TAG=v0.1.0\n例は --version v0.1.0.1.' && bad="$bad v0.1.0.1 を通した"
 check_docs $'TAG=v0.1.0\n--version の例は無い' && bad="$bad --version の例が無い"
 check_docs $'説明だけ\n`--version v0.1.0`' && bad="$bad TAG= の行が無い"
 if [[ -z "$bad" ]]; then pass; else fail "照合の対象が期待と違う:$bad"; fi
@@ -306,7 +309,7 @@ extract_block() { # $1 = ファイル, $2 = needle
     inb { buf = buf $0 "\n"; if (index($0, n)) hit = 1 }
   ' "$1"
 }
-BLOCK_ARCHIVE="$(extract_block "$HOST_README" 'mkdir devhost')"
+BLOCK_ARCHIVE="$(extract_block "$HOST_README" 'mkdir -p devhost')"
 BLOCK_DEVSH="$(extract_block "$HOST_README" '-o dev.sh')"
 
 # 偽の curl: URL 末尾のファイル名で $FAKE_REL_DIR のファイルを写す（ネットワークには出ない）。
@@ -343,6 +346,11 @@ if [[ $ok_a -eq 0 && -f "$dir_a/devhost/dev.sh" && $RUN_RC -eq 0 && -f "$RUN_WOR
 else
   fail "正しい資産で失敗した（アーカイブ rc=$ok_a / dev.sh rc=$RUN_RC）"
 fi
+
+it "同じ場所で 2 回実行しても、照合が通れば成功する（mkdir の失敗が照合の失敗に見えない）"
+run_readme_code "$rel" "$BLOCK_ARCHIVE
+$BLOCK_ARCHIVE"
+if [[ $RUN_RC -eq 0 && -f "$RUN_WORK/devhost/dev.sh" ]]; then pass; else fail "2 回目で失敗した（rc=$RUN_RC）"; fi
 
 it "アーカイブのハッシュが食い違うと、展開されず非 0 で終わる"
 bad_rel="$WORK/bad-archive"

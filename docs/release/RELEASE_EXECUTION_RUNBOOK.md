@@ -72,6 +72,8 @@ workflow は認証と identity をリポジトリ設定から解決する。値�
 
 **attest ステップは `gh release create` の後に走る。** attestation API の一時障害でそこだけが失敗すると、**attestation の無いリリースが公開されたまま残る。** 同じ版での再実行は preflight が拒否するため（公開済みバージョンは不変）、`release.yml` では修復できない。
 
+**公開されたのに印が書かれない場合も、同じ手順で復旧する。** `gh release create` が公開に成功したあとに 0 以外で終わると（`tag_and_release` の後段の失敗など）、`mark_attest_published` に到達せず、印が書かれないので attestation が付かない（印の導入前は digest だけで発行されていた）。見分け方は、リリースが公開されている（`gh release view <tag> --repo <owner>/<repo>` が成功する）のに、`gh attestation verify SHA256SUMS --owner <owner>` が失敗する、または release.yml の「Read the attestation subjects」のログに「発行を飛ばします」が出ていること。この場合も下の `attest-recover.yml` で発行し直す（挙動は変えていない）。
+
 **`attest-recover.yml` を使う**（`workflow_dispatch` のみ）。attestation は digest だけを対象にできるので、資産を作り直さずに後から発行できる。
 
 ```bash
