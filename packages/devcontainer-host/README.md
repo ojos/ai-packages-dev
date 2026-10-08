@@ -49,13 +49,56 @@ AppArmor だけを外しても、seccomp が先に止めるので動きません
 
 ## 外部の機械への導入
 
+### install.sh で入れる
+
+`install.sh` が、取得・照合・`dev` の設置・ユニットの設置までを 1 つにまとめています。
+**取得した `install.sh` は、照合してから実行してください。** `curl ... | bash` の形は勧めません（照合を挟めないため）。
+マニフェストと `install.sh` を取得し、`install.sh` のハッシュをマニフェストと照合して、通ったときだけ実行します。
+
+```bash
+TAG=v0.1.0   # devcontainer-host の最新安定リリース
+BASE="https://github.com/ojos/devcontainer-host/releases/download/${TAG}"
+
+curl -fsSL "${BASE}/RELEASE-MANIFEST.json" -o RELEASE-MANIFEST.json
+curl -fsSL "${BASE}/install.sh" -o install.sh
+
+# sha256sum は GNU coreutils のコマンドで、macOS には無い。shasum へ分岐する。
+if command -v sha256sum >/dev/null 2>&1; then sha256c="sha256sum"; else sha256c="shasum -a 256"; fi
+# 照合と実行を && でつなぐ。照合に失敗したら実行しない（行を分けると、失敗しても次の行が走る）。
+jq -r '.checksums["install.sh"] + "  install.sh"' RELEASE-MANIFEST.json | $sha256c -c - \
+  && bash install.sh --version "${TAG}"
+```
+
+`bash install.sh --dry-run` は、何も書かずに計画だけを出します（取得と照合は行います）。`--version` を省くと最新を入れます。
+`install.sh` がすることは次のとおりです。
+
+1. 同じ版の `RELEASE-MANIFEST.json`・`dev.sh`・`dev-up@.service`・`projects.example` を取得し、マニフェストの `checksums` と照合します。
+   **1 つでも食い違えば、何も置かずに非 0 で止まります。** `dev.sh` は devhost の `dev.sh` の形か（1 行目が bash の shebang、2 行目が `# dev — ` で始まる）と構文も確かめます。
+2. `dev` を `~/.local/bin/dev` へ**写しで**置きます。置き換え先がリンク・ディレクトリ・git で追跡されているファイル・devhost の `dev.sh` でないファイルなら、
+   `dev self-update` と同じく置き換えずに止まります。
+3. `dev-up@.service` を `~/.config/systemd/user/` へ置き、`systemctl --user daemon-reload` を呼びます。
+4. `~/.config/dev/projects` が無ければ `projects.example` から作ります。**あれば決して上書きしません。**
+5. devcontainer CLI・docker・systemd の有無を確かめ、足りないものを案内します。**自動では入れません。**
+   `loginctl enable-linger` と、プロジェクトごとの `systemctl --user enable --now dev-up@<名前>.service` も、案内だけです
+   （`sudo` が要る・どのプロジェクトを常駐させるかは利用者が決めるため）。
+
+再実行しても壊れません（冪等）。新しい版なら、`dev` とユニットのファイルを更新します。
+すでに動いているユニットは、起こし直すまで古い `dev` のまま動くので、`dev restart <名前>` などで起こし直します。
+`dev self-update` は `dev` だけを更新し、ユニットのファイルが古いときは `install.sh` の再実行を案内します
+（「dev を置く」と `dev self-update` の説明を参照）。
+
+この取得の手順は、マニフェストと `install.sh` を同じ取得元から取ります。取得元ごと差し替えられた場合まで防ぐには、
+次の「devhost を入手する」の attestation の検証を先に通してください。
+
+以降の「devhost を入手する」「devcontainer CLI を入れる」「dev を置く」「ユニットを入れる」は、`install.sh` を使わずに**手で入れる**手順です。
+
 ### devhost を入手する
 
 devhost は、独自の版を持つ公開リポジトリ `ojos/devcontainer-host` のリリースで配られます
 （以前は devcontainer-bootstrap（DCB）のリリースに同梱していましたが、同梱は外しました）。
 各リリースには `RELEASE-MANIFEST.json`・`SHA256SUMS`・`PACKAGE_ARCHIVE.tar.gz`（このリポジトリのツリー一式）に加えて、
-`dev.sh` と `dev-up@.service` が個別の資産として付きます。`RELEASE-MANIFEST.json` の `checksums` が
-`PACKAGE_ARCHIVE.tar.gz` / `SHA256SUMS` / `dev.sh` / `dev-up@.service` のハッシュを持つので、取得したものを照合してから使います。
+`dev.sh`・`dev-up@.service`・`install.sh`・`projects.example` が個別の資産として付きます。`RELEASE-MANIFEST.json` の `checksums` が
+`PACKAGE_ARCHIVE.tar.gz` / `SHA256SUMS` / `dev.sh` / `dev-up@.service` / `install.sh` / `projects.example` のハッシュを持つので、取得したものを照合してから使います。
 
 ```bash
 TAG=v0.1.0   # devcontainer-host の最新安定リリース
@@ -87,7 +130,7 @@ jq -r '.checksums["dev.sh"] + "  dev.sh"' RELEASE-MANIFEST.json | $sha256c -c - 
 ```
 
 リリースの `SHA256SUMS` には、GitHub Actions が発行した artifact attestation（SLSA provenance）が付いています
-（任意の検証。[GitHub CLI](https://cli.github.com/) が要ります）。`SHA256SUMS` は `dev.sh`・`dev-up@.service`・`PACKAGE_ARCHIVE.tar.gz` のハッシュを持ちます。
+（任意の検証。[GitHub CLI](https://cli.github.com/) が要ります）。`SHA256SUMS` は `dev.sh`・`dev-up@.service`・`install.sh`・`projects.example`・`PACKAGE_ARCHIVE.tar.gz` のハッシュを持ちます。
 **attestation が保証するのは `SHA256SUMS` 自身だけです。** 取得したファイルまで辿るには、attestation の検証に続けて `SHA256SUMS` と取得物を照合します（`RELEASE-MANIFEST.json` だけの照合では、マニフェストごと差し替えられた場合を検出できません）。
 **成功しても何も表示されません。判定は終了コードで行ってください**（0 = 成功、非 0 = 失敗）。
 
@@ -98,7 +141,7 @@ if gh attestation verify SHA256SUMS --owner "$OWNER"; then echo "attestation: ok
 
 # 検証済みの SHA256SUMS と、取得したものだけを照合する（取得していないファイルは飛ばす。
 # 全行を渡すと、取得していない dev.sh などが無いことで落ちる）
-for f in PACKAGE_ARCHIVE.tar.gz dev.sh dev-up@.service; do
+for f in PACKAGE_ARCHIVE.tar.gz dev.sh dev-up@.service install.sh projects.example; do
   [ -f "$f" ] || continue
   awk -v f="$f" '$2 == f' SHA256SUMS | $sha256c -c - || { echo "$f: 照合に失敗しました" >&2; exit 1; }
 done
@@ -143,7 +186,9 @@ cp devhost/projects.example ~/.config/dev/projects   # 名前と絶対パスを�
 `dev self-update` を使います。`dev self-update` は上の「devhost を入手する」と同じ照合（マニフェストの
 ハッシュの照合）を通してから、`dev.sh` だけを置き換えます（既定は最新、`--version v0.1.0` で固定）。
 置き換え先が devhost の `dev.sh` だと確かめられないとき（リンク、別の道具など）は、何も置き換えずに止まります。
-`dev-up@.service` と `projects` は更新しません（ユニットを更新したときは「ユニットを入れる」の `install` を打ち直します）。
+ユニットのファイルと `projects` は書き換えません。更新のあとに、置いてあるユニットのファイルを同じリリースの
+`dev-up@.service` と比べ、違えば `install.sh` の再実行（または「ユニットを入れる」の `install` の打ち直し）を案内します。
+動いているユニットは、起こし直すまで古い `dev` のまま動くので、`dev restart <名前>` などで起こし直します。
 
 ### ユニットを入れる
 
@@ -475,14 +520,20 @@ dev self-update — dev 自身を、devcontainer-host の公開リリースの�
   dev self-update [--version <vX.Y.Z>]
 
 呼ぶ順序:
-  1. 置き換え先（この dev）が、リンクでも git の作業ツリーの中でもなく、devhost の dev.sh であることを
+  1. 置き換え先（この dev）が、リンクでもディレクトリでも git で追跡されているファイルでもなく、devhost の dev.sh であることを
      確かめる（1 行目が bash の shebang、2 行目が「# dev — 」で始まる）
   2. 公開リリースから RELEASE-MANIFEST.json を取得する（既定は最新。--version でその版に固定する）
   3. マニフェストの checksums に記録された dev.sh の SHA-256 を読み、同じリリースの dev.sh を取得して照合する
   4. 取得した dev.sh が 1 と同じ形（bash の shebang と「# dev — 」）であることと、構文を確かめる
   5. 同じディレクトリの一時ファイルへ写し、mv で置き換える
-どれか 1 つでも外れたら、何も置き換えずに 1 で止まる。手動の入手（README の「devhost を入手する」）と
-同じ照合。dev.sh だけを置き換える（dev-up@.service や設定ファイルには触らない）。
+  6. 置いてあるユニットのファイル（~/.config/systemd/user/dev-up@.service）を、同じリリースのマニフェストの
+     checksums の dev-up@.service と比べる。違えば、install.sh を再実行してユニットを更新するよう案内する
+     （ユニットのファイルを置いていない、マニフェストにハッシュが無いときは何も言わない）
+  7. 置き換えたあと、動いているユニットは起こし直すまで古い dev のまま動き続けることを案内する
+     （dev restart <名前>、または systemctl --user restart dev-up@<名前>.service）
+どれか 1 つでも外れたら（1〜5）、何も置き換えずに 1 で止まる。手動の入手（README の「devhost を入手する」）と
+同じ照合。dev.sh だけを置き換える。**ユニットのファイルや設定ファイルは書き換えない**（6 は差の案内だけで、
+更新は install.sh の再実行に任せる）。
 curl と jq と、sha256sum または shasum が要る。
 
 オプション:

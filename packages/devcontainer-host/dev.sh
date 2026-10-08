@@ -625,6 +625,8 @@ RELEASE_BASE_URL="https://github.com/ojos/devcontainer-host/releases"
 # 置き換え先（いま置いてある dev）と、取得した新しい dev の両方に課す（取得物は、ハッシュの照合と
 # 構文の検査に加えて、sh や無関係なスクリプトを dev として置かないための確かめ）。
 SELF_HEADER_PREFIX='# dev — '
+# 版（vX.Y.Z）の形。--version の値とマニフェストの版に課す（URL の一部になるため）。
+SEMVER_RE='^v[0-9]+\.[0-9]+\.[0-9]+([-+.][0-9A-Za-z.-]+)?$'
 
 # ファイルの先頭 2 行が devhost の dev.sh のものであること。
 is_devhost_dev_sh() {
@@ -648,22 +650,63 @@ sha256_of() {
   fi
 }
 
-# パスの祖先に .git（ディレクトリでもファイルでも）があれば git の作業ツリーの中。git が無い機械でも
-# 判定できるよう、git コマンドでなく祖先の探索で見る。リポジトリのチェックアウトの packages/devcontainer-host/dev.sh や、
-# 展開しただけのリリースのディレクトリ（リポジトリの中にある場合）を、置き換え先にしないため。
-in_git_worktree() {
-  local d
-  d="$(cd "$(dirname "$1")" && pwd -P)" || return 1
-  while :; do
-    [[ -e "$d/.git" ]] && return 0
-    [[ "$d" == "/" ]] && return 1
-    d="${d%/*}"
-    [[ -n "$d" ]] || d="/"
-  done
+# ファイルが git で追跡されているか。git が無い機械では、追跡されていないとみなす。
+# リポジトリのチェックアウトの packages/devcontainer-host/dev.sh を、置き換え先にしないため。
+# 「祖先に .git がある」では判定しない（ホームを ~/.git で管理している機械で、置いた dev まで拒んでしまう）。
+is_git_tracked() {
+  local f="$1" d
+  command -v git >/dev/null 2>&1 || return 1
+  d="$(cd "$(dirname "$f")" && pwd -P)" || return 1
+  git -C "$d" ls-files --error-unmatch -- "${f##*/}" >/dev/null 2>&1
+}
+
+# 置き換え先の dev を書き換えてよいか。だめなら理由を標準出力へ出して 1 を返す（呼び出し側が「何も置いていない」を添えて止まる）。
+# リンク（先を書き換えない）・ディレクトリ・git で追跡されているファイル・devhost の dev.sh でないもの、のいずれかなら拒む。
+dev_target_refusal() {
+  local p="$1"
+  if [[ -L "$p" ]]; then
+    echo "置き換え先 $p はリンクです。リンクの先は書き換えません（README.md の「dev を置く」のとおり、写しで置いてください）。"
+    return 1
+  fi
+  if [[ -d "$p" ]]; then
+    echo "置き換え先 $p はディレクトリです。"
+    return 1
+  fi
+  if is_git_tracked "$p"; then
+    echo "置き換え先 $p は git で追跡されているファイルです（リポジトリのチェックアウトの dev.sh は書き換えません。~/.local/bin/dev などへ写して置いたものを更新してください）。"
+    return 1
+  fi
+  if ! is_devhost_dev_sh "$p"; then
+    echo "置き換え先 $p が devhost の dev.sh だと確かめられません（1 行目が bash の shebang、2 行目が「# dev — 」で始まる形ではない、または読めない）。"
+    return 1
+  fi
+  return 0
 }
 
 SU_TMP=""
 su_cleanup() { [[ -z "$SU_TMP" ]] || rm -rf "$SU_TMP"; }
+
+# 置いてあるユニットのファイルを、同じリリースの dev-up@.service と比べ、違えば install.sh の再実行を案内する。
+# **ユニットは書き換えない**（差の検出と案内だけ。書き換えは install.sh の再実行に任せる）。
+# 比べる相手は、マニフェストの checksums["dev-up@.service"]（照合済みの dev.sh と同じリリースのマニフェスト）。
+# ユニットを置いていない機械（手動で使う）、マニフェストにハッシュが無い版では何も言わない。
+# 案内が出せなくても self-update 自体は失敗させない（dev.sh の置き換えはもう済んでいる）。
+# 使い方: su_check_unit <マニフェスト> <リリースの版> <指定した版（--version を付けなかったときは空）>
+su_check_unit() {
+  local manifest="$1" ver="$2" pin="${3:-}" unit want got
+  unit="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/dev-up@.service"
+  [[ -f "$unit" ]] || return 0
+  want="$(jq -r '.checksums["dev-up@.service"] // empty' "$manifest" 2>/dev/null)" || return 0
+  [[ "$want" =~ ^[0-9a-f]{64}$ ]] || return 0
+  got="$(sha256_of "$unit")" || {
+    echo "[$PROG] 警告: $unit のハッシュを計算できないので、リリースのユニットとは比べていません。" >&2
+    return 0
+  }
+  if [[ "$got" != "$want" ]]; then
+    echo "[$PROG] 置いてあるユニット（$unit）が、リリース${ver:+（$ver）}の dev-up@.service と違います。"
+    echo "[$PROG]   install.sh を再実行してユニットを更新してください${pin:+（bash install.sh --version $pin）}（README.md の「install.sh で入れる」。self-update はユニットを書き換えません）。"
+  fi
+}
 
 # dev 自身を、devcontainer-host の公開リリースの dev.sh へ置き換える。
 # 手順は README.md の手動の入手と同じ: RELEASE-MANIFEST.json と dev.sh を取得し、
@@ -678,7 +721,7 @@ cmd_self_update() {
     a="$1"
     case "$a" in
       --version)
-        [[ $# -ge 2 ]] || usage_error "--version には版が要ります（使い方: dev self-update [--version <vX.Y.Z>]）"
+        [[ $# -ge 2 && -n "$2" ]] || usage_error "--version には版が要ります（空は不可。使い方: dev self-update [--version <vX.Y.Z>]）"
         version="$2"
         shift
         ;;
@@ -686,12 +729,12 @@ cmd_self_update() {
     esac
     shift
   done
-  if [[ -n "$version" && ! "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-+.][0-9A-Za-z.-]+)?$ ]]; then
+  if [[ -n "$version" && ! "$version" =~ $SEMVER_RE ]]; then
     usage_error "版は vX.Y.Z の形で指定します（URL の一部になるため）: $version"
   fi
   need curl "curl を入れてください。"
   need jq "jq を入れてください（マニフェストを読む。README.md の手動の入手と同じ）。"
-  local base self selfdir
+  local base self selfdir mver=""
   # 最新のとき、マニフェストだけを latest から取り、そこに書かれた版で dev.sh を取る
   # （latest を 2 回引くと、間にリリースが出たときに、別の版のマニフェストと dev.sh を組み合わせうる）。
   local mbase
@@ -701,9 +744,12 @@ cmd_self_update() {
   # 置き換え先。写しとして置いた dev（~/.local/bin/dev）自身。リンクは辿らず、止まる
   # （リンク先のリポジトリの道具を、黙って書き換えないため）。
   self="${DEV_SELF_PATH:-${BASH_SOURCE[0]}}"
-  [[ ! -L "$self" ]] || die "置き換え先 $self はリンクです。リンクの先は書き換えません（README.md の「dev を置く」のとおり、写しで置いてください）。何も置き換えていません。"
-  ! in_git_worktree "$self" || die "置き換え先 $self は git の作業ツリーの中です（リポジトリのチェックアウトや、展開しただけのディレクトリは書き換えません。~/.local/bin/dev などへ写して置いたものを更新してください）。何も置き換えていません。"
-  is_devhost_dev_sh "$self" || die "置き換え先 $self が devhost の dev.sh だと確かめられません（1 行目が bash の shebang、2 行目が「# dev — 」で始まる形ではない、または読めない）。何も置き換えていません。"
+  local why
+  if [[ -e "$self" || -L "$self" ]]; then
+    why="$(dev_target_refusal "$self")" || die "$why 何も置き換えていません。"
+  else
+    die "置き換え先 $self が無いか、読めません。何も置き換えていません。"
+  fi
   selfdir="$(cd "$(dirname "$self")" && pwd)"
 
   SU_TMP="$(mktemp -d "${TMPDIR:-/tmp}/dev-self-update.XXXXXX")" || die "作業ディレクトリを作れません。何も置き換えていません。"
@@ -711,10 +757,9 @@ cmd_self_update() {
   echo "[$PROG] 取得先: $mbase"
   curl -fsSL "$mbase/RELEASE-MANIFEST.json" -o "$SU_TMP/RELEASE-MANIFEST.json" || die "RELEASE-MANIFEST.json を取得できません。何も置き換えていません。"
   if [[ -z "$version" ]]; then
-    local mver
     mver="$(jq -r '.version // empty' "$SU_TMP/RELEASE-MANIFEST.json")" || die "RELEASE-MANIFEST.json を読めません。何も置き換えていません。"
     [[ "$mver" == v* ]] || mver="v$mver"
-    [[ "$mver" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-+.][0-9A-Za-z.-]+)?$ ]] || die "最新の版をマニフェストから読めません（version: $mver）。--version vX.Y.Z で版を指定してください。何も置き換えていません。"
+    [[ "$mver" =~ $SEMVER_RE ]] || die "最新の版をマニフェストから読めません（version: $mver）。--version vX.Y.Z で版を指定してください。何も置き換えていません。"
     base="$RELEASE_BASE_URL/download/$mver"
     echo "[$PROG] 最新の版: $mver（dev.sh は $base から取る）"
   fi
@@ -730,8 +775,10 @@ cmd_self_update() {
   is_devhost_dev_sh "$SU_TMP/dev.sh" || die "取得した dev.sh が devhost の dev.sh だと確かめられません（1 行目が bash の shebang、2 行目が「# dev — 」で始まる形ではない）。何も置き換えていません。"
   "${BASH:-bash}" -n "$SU_TMP/dev.sh" || die "取得した dev.sh に構文の誤りがあります。何も置き換えていません。"
 
+  local relver="${version:-${mver:-}}"
   if cmp -s "$SU_TMP/dev.sh" "$self"; then
     echo "[$PROG] すでにこの版です（$self は取得した dev.sh と同じ）。置き換えません。"
+    su_check_unit "$SU_TMP/RELEASE-MANIFEST.json" "$relver" "$version"
     return 0
   fi
   local tmp
@@ -741,6 +788,8 @@ cmd_self_update() {
     die "置き換えに失敗しました。何も置き換えていません（置き換え先: $self）。"
   fi
   echo "[$PROG] 置き換えました: $self"
+  su_check_unit "$SU_TMP/RELEASE-MANIFEST.json" "$relver" "$version"
+  echo "[$PROG] すでに動いているユニットは、起こし直すまで古い dev のまま動き続けます。dev restart <名前>（コンテナも再起動します）か systemctl --user restart dev-up@<名前>.service で起こし直してください。"
 }
 
 # dev の版を出す。
@@ -1260,14 +1309,20 @@ dev self-update — dev 自身を、devcontainer-host の公開リリースの�
   dev self-update [--version <vX.Y.Z>]
 
 呼ぶ順序:
-  1. 置き換え先（この dev）が、リンクでも git の作業ツリーの中でもなく、devhost の dev.sh であることを
+  1. 置き換え先（この dev）が、リンクでもディレクトリでも git で追跡されているファイルでもなく、devhost の dev.sh であることを
      確かめる（1 行目が bash の shebang、2 行目が「# dev — 」で始まる）
   2. 公開リリースから RELEASE-MANIFEST.json を取得する（既定は最新。--version でその版に固定する）
   3. マニフェストの checksums に記録された dev.sh の SHA-256 を読み、同じリリースの dev.sh を取得して照合する
   4. 取得した dev.sh が 1 と同じ形（bash の shebang と「# dev — 」）であることと、構文を確かめる
   5. 同じディレクトリの一時ファイルへ写し、mv で置き換える
-どれか 1 つでも外れたら、何も置き換えずに 1 で止まる。手動の入手（README の「devhost を入手する」）と
-同じ照合。dev.sh だけを置き換える（dev-up@.service や設定ファイルには触らない）。
+  6. 置いてあるユニットのファイル（~/.config/systemd/user/dev-up@.service）を、同じリリースのマニフェストの
+     checksums の dev-up@.service と比べる。違えば、install.sh を再実行してユニットを更新するよう案内する
+     （ユニットのファイルを置いていない、マニフェストにハッシュが無いときは何も言わない）
+  7. 置き換えたあと、動いているユニットは起こし直すまで古い dev のまま動き続けることを案内する
+     （dev restart <名前>、または systemctl --user restart dev-up@<名前>.service）
+どれか 1 つでも外れたら（1〜5）、何も置き換えずに 1 で止まる。手動の入手（README の「devhost を入手する」）と
+同じ照合。dev.sh だけを置き換える。**ユニットのファイルや設定ファイルは書き換えない**（6 は差の案内だけで、
+更新は install.sh の再実行に任せる）。
 curl と jq と、sha256sum または shasum が要る。
 
 オプション:

@@ -98,7 +98,7 @@ gh workflow run attest-recover.yml -f subject-digest=<64 桁の 16 進>
 | パッケージ | 配布方式 | 消費者が取得するもの |
 |---|---|---|
 | `devcontainer-bootstrap` | GitHub Release + 資産 | `bootstrap.sh` / `doctor.sh` / `SHA256SUMS`（curl でダウンロード） |
-| `devcontainer-host` | GitHub Release + 資産（DCB と同じ形に加え、`dev.sh` / `dev-up@.service` を個別に添付） | `dev.sh` / `dev-up@.service`（`dev self-update` は `dev.sh` を直接取得する）、または `PACKAGE_ARCHIVE.tar.gz`（ツリー一式） |
+| `devcontainer-host` | GitHub Release + 資産（DCB と同じ形に加え、`dev.sh` / `dev-up@.service` / `install.sh` / `projects.example` を個別に添付） | `install.sh`（マニフェストで照合してから実行する）、`dev.sh` / `dev-up@.service`（`dev self-update` は `dev.sh` を直接取得する）、または `PACKAGE_ARCHIVE.tar.gz`（ツリー一式） |
 | `ai-playbook` | git タグのみ（Release なし・資産なし） | git タグ（submodule / subtree / archive tarball で固定して取り込む） |
 
 DCB の `SHA256SUMS` は、README がダウンロードさせるファイル（`bootstrap.sh` / `doctor.sh` / `PACKAGE_ARCHIVE.tar.gz`）を対象にする（アーカイブは attestation からアーカイブまで辿れるようにするため。#491）。
@@ -107,8 +107,9 @@ ai-playbook はリリース資産を持たない。DCB の `--playbook-from` も
 
 **devhost（`packages/devcontainer-host/.`）は DCB に同梱せず、独自の版を持つ公開リポジトリ `ojos/devcontainer-host` から配る（#486。#376 で DCB への同梱としていたものを移した）。**
 配布先のルートに `packages/devcontainer-host/` の中身（`dev.sh`・`dev-up@.service`・`README.md`・`selftest.sh`・`*.example`・`termux/` など）が並ぶ。
-Release の資産は DCB と同じ `RELEASE-MANIFEST.json`・`SHA256SUMS`・`PACKAGE_ARCHIVE.tar.gz` に加えて、**`dev.sh` と `dev-up@.service` を個別の資産として添付する**。
-この 2 つは `SHA256SUMS` と `RELEASE-MANIFEST.json` の `checksums` の対象になる（`dev self-update` が `checksums["dev.sh"]` と取得した `dev.sh` を照合する）。
+Release の資産は DCB と同じ `RELEASE-MANIFEST.json`・`SHA256SUMS`・`PACKAGE_ARCHIVE.tar.gz` に加えて、**`dev.sh`・`dev-up@.service`・`install.sh`・`projects.example` を個別の資産として添付する**（#495）。
+この 4 つは `SHA256SUMS` と `RELEASE-MANIFEST.json` の `checksums` の対象になる（`dev self-update` が `checksums["dev.sh"]` と取得した `dev.sh` を、`install.sh` が `dev.sh` / `dev-up@.service` / `projects.example` を照合する。`install.sh` 自身は、README の手順が `checksums["install.sh"]` と照合してから実行する）。
+`projects.example` を個別の資産にしたのは、アーカイブから取り出す経路だと、アーカイブの展開とそのハッシュの照合という別の経路が `install.sh` に増えるため。個別の資産なら `dev.sh` と同じ照合の経路で済む。
 個別の資産にするのは単一ファイル名のものだけで、複数ファイル・サブディレクトリ（`termux/`）を持つツリーは `PACKAGE_ARCHIVE.tar.gz` に乗せる（`SHA256SUMS` / `RELEASE-MANIFEST.json` の資産名は単一ファイル名の前提で、`is_plain_asset_name`・監査側）。
 `SHA256SUMS` には DCB と同じく artifact attestation を発行する。**DCB と違い、devcontainer-host の `SHA256SUMS` は `PACKAGE_ARCHIVE.tar.gz` も対象に含める**（attestation の対象は `SHA256SUMS` 1 つなので、アーカイブが無いと、アーカイブとマニフェストの archive 用ハッシュを一緒に差し替えられても検証が通る）。導入手順は `packages/devcontainer-host/README.md`。
 DCB の `PACKAGE_ARCHIVE.tar.gz` に `devhost/` は含まれない（`packages/devcontainer-bootstrap/tests/test-release-no-devhost-bundle.sh` が固定する）。
@@ -300,7 +301,7 @@ preflight がもう一度すべて走る。dry-run 通過後に `main` や公開
 - **DCB**: 公開リポジトリへソースを反映し、タグを push し、GitHub Release を作成して
   `bootstrap.sh` / `doctor.sh` / `SHA256SUMS` / `RELEASE-MANIFEST.json` / `PACKAGE_ARCHIVE.tar.gz` を添付する。
 - **devcontainer-host**: 公開リポジトリへソースを反映し（`dev.sh` の `DEV_VERSION` を公開するタグへ書き換えたツリー）、タグを push し、GitHub Release を作成して
-  `dev.sh` / `dev-up@.service` / `SHA256SUMS` / `RELEASE-MANIFEST.json` / `PACKAGE_ARCHIVE.tar.gz` を添付する。`SHA256SUMS` へ attestation を発行する。
+  `dev.sh` / `dev-up@.service` / `install.sh` / `projects.example` / `SHA256SUMS` / `RELEASE-MANIFEST.json` / `PACKAGE_ARCHIVE.tar.gz` を添付する。`SHA256SUMS` へ attestation を発行する。
 - **ai-playbook**: 公開リポジトリへソースを反映し、タグを push する。Release も資産も作らない。
 
 公開リポジトリへの release snapshot コミットは GitHub App の bot 名義になる。実行主体とコミット名義を一致させるため。
