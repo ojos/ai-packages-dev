@@ -151,7 +151,11 @@ devcontainer.json が `shutdownAction: stopCompose` のプロジェクトでは�
 作り直さずに再起動するなら `dev restart <名前>` を使います。`dev stop` / `dev disable` / `dev restart` の範囲は、
 compose で動くプロジェクトならそのプロジェクトのコンテナ全体（DB などの別のサービスを含む。VS Code の
 `stopCompose` と同じ。app のコンテナの label `com.docker.compose.project` で列挙し、compose ファイルは読みも
-書き換えもしません）で、label が無ければコンテナ 1 つです。作り直しは `dev rebuild <名前>` が
+書き換えもしません）で、label が無ければコンテナ 1 つです。列挙の起点は app のコンテナなので、app の
+コンテナだけが消えて DB などが残っている場合は見つけられません（`docker ps` で確かめて止めます）。また、
+compose のサービスに `restart: always` があると、`dev disable` で止めても Docker デーモンの再起動で
+そのコンテナは起き直ります（Docker の仕様。dev は compose を書き換えないので、止めたままにしたいサービスは
+各プロジェクトで `unless-stopped` などにします）。作り直しは `dev rebuild <名前>` が
 ユニットの停止と起こし直しまで行います（止めずに作り直すと、30 秒後にユニットの `up` が作り直しの
 途中に重なりえます。VS Code の Rebuild Container も同じなので、VS Code から作り直すときは先に
 `systemctl --user stop dev-up@<名前>.service` で止め、終わったら `start` で戻します）。
