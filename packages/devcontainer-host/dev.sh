@@ -721,7 +721,7 @@ cmd_self_update() {
     a="$1"
     case "$a" in
       --version)
-        [[ $# -ge 2 ]] || usage_error "--version には版が要ります（使い方: dev self-update [--version <vX.Y.Z>]）"
+        [[ $# -ge 2 && -n "$2" ]] || usage_error "--version には版が要ります（空は不可。使い方: dev self-update [--version <vX.Y.Z>]）"
         version="$2"
         shift
         ;;

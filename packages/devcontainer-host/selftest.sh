@@ -1476,6 +1476,8 @@ expect_no_calls
 run 2 "self-update: 版に URL の区切りが混ざる" -- DEV_SELF_PATH="$SELF" -- self-update --version 'v1.0.0/../x'
 expect_no_calls
 run 2 "self-update: --version に値が無い" -- DEV_SELF_PATH="$SELF" -- self-update --version
+run 2 "self-update: --version の値が空" -- DEV_SELF_PATH="$SELF" -- self-update --version ""
+expect_no_calls
 run 2 "self-update: 知らない引数" -- DEV_SELF_PATH="$SELF" -- self-update alpha
 expect_no_calls
 

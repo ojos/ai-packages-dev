@@ -79,6 +79,10 @@ REL2="$WORK/rel2"
 make_release "$REL1" "0.1.0" ""
 make_release "$REL2" "0.2.0" "# 新しい版"
 
+# 止まったら失敗にするため、timeout があれば付ける（止まると終了コード 124 になり、期待の終了コードと合わない）。
+TO=()
+if command -v timeout >/dev/null 2>&1; then TO=(timeout 30); fi
+
 # install.sh を、偽の道具と一時の HOME で回す。使い方: run_install <リリースのディレクトリ> [install.sh の引数...]
 # 結果: RC / OUT / ERR / LOG。HOME は $H（呼び出し側で決める）。
 H=""
@@ -91,7 +95,7 @@ run_install() {
   : > "$LOG"
   RC=0
   env -u XDG_CONFIG_HOME HOME="$H" PATH="$FAKEBIN:$PATH" FAKE_LOG="$LOG" FAKE_CURL_DIR="$reldir" \
-    bash "$INSTALL" "$@" > "$OUT" 2> "$ERR" < /dev/null || RC=$?
+    ${TO[@]+"${TO[@]}"} bash "$INSTALL" "$@" > "$OUT" 2> "$ERR" < /dev/null || RC=$?
 }
 
 new_home() {
@@ -482,6 +486,57 @@ run_install "$REL2" --version v0.2.0 --dry-run
 after="$(cat "$(BIN)" "$(UNIT)" "$(PROJ)" | cksum)"
 if [[ $RC -eq 0 && "$before" == "$after" ]] && grep -q '新しい版へ置き換える' "$OUT" \
    && grep -q '実行すると dev かユニットのファイルを更新します' "$OUT" && ! grep -q 'dev restart' "$OUT"; then pass; else fail "終了コード $RC: $(cat "$OUT")"; fi
+
+# --dry-run は、書き込めない置き場所があっても計画を出す（実行すると止まる旨を添える）。
+if [[ "$(id -u)" != "0" ]]; then
+  it "--dry-run は、設定ディレクトリが読み取り専用でも計画を出して 0 で終わり、実行すると書き込めずに止まる旨を出す"
+  new_home
+  mkdir -p "$H/.config/dev"
+  chmod 0555 "$H/.config/dev"
+  run_install "$REL1" --dry-run
+  dry_rc=$RC
+  dry_out="$(cat "$OUT")"
+  run_install "$REL1"
+  exec_rc=$RC
+  chmod 0755 "$H/.config/dev"
+  if [[ $dry_rc -eq 0 && "$dry_out" == *'計画'* && "$dry_out" == *'実行すると、書き込めずに止まります'* && $exec_rc -ne 0 && "$(files_in_home)" == "0" ]]; then pass; else fail "dry-run rc=$dry_rc、実行 rc=$exec_rc: $dry_out"; fi
+
+  it "--dry-run は、HOME 全体が読み取り専用でも計画を出して 0 で終わる"
+  new_home
+  chmod 0555 "$H"
+  run_install "$REL1" --dry-run
+  chmod 0755 "$H"
+  if [[ $RC -eq 0 ]] && grep -q '計画' "$OUT" && grep -q '実行すると、書き込めずに止まります' "$OUT"; then pass; else fail "終了コード $RC: $(cat "$OUT") $(cat "$ERR")"; fi
+fi
+
+# 通常のファイルでない既存の置き先（名前付きパイプ）は、比較（cmp）より前に止める。止まったら失敗にする。
+if command -v mkfifo >/dev/null 2>&1; then
+  it "置き換え先のユニットが名前付きパイプなら、読まずに（止まらずに）非 0 で止まり、何も置かない"
+  new_home
+  mkdir -p "$(dirname "$(UNIT)")"
+  mkfifo "$(UNIT)"
+  run_install "$REL1"
+  if [[ $RC -eq 1 && ! -e "$(BIN)" ]] && grep -q '通常のファイルではありません' "$ERR"; then pass; else fail "終了コード $RC（124 は止まった）: $(cat "$ERR")"; fi
+
+  it "置き換え先の dev が名前付きパイプなら、止まらずに非 0 で止まり、何も置かない"
+  new_home
+  mkdir -p "$(dirname "$(BIN)")"
+  mkfifo "$(BIN)"
+  run_install "$REL1"
+  if [[ $RC -eq 1 && ! -e "$(UNIT)" ]]; then pass; else fail "終了コード $RC（124 は止まった）: $(cat "$ERR")"; fi
+
+  it "projects が名前付きパイプなら、止まらずに非 0 で止まり、何も置かない"
+  new_home
+  mkdir -p "$(dirname "$(PROJ)")"
+  mkfifo "$(PROJ)"
+  run_install "$REL1"
+  if [[ $RC -eq 1 && ! -e "$(BIN)" && ! -e "$(UNIT)" ]]; then pass; else fail "終了コード $RC（124 は止まった）: $(cat "$ERR")"; fi
+fi
+
+it "--version の値が空なら、使い方の誤り（2）で止まり、何も置かず、最新も取りにいかない"
+new_home
+run_install "$REL1" --version ""
+if [[ $RC -eq 2 && "$(files_in_home)" == "0" && ! -s "$LOG" ]]; then pass; else fail "終了コード $RC: $(cat "$ERR")"; fi
 
 # ── 5. 使い方の誤り ───────────────────────────────────────────────────────────
 

@@ -117,14 +117,22 @@ curl と jq と、sha256sum または shasum が要る。
 EOF
 }
 
-# 置き先の親ディレクトリに書き込めるか（無ければ、いちばん近い既存の祖先を見る）。置く前に、すべての置き場所へ課す。
-# 使い方: check_parent_writable <置き先>
-check_parent_writable() {
+# 置き先の親ディレクトリに書き込めるか（無ければ、いちばん近い既存の祖先を見る）。
+# 問題があれば、その説明を標準出力へ出して 1 を返す。実行では置く前に止め、--dry-run では計画に出す。
+# 使い方: parent_problem <置き先>
+parent_problem() {
   local dst="$1" d
   d="$(dirname "$dst")"
   while [[ ! -e "$d" && "$d" != "/" && "$d" != "." ]]; do d="$(dirname "$d")"; done
-  [[ -d "$d" ]] || die "$dst の親 $d がディレクトリではありません。何も置いていません。"
-  [[ -w "$d" && -x "$d" ]] || die "$dst の親 $d に書き込めません。何も置いていません。"
+  if [[ ! -d "$d" ]]; then
+    echo "$dst の親 $d がディレクトリではありません。"
+    return 1
+  fi
+  if [[ ! -w "$d" || ! -x "$d" ]]; then
+    echo "$dst の親 $d に書き込めません。"
+    return 1
+  fi
+  return 0
 }
 
 # 置き先に対する計画の語を返す:
@@ -196,7 +204,7 @@ main() {
     a="$1"
     case "$a" in
       --version)
-        [[ $# -ge 2 ]] || usage_error "--version には版が要ります（使い方: bash install.sh [--version <vX.Y.Z>] [--dry-run]）"
+        [[ $# -ge 2 && -n "$2" ]] || usage_error "--version には版が要ります（空は不可。使い方: bash install.sh [--version <vX.Y.Z>] [--dry-run]）"
         version="$2"
         shift
         ;;
@@ -232,11 +240,12 @@ main() {
   if [[ -e "$bin_path" || -L "$bin_path" ]]; then
     why="$(dev_target_refusal "$bin_path")" || die "$why 何も置いていません。"
   fi
+  # 既にあるものは、通常のファイルでなければ、比較（cmp）より前に止める（名前付きパイプなどを読むと止まるため）。
   if [[ -L "$unit_path" ]]; then
     die "置き換え先 $unit_path はリンクです。リンクの先は書き換えません。何も置いていません。"
   fi
-  if [[ -d "$unit_path" ]]; then
-    die "置き換え先 $unit_path はディレクトリです。何も置いていません。"
+  if [[ -e "$unit_path" && ! -f "$unit_path" ]]; then
+    die "置き換え先 $unit_path は通常のファイルではありません（ディレクトリ、名前付きパイプなど）。何も置いていません。"
   fi
 
   # projects は、通常のファイル（リンクなら実体が通常のファイル）でなければ、「あるので触らない」にせず止める
@@ -244,10 +253,16 @@ main() {
   if [[ -e "$projects_path" || -L "$projects_path" ]]; then
     [[ -f "$projects_path" ]] || die "$projects_path が通常のファイルではありません（ディレクトリ、またはリンク切れ）。dev は設定ファイルとして読めません。何も置いていません。"
   fi
-  # すべての置き場所を、何かを置く前に検査する。
-  check_parent_writable "$bin_path"
-  check_parent_writable "$unit_path"
-  [[ -e "$projects_path" ]] || check_parent_writable "$projects_path"
+  # すべての置き場所の親に書き込めるかを、何かを置く前に検査する。実行では見つかった時点で止まる。
+  # --dry-run では止めずに集め、計画に「実行すると書き込めずに止まる」と出す（計画を出せないほうが困るため）。
+  local write_problems="" t msg
+  for t in "$bin_path" "$unit_path" "$projects_path"; do
+    [[ "$t" != "$projects_path" || ! -e "$t" ]] || continue
+    if ! msg="$(parent_problem "$t")"; then write_problems="${write_problems}${msg}"$'\n'; fi
+  done
+  if [[ -n "$write_problems" && "$dry_run" -eq 0 ]]; then
+    die "${write_problems%%$'\n'*} 何も置いていません。"
+  fi
 
   IT_TMP="$(mktemp -d "${TMPDIR:-/tmp}/devhost-install.XXXXXX")" || die "作業ディレクトリを作れません。何も置いていません。"
   trap cleanup EXIT
@@ -317,6 +332,11 @@ main() {
   fi
 
   if [[ "$dry_run" -eq 1 ]]; then
+    while IFS= read -r msg; do
+      [[ -z "$msg" ]] || echo "[$PROG] 注意: 実行すると、書き込めずに止まります: $msg"
+    done <<EOF_PROBLEMS
+$write_problems
+EOF_PROBLEMS
     echo "[$PROG] --dry-run のため、何も置いていません。"
   else
     # 全部の一時ファイルを用意してから、まとめて置く。
