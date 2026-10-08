@@ -56,7 +56,7 @@ rel="$WORK/host-release"
   cd "$REPO_ROOT"
   prepare_host_release_repo "$rel" "$TEST_HOST_TAG"
   # 実行ブロックと同じ指定（scripts/release-packages.sh の --host-version の節）。
-  SUMS_TARGETS=("${HOST_INDIVIDUAL_ASSETS[@]}")
+  SUMS_TARGETS=("${HOST_SUMS_TARGETS[@]}")
   MANIFEST_CHECKSUM_TARGETS=("${HOST_INDIVIDUAL_ASSETS[@]}")
   generate_standard_assets "$rel" "devcontainer-host" "$TEST_HOST_VER"
 ) >"$WORK/stage.log" 2>&1
@@ -105,10 +105,10 @@ else
   fail "配布ツリーに無い:$missing"
 fi
 
-it "SHA256SUMS は dev.sh と dev-up@.service を対象にし、チェックサムの照合が通る"
+it "SHA256SUMS は dev.sh・dev-up@.service・PACKAGE_ARCHIVE.tar.gz を対象にし（attestation からアーカイブまで辿れる）、チェックサムの照合が通る"
 if [[ -f "$rel/SHA256SUMS" ]]; then
   names="$(awk '{print $2}' "$rel/SHA256SUMS" | tr '\n' ' ')"
-  if [[ "$names" == "dev.sh dev-up@.service " ]] && (cd "$rel" && sha256sum -c SHA256SUMS >/dev/null 2>&1); then  # bsd-ok: Linux で回す
+  if [[ "$names" == "dev.sh dev-up@.service PACKAGE_ARCHIVE.tar.gz " ]] && (cd "$rel" && sha256sum -c SHA256SUMS >/dev/null 2>&1); then  # bsd-ok: Linux で回す
     pass
   else
     fail "SHA256SUMS の対象が違う、または照合に失敗する: $names"
@@ -235,6 +235,9 @@ it "開発リポジトリの dev.sh に DEV_VERSION=\"vX.Y.Z\" の行がちょ�
 n="$(grep -cE '^DEV_VERSION="v[0-9]+\.[0-9]+\.[0-9]+"$' "$REPO_ROOT/packages/devcontainer-host/dev.sh" || true)"
 assert_eq "$n" "1" "DEV_VERSION の行数"
 
+# 現行の版は README の取得手順（TAG=）から読む。版を上げても、固定の版でこの試験が落ちないようにする。
+CUR_TAG="$(sed -n 's/^TAG=\(v[0-9][0-9.]*\).*/\1/p' "$REPO_ROOT/packages/devcontainer-host/README.md" | sed -n '1p')"
+
 it "追跡外のファイルは、配布ツリーに入らない"
 untracked="$REPO_ROOT/packages/devcontainer-host/zz-untracked-$$.txt"
 printf 'secret\n' > "$untracked"
@@ -250,13 +253,33 @@ fi
 
 it "README の固定の版・リリースノートの見出しが公開するタグと食い違うと、preflight の文書検査が落ちる"
 docs_ok=0
-( . "$fns"; cd "$REPO_ROOT"; validate_host_docs v0.1.0 ) >/dev/null 2>&1 || docs_ok=1
+( . "$fns"; cd "$REPO_ROOT"; validate_host_docs "$CUR_TAG" ) >/dev/null 2>&1 || docs_ok=1
 ( . "$fns"; cd "$REPO_ROOT"; validate_host_docs v9.9.9 ) >/dev/null 2>&1 && docs_ok=2
+[[ -n "$CUR_TAG" ]] || docs_ok=3
 if [[ $docs_ok -eq 0 ]]; then
   pass
 else
   fail "validate_host_docs の判定が期待と違う（$docs_ok: 1 = 現行の版で落ちた / 2 = 食い違う版で通った）"
 fi
+
+it "文書の照合は語の境界で行う（v0.1.0 に対して v0.1.00 や v0.1.0-rc を通さない）"
+docs_fx="$WORK/docs-fx"
+mkdir -p "$docs_fx/packages/devcontainer-host" "$docs_fx/docs/release"
+printf '## v0.1.0\n' > "$docs_fx/docs/release/release-notes-devcontainer-host.md"
+check_docs() { # 引数: README の本文。公開するタグは v0.1.0。0 = 通った
+  printf '%s\n' "$1" > "$docs_fx/packages/devcontainer-host/README.md"
+  ( . "$fns"; cd "$docs_fx"; validate_host_docs v0.1.0 ) >/dev/null 2>&1
+}
+bad=""
+check_docs $'TAG=v0.1.0\n固定は `--version v0.1.0` で行う' || bad="$bad 一致する本文が落ちた"
+check_docs $'TAG=v0.1.00\n--version v0.1.0' && bad="$bad TAG=v0.1.00"
+check_docs $'TAG=v0.1.0\n--version v0.1.00' && bad="$bad --version=v0.1.00"
+check_docs $'TAG=v0.1.0-rc1\n--version v0.1.0' && bad="$bad TAG=v0.1.0-rc1"
+check_docs $'TAG=v0.1.0.1\n--version v0.1.0' && bad="$bad TAG=v0.1.0.1"
+check_docs $'TAG=vX0Y1Z0\n--version v0.1.0' && bad="$bad ドットが任意の文字に一致"
+printf '## v0.1.00\n' > "$docs_fx/docs/release/release-notes-devcontainer-host.md"
+check_docs $'TAG=v0.1.0\n--version v0.1.0' && bad="$bad リリースノートの見出し v0.1.00"
+if [[ -z "$bad" ]]; then pass; else fail "境界の判定が期待と違う:$bad"; fi
 
 # ── 2. --host-version の dry-run ─────────────────────────────────────────────
 
@@ -281,7 +304,7 @@ chmod +x "$stub/gh" "$stub/git"
 
 it "--host-version の dry-run が 0 で終わり、計画に配布物と資産が出る"
 : > "$WORK/gh-calls.log"
-out="$(cd "$REPO_ROOT" && PATH="$stub:$PATH" timeout 300 bash "$RELEASE_SH" --owner test --host-version v0.1.0 2>&1)"
+out="$(cd "$REPO_ROOT" && PATH="$stub:$PATH" timeout 300 bash "$RELEASE_SH" --owner test --host-version "$CUR_TAG" 2>&1)"
 code=$?
 if [[ $code -eq 0 ]] \
    && [[ "$out" == *'[ok] preflight checks passed'* ]] \
@@ -294,17 +317,17 @@ else
 fi
 
 it "dry-run は devcontainer-host の公開有無だけを問い合わせ、公開側へ触れない"
-calls="$(grep -v '^gh release view v0.1.0 --repo test/devcontainer-host' "$WORK/gh-calls.log" || true)"
-if [[ -z "$calls" ]] && grep -q 'gh release view v0.1.0 --repo test/devcontainer-host' "$WORK/gh-calls.log"; then
+calls="$(grep -v "^gh release view $CUR_TAG --repo test/devcontainer-host" "$WORK/gh-calls.log" || true)"
+if [[ -z "$calls" ]] && grep -q "gh release view $CUR_TAG --repo test/devcontainer-host" "$WORK/gh-calls.log"; then
   pass
 else
   fail "想定外の gh の呼び出し: $calls"
 fi
 
 it "公開済みの版は、副作用の前に止まる"
-out="$(cd "$REPO_ROOT" && PATH="$stub:$PATH" STUB_RELEASE_VIEW_RC=0 GITHUB_ACTIONS=true timeout 60 bash "$RELEASE_SH" --owner test --host-version v0.1.0 --execute 2>&1)"
+out="$(cd "$REPO_ROOT" && PATH="$stub:$PATH" STUB_RELEASE_VIEW_RC=0 GITHUB_ACTIONS=true timeout 60 bash "$RELEASE_SH" --owner test --host-version "$CUR_TAG" --execute 2>&1)"
 code=$?
-if [[ $code -ne 0 ]] && [[ "$out" == *'test/devcontainer-host already has a release for v0.1.0'* ]]; then
+if [[ $code -ne 0 ]] && [[ "$out" == *"test/devcontainer-host already has a release for $CUR_TAG"* ]]; then
   pass
 else
   fail "公開済みの版で止まらなかった（終了コード $code）: $(printf '%s' "$out" | tail -3)"

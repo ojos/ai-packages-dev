@@ -105,7 +105,7 @@ ai-playbook はリリース資産を持たない。DCB の `--playbook-from` も
 Release の資産は DCB と同じ `RELEASE-MANIFEST.json`・`SHA256SUMS`・`PACKAGE_ARCHIVE.tar.gz` に加えて、**`dev.sh` と `dev-up@.service` を個別の資産として添付する**。
 この 2 つは `SHA256SUMS` と `RELEASE-MANIFEST.json` の `checksums` の対象になる（`dev self-update` が `checksums["dev.sh"]` と取得した `dev.sh` を照合する）。
 個別の資産にするのは単一ファイル名のものだけで、複数ファイル・サブディレクトリ（`termux/`）を持つツリーは `PACKAGE_ARCHIVE.tar.gz` に乗せる（`SHA256SUMS` / `RELEASE-MANIFEST.json` の資産名は単一ファイル名の前提で、`is_plain_asset_name`・監査側）。
-`SHA256SUMS` には DCB と同じく artifact attestation を発行する。導入手順は `packages/devcontainer-host/README.md`。
+`SHA256SUMS` には DCB と同じく artifact attestation を発行する。**DCB と違い、devcontainer-host の `SHA256SUMS` は `PACKAGE_ARCHIVE.tar.gz` も対象に含める**（attestation の対象は `SHA256SUMS` 1 つなので、アーカイブが無いと、アーカイブとマニフェストの archive 用ハッシュを一緒に差し替えられても検証が通る）。導入手順は `packages/devcontainer-host/README.md`。
 DCB の `PACKAGE_ARCHIVE.tar.gz` に `devhost/` は含まれない（`packages/devcontainer-bootstrap/tests/test-release-no-devhost-bundle.sh` が固定する）。
 
 ### 配布リポジトリのルートへ載せるファイル

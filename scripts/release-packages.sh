@@ -190,11 +190,15 @@ validate_host_docs() {
   local readme="packages/devcontainer-host/README.md"
   local notes="docs/release/release-notes-devcontainer-host.md"
 
-  grep -Fq -- "TAG=$tag" "$readme" || {
+  # 語の境界で照合する。部分一致だと、公開タグ v0.1.0 に対して TAG=v0.1.00 を通してしまう。
+  # 版の後ろに英数字・ドット・ハイフンが続く形は、別の版として落とす。
+  local tag_re="${tag//./\\.}"
+  local boundary='([^0-9A-Za-z.-]|$)'
+  grep -Eq -- "TAG=${tag_re}${boundary}" "$readme" || {
     echo "error: devcontainer-host README.md の取得手順の TAG= が $tag と一致しません" >&2
     exit 1
   }
-  grep -Fq -- "--version $tag" "$readme" || {
+  grep -Eq -- "--version ${tag_re}${boundary}" "$readme" || {
     echo "error: devcontainer-host README.md の self-update の例（--version）が $tag と一致しません" >&2
     exit 1
   }
@@ -591,6 +595,12 @@ DCB_DISTRIBUTED_FILES=(
 # 個別の資産として出し、SHA256SUMS とマニフェストの checksums の両方に載せるファイル
 # （dev self-update が checksums["dev.sh"] と取得した dev.sh を照合する）。1 か所で持つ。
 HOST_INDIVIDUAL_ASSETS=(dev.sh dev-up@.service)
+
+# SHA256SUMS の対象。個別の資産に加えて PACKAGE_ARCHIVE.tar.gz を含める。attestation の対象は
+# SHA256SUMS 1 つなので、アーカイブがここに無いと、アーカイブとマニフェストの archive 用ハッシュを
+# 一緒に差し替えられても attestation の検証が通ってしまう。generate_standard_assets は
+# アーカイブを作ってから SHA256SUMS を作るので、この順序で足りる。
+HOST_SUMS_TARGETS=(dev.sh dev-up@.service PACKAGE_ARCHIVE.tar.gz)
 
 HOST_DISTRIBUTED_FILES=(
   "LICENSE:LICENSE"
@@ -1186,7 +1196,7 @@ fi
 if [[ -n "$HOST_TAG" ]]; then
   HOST_VER="$(extract_semver "$HOST_TAG")"
   prepare_host_release_repo "$HOST_DIR" "$HOST_TAG"
-  SUMS_TARGETS=("${HOST_INDIVIDUAL_ASSETS[@]}")
+  SUMS_TARGETS=("${HOST_SUMS_TARGETS[@]}")
   MANIFEST_CHECKSUM_TARGETS=("${HOST_INDIVIDUAL_ASSETS[@]}")
   generate_standard_assets "$HOST_DIR" "devcontainer-host" "$HOST_VER"
   MANIFEST_CHECKSUM_TARGETS=()

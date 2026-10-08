@@ -85,13 +85,17 @@ jq -r '.checksums["dev.sh"] + "  dev.sh"' RELEASE-MANIFEST.json | $sha256c -c -
 ```
 
 リリースの `SHA256SUMS` には、GitHub Actions が発行した artifact attestation（SLSA provenance）が付いています
-（任意の検証。[GitHub CLI](https://cli.github.com/) が要ります）。`SHA256SUMS` は `dev.sh` と `dev-up@.service` のハッシュを持ちます。
+（任意の検証。[GitHub CLI](https://cli.github.com/) が要ります）。`SHA256SUMS` は `dev.sh`・`dev-up@.service`・`PACKAGE_ARCHIVE.tar.gz` のハッシュを持ちます。
+**attestation が保証するのは `SHA256SUMS` 自身だけです。** 取得したファイルまで辿るには、attestation の検証に続けて `SHA256SUMS` と取得物を照合します（`RELEASE-MANIFEST.json` だけの照合では、マニフェストごと差し替えられた場合を検出できません）。
 **成功しても何も表示されません。判定は終了コードで行ってください**（0 = 成功、非 0 = 失敗）。
 
 ```bash
 curl -sSL "${BASE}/SHA256SUMS" -o SHA256SUMS
 OWNER="$(printf '%s' "$BASE" | sed -n 's#^https://github.com/\([^/]*\)/.*#\1#p')"   # 取得元の owner
 if gh attestation verify SHA256SUMS --owner "$OWNER"; then echo "attestation: ok"; else echo "attestation: 検証に失敗しました" >&2; exit 1; fi
+
+# 検証済みの SHA256SUMS と、取得した archive・dev.sh を照合する（dev-up@.service も取得したなら加える）
+grep -E '  (dev\.sh|PACKAGE_ARCHIVE\.tar\.gz)$' SHA256SUMS | $sha256c -c -
 ```
 
 以降の手順は、この `devhost/` を取り出したディレクトリで実行します
