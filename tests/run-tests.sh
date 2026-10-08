@@ -13,8 +13,13 @@
 # 要らない。所要時間も秒単位に収める。scripts/acceptance.sh はこれを DCB テスト
 # （約 4 分）より前に置き、安い検査から落ちるようにしている。
 #
-# 例外が 3 つある。いずれも持ち込んでいるのは検査対象スクリプト自身の依存で、
-# テスト側が増やした依存ではない。どちらもネットワークへは出ない。
+# 例外が 4 つある。いずれも持ち込んでいるのは検査対象スクリプト自身の依存で、
+# テスト側が増やした依存ではない。どれもネットワークへは出ない。
+#
+#   test-devcontainer-host-install.sh
+#                              devhost の install.sh を実行するため jq と sha256sum（または shasum）を要する
+#                              （install.sh 自身がマニフェストを jq で読み、ハッシュで照合する）。置いた dev の
+#                              中身の比較に cmp を使う。curl / systemctl は PATH 上の偽物で、ネットワークには出ない。
 #
 #   test-release-devcontainer-host.sh
 #                              devhost のリリース手順（scripts/release-packages.sh の関数と dry-run、
