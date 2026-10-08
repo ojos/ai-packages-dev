@@ -55,5 +55,20 @@ resource "github_repository" "public" {
     # 公開リポジトリを消す plan は、それ自体を誤りとして止める（2 枚目）。
     # PAT の Administration: write はリポジトリの削除もできるため。
     prevent_destroy = true
+
+    # マージ関係の設定は、作成時だけ宣言どおりに入れ、以後は追わない（#487）。
+    # GitHub はこれらを Contents: write の権限が無いと返さず、provider は空を false と読む。
+    # PAT（Administration だけ）では常に「false -> true」の偽の差分になるが、PR から使える
+    # 読み取りの PAT に配布物への書き込み権限を足すことはしない。配布先は bot の push だけで
+    # PR を受けないので、外での変更を検知できなくても影響は小さい。
+    ignore_changes = [
+      allow_merge_commit,
+      allow_squash_merge,
+      allow_rebase_merge,
+      merge_commit_title,
+      merge_commit_message,
+      squash_merge_commit_title,
+      squash_merge_commit_message,
+    ]
   }
 }

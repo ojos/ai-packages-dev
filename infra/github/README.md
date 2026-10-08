@@ -42,6 +42,10 @@ terraform -chdir=infra/github validate
 
 リポジトリには `prevent_destroy` と `archive_on_destroy` を付けています。`local.repositories` から行を消すと、plan が誤りとして止まります。管理から外すだけなら、`removed` ブロックで状態から外してください（リポジトリは GitHub に残ります）。
 
+## マージの設定は作成時だけ
+
+`allow_*_merge` とマージの文言（計 7 項目）は、作成時だけ宣言どおりに入れ、以後は `ignore_changes` で追いません。GitHub はこれらを Contents: write の権限が無いと返さず、Administration だけの PAT では常に偽の差分になるためです。PR から使える読み取りの PAT に、配布物への書き込み権限を足すことはしません。
+
 ## 非公開の脆弱性の報告
 
 GitHub provider が扱えないため、`terraform_data` から `gh api` の `PUT` で有効にします。実行されるのはリポジトリを作ったときと、その資源を初めて作ったときだけです。GitHub の画面などで無効にされても plan には差分が出ないので、照合は `scripts/check-repo-security.sh` で行います。
