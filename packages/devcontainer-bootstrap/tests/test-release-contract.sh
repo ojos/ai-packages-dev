@@ -299,4 +299,100 @@ else
   fail "版の重複判定（$guard 行）が run_dcb_tests（$tests_line 行）より後、または欠落"
 fi
 
+# ── SHA256SUMS は PACKAGE_ARCHIVE.tar.gz を含む（attestation からアーカイブまで辿れる） ──
+
+it "SHA256SUMS の対象に PACKAGE_ARCHIVE.tar.gz があり、ハッシュが実物と一致する（#491）"
+# attestation の対象は SHA256SUMS 1 つ。アーカイブがここに無いと、アーカイブとマニフェストの
+# archive 用ハッシュを一緒に差し替えられても attestation の検証が通る。
+if [[ -f "$rel/SHA256SUMS" && -f "$rel/PACKAGE_ARCHIVE.tar.gz" ]]; then
+  want="$(awk '$2 == "PACKAGE_ARCHIVE.tar.gz" {print $1}' "$rel/SHA256SUMS")"
+  got="$(sha256sum "$rel/PACKAGE_ARCHIVE.tar.gz" | awk '{print $1}')"  # bsd-ok: CI（Linux）でしか実行しないテスト
+  if [[ -n "$want" && "$want" == "$got" ]]; then pass; else fail "SHA256SUMS のアーカイブの行が無い、または実物と不一致 ($want vs $got)"; fi
+else
+  fail "SHA256SUMS または PACKAGE_ARCHIVE.tar.gz が生成されていない"
+fi
+
+# ── README の検証手順を、食い違うハッシュで実行する（#491） ─────────────────────
+
+# fenced code block のうち、needle を含む最初の 1 つの中身を返す。
+extract_block() { # $1 = ファイル, $2 = needle
+  awk -v n="$2" '
+    /^```/ { if (inb) { if (hit) { printf "%s", buf; exit } inb = 0; buf = ""; hit = 0 } else { inb = 1 } ; next }
+    inb { buf = buf $0 "\n"; if (index($0, n)) hit = 1 }
+  ' "$1"
+}
+
+BLOCK="$(extract_block "$DCB_README" 'mkdir -p dcb && tar')"
+it "README の照合と展開の手順（&& でつないだ block）を抜き出せる"
+if [[ -n "$BLOCK" ]]; then pass; else fail "README に 'mkdir -p dcb && tar' を含むコードブロックが無い"; fi
+
+# 偽の curl: URL 末尾のファイル名で $FAKE_REL_DIR のファイルを写す（ネットワークには出ない）。
+stubbin="$(new_workdir)/bin"
+mkdir -p "$stubbin"
+cat > "$stubbin/curl" <<'STUB'
+#!/usr/bin/env bash
+out=""; url=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in -o) out="$2"; shift 2 ;; -*) shift ;; *) url="$1"; shift ;; esac
+done
+cp "$FAKE_REL_DIR/${url##*/}" "$out"
+STUB
+chmod +x "$stubbin/curl"
+
+# README の block を、偽の curl と作業ディレクトリで実行する。$1 = リリース資産のディレクトリ。
+run_block() {
+  local reldir="$1" code="${2:-$BLOCK}" work
+  work="$(new_workdir)"
+  ( cd "$work" && PATH="$stubbin:$PATH" FAKE_REL_DIR="$reldir" bash -c "$code" >/dev/null 2>&1 )
+  RUN_RC=$?
+  RUN_WORK="$work"
+}
+
+it "正しい資産では、照合が通り展開される（対照群）"
+if [[ -n "$BLOCK" && -f "$rel/RELEASE-MANIFEST.json" ]]; then
+  run_block "$rel"
+  if [[ $RUN_RC -eq 0 && -f "$RUN_WORK/dcb/bootstrap.sh" ]]; then pass; else fail "終了コード $RUN_RC、展開: $(ls "$RUN_WORK" 2>&1 | tr '\n' ' ')"; fi
+else
+  fail "block またはマニフェストが無い"
+fi
+
+it "同じ場所で 2 回実行しても、照合が通れば成功する（mkdir の失敗が照合の失敗に見えない）"
+if [[ -n "$BLOCK" && -f "$rel/RELEASE-MANIFEST.json" ]]; then
+  run_block "$rel" "$BLOCK
+$BLOCK"
+  if [[ $RUN_RC -eq 0 && -f "$RUN_WORK/dcb/bootstrap.sh" ]]; then pass; else fail "2 回目で失敗した（rc=$RUN_RC）"; fi
+else
+  fail "block またはマニフェストが無い"
+fi
+
+it "マニフェストのアーカイブのハッシュが食い違うと、展開されず非 0 で終わる"
+if [[ -n "$BLOCK" && -f "$rel/RELEASE-MANIFEST.json" ]]; then
+  bad="$(new_workdir)/bad"; cp -R "$rel" "$bad"
+  jq '.checksums["PACKAGE_ARCHIVE.tar.gz"] = "0000000000000000000000000000000000000000000000000000000000000000"' "$rel/RELEASE-MANIFEST.json" > "$bad/RELEASE-MANIFEST.json"
+  run_block "$bad"
+  if [[ $RUN_RC -ne 0 && ! -e "$RUN_WORK/dcb" ]]; then pass; else fail "終了コード $RUN_RC、展開: $(ls "$RUN_WORK" 2>&1 | tr '\n' ' ')"; fi
+else
+  fail "block またはマニフェストが無い"
+fi
+
+it "bootstrap.sh が SHA256SUMS と食い違うと（マニフェストの照合は通っても）、展開されず非 0 で終わる"
+if [[ -n "$BLOCK" && -f "$rel/RELEASE-MANIFEST.json" ]]; then
+  bad="$(new_workdir)/bad2"; cp -R "$rel" "$bad"
+  printf '# 改ざん\n' >> "$bad/bootstrap.sh"
+  run_block "$bad"
+  if [[ $RUN_RC -ne 0 && ! -e "$RUN_WORK/dcb" ]]; then pass; else fail "終了コード $RUN_RC、展開: $(ls "$RUN_WORK" 2>&1 | tr '\n' ' ')"; fi
+else
+  fail "block またはマニフェストが無い"
+fi
+
+it "アーカイブが SHA256SUMS と食い違うと、展開されず非 0 で終わる"
+if [[ -n "$BLOCK" && -f "$rel/RELEASE-MANIFEST.json" ]]; then
+  bad="$(new_workdir)/bad3"; cp -R "$rel" "$bad"
+  printf 'x' >> "$bad/PACKAGE_ARCHIVE.tar.gz"
+  run_block "$bad"
+  if [[ $RUN_RC -ne 0 && ! -e "$RUN_WORK/dcb" ]]; then pass; else fail "終了コード $RUN_RC、展開: $(ls "$RUN_WORK" 2>&1 | tr '\n' ' ')"; fi
+else
+  fail "block またはマニフェストが無い"
+fi
+
 exit_with_result

@@ -281,6 +281,93 @@ printf '## v0.1.00\n' > "$docs_fx/docs/release/release-notes-devcontainer-host.m
 check_docs $'TAG=v0.1.0\n--version v0.1.0' && bad="$bad リリースノートの見出し v0.1.00"
 if [[ -z "$bad" ]]; then pass; else fail "境界の判定が期待と違う:$bad"; fi
 
+it "文書の照合は、入手手順の TAG= の行と --version の例の行そのものを見る（説明文に新しい版があるだけでは通らない）"
+bad=""
+printf '## v0.1.0\n' > "$docs_fx/docs/release/release-notes-devcontainer-host.md"
+check_docs $'TAG=v0.1.0   # 最新\n`dev self-update --version v0.1.0`' || bad="$bad 一致する本文が落ちた"
+check_docs $'TAG=v0.0.9\n最新は v0.1.0 です。TAG=v0.1.0 を使ってください\n`--version v0.1.0`' && bad="$bad 説明文にだけ新しい TAG=v0.1.0 がある"
+check_docs $'TAG=v0.0.9\n新しい版は v0.1.0 です\n`--version v0.1.0`' && bad="$bad 説明文にだけ新しい版がある"
+check_docs $'  TAG=v0.1.0\n`--version v0.1.0`' && bad="$bad TAG= が行頭でない"
+check_docs $'TAG=v0.1.0\nTAG=v0.0.9\n`--version v0.1.0`' && bad="$bad 古い TAG= の行が残っている"
+check_docs $'TAG=v0.1.0\n`--version v0.0.9`' && bad="$bad --version の例が古い"
+check_docs $'TAG=v0.1.0\n`--version v0.0.9` と `--version v0.1.0`' && bad="$bad 古い --version の例が混ざっている"
+check_docs $'TAG=v0.1.0\n文末の例は `--version v0.1.0`.' || bad="$bad 文末の句点を版に含めた"
+check_docs $'TAG=v0.1.0\n例は --version v0.1.0. です' || bad="$bad 句点つきの版を落とした"
+check_docs $'TAG=v0.1.0\n例は --version v0.1.0.1.' && bad="$bad v0.1.0.1 を通した"
+check_docs $'TAG=v0.1.0\n--version の例は無い' && bad="$bad --version の例が無い"
+check_docs $'説明だけ\n`--version v0.1.0`' && bad="$bad TAG= の行が無い"
+if [[ -z "$bad" ]]; then pass; else fail "照合の対象が期待と違う:$bad"; fi
+
+# ── README の入手手順を、食い違うハッシュで実行する（#491） ───────────────────
+
+HOST_README="$REPO_ROOT/packages/devcontainer-host/README.md"
+
+# fenced code block のうち、needle を含む最初の 1 つの中身を返す。
+extract_block() { # $1 = ファイル, $2 = needle
+  awk -v n="$2" '
+    /^```/ { if (inb) { if (hit) { printf "%s", buf; exit } inb = 0; buf = ""; hit = 0 } else { inb = 1 } ; next }
+    inb { buf = buf $0 "\n"; if (index($0, n)) hit = 1 }
+  ' "$1"
+}
+BLOCK_ARCHIVE="$(extract_block "$HOST_README" 'mkdir -p devhost')"
+BLOCK_DEVSH="$(extract_block "$HOST_README" '-o dev.sh')"
+
+# 偽の curl: URL 末尾のファイル名で $FAKE_REL_DIR のファイルを写す（ネットワークには出ない）。
+rb_bin="$WORK/readme-bin"
+mkdir -p "$rb_bin"
+cat > "$rb_bin/curl" <<'STUB'
+#!/usr/bin/env bash
+out=""; url=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in -o) out="$2"; shift 2 ;; -*) shift ;; *) url="$1"; shift ;; esac
+done
+cp "$FAKE_REL_DIR/${url##*/}" "$out"
+STUB
+chmod +x "$rb_bin/curl"
+
+# README の block を、偽の curl と作業ディレクトリで実行する。$1 = リリース資産、$2 = コード。
+run_readme_code() {
+  local reldir="$1" code="$2"
+  RUN_WORK="$(mktemp -d "$WORK/readme-run.XXXXXX")"
+  ( cd "$RUN_WORK" && PATH="$rb_bin:$PATH" FAKE_REL_DIR="$reldir" bash -c "$code" >/dev/null 2>&1 )
+  RUN_RC=$?
+}
+
+it "README の入手手順（アーカイブ・dev.sh）のコードブロックを抜き出せる"
+if [[ -n "$BLOCK_ARCHIVE" && -n "$BLOCK_DEVSH" ]]; then pass; else fail "block を抜き出せない（アーカイブ: ${#BLOCK_ARCHIVE} 字 / dev.sh: ${#BLOCK_DEVSH} 字）"; fi
+
+it "対照: 正しい資産では、アーカイブは展開され、dev.sh は設置される"
+run_readme_code "$rel" "$BLOCK_ARCHIVE"
+ok_a=$RUN_RC; dir_a="$RUN_WORK"
+run_readme_code "$rel" "$BLOCK_ARCHIVE
+$BLOCK_DEVSH"
+if [[ $ok_a -eq 0 && -f "$dir_a/devhost/dev.sh" && $RUN_RC -eq 0 && -f "$RUN_WORK/dev.sh" ]]; then
+  pass
+else
+  fail "正しい資産で失敗した（アーカイブ rc=$ok_a / dev.sh rc=$RUN_RC）"
+fi
+
+it "同じ場所で 2 回実行しても、照合が通れば成功する（mkdir の失敗が照合の失敗に見えない）"
+run_readme_code "$rel" "$BLOCK_ARCHIVE
+$BLOCK_ARCHIVE"
+if [[ $RUN_RC -eq 0 && -f "$RUN_WORK/devhost/dev.sh" ]]; then pass; else fail "2 回目で失敗した（rc=$RUN_RC）"; fi
+
+it "アーカイブのハッシュが食い違うと、展開されず非 0 で終わる"
+bad_rel="$WORK/bad-archive"
+cp -R "$rel" "$bad_rel"
+jq '.checksums["PACKAGE_ARCHIVE.tar.gz"] = "0000000000000000000000000000000000000000000000000000000000000000"' "$rel/RELEASE-MANIFEST.json" > "$bad_rel/RELEASE-MANIFEST.json"
+run_readme_code "$bad_rel" "$BLOCK_ARCHIVE"
+if [[ $RUN_RC -ne 0 && ! -e "$RUN_WORK/devhost" ]]; then pass; else fail "終了コード $RUN_RC、展開: $(ls "$RUN_WORK" | tr '\n' ' ')"; fi
+
+it "dev.sh のハッシュが食い違うと、dev.sh を消し、非 0 で終わる"
+bad_dev="$WORK/bad-devsh"
+cp -R "$rel" "$bad_dev"
+printf '# 改ざん\n' >> "$bad_dev/dev.sh"
+run_readme_code "$bad_dev" "$BLOCK_ARCHIVE
+$BLOCK_DEVSH"
+# アーカイブ側は正しいので、最後の終了コードが dev.sh の照合の結果になる。
+if [[ $RUN_RC -ne 0 && ! -e "$RUN_WORK/dev.sh" ]]; then pass; else fail "終了コード $RUN_RC、設置: $(ls "$RUN_WORK" | tr '\n' ' ')"; fi
+
 # ── 2. --host-version の dry-run ─────────────────────────────────────────────
 
 stub="$WORK/bin"
@@ -434,7 +521,7 @@ dcb_after="$WORK/dcb-after"
   # shellcheck disable=SC1090
   . "$fns"
   cd "$REPO_ROOT"
-  SUMS_TARGETS=(bootstrap.sh doctor.sh)
+  SUMS_TARGETS=(bootstrap.sh doctor.sh PACKAGE_ARCHIVE.tar.gz)
   prepare_dcb_release_repo "$dcb_after"
   generate_standard_assets "$dcb_after" "devcontainer-bootstrap" "0.0.0"
 ) >/dev/null 2>&1

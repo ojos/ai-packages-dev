@@ -31,7 +31,7 @@ rel="$(new_workdir)/rel"
   # shellcheck disable=SC1090
   . "$fns"
   cd "$REPO_ROOT"
-  SUMS_TARGETS=(bootstrap.sh doctor.sh)
+  SUMS_TARGETS=(bootstrap.sh doctor.sh PACKAGE_ARCHIVE.tar.gz)
   prepare_dcb_release_repo "$rel"
   generate_standard_assets "$rel" "devcontainer-bootstrap" "0.0.0"
 ) >/dev/null 2>&1
@@ -82,10 +82,10 @@ else
   pass
 fi
 
-it "SHA256SUMS の対象は変えない（bootstrap.sh / doctor.sh のみ）"
+it "SHA256SUMS の対象は bootstrap.sh / doctor.sh / PACKAGE_ARCHIVE.tar.gz（devhost のファイルは足さない）"
 if [[ -f "$rel/SHA256SUMS" ]]; then
   names="$(awk '{print $2}' "$rel/SHA256SUMS" | tr '\n' ' ')"
-  assert_eq "$names" "bootstrap.sh doctor.sh " "SHA256SUMS の対象"
+  assert_eq "$names" "bootstrap.sh doctor.sh PACKAGE_ARCHIVE.tar.gz " "SHA256SUMS の対象"
 else
   fail "SHA256SUMS が生成されていない"
 fi

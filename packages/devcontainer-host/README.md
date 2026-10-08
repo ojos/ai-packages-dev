@@ -69,9 +69,10 @@ if command -v sha256sum >/dev/null 2>&1; then sha256c="sha256sum"; else sha256c=
 # マニフェストの checksums には SHA256SUMS などの行もあるが、ここで使うのは archive だけ。
 # その行だけを抜き出して照合する（ほかのファイルを取得していないので、全行を渡すと落ちる）。
 # archive の中身は、リポジトリのルートそのもの（dev.sh などがルート直下に並ぶ）。専用のディレクトリへ展開する。
+# 再実行できるよう mkdir -p を使う（前回の展開物が残っていれば上書きされる。版を変えるときは devhost/ を消してから）。
 # 照合と展開を && でつなぐ。照合に失敗したら展開しない（行を分けると、失敗しても次の行が走る）。
 jq -r '.checksums["PACKAGE_ARCHIVE.tar.gz"] + "  PACKAGE_ARCHIVE.tar.gz"' RELEASE-MANIFEST.json | $sha256c -c - \
-  && mkdir devhost && tar -xzf PACKAGE_ARCHIVE.tar.gz -C devhost && ls devhost/
+  && mkdir -p devhost && tar -xzf PACKAGE_ARCHIVE.tar.gz -C devhost && ls devhost/
 ```
 
 `dev.sh` だけが要るときは、個別の資産を取得して、同じマニフェストのハッシュと照合します
@@ -79,8 +80,10 @@ jq -r '.checksums["PACKAGE_ARCHIVE.tar.gz"] + "  PACKAGE_ARCHIVE.tar.gz"' RELEAS
 
 ```bash
 curl -sSL "${BASE}/dev.sh" -o dev.sh
-# 照合に失敗したら、取得した dev.sh を消す（未検証のものを残さない）
-jq -r '.checksums["dev.sh"] + "  dev.sh"' RELEASE-MANIFEST.json | $sha256c -c - || rm -f dev.sh
+# 照合に失敗したら、取得した dev.sh を消したうえで非 0 で終わる（未検証のものを残さない。
+# `|| rm -f dev.sh` だけだと rm が成功して 0 になり、失敗が成功として扱われる）
+jq -r '.checksums["dev.sh"] + "  dev.sh"' RELEASE-MANIFEST.json | $sha256c -c - \
+  || { rm -f dev.sh; echo "dev.sh: 照合に失敗しました" >&2; false; }
 ```
 
 リリースの `SHA256SUMS` には、GitHub Actions が発行した artifact attestation（SLSA provenance）が付いています
