@@ -155,7 +155,10 @@ compose で動くプロジェクトならそのプロジェクトのコンテナ
 コンテナだけが消えて DB などが残っている場合は見つけられません（`docker ps` で確かめて止めます）。また、
 compose のサービスに `restart: always` があると、`dev disable` で止めても Docker デーモンの再起動で
 そのコンテナは起き直ります（Docker の仕様。dev は compose を書き換えないので、止めたままにしたいサービスは
-各プロジェクトで `unless-stopped` などにします）。作り直しは `dev rebuild <名前>` が
+各プロジェクトで `unless-stopped` などにします）。`dev restart` は列挙したコンテナを 1 回の `docker restart` で
+まとめて再起動するので、compose の `depends_on` の順序や DB の準備完了は待ちません。app が起動時に DB を
+要して落ちても、ユニットが動いていれば起こし直しの `devcontainer up` が compose の順序で戻します。順序が要るときは
+`dev rebuild` を使います。作り直しは `dev rebuild <名前>` が
 ユニットの停止と起こし直しまで行います（止めずに作り直すと、30 秒後にユニットの `up` が作り直しの
 途中に重なりえます。VS Code の Rebuild Container も同じなので、VS Code から作り直すときは先に
 `systemctl --user stop dev-up@<名前>.service` で止め、終わったら `start` で戻します）。
