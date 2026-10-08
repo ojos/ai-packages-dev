@@ -10,7 +10,7 @@ set -uo pipefail
 echo "test-terraform-refuse-destroy"
 
 SCRIPT="$REPO_ROOT/scripts/terraform-refuse-destroy.sh"
-WORK="$(mktemp -d)"
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/terraform-refuse-destroy.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
 mkdir -p "$WORK/bin"
 
