@@ -77,7 +77,7 @@ it "節「$HOST_SECTION」の表が 4 行で、tmux / compose / codex / UID を�
 assert_eq "$(printf '%s\n' "$HOST_ROWS" | sort | tr '\n' ' ')" "UID codex compose tmux " "表の行"
 
 it "共通の説明文が、表と同じ 4 項目を列挙する"
-listed="tmux、compose の \`init: true\`、codex のサンドボックスの設定、UID の合わせ込み"
+listed="tmux、compose の \`init: true\`、codex のサンドボックスの設定（\`--with-codex\` のとき）、UID の合わせ込み"
 if printf '%s\n' "$REF_BLOCK" | grep -F "$listed" >/dev/null; then
   pass
 else
