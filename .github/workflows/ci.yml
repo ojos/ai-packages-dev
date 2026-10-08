@@ -132,6 +132,28 @@ jobs:
       - name: Relative markdown links resolve
         run: bash scripts/check-doc-links.sh
 
+  terraform:
+    name: Terraform format and validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # 公開リポジトリの宣言（infra/github/。#487）の整形と構文。資格情報は要らない
+      # （-backend=false で HCP Terraform へ繋がない）。plan / apply は資格情報が要るので
+      # terraform.yml が持つ。版は terraform.yml と揃える。
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: 1.16.5
+          terraform_wrapper: false
+
+      - name: Format
+        run: terraform -chdir=infra/github fmt -check -recursive
+
+      - name: Validate
+        run: |
+          terraform -chdir=infra/github init -backend=false -input=false -lockfile=readonly
+          terraform -chdir=infra/github validate
+
   neutrality:
     name: Package neutrality
     runs-on: ubuntu-latest

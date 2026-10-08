@@ -230,3 +230,10 @@ GETTING_STARTED.md
 #
 # 配布側が .claude/ の中で閉じるのは、生成先の管理セクション（自動再生成される区間）へ
 # .claude/ 固有の行を書かないためで、方針が違うわけではない。
+
+# Terraform（infra/github/。#487）。provider の取得先 .terraform/ は init のたびに作り直せるので
+# 追跡しない。.terraform.lock.hcl（provider の版とハッシュの固定）は追跡する。
+# 状態ファイルは HCP Terraform に置くが、手元へ落ちた写しを誤ってコミットしないよう除外する。
+.terraform/
+*.tfstate
+*.tfstate.*

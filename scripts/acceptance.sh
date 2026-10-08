@@ -3,7 +3,7 @@
 #
 # verify.sh がこのスクリプトを実行し、終了コードで合否を判定する。
 #
-# このリポジトリは CI（.github/workflows/ci.yml）の 7 ジョブ
+# このリポジトリは CI（.github/workflows/ci.yml）の 8 ジョブ
 # + .github/workflows/identity-guard.yml を完全ミラーする。
 # 「ローカルが緑なら CI も緑」を保つのが目的で、部分ミラーは push してから CI で
 # 落ちる経路を残すため採らない。
@@ -196,6 +196,23 @@ bash packages/devcontainer-bootstrap/tests/run-tests.sh
 # bash 本体だけで、秒で終わる。
 echo "[acceptance] (devhost) selftest"
 bash packages/devhost/selftest.sh
+
+# ── CI: Terraform format and validate ─────────────────────────────────────────
+# 公開リポジトリの宣言（infra/github/。#487）の整形と構文。-backend=false で HCP Terraform へ
+# 繋がないので、資格情報は要らない。terraform は devcontainer の feature が入れる。
+#
+# init は provider を registry から取得する。作業ツリー（.claude/worktrees/*）ごとに取り直さない
+# よう、TF_PLUGIN_CACHE_DIR が未設定ならホームの下のキャッシュを使う。-lockfile=readonly で、
+# 追跡している .terraform.lock.hcl と違う provider を黙って選ばない（ロックの書き換えは
+# 人が terraform providers lock で行う）。CI 側は毎回まっさらなランナーなので、キャッシュは持たない。
+require_cmd terraform "rebuild the devcontainer (the terraform feature installs it)."
+export TF_PLUGIN_CACHE_DIR="${TF_PLUGIN_CACHE_DIR:-$HOME/.terraform.d/plugin-cache}"
+mkdir -p "$TF_PLUGIN_CACHE_DIR"
+echo "[acceptance] (terraform) fmt"
+terraform -chdir=infra/github fmt -check -recursive
+echo "[acceptance] (terraform) validate"
+terraform -chdir=infra/github init -backend=false -input=false -lockfile=readonly >/dev/null
+terraform -chdir=infra/github validate
 
 if [[ "$ran_any" -eq 0 ]]; then
   echo "[acceptance] 受け入れ条件が未定義です。検証対象が 1 つも見つかりません。" >&2

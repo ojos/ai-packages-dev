@@ -44,6 +44,7 @@ workflow は認証と identity をリポジトリ設定から解決する。値�
 
 - App は `ojos/devcontainer-bootstrap` と `ojos/ai-playbook` の 2 リポジトリへ install し、権限は `contents: write` のみを与える。Actions の `GITHUB_TOKEN` は自リポジトリにしかスコープが効かず、クロスリポジトリ push ができないため。
 - bot ユーザー ID は install 後に `gh api '/users/ojos-release-bot[bot]' --jq '.id'` で取得する。**App ID とは別番号**で、コミットを bot アカウントへ紐付けるのはこちら。
+- **配布先の公開リポジトリそのもの（存在と設定）は、このワークフローではなく `infra/github/` の Terraform が作る**（#487。`.github/project-ai-rules.md`「外部サービスの状態管理」）。新しい配布先を足すときは、先にそちらの PR で作ってから、App の install（手作業）とこのワークフローの対応を行う。
 
 ### artifact attestation（#340）
 
