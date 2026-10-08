@@ -68,12 +68,10 @@ curl -sSL "${BASE}/PACKAGE_ARCHIVE.tar.gz" -o PACKAGE_ARCHIVE.tar.gz
 if command -v sha256sum >/dev/null 2>&1; then sha256c="sha256sum"; else sha256c="shasum -a 256"; fi
 # マニフェストの checksums には SHA256SUMS などの行もあるが、ここで使うのは archive だけ。
 # その行だけを抜き出して照合する（ほかのファイルを取得していないので、全行を渡すと落ちる）。
-jq -r '.checksums["PACKAGE_ARCHIVE.tar.gz"] + "  PACKAGE_ARCHIVE.tar.gz"' RELEASE-MANIFEST.json | $sha256c -c -
-
 # archive の中身は、リポジトリのルートそのもの（dev.sh などがルート直下に並ぶ）。専用のディレクトリへ展開する。
-mkdir devhost
-tar -xzf PACKAGE_ARCHIVE.tar.gz -C devhost
-ls devhost/
+# 照合と展開を && でつなぐ。照合に失敗したら展開しない（行を分けると、失敗しても次の行が走る）。
+jq -r '.checksums["PACKAGE_ARCHIVE.tar.gz"] + "  PACKAGE_ARCHIVE.tar.gz"' RELEASE-MANIFEST.json | $sha256c -c - \
+  && mkdir devhost && tar -xzf PACKAGE_ARCHIVE.tar.gz -C devhost && ls devhost/
 ```
 
 `dev.sh` だけが要るときは、個別の資産を取得して、同じマニフェストのハッシュと照合します
@@ -81,7 +79,8 @@ ls devhost/
 
 ```bash
 curl -sSL "${BASE}/dev.sh" -o dev.sh
-jq -r '.checksums["dev.sh"] + "  dev.sh"' RELEASE-MANIFEST.json | $sha256c -c -
+# 照合に失敗したら、取得した dev.sh を消す（未検証のものを残さない）
+jq -r '.checksums["dev.sh"] + "  dev.sh"' RELEASE-MANIFEST.json | $sha256c -c - || rm -f dev.sh
 ```
 
 リリースの `SHA256SUMS` には、GitHub Actions が発行した artifact attestation（SLSA provenance）が付いています
