@@ -12,11 +12,11 @@
 #   dev supervise <名前>        起こして止まるまで待つ（systemd のユニットから使う）
 #   dev rebuild <名前> [--pull] コンテナを作り直す（ユニットを止めて、作り直して、起こし直す）
 #   dev doctor <名前>           「動いているのに入れない」を見分ける（exec・pids・ゾンビ・OOM・ユニット）
-#   dev restart <名前>          作り直さずに再起動する（ユニットを止めて、docker restart して、起こし直す）
-#   dev stop <名前>             意図して止める（ユニットを先に止めてから、コンテナを止める）
+#   dev restart <名前>          作り直さずに再起動する（ユニットを止めて、docker restart して、起こし直す。compose なら全体）
+#   dev stop <名前>             意図して止める（ユニットを先に止めてから、コンテナを止める。compose なら全体）
 #   dev logs <名前> [-n <行数>]  ユニットのログの末尾（既定 50 行）
 #   dev enable <名前>           ユニットを有効にして起こす（起動時から保つ）
-#   dev disable <名前>          ユニットを無効にして止める（コンテナは止めない）
+#   dev disable <名前>          ユニットを無効にして止め、コンテナも止める（再起動の後も止めたまま）
 #   dev exec <名前> -- <コマンド...>  tmux を介さずにコンテナの中でコマンドを 1 つ実行する
 #   dev self-update [--version <vX.Y.Z>]  dev 自身を DCB の公開リリースの版へ置き換える
 #   dev help [サブコマンド]      サブコマンドごとの説明（正本はこのファイルの help_* 関数）
