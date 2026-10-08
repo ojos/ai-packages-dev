@@ -1,6 +1,6 @@
 # ai-packages-dev
 
-ai-playbook / DevContainer Bootstrap (DCB) の 2 パッケージを共同開発するためのモノリポジトリです。
+ai-playbook / DevContainer Bootstrap (DCB) / devcontainer-host (devhost) の 3 パッケージを共同開発するためのモノリポジトリです。
 
 各パッケージは独立して配布可能な設計ですが、相互補完することで AI コーディング導入のシナジーを生み出すために、開発は 1 リポジトリに集約します。
 
@@ -42,11 +42,28 @@ ai-packages-dev/
 
 ## パッケージの役割と関係
 
-| パッケージ | 役割 | 配布先リポジトリ |
+### 3 パッケージの関係
+
+<!-- package-relations:begin -->
+ai-playbook・devcontainer-bootstrap（DCB）・devcontainer-host（devhost）は、それぞれ単体で使えます。DCB を中心に組み合わせると、効果が最大になります。
+
+| パッケージ | 単体での用途 | 配布先 |
 |---|---|---|
-| ai-playbook | AI 運用規範の正本。ランタイムを持たない | ojos/ai-playbook |
-| devcontainer-bootstrap (DCB) | Dev Container 環境を 1 コマンドで生成し、規範を配置する | ojos/devcontainer-bootstrap |
-| devcontainer-host (devhost) | SSH で届く外部の機械で devcontainer を起こし、保つ。コマンド `dev` | ojos/devcontainer-host |
+| ai-playbook | AI 運用の規範（ルール）だけを、プロジェクトへ入れる | ojos/ai-playbook |
+| DCB | プロジェクトの devcontainer を 1 コマンドで生成する | ojos/devcontainer-bootstrap |
+| devhost | 任意の `devcontainer.json` を持つプロジェクトを、SSH で届く外部の機械で常駐させる | ojos/devcontainer-host |
+
+**DCB が中心です。** DCB は、ほかの 2 つが着地する場所（プロジェクトの devcontainer）を作ります。ai-playbook の規範はその中に置かれ（DCB が配布機構で、正本は ai-playbook です）、devhost はそのコンテナを外部の機械で動かし続けます。
+
+- **DCB と ai-playbook**: DCB が、生成先のプロジェクトへ規範を配置します（`--playbook-version` などで取得元を指定する。新しい版へ移るときは、`--upgrade` に新しい `--playbook-version` を渡す）。DCB は規範の内容を持ちません。
+- **DCB と devhost**: DCB の生成物には、devhost が前提にする、または助かるもの（tmux、compose の `init: true`、codex のサンドボックスの設定（`--with-codex` のとき）、UID の合わせ込み）が入っています。devhost は DCB の生成物でなくても使えますが、DCB の生成物ならこれらが最初から揃います。理由と意味は devhost の README の「DCB と一緒に使うと揃うもの」にあります。
+- **ai-playbook と devhost**: 今は直接の関係がありません。
+
+**入れ方は 2 段です。** 置く場所と単位が違うため、DCB のオプションでは devhost は入りません（DCB が書き込むのは生成先のプロジェクトの中だけで、外部の機械のホームやユーザーの systemd には書き込みません）。
+
+1. プロジェクトごとに、プロジェクトの中へ DCB で devcontainer（と、必要なら規範）を生成する。
+2. 外部の機械ごとに、外部の機械のホームへ devhost を入れ、設定ファイル（`projects`）にそのプロジェクトを 1 行足す。
+<!-- package-relations:end -->
 
 `packages/devcontainer-host/`（devhost）は、SSH で届く外部の機械の上で devcontainer を保つための道具一式です。
 DCB のリリースには同梱せず、独自の版を持つ公開リポジトリ `ojos/devcontainer-host` のリリースで配ります（最初の版は v0.1.0 の予定。公開前は下の「リリース状況」が「未公開」になります）。

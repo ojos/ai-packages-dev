@@ -39,6 +39,29 @@
 - 第二意見のエンジンは、実行環境ではなく `scripts/second-opinion-review.sh --engine` で選びます（`gemini`（既定）/ `antigravity` / `codex`）。第二意見は主レビューと別ベンダーのモデルで取ることが前提です。エンジンは実行環境から自動では決まらず、選び方の検査もしないため、**主レビューと同じベンダーのエンジンを選ばないでください**（例: Codex で実装するなら `codex` 以外）。
 - GitHub Copilot のリモートレビュー要求（`--with-copilot-review`）は、リモート最終ゲートの選択制の機構です。入口ファイルの有無とは別です。
 
+## 3 パッケージの関係
+
+<!-- package-relations:begin -->
+ai-playbook・devcontainer-bootstrap（DCB）・devcontainer-host（devhost）は、それぞれ単体で使えます。DCB を中心に組み合わせると、効果が最大になります。
+
+| パッケージ | 単体での用途 | 配布先 |
+|---|---|---|
+| ai-playbook | AI 運用の規範（ルール）だけを、プロジェクトへ入れる | ojos/ai-playbook |
+| DCB | プロジェクトの devcontainer を 1 コマンドで生成する | ojos/devcontainer-bootstrap |
+| devhost | 任意の `devcontainer.json` を持つプロジェクトを、SSH で届く外部の機械で常駐させる | ojos/devcontainer-host |
+
+**DCB が中心です。** DCB は、ほかの 2 つが着地する場所（プロジェクトの devcontainer）を作ります。ai-playbook の規範はその中に置かれ（DCB が配布機構で、正本は ai-playbook です）、devhost はそのコンテナを外部の機械で動かし続けます。
+
+- **DCB と ai-playbook**: DCB が、生成先のプロジェクトへ規範を配置します（`--playbook-version` などで取得元を指定する。新しい版へ移るときは、`--upgrade` に新しい `--playbook-version` を渡す）。DCB は規範の内容を持ちません。
+- **DCB と devhost**: DCB の生成物には、devhost が前提にする、または助かるもの（tmux、compose の `init: true`、codex のサンドボックスの設定（`--with-codex` のとき）、UID の合わせ込み）が入っています。devhost は DCB の生成物でなくても使えますが、DCB の生成物ならこれらが最初から揃います。理由と意味は devhost の README の「DCB と一緒に使うと揃うもの」にあります。
+- **ai-playbook と devhost**: 今は直接の関係がありません。
+
+**入れ方は 2 段です。** 置く場所と単位が違うため、DCB のオプションでは devhost は入りません（DCB が書き込むのは生成先のプロジェクトの中だけで、外部の機械のホームやユーザーの systemd には書き込みません）。
+
+1. プロジェクトごとに、プロジェクトの中へ DCB で devcontainer（と、必要なら規範）を生成する。
+2. 外部の機械ごとに、外部の機械のホームへ devhost を入れ、設定ファイル（`projects`）にそのプロジェクトを 1 行足す。
+<!-- package-relations:end -->
+
 ## 管理対象
 
 | 対象 | 内容 |
