@@ -13,7 +13,31 @@ devcontainer を起こし、入る**ための道具一式です。どのプロ�
 | `ssh_config.cloudflared.example` | 端末の `~/.ssh/config` | ssh の入口の断片（経路: Cloudflare Access） |
 | `ssh_config.tailscale.example` | 端末の `~/.ssh/config` | ssh の入口の断片（経路: Tailscale） |
 | `termux/shortcut.example` | スマホの `~/.shortcuts/` | Termux:Widget のボタン 1 つ分 |
+| `install.sh` | （置かない。導入・更新のときに実行する） | 取得・照合して dev とユニットを置くインストーラー（「外部の機械への導入」） |
 | `selftest.sh` | （置かない） | 偽の道具で回す自己試験 |
+
+## 3 パッケージの関係
+
+<!-- package-relations:begin -->
+ai-playbook・devcontainer-bootstrap（DCB）・devcontainer-host（devhost）は、それぞれ単体で使えます。DCB を中心に組み合わせると、効果が最大になります。
+
+| パッケージ | 単体での用途 | 配布先 |
+|---|---|---|
+| ai-playbook | AI 運用の規範（ルール）だけを、プロジェクトへ入れる | ojos/ai-playbook |
+| DCB | プロジェクトの devcontainer を 1 コマンドで生成する | ojos/devcontainer-bootstrap |
+| devhost | 任意の `devcontainer.json` を持つプロジェクトを、SSH で届く外部の機械で常駐させる | ojos/devcontainer-host |
+
+**DCB が中心です。** DCB は、ほかの 2 つが着地する場所（プロジェクトの devcontainer）を作ります。ai-playbook の規範はその中に置かれ（DCB が配布機構で、正本は ai-playbook です）、devhost はそのコンテナを外部の機械で動かし続けます。
+
+- **DCB と ai-playbook**: DCB が、生成先のプロジェクトへ規範を配置します（`--playbook-version` などで取得元を指定する。`--upgrade` で新しい版へ追従する）。DCB は規範の内容を持ちません。
+- **DCB と devhost**: DCB の生成物には、devhost が前提にする、または助かるもの（tmux、compose の `init: true`、codex のサンドボックスの設定、UID の合わせ込み）が入っています。devhost は DCB の生成物でなくても使えますが、DCB の生成物ならこれらが最初から揃います。理由と意味は devhost の README の「DCB と一緒に使うと揃うもの」にあります。
+- **ai-playbook と devhost**: 今は直接の関係がありません。
+
+**入れ方は 2 段です。** 置く場所と単位が違うため、DCB のオプションでは devhost は入りません（DCB が書き込むのは生成先のプロジェクトの中だけで、外部の機械のホームやユーザーの systemd には書き込みません）。
+
+1. プロジェクトごとに、プロジェクトの中へ DCB で devcontainer（と、必要なら規範）を生成する。
+2. 外部の機械ごとに、外部の機械のホームへ devhost を入れ、設定ファイル（`projects`）にそのプロジェクトを 1 行足す。
+<!-- package-relations:end -->
 
 ## 外部の機械の前提
 
@@ -21,6 +45,8 @@ devcontainer を起こし、入る**ための道具一式です。どのプロ�
 systemd を持たない OS（macOS や、systemd を使わない Linux ディストリビューション）には
 導入できません。端末側（ssh で繋ぐ側）は macOS / Linux / Termux のいずれでも、同じ書式の
 `ssh_config` で使えます。
+
+**コンテナの中に tmux が要ります。** `dev attach`（コンテナの中の tmux に入る）と、`dev ls` の TMUX の列（tmux のセッションの有無）が、コンテナの中の tmux を使うためです。tmux が無いコンテナでは、`dev attach` が入れず、`dev ls` の TMUX は常に none になります。DCB で作った devcontainer には、tmux が常に入っています（下の「DCB と一緒に使うと揃うもの」）。DCB を使わない devcontainer では、各自で tmux を入れてください。
 
 **ネイティブ Linux の Docker Engine でワークスペースへ書き込めない場合**は、
 devcontainer-bootstrap（DCB）の README の「ネイティブ Linux の Docker でのワークスペースの所有者」に
@@ -33,6 +59,17 @@ seccomp の既定の制限を両方外す必要があります**（seccomp は D
 `--with-codex` を使わずに codex を後から入れた場合や、それより前の DCB で生成した場合は、
 DCB の README の「コンテナの中での codex のサンドボックス」に従って足してください。
 AppArmor だけを外しても、seccomp が先に止めるので動きません（Ubuntu 26.04 の実機で実測）。
+
+## DCB と一緒に使うと揃うもの
+
+devhost は、`devcontainer.json` を持つプロジェクトなら DCB の生成物でなくても使えます。DCB（devcontainer-bootstrap）で作った devcontainer なら、次のものが最初から入っていて、devhost の前提を満たしたり、devhost が見る不具合を防いだりします。DCB の生成物は、DCB の README と、DCB の `bootstrap.sh` が出す雛形で確かめられます（DCB は別のリポジトリで配布されるため、相対リンクにはしません）。
+
+| DCB の生成物 | DCB が入れる理由 | devhost にとっての意味 |
+|---|---|---|
+| tmux（`devcontainer.json` の feature として常に入る。`--with-*` では増減しない） | DCB の標準装備（common-utils・ripgrep・shellcheck・tmux・github-cli）の 1 つ | `dev attach` と `dev ls` の TMUX の列が使う。単体で使うときは、各自で入れる必要がある（「外部の機械の前提」） |
+| compose の `init: true`（`compose.yaml` の `app`） | PID 1 の `sleep infinity` は孤児になったプロセスを回収しない。これが無いと、ゾンビが溜まり、数日でプロセス数の上限に達して `docker exec` もコンテナ内のセッションも止まる | ゾンビの蓄積を防ぐ。`dev doctor` が見る pids の上限（pids.current / pids.max）とゾンビの数に効く。既存の生成先は、DCB の `--upgrade` で取り込んだあと、`dev rebuild` でコンテナを作り直すと効く |
+| codex のサンドボックスの設定（`--with-codex` のとき、`compose.yaml` の `security_opt: [apparmor=unconfined, seccomp=unconfined]`） | codex のサンドボックス（bwrap）は namespace を作って mount する。Docker の既定の seccomp が namespace の作成を、ネイティブ Linux では AppArmor が mount を止める | 外部の機械はネイティブ Linux の Docker Engine なので、これが無いと codex のサンドボックスが動かない。隔離は弱まる。詳しくは「外部の機械の前提」と DCB の README の「コンテナの中での codex のサンドボックス」 |
+| UID の合わせ込み（`devcontainer.json` の `updateRemoteUserUID`。生成物は書かず、既定の有効に任せる） | ネイティブ Linux では bind mount の所有者が数値の UID のまま通り、ホストの利用者の UID が 1000 でないとワークスペースへ書き込めない | 外部の機械の利用者の UID が 1000 でなくても、devcontainer CLI がコンテナを作るときに合わせる。`false` にしないこと |
 
 ## 層と、この道具が戻すもの
 
