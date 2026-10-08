@@ -467,7 +467,7 @@ JSON
 # リリースノートは配布先ルートで解決できる CHANGELOG.md という名前へ移して配る。
 # 変更履歴の正本は開発リポジトリの docs/release/ 側のままで、配布はその写しになる。
 #
-# devhost（packages/devhost/.）は配布先の devhost/ 配下へそのまま写す（#376）。
+# devhost（packages/devcontainer-host/.）は配布先の devhost/ 配下へそのまま写す（#376）。
 # devhost は bootstrap.sh が生成するものではなく、利用者が外部の機械へ手で置く
 # 独立した道具一式だが、配布経路は DCB のリリースに同梱する（親 #374 が選んだ方式）。
 #
@@ -487,15 +487,15 @@ DCB_DISTRIBUTED_FILES=(
   "packages/devcontainer-bootstrap/README.md:README.md"
   "LICENSE:LICENSE"
   "docs/release/release-notes-devcontainer-bootstrap.md:CHANGELOG.md"
-  "packages/devhost/README.md:devhost/README.md"
-  "packages/devhost/dev.sh:devhost/dev.sh"
-  "packages/devhost/dev-up@.service:devhost/dev-up@.service"
-  "packages/devhost/projects.example:devhost/projects.example"
-  "packages/devhost/selftest.sh:devhost/selftest.sh"
-  "packages/devhost/ssh_config.plain.example:devhost/ssh_config.plain.example"
-  "packages/devhost/ssh_config.cloudflared.example:devhost/ssh_config.cloudflared.example"
-  "packages/devhost/ssh_config.tailscale.example:devhost/ssh_config.tailscale.example"
-  "packages/devhost/termux/shortcut.example:devhost/termux/shortcut.example"
+  "packages/devcontainer-host/README.md:devhost/README.md"
+  "packages/devcontainer-host/dev.sh:devhost/dev.sh"
+  "packages/devcontainer-host/dev-up@.service:devhost/dev-up@.service"
+  "packages/devcontainer-host/projects.example:devhost/projects.example"
+  "packages/devcontainer-host/selftest.sh:devhost/selftest.sh"
+  "packages/devcontainer-host/ssh_config.plain.example:devhost/ssh_config.plain.example"
+  "packages/devcontainer-host/ssh_config.cloudflared.example:devhost/ssh_config.cloudflared.example"
+  "packages/devcontainer-host/ssh_config.tailscale.example:devhost/ssh_config.tailscale.example"
+  "packages/devcontainer-host/termux/shortcut.example:devhost/termux/shortcut.example"
 )
 
 # ai-playbook はツリー全体（.ai-playbook/.）を展開したうえで、開発リポジトリの

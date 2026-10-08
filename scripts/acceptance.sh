@@ -195,7 +195,7 @@ bash packages/devcontainer-bootstrap/tests/run-tests.sh
 # 偽の devcontainer / docker / tmux / systemctl で dev.sh を回す自己試験。外部依存は
 # bash 本体だけで、秒で終わる。
 echo "[acceptance] (devhost) selftest"
-bash packages/devhost/selftest.sh
+bash packages/devcontainer-host/selftest.sh
 
 # ── CI: Terraform format and validate ─────────────────────────────────────────
 # 公開リポジトリの宣言（infra/github/。#487）の整形と構文。-backend=false で HCP Terraform へ

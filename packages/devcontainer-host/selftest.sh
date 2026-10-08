@@ -44,9 +44,9 @@
 # - systemctl: `--user is-active <unit>` は状態の語を 1 行出し、active で 0、それ以外で 3
 #
 # 使い方:
-#   bash packages/devhost/selftest.sh             同じディレクトリの dev.sh を試す
-#   DEV_BIN=<path> bash packages/devhost/selftest.sh   別の dev.sh を試す（変異を当てるとき）
-#   DEV_UNIT=<path> bash packages/devhost/selftest.sh  別のユニットを試す（同上）
+#   bash packages/devcontainer-host/selftest.sh             同じディレクトリの dev.sh を試す
+#   DEV_BIN=<path> bash packages/devcontainer-host/selftest.sh   別の dev.sh を試す（変異を当てるとき）
+#   DEV_UNIT=<path> bash packages/devcontainer-host/selftest.sh  別のユニットを試す（同上）
 #
 # 終了コード: 0 = DEVHOST_SELFTEST_PASS / 1 = 期待と食い違った
 set -euo pipefail
@@ -1300,16 +1300,16 @@ mk_self
 
 # git の作業ツリーの中（リポジトリのチェックアウトや、展開しただけのディレクトリ）は置き換えない。
 GITDIR="$WORK/checkout"
-mkdir -p "$GITDIR/.git" "$GITDIR/packages/devhost"
-printf '%s\n%s\necho old\n' "$HDR1" "$HDR2" >"$GITDIR/packages/devhost/dev.sh"
-run 1 "self-update: git の作業ツリーの中の dev.sh は置き換えない" -- DEV_SELF_PATH="$GITDIR/packages/devhost/dev.sh" FAKE_CURL_DIR="$REL" -- self-update
+mkdir -p "$GITDIR/.git" "$GITDIR/packages/devcontainer-host"
+printf '%s\n%s\necho old\n' "$HDR1" "$HDR2" >"$GITDIR/packages/devcontainer-host/dev.sh"
+run 1 "self-update: git の作業ツリーの中の dev.sh は置き換えない" -- DEV_SELF_PATH="$GITDIR/packages/devcontainer-host/dev.sh" FAKE_CURL_DIR="$REL" -- self-update
 expect_err "git の作業ツリーの中です"
 expect_no_calls
-[[ "$(cat "$GITDIR/packages/devhost/dev.sh")" == "$(printf '%s\n%s\necho old' "$HDR1" "$HDR2")" ]] || ng "self-update: git の作業ツリーの dev.sh が書き換わっています"
+[[ "$(cat "$GITDIR/packages/devcontainer-host/dev.sh")" == "$(printf '%s\n%s\necho old' "$HDR1" "$HDR2")" ]] || ng "self-update: git の作業ツリーの dev.sh が書き換わっています"
 # 作業ツリーが worktree / submodule のように .git がファイルの形でも同じ。
 rm -rf "$GITDIR/.git"
 printf 'gitdir: /elsewhere\n' >"$GITDIR/.git"
-run 1 "self-update: .git がファイルの作業ツリーの中も置き換えない" -- DEV_SELF_PATH="$GITDIR/packages/devhost/dev.sh" FAKE_CURL_DIR="$REL" -- self-update
+run 1 "self-update: .git がファイルの作業ツリーの中も置き換えない" -- DEV_SELF_PATH="$GITDIR/packages/devcontainer-host/dev.sh" FAKE_CURL_DIR="$REL" -- self-update
 expect_no_calls
 
 # 置き換え先は、2 行目が説明文の全文と違っても「# dev — 」で始まれば devhost の dev.sh とみなす（版をまたいで更新できる）。

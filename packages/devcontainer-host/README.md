@@ -75,7 +75,7 @@ ls devhost/
 ```
 
 以降の手順は、この `devhost/` を取り出したディレクトリで実行します
-（リポジトリを取り込んでいる場合は `packages/devhost/` を同じ意味で読んでください）。
+（リポジトリを取り込んでいる場合は `packages/devcontainer-host/` を同じ意味で読んでください）。
 
 ### devcontainer CLI を入れる
 
