@@ -125,7 +125,7 @@ fi
 it "対象が無い実行では発行しない（if で守っている）"
 # DCB を公開しない実行（playbook だけのリリース）では digest が作られない。
 # 守りが外れると、対象の無い発行で失敗するか、空の対象で発行しうる。
-if [[ -n "$( { grep -nE "^[[:space:]]*if:[[:space:]]*steps\..*outputs\.digest[[:space:]]*!=" "$WF" || true; } )" ]]; then
+if [[ -n "$( { grep -nE "^[[:space:]]*if:[[:space:]]*(\\$\\{\\{[[:space:]]*)?(!cancelled\(\)[[:space:]]*&&[[:space:]]*)?steps\..*outputs\.digest[-a-z]*[[:space:]]*!=" "$WF" || true; } )" ]]; then
   pass
 else
   fail "attest ステップに digest の有無による if が無い"
@@ -137,19 +137,32 @@ it "workflow が読む digest のファイル名を、スクリプトが書く�
 # **ここが食い違うと、発行が静かに飛ぶ。** workflow は
 # `<ATTEST_SUBJECTS_DIR>/<名前>.sha256` を読み、スクリプトは `$pkg_name.sha256` を
 # 書く。pkg_name は generate_standard_assets の呼び出し側が渡す。
-WF_NAME="$( { grep -oE '/[a-z0-9-]+\.sha256' "$WF" || true; } | head -n 1 | sed 's#^/##; s#\.sha256$##' )"
+# workflow は `<パッケージ名>:<出力名>` の組を回して `<ATTEST_SUBJECTS_DIR>/<パッケージ名>.sha256` を読む。
+# 組の名前のすべてが、スクリプトの呼び出しに在ること。
+WF_NAMES="$( { grep -oE '"[a-z0-9-]+:digest[-a-z]*"' "$WF" || true; } | sed 's/^"//; s/:.*$//' )"
 SCRIPT_WRITES="$( { grep -nF '$pkg_name.sha256' "$SCRIPT" || true; } )"
 SCRIPT_CALLS="$( { grep -noE 'generate_standard_assets "[^"]*" "[a-z0-9-]+"' "$SCRIPT" || true; } | sed 's/.*"\([a-z0-9-]*\)"$/\1/' )"
-if [[ -z "$WF_NAME" ]]; then
-  fail "workflow から読み取るファイル名を抽出できない"
+if [[ -z "$WF_NAMES" ]]; then
+  fail "workflow から読み取るパッケージ名を抽出できない"
 elif [[ -z "$SCRIPT_WRITES" ]]; then
   fail "スクリプトが \$pkg_name.sha256 を書いていない"
 elif [[ -z "$SCRIPT_CALLS" ]]; then
   fail "generate_standard_assets の呼び出しから package 名を抽出できない"
-elif [[ -n "$(printf '%s\n' "$SCRIPT_CALLS" | grep -xF "$WF_NAME" || true)" ]]; then
+else
+  bad=""
+  for n in $WF_NAMES; do
+    printf '%s\n' "$SCRIPT_CALLS" | grep -xF "$n" >/dev/null || bad="$bad $n"
+  done
+  if [[ -z "$bad" ]]; then pass; else fail "workflow が読む名前がスクリプトの呼び出しに無い:$bad"; fi
+fi
+
+it "digest を読むステップと発行ステップが、公開の途中の失敗でも走る条件（!cancelled()）を持つ"
+# DCB を公開したあとに別のパッケージの公開が失敗しても、公開済みの SHA256SUMS に attestation を付ける。
+n="$( { grep -cE "^[[:space:]]*if:[[:space:]]*\\$\\{\\{[[:space:]]*!cancelled\(\)" "$WF" || true; } )"
+if [[ "$n" -ge 3 ]]; then
   pass
 else
-  fail "workflow が読む名前「$WF_NAME」が、スクリプトの呼び出し（$(printf '%s' "$SCRIPT_CALLS" | tr '\n' ' ')）に無い"
+  fail "!cancelled() を持つステップが 3 つ未満（$n）"
 fi
 
 it "スクリプトは環境変数が無ければ digest を書かない"

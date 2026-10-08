@@ -18,8 +18,7 @@
 #   dev enable <名前>           ユニットを有効にして起こす（起動時から保つ）
 #   dev disable <名前>          ユニットを無効にして止め、コンテナも止める（再起動の後も止めたまま）
 #   dev exec <名前> -- <コマンド...>  tmux を介さずにコンテナの中でコマンドを 1 つ実行する
-#   dev self-update [--version <vX.Y.Z>]  dev 自身を devcontainer-host の公開リリースの版へ置き換える
-#   dev version                 dev の版を出す（`dev --version` も同じ）
+#   dev self-update [--version <vX.Y.Z>]  dev 自身を DCB の公開リリースの版へ置き換える
 #   dev help [サブコマンド]      サブコマンドごとの説明（正本はこのファイルの help_* 関数）
 #
 # ## プロジェクトの一覧
@@ -55,11 +54,6 @@ set -euo pipefail
 PROG="dev"
 DEFAULT_TMUX_SESSION="main"
 
-# dev の版。公開する版（リリースのタグ）は、リリースの手順がこの行を書き換えて配る
-# （scripts/release-packages.sh の stamp_host_version）。リポジトリの中の値は、次に出す版の目印で、
-# 公開物の値ではない。行の形（DEV_VERSION="vX.Y.Z"）を変えると、リリースの手順が止まる。
-DEV_VERSION="v0.1.0"
-
 # ssh の非対話のコマンド（`ssh <ホスト> .local/bin/dev ...`）と systemd のユーザーのユニットは
 # ~/.profile を読まないので、~/.local/bin などが PATH に無い。devcontainer CLI の既定の置き場所
 # （公式の install.sh は ~/.devcontainers/bin）と ~/.local/bin を**末尾へ**足す（先に在る PATH を優先する）。
@@ -88,7 +82,6 @@ usage() {
   dev disable <名前>
   dev exec <名前> -- <コマンド...>
   dev self-update [--version <vX.Y.Z>]
-  dev version
   dev help [サブコマンド]
 
 サブコマンドごとの説明は dev help <サブコマンド>。
@@ -616,13 +609,12 @@ cmd_exec() {
 }
 
 # ── self-update ───────────────────────────────────────────────────────────────
-# devhost は公開リポジトリ ojos/devcontainer-host のリリースで配られる（README.md の「devhost を入手する」）。
-# 取得先はその公開リリース。既定は最新、--version で版を固定する。
-# （以前は devcontainer-bootstrap のリリースに同梱していた。取得先を変えても、下の確かめは変えない。）
-RELEASE_BASE_URL="https://github.com/ojos/devcontainer-host/releases"
+# devhost は DCB のリリースに同梱されて配られる（README.md の「devhost を入手する」）。
+# 取得先は DCB の公開リリース。既定は最新、--version で版を固定する。
+RELEASE_BASE_URL="https://github.com/ojos/devcontainer-bootstrap/releases"
 # devhost の dev.sh である確かめ。1 行目が bash の shebang、2 行目が「# dev — 」で始まること。2 行目を全文で照合しないのは、将来の版が説明文を変えても、
 # 古い版から更新できなくなるのを避けるため（接頭辞は版をまたいで変えない約束にする）。
-# 置き換え先（いま置いてある dev）と、取得した新しい dev の両方に課す（取得物は、ハッシュの照合と
+# 置き換え先（いま置いてある dev）と、取り出した新しい dev の両方に課す（取得物は、ハッシュの照合と
 # 構文の検査に加えて、sh や無関係なスクリプトを dev として置かないための確かめ）。
 SELF_HEADER_PREFIX='# dev — '
 
@@ -665,11 +657,10 @@ in_git_worktree() {
 SU_TMP=""
 su_cleanup() { [[ -z "$SU_TMP" ]] || rm -rf "$SU_TMP"; }
 
-# dev 自身を、devcontainer-host の公開リリースの dev.sh へ置き換える。
-# 手順は README.md の手動の入手と同じ: RELEASE-MANIFEST.json と dev.sh を取得し、
-# マニフェストが記録した dev.sh のハッシュ（checksums の dev.sh）と照合する。dev.sh は個別の資産として
-# 配られているので、アーカイブは取らない。
-# **置き換える前に全部確かめる**（ハッシュが合う / 取得したものが devhost の dev.sh で構文が通る / 置き換え先も
+# dev 自身を、DCB の公開リリースの devhost/dev.sh へ置き換える。
+# 手順は README.md の手動の入手と同じ: RELEASE-MANIFEST.json と PACKAGE_ARCHIVE.tar.gz を取得し、
+# マニフェストが記録した archive のハッシュと照合してから、./devhost/dev.sh を取り出す。
+# **置き換える前に全部確かめる**（ハッシュが合う / 取り出したものが devhost の dev.sh / 置き換え先も
 # devhost の dev.sh）。どれかが外れたら、何も置き換えずに 1 で止まる。置き換えは同じディレクトリの
 # 一時ファイルへ書いてから mv する（途中で切れても、半端な dev が残らない）。
 cmd_self_update() {
@@ -691,9 +682,10 @@ cmd_self_update() {
   fi
   need curl "curl を入れてください。"
   need jq "jq を入れてください（マニフェストを読む。README.md の手動の入手と同じ）。"
+  need tar "tar を入れてください。"
   local base self selfdir
-  # 最新のとき、マニフェストだけを latest から取り、そこに書かれた版で dev.sh を取る
-  # （latest を 2 回引くと、間にリリースが出たときに、別の版のマニフェストと dev.sh を組み合わせうる）。
+  # 最新のとき、マニフェストだけを latest から取り、そこに書かれた版でアーカイブを取る
+  # （latest を 2 回引くと、間にリリースが出たときに、別の版のマニフェストとアーカイブを組み合わせうる）。
   local mbase
   if [[ -n "$version" ]]; then mbase="$RELEASE_BASE_URL/download/$version"; else mbase="$RELEASE_BASE_URL/latest/download"; fi
   base="$mbase"
@@ -716,37 +708,33 @@ cmd_self_update() {
     [[ "$mver" == v* ]] || mver="v$mver"
     [[ "$mver" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-+.][0-9A-Za-z.-]+)?$ ]] || die "最新の版をマニフェストから読めません（version: $mver）。--version vX.Y.Z で版を指定してください。何も置き換えていません。"
     base="$RELEASE_BASE_URL/download/$mver"
-    echo "[$PROG] 最新の版: $mver（dev.sh は $base から取る）"
+    echo "[$PROG] 最新の版: $mver（アーカイブは $base から取る）"
   fi
+  curl -fsSL "$base/PACKAGE_ARCHIVE.tar.gz" -o "$SU_TMP/PACKAGE_ARCHIVE.tar.gz" || die "PACKAGE_ARCHIVE.tar.gz を取得できません。何も置き換えていません。"
 
   local want got
-  want="$(jq -r '.checksums["dev.sh"] // empty' "$SU_TMP/RELEASE-MANIFEST.json")" || die "RELEASE-MANIFEST.json を読めません。何も置き換えていません。"
-  [[ "$want" =~ ^[0-9a-f]{64}$ ]] || die "RELEASE-MANIFEST.json に dev.sh のハッシュ（checksums の dev.sh）がありません。何も置き換えていません。"
-  curl -fsSL "$base/dev.sh" -o "$SU_TMP/dev.sh" || die "dev.sh を取得できません。何も置き換えていません。"
-  got="$(sha256_of "$SU_TMP/dev.sh")" || die "ハッシュを計算できません。何も置き換えていません。"
-  [[ "$got" == "$want" ]] || die "dev.sh のハッシュがマニフェストと合いません（マニフェスト $want / 実際 $got）。何も置き換えていません。"
+  want="$(jq -r '.checksums["PACKAGE_ARCHIVE.tar.gz"] // empty' "$SU_TMP/RELEASE-MANIFEST.json")" || die "RELEASE-MANIFEST.json を読めません。何も置き換えていません。"
+  [[ "$want" =~ ^[0-9a-f]{64}$ ]] || die "RELEASE-MANIFEST.json に archive のハッシュ（checksums の PACKAGE_ARCHIVE.tar.gz）がありません。何も置き換えていません。"
+  got="$(sha256_of "$SU_TMP/PACKAGE_ARCHIVE.tar.gz")" || die "ハッシュを計算できません。何も置き換えていません。"
+  [[ "$got" == "$want" ]] || die "PACKAGE_ARCHIVE.tar.gz のハッシュがマニフェストと合いません（マニフェスト $want / 実際 $got）。何も置き換えていません。"
   echo "[$PROG] ハッシュが合いました: $got"
 
-  is_devhost_dev_sh "$SU_TMP/dev.sh" || die "取得した dev.sh が devhost の dev.sh だと確かめられません（1 行目が bash の shebang、2 行目が「# dev — 」で始まる形ではない）。何も置き換えていません。"
-  "${BASH:-bash}" -n "$SU_TMP/dev.sh" || die "取得した dev.sh に構文の誤りがあります。何も置き換えていません。"
+  # archive の中の名前は ./devhost/... なので、./ を付けて指定する（GNU tar は devhost/ だと一致しない）。
+  mkdir "$SU_TMP/x" && tar -xzf "$SU_TMP/PACKAGE_ARCHIVE.tar.gz" -C "$SU_TMP/x" ./devhost/dev.sh || die "archive から ./devhost/dev.sh を取り出せません。何も置き換えていません。"
+  is_devhost_dev_sh "$SU_TMP/x/devhost/dev.sh" || die "取り出した devhost/dev.sh が devhost の dev.sh だと確かめられません（1 行目が bash の shebang、2 行目が「# dev — 」で始まる形ではない）。何も置き換えていません。"
+  "${BASH:-bash}" -n "$SU_TMP/x/devhost/dev.sh" || die "取り出した devhost/dev.sh に構文の誤りがあります。何も置き換えていません。"
 
-  if cmp -s "$SU_TMP/dev.sh" "$self"; then
+  if cmp -s "$SU_TMP/x/devhost/dev.sh" "$self"; then
     echo "[$PROG] すでにこの版です（$self は取得した dev.sh と同じ）。置き換えません。"
     return 0
   fi
   local tmp
   tmp="$(mktemp "$selfdir/.dev.XXXXXX")" || die "$selfdir に一時ファイルを作れません。何も置き換えていません。"
-  if ! cp "$SU_TMP/dev.sh" "$tmp" || ! chmod 0755 "$tmp" || ! mv -f "$tmp" "$self"; then
+  if ! cp "$SU_TMP/x/devhost/dev.sh" "$tmp" || ! chmod 0755 "$tmp" || ! mv -f "$tmp" "$self"; then
     rm -f "$tmp"
     die "置き換えに失敗しました。何も置き換えていません（置き換え先: $self）。"
   fi
   echo "[$PROG] 置き換えました: $self"
-}
-
-# dev の版を出す。
-cmd_version() {
-  [[ $# -eq 0 ]] || usage_error "使い方: dev version"
-  printf '%s %s\n' "$PROG" "$DEV_VERSION"
 }
 
 # doctor の 1 行ごとの判定。FAIL / WARN の数を数える。
@@ -1254,7 +1242,7 @@ EOF
 
 help_self-update() {
   cat <<'EOF'
-dev self-update — dev 自身を、devcontainer-host の公開リリースの版へ置き換える。
+dev self-update — dev 自身を、DCB の公開リリースの版へ置き換える。
 
 使い方:
   dev self-update [--version <vX.Y.Z>]
@@ -1262,33 +1250,19 @@ dev self-update — dev 自身を、devcontainer-host の公開リリースの�
 呼ぶ順序:
   1. 置き換え先（この dev）が、リンクでも git の作業ツリーの中でもなく、devhost の dev.sh であることを
      確かめる（1 行目が bash の shebang、2 行目が「# dev — 」で始まる）
-  2. 公開リリースから RELEASE-MANIFEST.json を取得する（既定は最新。--version でその版に固定する）
-  3. マニフェストの checksums に記録された dev.sh の SHA-256 を読み、同じリリースの dev.sh を取得して照合する
-  4. 取得した dev.sh が 1 と同じ形（bash の shebang と「# dev — 」）であることと、構文を確かめる
+  2. 公開リリースから RELEASE-MANIFEST.json と PACKAGE_ARCHIVE.tar.gz を取得する
+     （既定は最新。--version でその版に固定する）
+  3. マニフェストに記録された archive の SHA-256 と、取得した archive のハッシュを照合する
+  4. archive から ./devhost/dev.sh を取り出し、1 と同じ形（bash の shebang と「# dev — 」）であることと構文を確かめる
   5. 同じディレクトリの一時ファイルへ写し、mv で置き換える
 どれか 1 つでも外れたら、何も置き換えずに 1 で止まる。手動の入手（README の「devhost を入手する」）と
 同じ照合。dev.sh だけを置き換える（dev-up@.service や設定ファイルには触らない）。
-curl と jq と、sha256sum または shasum が要る。
+curl / jq / tar と、sha256sum または shasum が要る。
 
 オプション:
   --version <vX.Y.Z>   取得する版（既定は最新）
 
 終了コード: 0 = 置き換えた（すでに同じ版なら置き換えずに 0） / 1 = 失敗（取得・照合・置き換え先の確認・置き換え） / 2 = 使い方の誤り
-EOF
-}
-
-help_version() {
-  cat <<'EOF'
-dev version — dev の版を出す。
-
-使い方:
-  dev version
-  dev --version
-
-出力は `dev vX.Y.Z` の 1 行。公開した版のこの値は、リリースの手順が書き込む。
-プロジェクトの設定ファイルは読まない。
-
-終了コード: 0 = 成功 / 2 = 使い方の誤り
 EOF
 }
 
@@ -1299,7 +1273,7 @@ dev help — サブコマンドの説明を出す。
 使い方:
   dev help                  使い方の一覧
   dev help <サブコマンド>    ls / up / attach / supervise / rebuild / doctor /
-                            restart / stop / logs / enable / disable / exec / self-update / version の説明
+                            restart / stop / logs / enable / disable / exec / self-update の説明
 
 終了コード: 0 = 成功 / 2 = 知らないサブコマンド
 EOF
@@ -1344,7 +1318,6 @@ main() {
     disable) cmd_disable "$@" ;;
     exec) cmd_exec "$@" ;;
     self-update) cmd_self_update "$@" ;;
-    version | --version) cmd_version "$@" ;;
     help) cmd_help "$@" ;;
     -h | --help) usage ;;
     *)

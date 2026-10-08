@@ -174,7 +174,7 @@ fi
 # 巻き込まれて上書きされた。
 
 it "パッケージ単位のリリースが可能（両方必須ではない）"
-if grep -q 'specify at least one of --dcb-version or --playbook-version' "$RELEASE_SH"; then
+if grep -q 'specify at least one of --dcb-version, --playbook-version or --host-version' "$RELEASE_SH"; then
   pass
 else
   fail "両方のバージョン指定が必須のままになっている"

@@ -13,8 +13,13 @@
 # 要らない。所要時間も秒単位に収める。scripts/acceptance.sh はこれを DCB テスト
 # （約 4 分）より前に置き、安い検査から落ちるようにしている。
 #
-# 例外が 2 つある。いずれも持ち込んでいるのは検査対象スクリプト自身の依存で、
+# 例外が 3 つある。いずれも持ち込んでいるのは検査対象スクリプト自身の依存で、
 # テスト側が増やした依存ではない。どちらもネットワークへは出ない。
+#
+#   test-release-devcontainer-host.sh
+#                              devhost のリリース手順（scripts/release-packages.sh の関数と dry-run、
+#                              古い版の dev.sh の self-update）を通すため jq / tar / python3 / timeout を要する。
+#                              gh / curl は PATH 上の偽物で、ネットワークには出ない。
 #
 #   test-agy-telemetry.sh      scripts/install-ai-tools.sh を実行するため jq を要する
 #                              （scripts/acceptance.sh も同じ理由で jq を前提にしている）。

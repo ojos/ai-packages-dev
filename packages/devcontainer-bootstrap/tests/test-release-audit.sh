@@ -278,7 +278,19 @@ cat > "$STUB_DIR/gh" <<STUB
 #!/usr/bin/env bash
 FIXTURE="$FIXTURE"
 if [[ "\${1:-}" == "release" && "\${2:-}" == "list" ]]; then
-  cat "\$FIXTURE/tags.txt"
+  # 監査は devcontainer-bootstrap と devcontainer-host の 2 リポジトリを見る。
+  # リポジトリごとの一覧は tags-<名前>.txt。無ければ、devcontainer-bootstrap だけが tags.txt
+  # （13 件）を返し、ほかは公開が 0 件の扱いにする。
+  repo=""
+  while [[ \$# -gt 0 ]]; do
+    if [[ "\$1" == "--repo" ]]; then repo="\${2##*/}"; fi
+    shift
+  done
+  if [[ -f "\$FIXTURE/tags-\$repo.txt" ]]; then
+    cat "\$FIXTURE/tags-\$repo.txt"
+  elif [[ "\$repo" == "devcontainer-bootstrap" ]]; then
+    cat "\$FIXTURE/tags.txt"
+  fi
   exit 0
 fi
 if [[ "\${1:-}" == "release" && "\${2:-}" == "download" ]]; then
@@ -319,6 +331,18 @@ else
   assert_contains "$out" "公開 13 件中 10 件を検査（範囲外・未検査: 3 件）" "監査出力"
 fi
 
+it "devcontainer-host も監査の対象に入る（公開があれば、その資産を再計算で検証する）"
+printf 'v0.1.1\nv0.1.0\n' > "$FIXTURE/tags-devcontainer-host.txt"
+out_host="$(run_audit)"
+rc=$?
+rm -f "$FIXTURE/tags-devcontainer-host.txt"
+if [[ $rc -eq 0 ]]; then
+  assert_contains "$out_host" "scope test-owner/devcontainer-host — 公開 2 件中 2 件を検査（範囲外・未検査: 0 件）" "監査出力"
+else
+  fail "devcontainer-host の公開がある状態で監査が失敗した:
+$(printf '%s' "$out_host" | grep -v '^\[audit\] OK' | head -10)"
+fi
+
 it "総括行にも検査件数と範囲外の件数が現れる"
 assert_contains "$out" "検査 10 件 / 範囲外・未検査 3 件" "監査出力"
 
@@ -351,7 +375,7 @@ fi
 
 it "範囲内の 1 件でも改変されていれば監査が非ゼロで終了する"
 mkdir -p "$FIXTURE/releases/v0.0.13"
-# $BASE は devhost/ のようなディレクトリも含む（#376）。-R を付けないと cp が
+# $BASE は PACKAGE_ARCHIVE.tar.gz の展開物などディレクトリも含みうる。-R を付けないと cp が
 # ディレクトリをエラーで読み飛ばし、警告が出る（監査の判定自体には影響しない）。
 cp -R "$BASE"/* "$FIXTURE/releases/v0.0.13"/
 printf ' ' >> "$FIXTURE/releases/v0.0.13/bootstrap.sh"

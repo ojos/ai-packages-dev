@@ -8,20 +8,23 @@ usage:
   bash scripts/release-packages.sh --owner <github-owner> --dcb-version <vX.Y.Z> --execute
   bash scripts/release-packages.sh --owner <github-owner> --playbook-version <vX.Y.Z> --execute
 
-  # release both in one run
+  bash scripts/release-packages.sh --owner <github-owner> --host-version <vX.Y.Z> --execute
+
+  # release several in one run
   bash scripts/release-packages.sh --owner <github-owner> \
-    --dcb-version <vX.Y.Z> --playbook-version <vX.Y.Z> --execute
+    --dcb-version <vX.Y.Z> --playbook-version <vX.Y.Z> --host-version <vX.Y.Z> --execute
 
 options:
   --owner <owner>               GitHub owner (required)
   --dcb-version <vX.Y.Z>        DCB release tag
   --playbook-version <vX.Y.Z>   ai-playbook tag (source-only, no release)
+  --host-version <vX.Y.Z>       devcontainer-host release tag
   --execute                     Actually execute release operations
   --audit                       Verify published release asset integrity and exit
   -h, --help                    Show help
 
 notes:
-  - Specify at least one of --dcb-version / --playbook-version.
+  - Specify at least one of --dcb-version / --playbook-version / --host-version.
     Only the specified packages are touched; the others are left untouched.
   - Published versions are immutable. Re-releasing an existing version fails
     during preflight, before any side effect.
@@ -155,6 +158,80 @@ validate_dcb_docs() {
   }
 }
 
+# devhost の版を書き込む行の形。dev.sh の DEV_VERSION="vX.Y.Z" がちょうど 1 行あること。
+#
+# DCB は版の写し（DCB_VERSION）をリポジトリの中で人手により揃え、リリースの preflight が
+# 公開するタグと照合する。devhost は写しを 1 つしか持たない（dev.sh だけ）ので、照合ではなく
+# 書き込みにする。リポジトリの中の値は次に出す版の目印で、公開物の値はこの関数群が決める。
+# 行の形が崩れていると書き込めないので、preflight で先に確かめる。
+HOST_VERSION_LINE_RE='^DEV_VERSION="v[0-9]+\.[0-9]+\.[0-9]+"$'
+
+validate_host_version_anchor() {
+  local file="${1:-packages/devcontainer-host/dev.sh}" n
+  [[ -f "$file" ]] || {
+    echo "error: $file not found" >&2
+    exit 1
+  }
+  n="$(grep -cE "$HOST_VERSION_LINE_RE" "$file" || true)"
+  [[ "$n" == "1" ]] || {
+    echo "error: $file に DEV_VERSION=\"vX.Y.Z\" の行がちょうど 1 つありません（見つかった数: $n）" >&2
+    echo "       リリースの手順が版を書き込む行です。形を変えないでください。" >&2
+    exit 1
+  }
+}
+
+# devcontainer-host の文書が、公開するタグと食い違っていないこと（validate_dcb_docs と同じ方式）。
+#
+# README の導入手順は固定の版（TAG=vX.Y.Z / --version vX.Y.Z）を例示している。公開する版を
+# 上げても README を直し忘れると、利用者が古い版を取得する手順がそのまま残る。リリース準備で
+# 人手により揃え、ここで照合して食い違えば落とす。リリースノートにも公開するタグの見出しを要る。
+validate_host_docs() {
+  local tag="$1"
+  local readme="packages/devcontainer-host/README.md"
+  local notes="docs/release/release-notes-devcontainer-host.md"
+
+  # 語の境界で照合する。部分一致だと、公開タグ v0.1.0 に対して TAG=v0.1.00 を通してしまう。
+  # 版の後ろに英数字・ドット・ハイフンが続く形は、別の版として落とす。
+  local tag_re="${tag//./\\.}"
+  local boundary='([^0-9A-Za-z.-]|$)'
+  grep -Eq -- "TAG=${tag_re}${boundary}" "$readme" || {
+    echo "error: devcontainer-host README.md の取得手順の TAG= が $tag と一致しません" >&2
+    exit 1
+  }
+  grep -Eq -- "--version ${tag_re}${boundary}" "$readme" || {
+    echo "error: devcontainer-host README.md の self-update の例（--version）が $tag と一致しません" >&2
+    exit 1
+  }
+  grep -Fxq -- "## $tag" "$notes" || {
+    echo "error: $notes に公開するタグの見出し「## $tag」がありません" >&2
+    exit 1
+  }
+}
+
+# 配布ツリーの dev.sh の DEV_VERSION を、公開するタグに書き換える（`dev version` が出す値）。
+# 使い方: stamp_host_version <配布ツリー> <vX.Y.Z>
+# 書き換えのあとで、行がタグと一致していることを確かめる。確かめられなければ公開しない。
+stamp_host_version() {
+  local dir="$1" tag="$2" f tmp
+  # 空や形の違うタグを書き込むと、`dev version` が空を出す版が公開される。呼び出し側の検査に
+  # 頼らず、ここでも形を確かめる。
+  [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+    echo "error: invalid tag format: $tag (expected: vX.Y.Z)" >&2
+    exit 1
+  }
+  f="$dir/dev.sh"
+  validate_host_version_anchor "$f"
+  tmp="$(mktemp "${TMPDIR:-/tmp}/host-stamp.XXXXXX")"
+  sed -E "s/$HOST_VERSION_LINE_RE/DEV_VERSION=\"$tag\"/" "$f" > "$tmp"
+  # mv ではなく中身を流し込む（実行権限を元のファイルから引き継ぐ）。
+  cat "$tmp" > "$f"
+  rm -f "$tmp"
+  grep -Fxq "DEV_VERSION=\"$tag\"" "$f" || {
+    echo "error: $f の DEV_VERSION を $tag に書き換えられませんでした" >&2
+    exit 1
+  }
+}
+
 # 公開済みのリリースは不変とする。
 #
 # 同じタグで再実行すると、tag_and_release が gh release upload --clobber で資産を
@@ -207,6 +284,23 @@ run_dcb_tests() {
     exit 1
   }
   echo "[ok] DCB tests passed"
+}
+
+# devhost の自己試験。公開リポジトリには tests/ も規範ソースも渡らないため、DCB と同じく
+# リリース前のこの位置が機能テストを通せる唯一のゲートになる。偽の curl / docker などを使い、
+# ネットワークには出ない。
+run_host_tests() {
+  local runner="packages/devcontainer-host/selftest.sh"
+  [[ -f "$runner" ]] || {
+    echo "error: devcontainer-host selftest not found: $runner" >&2
+    exit 1
+  }
+  echo "[preflight] running devcontainer-host selftest"
+  bash "$runner" >/dev/null || {
+    echo "error: devcontainer-host selftest failed. run: bash $runner" >&2
+    exit 1
+  }
+  echo "[ok] devcontainer-host selftest passed"
 }
 
 validate_markdown_links_in_tree() {
@@ -308,6 +402,10 @@ PY
 
 # すべてのパッケージリリースに必須のリリース資産。
 REQUIRED_RELEASE_ASSETS=("RELEASE-MANIFEST.json" "SHA256SUMS" "PACKAGE_ARCHIVE.tar.gz")
+
+# RELEASE-MANIFEST.json の checksums へ、標準の 2 資産（PACKAGE_ARCHIVE.tar.gz / SHA256SUMS）に加えて載せる
+# 個別の資産。パッケージごとに呼び出し側が設定する（既定は空）。
+MANIFEST_CHECKSUM_TARGETS=()
 
 # ソースを公開リポジトリへ反映し、タグを push する。GitHub Release は作らない。
 # 文書パッケージ（ai-playbook）向け。消費者は git タグを固定して取り込むため、
@@ -426,6 +524,19 @@ generate_standard_assets() {
   local sums_sha
   sums_sha=$(sha256sum SHA256SUMS | awk '{print $1}')  # bsd-ok: リリース実行は Actions（Linux）でしか行わない
 
+  # checksums は標準の 2 つに、MANIFEST_CHECKSUM_TARGETS で指定した個別の資産を足す。
+  # devcontainer-host の self-update は、マニフェストの checksums["dev.sh"] と取得した
+  # dev.sh を照合する。DCB は足さない（空のまま）。
+  local checksums_json="" extra extra_sha
+  for extra in ${MANIFEST_CHECKSUM_TARGETS[@]+"${MANIFEST_CHECKSUM_TARGETS[@]}"}; do
+    [[ -f "$extra" ]] || {
+      echo "error: manifest checksum target not found in release tree: $extra" >&2
+      exit 1
+    }
+    extra_sha=$(sha256sum "$extra" | awk '{print $1}')  # bsd-ok: リリース実行は Actions（Linux）でしか行わない
+    checksums_json="$checksums_json,"$'\n'"    \"$extra\": \"$extra_sha\""
+  done
+
   # assets は「この Release に添付されるファイル」の一覧。標準 3 資産だけを固定で
   # 書いていると、README が公式の入手手順として案内する bootstrap.sh / doctor.sh が
   # 載らず、マニフェストだけを見た利用者は何を取得すればよいか分からない。
@@ -451,7 +562,7 @@ $assets_json
   ],
   "checksums": {
     "PACKAGE_ARCHIVE.tar.gz": "$archive_sha",
-    "SHA256SUMS": "$sums_sha"
+    "SHA256SUMS": "$sums_sha"$checksums_json
   }
 }
 JSON
@@ -467,35 +578,33 @@ JSON
 # リリースノートは配布先ルートで解決できる CHANGELOG.md という名前へ移して配る。
 # 変更履歴の正本は開発リポジトリの docs/release/ 側のままで、配布はその写しになる。
 #
-# devhost（packages/devcontainer-host/.）は配布先の devhost/ 配下へそのまま写す（#376）。
-# devhost は bootstrap.sh が生成するものではなく、利用者が外部の機械へ手で置く
-# 独立した道具一式だが、配布経路は DCB のリリースに同梱する（親 #374 が選んだ方式）。
-#
-# **SUMS_TARGETS（SHA256SUMS の対象）には devhost を加えない。** SHA256SUMS は
-# 「検証する人が個別に取得するファイル」だけを列挙する設計で、個々のファイル名が
-# 単一ファイル名であること（`is_plain_asset_name`）を監査側が前提にしている。
-# devhost は複数ファイルかつサブディレクトリ（devhost/termux/）を持つため、個別の
-# フラットな Release 資産として添付すると termux/shortcut.example の階層が失われ、
-# devhost/README.md は DCB の README.md と資産名が衝突する。そのため devhost は
-# PACKAGE_ARCHIVE.tar.gz（配布ツリー全体を固める既存の資産）だけに乗せ、完全性は
-# PACKAGE_ARCHIVE.tar.gz のハッシュ（RELEASE-MANIFEST.json → SHA256SUMS → …の
-# 既存の 2 段検証チェーンの根）で守る。bootstrap.sh / doctor.sh の配布先の名前と
-# 検証手順（SUMS_TARGETS）はこれまでどおり変えない。
+# devhost（packages/devcontainer-host/.）は DCB のリリースに同梱しない。以前は配布先の devhost/ 配下へ
+# 写していた（#376）が、独自の版を持つ公開リポジトリ ojos/devcontainer-host から配る（#486）。
+# 同梱を戻さないための検査は packages/devcontainer-bootstrap/tests/test-release-no-devhost-bundle.sh が持つ。
 DCB_DISTRIBUTED_FILES=(
   "packages/devcontainer-bootstrap/bootstrap.sh:bootstrap.sh"
   "packages/devcontainer-bootstrap/doctor.sh:doctor.sh"
   "packages/devcontainer-bootstrap/README.md:README.md"
   "LICENSE:LICENSE"
   "docs/release/release-notes-devcontainer-bootstrap.md:CHANGELOG.md"
-  "packages/devcontainer-host/README.md:devhost/README.md"
-  "packages/devcontainer-host/dev.sh:devhost/dev.sh"
-  "packages/devcontainer-host/dev-up@.service:devhost/dev-up@.service"
-  "packages/devcontainer-host/projects.example:devhost/projects.example"
-  "packages/devcontainer-host/selftest.sh:devhost/selftest.sh"
-  "packages/devcontainer-host/ssh_config.plain.example:devhost/ssh_config.plain.example"
-  "packages/devcontainer-host/ssh_config.cloudflared.example:devhost/ssh_config.cloudflared.example"
-  "packages/devcontainer-host/ssh_config.tailscale.example:devhost/ssh_config.tailscale.example"
-  "packages/devcontainer-host/termux/shortcut.example:devhost/termux/shortcut.example"
+)
+
+# devcontainer-host はツリー全体（packages/devcontainer-host/.）を配布先のルートへ展開したうえで、
+# 開発リポジトリの別階層にある共通ファイルを追加で載せる（DCB の配布先と同じ形）。
+# CHANGELOG.md の正本は docs/release/release-notes-devcontainer-host.md。
+# 個別の資産として出し、SHA256SUMS とマニフェストの checksums の両方に載せるファイル
+# （dev self-update が checksums["dev.sh"] と取得した dev.sh を照合する）。1 か所で持つ。
+HOST_INDIVIDUAL_ASSETS=(dev.sh dev-up@.service)
+
+# SHA256SUMS の対象。個別の資産に加えて PACKAGE_ARCHIVE.tar.gz を含める。attestation の対象は
+# SHA256SUMS 1 つなので、アーカイブがここに無いと、アーカイブとマニフェストの archive 用ハッシュを
+# 一緒に差し替えられても attestation の検証が通ってしまう。generate_standard_assets は
+# アーカイブを作ってから SHA256SUMS を作るので、この順序で足りる。
+HOST_SUMS_TARGETS=(dev.sh dev-up@.service PACKAGE_ARCHIVE.tar.gz)
+
+HOST_DISTRIBUTED_FILES=(
+  "LICENSE:LICENSE"
+  "docs/release/release-notes-devcontainer-host.md:CHANGELOG.md"
 )
 
 # ai-playbook はツリー全体（.ai-playbook/.）を展開したうえで、開発リポジトリの
@@ -554,6 +663,29 @@ prepare_playbook_release_repo() {
   # 配布リポジトリのルート = .ai-playbook の中身。ドット始まりの正本を展開する。
   cp -R .ai-playbook/. "$dir/"
   copy_distributed_files "$dir" "${PLAYBOOK_DISTRIBUTED_FILES[@]}"
+}
+
+# devcontainer-host の配布ツリーを作る。ルートに packages/devcontainer-host/ の追跡ファイル（dev.sh・
+# dev-up@.service・README.md・selftest.sh・*.example・termux/ など）を置き、dev.sh の版を
+# 公開するタグへ書き換える。
+# 使い方: prepare_host_release_repo <配布ツリー> <vX.Y.Z>
+prepare_host_release_repo() {
+  local dir="$1" tag="$2" f rel
+  rm -rf "$dir"
+  mkdir -p "$dir"
+  # 追跡しているファイルだけを写す。ディレクトリごと写すと、追跡外のファイルや .gitignore の
+  # ファイル（作業中のメモ、資格情報を含みうるもの）が公開物へ入りうる。
+  while IFS= read -r -d '' f; do
+    rel="${f#packages/devcontainer-host/}"
+    [[ -f "$f" ]] || {
+      echo "error: 追跡しているファイルが作業ツリーに無い: $f" >&2
+      exit 1
+    }
+    mkdir -p "$dir/$(dirname "$rel")"
+    cp "$f" "$dir/$rel"
+  done < <(git ls-files -z -- packages/devcontainer-host)
+  copy_distributed_files "$dir" "${HOST_DISTRIBUTED_FILES[@]}"
+  stamp_host_version "$dir" "$tag"
 }
 
 init_and_push_release_repo() {
@@ -843,7 +975,7 @@ audit_release_assets() {
   require_cmd sha256sum  # bsd-ok: リリース実行は Actions（Linux）でしか行わない
 
   # ai-playbook は Release 資産を持たない（タグのみ配布）ため監査対象外。
-  local repos=("$owner/devcontainer-bootstrap")
+  local repos=("$owner/devcontainer-bootstrap" "$owner/devcontainer-host")
   local failed=0
   local repo tag tags total inspected skipped dir workroot
   local grand_inspected=0 grand_skipped=0
@@ -923,6 +1055,7 @@ audit_release_assets() {
 OWNER=""
 DCB_TAG=""
 PLAYBOOK_TAG=""
+HOST_TAG=""
 EXECUTE="false"
 AUDIT="false"
 SUMS_TARGETS=()
@@ -932,6 +1065,7 @@ while [[ $# -gt 0 ]]; do
     --owner) OWNER="$2"; shift 2 ;;
     --dcb-version) DCB_TAG="$2"; shift 2 ;;
     --playbook-version) PLAYBOOK_TAG="$2"; shift 2 ;;
+    --host-version) HOST_TAG="$2"; shift 2 ;;
     --execute) EXECUTE="true"; shift ;;
     --audit) AUDIT="true"; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -965,8 +1099,8 @@ fi
 
 # パッケージは独立してリリースできる。片方の修正が他方の公開物へ波及しないよう、
 # 指定されたパッケージだけを対象にする。
-[[ -n "$DCB_TAG" || -n "$PLAYBOOK_TAG" ]] || {
-  echo "error: specify at least one of --dcb-version or --playbook-version" >&2
+[[ -n "$DCB_TAG" || -n "$PLAYBOOK_TAG" || -n "$HOST_TAG" ]] || {
+  echo "error: specify at least one of --dcb-version, --playbook-version or --host-version" >&2
   usage
   exit 1
 }
@@ -985,6 +1119,17 @@ require_clean_worktree
 # 検査は安い順に並べる。版の重複は問い合わせ 1 回で分かるため、テスト実行のような
 # 重い検査より先に判定する。手戻りが早いだけでなく、テストから release-packages.sh を
 # 呼んだときに run_dcb_tests が再びテスト一式を起動する再帰も避けられる。
+# devcontainer-host の検査は、DCB の機能テスト（run_dcb_tests）より前に置く。安い検査から先に落とす
+# ためと、公開の途中（DCB の公開のあと）で host の不備が見つかる形を作らないため。
+if [[ -n "$HOST_TAG" ]]; then
+  extract_semver "$HOST_TAG" >/dev/null
+  require_version_unpublished "$OWNER/devcontainer-host" "$HOST_TAG"
+  validate_host_version_anchor
+  validate_host_docs "$HOST_TAG"
+  validate_markdown_links_in_tree "$(pwd)/packages/devcontainer-host"
+  run_host_tests
+fi
+
 if [[ -n "$DCB_TAG" ]]; then
   extract_semver "$DCB_TAG" >/dev/null
   require_version_unpublished "$OWNER/devcontainer-bootstrap" "$DCB_TAG"
@@ -1013,6 +1158,14 @@ if [[ -n "$PLAYBOOK_TAG" ]]; then
   print_distribution_plan "ai-playbook (additional)" "${PLAYBOOK_DISTRIBUTED_FILES[@]}"
 fi
 
+if [[ -n "$HOST_TAG" ]]; then
+  echo "[plan] devcontainer-host distributed files:"
+  echo "[plan]   packages/devcontainer-host/（追跡ファイルのみ） -> (repository root)"
+  print_distribution_plan "devcontainer-host (additional)" "${HOST_DISTRIBUTED_FILES[@]}"
+  echo "[plan]   dev.sh DEV_VERSION -> \"$HOST_TAG\""
+  echo "[plan] devcontainer-host release assets: dev.sh dev-up@.service RELEASE-MANIFEST.json SHA256SUMS PACKAGE_ARCHIVE.tar.gz"
+fi
+
 if [[ "$EXECUTE" != "true" ]]; then
   echo "[info] dry-run mode. add --execute to publish releases"
   exit 0
@@ -1027,13 +1180,29 @@ resolve_release_identity
 ROOT_DIR="$(pwd)"
 DCB_DIR="/tmp/dcb-release"
 PLAYBOOK_DIR="/tmp/playbook-release"
+HOST_DIR="/tmp/host-release"
 
+# 公開より前に、公開する配布ツリーと資産をすべて作る（ステージング）。生成で落ちる不備
+# （追跡ファイルの欠落、版の書き込み失敗など）を、どのパッケージの公開よりも前に見つける。
+# 公開の途中で別のパッケージの不備が見つかると、先に公開した側だけが残るため。
 if [[ -n "$DCB_TAG" ]]; then
   DCB_VER="$(extract_semver "$DCB_TAG")"
   prepare_dcb_release_repo "$DCB_DIR"
   # ユーザーは bootstrap.sh と SHA256SUMS だけを取得する（README の手順）。
   SUMS_TARGETS=(bootstrap.sh doctor.sh)
   generate_standard_assets "$DCB_DIR" "devcontainer-bootstrap" "$DCB_VER"
+fi
+
+if [[ -n "$HOST_TAG" ]]; then
+  HOST_VER="$(extract_semver "$HOST_TAG")"
+  prepare_host_release_repo "$HOST_DIR" "$HOST_TAG"
+  SUMS_TARGETS=("${HOST_SUMS_TARGETS[@]}")
+  MANIFEST_CHECKSUM_TARGETS=("${HOST_INDIVIDUAL_ASSETS[@]}")
+  generate_standard_assets "$HOST_DIR" "devcontainer-host" "$HOST_VER"
+  MANIFEST_CHECKSUM_TARGETS=()
+fi
+
+if [[ -n "$DCB_TAG" ]]; then
   init_and_push_release_repo "$DCB_DIR" "$OWNER/devcontainer-bootstrap" public
   tag_and_release "$DCB_DIR" "$OWNER/devcontainer-bootstrap" "$DCB_TAG" "Release $DCB_TAG" \
     "$DCB_DIR/bootstrap.sh" \
@@ -1041,6 +1210,16 @@ if [[ -n "$DCB_TAG" ]]; then
     "$DCB_DIR/RELEASE-MANIFEST.json" \
     "$DCB_DIR/SHA256SUMS" \
     "$DCB_DIR/PACKAGE_ARCHIVE.tar.gz"
+fi
+
+if [[ -n "$HOST_TAG" ]]; then
+  init_and_push_release_repo "$HOST_DIR" "$OWNER/devcontainer-host" public
+  tag_and_release "$HOST_DIR" "$OWNER/devcontainer-host" "$HOST_TAG" "Release $HOST_TAG" \
+    "$HOST_DIR/dev.sh" \
+    "$HOST_DIR/dev-up@.service" \
+    "$HOST_DIR/RELEASE-MANIFEST.json" \
+    "$HOST_DIR/SHA256SUMS" \
+    "$HOST_DIR/PACKAGE_ARCHIVE.tar.gz"
 fi
 
 if [[ -n "$PLAYBOOK_TAG" ]]; then
@@ -1063,7 +1242,7 @@ else
 fi
 
 echo "[ok] completed releases"
-for r in "$OWNER/devcontainer-bootstrap" "$OWNER/ai-playbook"; do
+for r in "$OWNER/devcontainer-bootstrap" "$OWNER/devcontainer-host" "$OWNER/ai-playbook"; do
   echo "[repo] $r"
   gh release list --repo "$r" --limit 3 || true
   echo "---"

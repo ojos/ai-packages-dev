@@ -32,7 +32,7 @@
 # - docker `inspect --format '{{index .Config.Labels "com.docker.compose.project"}}' <id>`: コンテナの compose のプロジェクト名（label が無ければ空）。
 #   `ps --filter label=com.docker.compose.project=<名>` でそのプロジェクトのコンテナを列挙する
 #   （コンテナの状態は 1 行 1 つで「パス<TAB>ID<TAB>状態<TAB>compose のプロジェクト（任意）」）
-# - curl: `-fsSL <URL> -o <出力先>` だけ。リリースの取得先（latest/download か download/v*）以外の URL は落とす
+# - curl: `-fsSL <URL> -o <出力先>` だけ。リリースの取得先（devcontainer-host の latest/download か download/v*）以外の URL は落とす
 #   （ネットワークには出ない。URL の末尾のファイル名で、試験が用意したファイルを写す。-f の失敗は 22）
 # - /proc と cgroup は偽の木（$WORK/proc と $WORK/cg）を DEV_PROC_ROOT / DEV_CGROUP_ROOT で渡す。
 #   cgroup v2 の形に合わせる（/proc/<PID>/cgroup は `0::/パス` の 1 行、pids.current / pids.max は
@@ -44,7 +44,7 @@
 # - systemctl: `--user is-active <unit>` は状態の語を 1 行出し、active で 0、それ以外で 3
 #
 # 使い方（<dir> はこのファイルのあるディレクトリ。モノレポでは packages/devcontainer-host、
-# DCB のアーカイブから取り出したものでは devhost）:
+# 公開リポジトリのリリースの archive から取り出したものでは、展開先に付けた名前）:
 #   bash <dir>/selftest.sh                    同じディレクトリの dev.sh を試す
 #   DEV_BIN=<path> bash <dir>/selftest.sh     別の dev.sh を試す（変異を当てるとき）
 #   DEV_UNIT=<path> bash <dir>/selftest.sh    別のユニットを試す（同上）
@@ -427,7 +427,7 @@ cat >>"$FAKEBIN/curl" <<'EOF'
 log_call curl "$@"
 [[ $# -eq 4 && "$1" == "-fsSL" && "$3" == "-o" ]] || { echo "fake curl: 想定外の呼び出し: $*" >&2; exit 2; }
 case "$2" in
-  https://github.com/ojos/devcontainer-bootstrap/releases/latest/download/* | https://github.com/ojos/devcontainer-bootstrap/releases/download/v*/*) ;;
+  https://github.com/ojos/devcontainer-host/releases/latest/download/* | https://github.com/ojos/devcontainer-host/releases/download/v*/*) ;;
   *) echo "fake curl: リリースの取得先ではない URL です: $2" >&2; exit 2 ;;
 esac
 if [[ "${FAKE_CURL_FAIL:-0}" == "1" ]]; then
@@ -1239,39 +1239,42 @@ run 2 "exec: 未登録" -- -- exec gamma -- true
 expect_no_calls
 
 # ── 6c'''''. self-update ──────────────────────────────────────────────────────
-# 偽のリリース: 先頭 2 行が devhost の dev.sh のものである「新しい dev」を archive に入れ、
-# マニフェストにそのハッシュを記録する（本物のリリースと同じ形: ./devhost/dev.sh）。
+# 偽のリリース: 先頭 2 行が devhost の dev.sh のものである「新しい dev」を、個別の資産 dev.sh として置き、
+# マニフェストの checksums["dev.sh"] にそのハッシュを記録する（本物のリリースと同じ形。アーカイブは取らない）。
 REL="$WORK/release"
 SELFDIR="$WORK/selfdir"
 SELF="$SELFDIR/dev"
 HDR1="$(sed -n '1p' "$DEV")"
 HDR2="$(sed -n '2p' "$DEV")"
-mkdir -p "$REL/devhost" "$SELFDIR"
-printf '%s\n%s\necho new\n' "$HDR1" "$HDR2" >"$REL/devhost/dev.sh"
-(cd "$REL" && tar -czf PACKAGE_ARCHIVE.tar.gz ./devhost)
+mkdir -p "$REL" "$SELFDIR"
+printf '%s\n%s\necho new\n' "$HDR1" "$HDR2" >"$REL/dev.sh"
 if command -v sha256sum >/dev/null 2>&1; then sum_cmd="sha256sum"; else sum_cmd="shasum -a 256"; fi
-good_sum="$($sum_cmd "$REL/PACKAGE_ARCHIVE.tar.gz" | awk '{ print $1 }')"
-write_manifest() { printf '{\n  "package": "devcontainer-bootstrap",\n  "version": "0.0.0",\n  "checksums": {\n    "PACKAGE_ARCHIVE.tar.gz": "%s",\n    "SHA256SUMS": "%s"\n  }\n}\n' "$1" "$(printf '%064d' 0)" >"$REL/RELEASE-MANIFEST.json"; }
+good_sum="$($sum_cmd "$REL/dev.sh" | awk '{ print $1 }')"
+zero_sum="$(printf '%064d' 0)"
+write_manifest() { printf '{\n  "package": "devcontainer-host",\n  "version": "0.0.0",\n  "checksums": {\n    "PACKAGE_ARCHIVE.tar.gz": "%s",\n    "SHA256SUMS": "%s",\n    "dev.sh": "%s"\n  }\n}\n' "$zero_sum" "$zero_sum" "$1" >"$REL/RELEASE-MANIFEST.json"; }
 write_manifest "$good_sum"
 mk_self() { printf '%s\n%s\necho old\n' "$HDR1" "$HDR2" >"$SELF"; chmod 0644 "$SELF"; }
 expect_log_has() { grep -qF -- "$1" "$LOG" || { ng "$CUR: 呼び出しの記録に「$1」がありません"; sed 's/^/    /' "$LOG" >&2; }; }
+expect_log_lacks() { if grep -qF -- "$1" "$LOG"; then ng "$CUR: 呼び出しの記録に「$1」があります（取らないはず）"; fi; }
 expect_self_unchanged() { [[ "$(cat "$SELF")" == "$(printf '%s\n%s\necho old' "$HDR1" "$HDR2")" ]] || ng "$CUR: 置き換えないはずが、置き換え先が変わっています"; }
-RELEASES="https://github.com/ojos/devcontainer-bootstrap/releases"
+RELEASES="https://github.com/ojos/devcontainer-host/releases"
 
 mk_self
 run 0 "self-update: 照合が合えば、最新の dev.sh で置き換える" -- DEV_SELF_PATH="$SELF" FAKE_CURL_DIR="$REL" -- self-update
 expect_log_has "curl [-fsSL] [$RELEASES/latest/download/RELEASE-MANIFEST.json] [-o]"
-expect_log_has "curl [-fsSL] [$RELEASES/download/v0.0.0/PACKAGE_ARCHIVE.tar.gz] [-o]"
-if grep -qF "latest/download/PACKAGE_ARCHIVE" "$LOG"; then ng "self-update: アーカイブを latest から取っています（マニフェストの版から取るはず）"; fi
-cmp -s "$REL/devhost/dev.sh" "$SELF" || ng "self-update: 置き換え先が新しい dev.sh になっていません"
+expect_log_has "curl [-fsSL] [$RELEASES/download/v0.0.0/dev.sh] [-o]"
+if grep -qF "latest/download/dev.sh" "$LOG"; then ng "self-update: dev.sh を latest から取っています（マニフェストの版から取るはず）"; fi
+expect_log_lacks "PACKAGE_ARCHIVE"
+expect_log_lacks "devcontainer-bootstrap"
+cmp -s "$REL/dev.sh" "$SELF" || ng "self-update: 置き換え先が新しい dev.sh になっていません"
 [[ -x "$SELF" ]] || ng "self-update: 置き換え後の dev に実行権限がありません"
 [[ "$(ls -A "$SELFDIR")" == "dev" ]] || ng "self-update: 置き換え先のディレクトリに一時ファイルが残っています: $(ls -A "$SELFDIR")"
 expect_out_line '置き換えました'
 mk_self
 run 0 "self-update --version: 版を固定した取得先から取る" -- DEV_SELF_PATH="$SELF" FAKE_CURL_DIR="$REL" -- self-update --version v9.8.7
 expect_log_has "curl [-fsSL] [$RELEASES/download/v9.8.7/RELEASE-MANIFEST.json] [-o]"
-expect_log_has "curl [-fsSL] [$RELEASES/download/v9.8.7/PACKAGE_ARCHIVE.tar.gz] [-o]"
-cmp -s "$REL/devhost/dev.sh" "$SELF" || ng "self-update --version: 置き換え先が新しい dev.sh になっていません"
+expect_log_has "curl [-fsSL] [$RELEASES/download/v9.8.7/dev.sh] [-o]"
+cmp -s "$REL/dev.sh" "$SELF" || ng "self-update --version: 置き換え先が新しい dev.sh になっていません"
 run 0 "self-update: すでに同じなら置き換えない" -- DEV_SELF_PATH="$SELF" FAKE_CURL_DIR="$REL" -- self-update
 expect_out_line 'すでにこの版です'
 
@@ -1283,18 +1286,25 @@ expect_self_unchanged
 write_manifest "not-a-hash"
 run 1 "self-update: マニフェストのハッシュが 64 桁の 16 進でなければ置き換えない" -- DEV_SELF_PATH="$SELF" FAKE_CURL_DIR="$REL" -- self-update
 expect_self_unchanged
-printf '{ "checksums": {} }\n' >"$REL/RELEASE-MANIFEST.json"
-run 1 "self-update: マニフェストに archive のハッシュが無ければ置き換えない" -- DEV_SELF_PATH="$SELF" FAKE_CURL_DIR="$REL" -- self-update
+printf '{ "version": "0.0.0", "checksums": {} }\n' >"$REL/RELEASE-MANIFEST.json"
+run 1 "self-update: マニフェストに dev.sh のハッシュが無ければ置き換えない" -- DEV_SELF_PATH="$SELF" FAKE_CURL_DIR="$REL" -- self-update
+expect_err "checksums の dev.sh"
+expect_log_lacks "/dev.sh] [-o]"
+expect_self_unchanged
+# archive のハッシュだけを持つ形（個別の資産を持たない版のマニフェスト）では、dev.sh を取らずに止まる。
+printf '{ "version": "0.0.0", "checksums": { "PACKAGE_ARCHIVE.tar.gz": "%s" } }\n' "$good_sum" >"$REL/RELEASE-MANIFEST.json"
+run 1 "self-update: archive のハッシュしか無いマニフェストでは置き換えない" -- DEV_SELF_PATH="$SELF" FAKE_CURL_DIR="$REL" -- self-update
 expect_self_unchanged
 write_manifest "$good_sum"
 
-# 版のないマニフェスト（最新を指定したとき）では、アーカイブをどの版から取るか決められないので止まる。
-printf '{ "checksums": { "PACKAGE_ARCHIVE.tar.gz": "%s" } }\n' "$good_sum" >"$REL/RELEASE-MANIFEST.json"
+# 版のないマニフェスト（最新を指定したとき）では、dev.sh をどの版から取るか決められないので止まる。
+printf '{ "checksums": { "dev.sh": "%s" } }\n' "$good_sum" >"$REL/RELEASE-MANIFEST.json"
 run 1 "self-update: 最新で、マニフェストに版が無ければ置き換えない" -- DEV_SELF_PATH="$SELF" FAKE_CURL_DIR="$REL" -- self-update
 expect_err "--version vX.Y.Z で版を指定"
 expect_self_unchanged
 write_manifest "$good_sum"
 # 版を固定したときは、マニフェストに版が無くても取れる。
+printf '{ "checksums": { "dev.sh": "%s" } }\n' "$good_sum" >"$REL/RELEASE-MANIFEST.json"
 run 0 "self-update --version: マニフェストに版が無くても固定した版で取る" -- DEV_SELF_PATH="$SELF" FAKE_CURL_DIR="$REL" -- self-update --version v1.2.3
 write_manifest "$good_sum"
 mk_self
@@ -1316,7 +1326,7 @@ expect_no_calls
 # 置き換え先は、2 行目が説明文の全文と違っても「# dev — 」で始まれば devhost の dev.sh とみなす（版をまたいで更新できる）。
 printf '%s\n%s\necho old\n' "$HDR1" '# dev — 別の版の説明文' >"$SELF"
 run 0 "self-update: 置き換え先の 2 行目が別の版の説明文でも、更新できる" -- DEV_SELF_PATH="$SELF" FAKE_CURL_DIR="$REL" -- self-update
-cmp -s "$REL/devhost/dev.sh" "$SELF" || ng "self-update: 別の版の説明文の dev が更新されていません"
+cmp -s "$REL/dev.sh" "$SELF" || ng "self-update: 別の版の説明文の dev が更新されていません"
 mk_self
 
 # devhost の dev.sh でない置き場所には、取得もせずに止まる。
@@ -1335,46 +1345,41 @@ expect_no_calls
 expect_self_unchanged
 rm -f "$SELFDIR/link"
 
-# 取り出した dev.sh が devhost のものでなければ（ハッシュは合っていても）置き換えない。
+# 取得した dev.sh が devhost のものでなければ（ハッシュは合っていても）置き換えない。
 BADREL="$WORK/release-bad"
-mkdir -p "$BADREL/devhost"
-printf '%s\n%s\nif then fi (\n' "$HDR1" "$HDR2" >"$BADREL/devhost/dev.sh"
-(cd "$BADREL" && tar -czf PACKAGE_ARCHIVE.tar.gz ./devhost)
-bad_sum="$($sum_cmd "$BADREL/PACKAGE_ARCHIVE.tar.gz" | awk '{ print $1 }')"
-printf '{ "version": "1.0.0", "checksums": { "PACKAGE_ARCHIVE.tar.gz": "%s" } }\n' "$bad_sum" >"$BADREL/RELEASE-MANIFEST.json"
+mkdir -p "$BADREL"
+# bad_release <dev.sh の中身を書く関数の出力先>: $BADREL/dev.sh のハッシュを記録したマニフェストを書く。
+write_bad_manifest() { printf '{ "version": "1.0.0", "checksums": { "dev.sh": "%s" } }\n' "$($sum_cmd "$BADREL/dev.sh" | awk '{ print $1 }')" >"$BADREL/RELEASE-MANIFEST.json"; }
+printf '%s\n%s\nif then fi (\n' "$HDR1" "$HDR2" >"$BADREL/dev.sh"
+write_bad_manifest
 mk_self
-run 1 "self-update: archive の dev.sh に構文の誤りがあれば置き換えない" -- DEV_SELF_PATH="$SELF" FAKE_CURL_DIR="$BADREL" -- self-update
+run 1 "self-update: 取得した dev.sh に構文の誤りがあれば置き換えない" -- DEV_SELF_PATH="$SELF" FAKE_CURL_DIR="$BADREL" -- self-update
 expect_err "構文の誤り"
 expect_self_unchanged
 # 取得物も、bash の shebang と「# dev — 」で始まる 2 行目が要る（sh や無関係なスクリプトは置かない）。
 for badhead in '#!/bin/sh' '#!/bin/false'; do
-  printf '%s\n%s\necho x\n' "$badhead" "$HDR2" >"$BADREL/devhost/dev.sh"
-  (cd "$BADREL" && tar -czf PACKAGE_ARCHIVE.tar.gz ./devhost)
-  printf '{ "version": "1.0.0", "checksums": { "PACKAGE_ARCHIVE.tar.gz": "%s" } }\n' "$($sum_cmd "$BADREL/PACKAGE_ARCHIVE.tar.gz" | awk '{ print $1 }')" >"$BADREL/RELEASE-MANIFEST.json"
+  printf '%s\n%s\necho x\n' "$badhead" "$HDR2" >"$BADREL/dev.sh"
+  write_bad_manifest
   run 1 "self-update: 取得物の 1 行目が $badhead なら置き換えない" -- DEV_SELF_PATH="$SELF" FAKE_CURL_DIR="$BADREL" -- self-update
   expect_err "devhost の dev.sh だと確かめられません"
   expect_self_unchanged
 done
-printf '%s\n%s\necho x\n' "$HDR1" '# 別のスクリプト' >"$BADREL/devhost/dev.sh"
-(cd "$BADREL" && tar -czf PACKAGE_ARCHIVE.tar.gz ./devhost)
-printf '{ "version": "1.0.0", "checksums": { "PACKAGE_ARCHIVE.tar.gz": "%s" } }\n' "$($sum_cmd "$BADREL/PACKAGE_ARCHIVE.tar.gz" | awk '{ print $1 }')" >"$BADREL/RELEASE-MANIFEST.json"
+printf '%s\n%s\necho x\n' "$HDR1" '# 別のスクリプト' >"$BADREL/dev.sh"
+write_bad_manifest
 run 1 "self-update: 取得物の 2 行目が「# dev — 」で始まらなければ置き換えない" -- DEV_SELF_PATH="$SELF" FAKE_CURL_DIR="$BADREL" -- self-update
 expect_self_unchanged
 # 2 行目の説明文が違っても、「# dev — 」で始まれば置き換わる（将来の版が説明文を変えても更新できる）。
-printf '%s\n%s\necho future\n' "$HDR1" '# dev — 将来の版の説明文' >"$BADREL/devhost/dev.sh"
-(cd "$BADREL" && tar -czf PACKAGE_ARCHIVE.tar.gz ./devhost)
-printf '{ "version": "1.0.0", "checksums": { "PACKAGE_ARCHIVE.tar.gz": "%s" } }\n' "$($sum_cmd "$BADREL/PACKAGE_ARCHIVE.tar.gz" | awk '{ print $1 }')" >"$BADREL/RELEASE-MANIFEST.json"
+printf '%s\n%s\necho future\n' "$HDR1" '# dev — 将来の版の説明文' >"$BADREL/dev.sh"
+write_bad_manifest
 run 0 "self-update: 取得物の 2 行目の説明文が違っても、「# dev — 」で始まれば置き換える" -- DEV_SELF_PATH="$SELF" FAKE_CURL_DIR="$BADREL" -- self-update
-cmp -s "$BADREL/devhost/dev.sh" "$SELF" || ng "self-update: 2 行目の説明文が違う取得物で置き換わっていません"
+cmp -s "$BADREL/dev.sh" "$SELF" || ng "self-update: 2 行目の説明文が違う取得物で置き換わっていません"
 mk_self
-# archive に ./devhost/dev.sh が無いとき。
+# マニフェストにはハッシュがあるのに、リリースに dev.sh の資産が無いとき（取得できない）。
 NOREL="$WORK/release-none"
-mkdir -p "$NOREL/other"
-echo x >"$NOREL/other/file"
-(cd "$NOREL" && tar -czf PACKAGE_ARCHIVE.tar.gz ./other)
-no_sum="$($sum_cmd "$NOREL/PACKAGE_ARCHIVE.tar.gz" | awk '{ print $1 }')"
-printf '{ "version": "1.0.0", "checksums": { "PACKAGE_ARCHIVE.tar.gz": "%s" } }\n' "$no_sum" >"$NOREL/RELEASE-MANIFEST.json"
-run 1 "self-update: archive に devhost/dev.sh が無ければ置き換えない" -- DEV_SELF_PATH="$SELF" FAKE_CURL_DIR="$NOREL" -- self-update
+mkdir -p "$NOREL"
+printf '{ "version": "1.0.0", "checksums": { "dev.sh": "%s" } }\n' "$good_sum" >"$NOREL/RELEASE-MANIFEST.json"
+run 1 "self-update: リリースに dev.sh の資産が無ければ置き換えない" -- DEV_SELF_PATH="$SELF" FAKE_CURL_DIR="$NOREL" -- self-update
+expect_err "dev.sh を取得できません"
 expect_self_unchanged
 run 1 "self-update: 取得に失敗したら置き換えない" -- DEV_SELF_PATH="$SELF" FAKE_CURL_DIR="$REL" FAKE_CURL_FAIL=1 -- self-update
 expect_err "取得できません"
@@ -1387,8 +1392,26 @@ run 2 "self-update: --version に値が無い" -- DEV_SELF_PATH="$SELF" -- self-
 run 2 "self-update: 知らない引数" -- DEV_SELF_PATH="$SELF" -- self-update alpha
 expect_no_calls
 
+# ── 6c''''''. version ─────────────────────────────────────────────────────────
+# 版は dev.sh の DEV_VERSION から出す。設定ファイルが無くても出せる（外部の機械に入れた直後に確かめるため）。
+WANT_VERSION="$(sed -n 's/^DEV_VERSION="\(v[0-9][0-9.]*\)"$/\1/p' "$DEV")"
+[[ "$(printf '%s\n' "$WANT_VERSION" | wc -l | tr -d ' ')" == "1" && -n "$WANT_VERSION" ]] || ng "dev.sh の DEV_VERSION=\"vX.Y.Z\" の行が 1 つではありません（リリースの手順が書き換えられなくなります）: $WANT_VERSION"
+run 0 "version: 版を出す" -- DEV_PROJECTS_FILE="$WORK/conf/none" -- version
+expect_out_line "^dev $WANT_VERSION\$"
+expect_no_calls
+run 0 "--version: version と同じ" -- DEV_PROJECTS_FILE="$WORK/conf/none" -- --version
+expect_out_line "^dev $WANT_VERSION\$"
+expect_no_calls
+run 2 "version: 引数は受け付けない" -- -- version x
+expect_err "使い方: dev version"
+expect_no_calls
+# 公開物の版の書き込み: リリースの手順（stamp_host_version）が置き換えるのと同じ形の行を、別の版に差し替えても出せる。
+STAMPED="$WORK/dev-stamped.sh"
+sed 's/^DEV_VERSION=".*"$/DEV_VERSION="v7.8.9"/' "$DEV" >"$STAMPED"
+if [[ "$("$BASH_BIN" "$STAMPED" --version)" != "dev v7.8.9" ]]; then ng "version: 書き換えた版を出していません"; fi
+
 # ── 6d. help ──────────────────────────────────────────────────────────────────
-for sub in ls up attach supervise rebuild doctor restart stop logs enable disable exec self-update help; do
+for sub in ls up attach supervise rebuild doctor restart stop logs enable disable exec self-update version help; do
   run 0 "help $sub" -- -- help "$sub"
   expect_no_calls
   expect_out_line "^dev $sub — "

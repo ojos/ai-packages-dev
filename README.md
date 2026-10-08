@@ -22,7 +22,7 @@ ai-packages-dev/
 │   │   ├── bootstrap.sh             # メインスクリプト
 │   │   ├── doctor.sh                # 自己診断スクリプト
 │   │   └── tests/                   # 機能テスト
-│   └── devcontainer-host/           # 外部の機械で devcontainer を保つ道具 devhost（独立配布せず DCB のリリースへ同梱）
+│   └── devcontainer-host/           # 外部の機械で devcontainer を保つ道具 devhost（配布先 ojos/devcontainer-host）
 ├── docs/                            # ドキュメント
 │   ├── CATALOG.md                   # docs 配下の索引（正本）
 │   ├── release/                     # リリース実行手順・履歴・リリースノート
@@ -46,9 +46,10 @@ ai-packages-dev/
 |---|---|---|
 | ai-playbook | AI 運用規範の正本。ランタイムを持たない | ojos/ai-playbook |
 | devcontainer-bootstrap (DCB) | Dev Container 環境を 1 コマンドで生成し、規範を配置する | ojos/devcontainer-bootstrap |
+| devcontainer-host (devhost) | SSH で届く外部の機械で devcontainer を起こし、保つ。コマンド `dev` | ojos/devcontainer-host |
 
-`packages/devcontainer-host/` は独立したパッケージではなく、SSH で届く外部の機械の上で devcontainer を保つための道具一式です。
-単独でタグ付けや配布は行わず、DCB のリリース資産（`PACKAGE_ARCHIVE.tar.gz` 内の `devhost/`）に同梱して配ります。
+`packages/devcontainer-host/`（devhost）は、SSH で届く外部の機械の上で devcontainer を保つための道具一式です。
+DCB のリリースには同梱せず、独自の版を持つ公開リポジトリ `ojos/devcontainer-host` のリリースで配ります（最初の版は v0.1.0 の予定。公開前は下の「リリース状況」が「未公開」になります）。
 
 **設計思想:**
 
@@ -104,6 +105,7 @@ ASF は 2026-07 に退役しました。
 | パッケージ | 配布状態 |
 |---|---|
 | devcontainer-bootstrap | ojos/devcontainer-bootstrap で v0.17.0 まで公開済み |
+| devcontainer-host | ojos/devcontainer-host は未公開（Release なし） |
 | ai-playbook | ojos/ai-playbook で v0.8.1 まで公開済み |
 
 リリース実行手順は [docs/release/RELEASE_EXECUTION_RUNBOOK.md](docs/release/RELEASE_EXECUTION_RUNBOOK.md) を参照する。
@@ -111,6 +113,7 @@ ASF は 2026-07 に退役しました。
 ### リリース状況
 
 - `devcontainer-bootstrap`: `ojos/devcontainer-bootstrap` で `v0.17.0` まで公開済み
+- `devcontainer-host`: `ojos/devcontainer-host` は未公開（Release なし）
 - `ai-playbook`: `ojos/ai-playbook` で `v0.8.1` まで公開済み
 <!-- RELEASE_STATUS:END -->
 

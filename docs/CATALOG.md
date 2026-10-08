@@ -33,6 +33,7 @@
 | `docs/release/RELEASE_HISTORY.md` | 履歴・記録 | リリース履歴の正本。現行世代（v0.1.0〜）と旧世代の要約メモ。 |
 | `docs/release/release-notes-ai-playbook.md` | リリースノート | ai-playbook リリースノート（新世代）。 |
 | `docs/release/release-notes-devcontainer-bootstrap.md` | リリースノート | DCB リリースノート（新世代）。 |
+| `docs/release/release-notes-devcontainer-host.md` | リリースノート | devcontainer-host（devhost）のリリースノート。公開先の `CHANGELOG.md` の正本。 |
 
 ### 記録（`docs/records/`）
 
