@@ -22,7 +22,7 @@ ai-packages-dev/
 │   │   ├── bootstrap.sh             # メインスクリプト
 │   │   ├── doctor.sh                # 自己診断スクリプト
 │   │   └── tests/                   # 機能テスト
-│   └── devhost/                     # 外部の機械で devcontainer を保つ道具（独立配布せず DCB のリリースへ同梱）
+│   └── devcontainer-host/           # 外部の機械で devcontainer を保つ道具 devhost（独立配布せず DCB のリリースへ同梱）
 ├── docs/                            # ドキュメント
 │   ├── CATALOG.md                   # docs 配下の索引（正本）
 │   ├── release/                     # リリース実行手順・履歴・リリースノート

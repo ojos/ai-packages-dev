@@ -43,10 +43,11 @@
 # - tmux: `has-session -t =<名前>`（無ければ 1）と `new-session -A -s <名前>`
 # - systemctl: `--user is-active <unit>` は状態の語を 1 行出し、active で 0、それ以外で 3
 #
-# 使い方:
-#   bash packages/devcontainer-host/selftest.sh             同じディレクトリの dev.sh を試す
-#   DEV_BIN=<path> bash packages/devcontainer-host/selftest.sh   別の dev.sh を試す（変異を当てるとき）
-#   DEV_UNIT=<path> bash packages/devcontainer-host/selftest.sh  別のユニットを試す（同上）
+# 使い方（<dir> はこのファイルのあるディレクトリ。モノレポでは packages/devcontainer-host、
+# DCB のアーカイブから取り出したものでは devhost）:
+#   bash <dir>/selftest.sh                    同じディレクトリの dev.sh を試す
+#   DEV_BIN=<path> bash <dir>/selftest.sh     別の dev.sh を試す（変異を当てるとき）
+#   DEV_UNIT=<path> bash <dir>/selftest.sh    別のユニットを試す（同上）
 #
 # 終了コード: 0 = DEVHOST_SELFTEST_PASS / 1 = 期待と食い違った
 set -euo pipefail
