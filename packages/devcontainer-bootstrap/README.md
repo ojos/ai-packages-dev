@@ -134,7 +134,7 @@ bash "$d/doctor.sh" --target-dir ./myapp
 | `bootstrap.sh` | 生成コマンド本体。単体で動作します |
 | `doctor.sh` | 生成後の自己診断コマンド。単体で動作します |
 | `SHA256SUMS` | 上の 2 つのチェックサム。`sha256sum -c SHA256SUMS`（macOS では `shasum -a 256 -c SHA256SUMS`）で**取得の破損**を検出します（守る範囲は [公開リリースからの利用](#公開リリースからの利用) の但し書きを参照）。片方だけ取得した場合は、その行を `grep` で抜き出して `-c -` へ渡します |
-| `PACKAGE_ARCHIVE.tar.gz` | そのリリース時点の公開リポジトリのツリー一式（`.git` と生成した 3 資産を除く。`bootstrap.sh` / `doctor.sh` / この README / `LICENSE` / `CHANGELOG.md` / **`devhost/`**）。スクリプトと手順書を 1 つの塊として手元へ固定したい場合や、リリース間の差分を追いたい場合、**devhost を入手する場合**に使います |
+| `PACKAGE_ARCHIVE.tar.gz` | そのリリース時点の公開リポジトリのツリー一式（`.git` と生成した 3 資産を除く。`bootstrap.sh` / `doctor.sh` / この README / `LICENSE` / `CHANGELOG.md`）。スクリプトと手順書を 1 つの塊として手元へ固定したい場合や、リリース間の差分を追いたい場合に使います |
 | `RELEASE-MANIFEST.json` | パッケージ名・版・資産一覧・チェックサムを機械可読にまとめたもの。`assets` がそのリリースに添付された資産の一覧、`checksums` が `PACKAGE_ARCHIVE.tar.gz` と `SHA256SUMS` のハッシュです |
 
 検証は 2 段構えです。`RELEASE-MANIFEST.json` が `SHA256SUMS` のハッシュを持ち、`SHA256SUMS` が `bootstrap.sh` / `doctor.sh` のハッシュを持つため、マニフェストを起点に配布物全体まで辿れます。
@@ -163,20 +163,14 @@ tar -xzf PACKAGE_ARCHIVE.tar.gz
 
 ### devhost — 外部の機械で devcontainer を保つ道具
 
-**SSH で届く外部の機械（自宅のラップトップ、社内のサーバーなど）の上で devcontainer を起動したまま保ち、
-スマホやほかの端末から入って AI コーディングを続けるための道具一式**です。`PACKAGE_ARCHIVE.tar.gz` の
-`devhost/` 配下に同梱されています（上の 1. で `RELEASE-MANIFEST.json` と照合する対象に入ります。個別の URL は配っていません）。
+SSH で届く外部の機械（自宅のラップトップ、社内のサーバーなど）の上で devcontainer を起動したまま保ち、
+スマホやほかの端末から入って AI コーディングを続けるための道具一式（コマンド `dev`）です。
+**DCB のリリースには同梱していません。** 独自の版を持つ公開リポジトリ `ojos/devcontainer-host` のリリースで配っています。
+入手の手順（マニフェストのハッシュの照合を含む）と使い方は、そのリポジトリの README を参照してください。
 
-```bash
-# 上の 1. で照合した PACKAGE_ARCHIVE.tar.gz から取り出す。archive の中の名前は ./devhost/...
-# なので、./ を付けて指定する（GNU tar は devhost/ だと一致しない）。
-tar -xzf PACKAGE_ARCHIVE.tar.gz ./devhost
-ls devhost/
-```
-
-bootstrap.sh が生成するものではなく、利用者が外部の機械へ手で置く独立した道具です。導入手順・使い方・
-SSH の経路（素の SSH / Cloudflare Access / Tailscale）は、取り出した `devhost/README.md` を参照してください
-（配布先では `devhost/` がこの README と同じ階層に並ぶため、ここでは相対リンクにしません）。
+以前の DCB のリリース（v0.14.0〜v0.17.0）は `PACKAGE_ARCHIVE.tar.gz` の `devhost/` に同梱していました。
+その `dev` の `dev self-update` は更新できなくなり、何も置き換えずに止まります。**手で 1 度だけ入れ直してください**
+（手順は `ojos/devcontainer-host` の README の「DCB 同梱の古い版から移るとき」）。
 
 ### 任意: 署名の検証（artifact attestation）
 

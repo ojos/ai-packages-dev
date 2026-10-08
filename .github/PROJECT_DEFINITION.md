@@ -33,7 +33,7 @@ bash scripts/check-neutrality.sh
 除外の理由（条件そのものはスクリプトのコメントを参照）:
 
 - `tests/` を除外する: 配布されない層であり、「生成物に固有名詞が残らないこと」を検証する都合上、検査対象語をリテラルで持つ必要があるため。
-- `ojos/devcontainer-bootstrap` / `ojos/ai-playbook` を除外する: 配布物が自身の公開リポジトリ名（取得元）として持つ必要があるため。
+- `ojos/devcontainer-bootstrap` / `ojos/ai-playbook` / `ojos/devcontainer-host` を除外する: 配布物が自身の公開リポジトリ名（取得元）として持つ必要があるため。
 
 ## 開発運用
 

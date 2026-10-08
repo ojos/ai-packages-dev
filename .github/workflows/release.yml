@@ -28,6 +28,10 @@ on:
         description: 'ai-playbook のタグ（例: v0.1.6）。公開しないときは空にする'
         required: false
         type: string
+      host-version:
+        description: 'devcontainer-host（devhost）のタグ（例: v0.1.0）。公開しないときは空にする'
+        required: false
+        type: string
       execute:
         description: '実際に公開する。false のままなら dry-run で、公開状態には一切触れない'
         required: false
@@ -68,6 +72,7 @@ jobs:
           # ブラケット記法なら解釈の余地が無く、失うものも無い。
           DCB_VERSION: ${{ inputs['dcb-version'] }}
           PLAYBOOK_VERSION: ${{ inputs['playbook-version'] }}
+          HOST_VERSION: ${{ inputs['host-version'] }}
           EXECUTE: ${{ inputs.execute }}
           # ブランチ名ではなく ref で判定する。ref_name は tag からの起動でもタグ名を
           # 返すため、main という名前のタグを作られると素通りする。
@@ -79,8 +84,8 @@ jobs:
 
           # 版番号は片方だけの指定を許す。パッケージごとに版が独立して進むため、
           # 一方の修正を他方の公開へ巻き込まない。ただし両方空なら対象が無い。
-          if [ -z "$DCB_VERSION" ] && [ -z "$PLAYBOOK_VERSION" ]; then
-            echo "error: dcb-version / playbook-version の少なくとも一方を指定してください" >&2
+          if [ -z "$DCB_VERSION" ] && [ -z "$PLAYBOOK_VERSION" ] && [ -z "$HOST_VERSION" ]; then
+            echo "error: dcb-version / playbook-version / host-version の少なくとも 1 つを指定してください" >&2
             fail=1
           fi
 
@@ -155,11 +160,12 @@ jobs:
           client-id: ${{ secrets.RELEASE_APP_CLIENT_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
-          # 配布先の 2 リポジトリだけに絞る。App が他リポジトリへ install されても、
+          # 配布先の 3 リポジトリだけに絞る。App が他リポジトリへ install されても、
           # このワークフローが受け取る権限は広がらない。
           repositories: |
             devcontainer-bootstrap
             ai-playbook
+            devcontainer-host
 
       # release-packages.sh は /tmp の一時クローンに対して git clone / push する。
       # actions/checkout が張る認証はチェックアウト先のリポジトリにしか効かないため、
@@ -194,6 +200,7 @@ jobs:
           OWNER: ${{ github.repository_owner }}
           DCB_VERSION: ${{ inputs['dcb-version'] }}
           PLAYBOOK_VERSION: ${{ inputs['playbook-version'] }}
+          HOST_VERSION: ${{ inputs['host-version'] }}
           EXECUTE: ${{ inputs.execute }}
         run: |
           # 入力は env 経由で受け取り、式展開でシェルへ直接埋め込まない。
@@ -204,6 +211,9 @@ jobs:
           fi
           if [ -n "$PLAYBOOK_VERSION" ]; then
             args+=(--playbook-version "$PLAYBOOK_VERSION")
+          fi
+          if [ -n "$HOST_VERSION" ]; then
+            args+=(--host-version "$HOST_VERSION")
           fi
           # execute が false のときは --execute を渡さない。スクリプトは preflight と
           # 配布計画の表示だけを行い、公開状態には触れずに終了する。
@@ -246,6 +256,31 @@ jobs:
         with:
           subject-name: SHA256SUMS
           subject-digest: ${{ steps.subject.outputs.digest }}
+
+      # devcontainer-host も DCB と同じ形（SHA256SUMS 1 つが対象）で発行する。
+      # SHA256SUMS は dev.sh と dev-up@.service のハッシュを持ち、マニフェストの
+      # checksums も同じファイルを指すので、ここを起点に配布物全体まで辿れる。
+      - name: Read the attestation subject (devcontainer-host)
+        id: subject-host
+        run: |
+          set -euo pipefail
+          f="${ATTEST_SUBJECTS_DIR}/devcontainer-host.sha256"
+          if [[ -f "$f" ]]; then
+            digest="$(cat "$f")"
+            echo "digest=sha256:${digest}" >> "$GITHUB_OUTPUT"
+            echo "[attest] subject digest: sha256:${digest}"
+          else
+            echo "[attest] 対象がありません（devcontainer-host を公開していない実行）。発行を飛ばします。"
+          fi
+        env:
+          ATTEST_SUBJECTS_DIR: ${{ github.workspace }}/attest-subjects
+
+      - name: Attest the checksum file (devcontainer-host)
+        if: steps.subject-host.outputs.digest != ''
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-name: SHA256SUMS
+          subject-digest: ${{ steps.subject-host.outputs.digest }}
 
       - name: Report the follow-up diff
         if: ${{ inputs.execute }}

@@ -47,6 +47,7 @@ while IFS= read -r line; do
 
   probe="${line//ojos\/devcontainer-bootstrap/$SENTINEL}"
   probe="${probe//ojos\/ai-playbook/$SENTINEL}"
+  probe="${probe//ojos\/devcontainer-host/$SENTINEL}"
 
   if printf '%s' "$probe" | grep -E "${SENTINEL}[A-Za-z0-9_-]" >/dev/null; then
     hits="${hits}${line}"$'\n'

@@ -17,7 +17,7 @@
 | `scripts/load-project-env.sh` | プロジェクト .env を source せず安全にパースして export（ホスト env を後勝ちで上書き）。 |
 | `scripts/on-attach.sh` | attach 時の初期化処理。 |
 | `scripts/post-rebuild-check.sh` | リビルド後チェック。**手動実行専用**（`postCreateCommand` / `postAttachCommand` からは起動しない）。 |
-| `scripts/release-packages.sh` | ai-playbook / DCB のリリース実行と監査（`--audit` は公開資産を再取得し SHA256 を再計算して整合性を検証する）。 |
+| `scripts/release-packages.sh` | ai-playbook / DCB / devcontainer-host（`--host-version`。`dev.sh` と `dev-up@.service` を個別の資産として添付し、`dev.sh` へ版を書き込む）のリリース実行と監査（`--audit` は公開資産を再取得し SHA256 を再計算して整合性を検証する）。 |
 | `scripts/audit-failure-notify.sh` | リリース資産監査の失敗通知。2 回連続の失敗でのみ issue を起票し、同じ失敗の open issue があればコメント追記に留める。 |
 | `scripts/setup-git-identity.sh` | global identity の無害化と local identity 適用、credential.helper の gh 固定。 |
 | `scripts/acceptance.sh` | このプロジェクトの受け入れ条件（`ci.yml` 8 ジョブ + `identity-guard.yml` の完全ミラー）。プロジェクトが所有・編集する。 |

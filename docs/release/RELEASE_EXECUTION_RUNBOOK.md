@@ -10,6 +10,7 @@
 - `ojos/ai-packages-dev`（開発・調整）
 - `ojos/ai-playbook`
 - `ojos/devcontainer-bootstrap`
+- `ojos/devcontainer-host`（devhost。#486）
 
 ## 実行場所
 
@@ -42,7 +43,7 @@ workflow は認証と identity をリポジトリ設定から解決する。値�
 
 いずれも Settings > Secrets and variables > Actions に置く（Secrets と Variables はタブが分かれている）。
 
-- App は `ojos/devcontainer-bootstrap` と `ojos/ai-playbook` の 2 リポジトリへ install し、権限は `contents: write` のみを与える。Actions の `GITHUB_TOKEN` は自リポジトリにしかスコープが効かず、クロスリポジトリ push ができないため。
+- App は `ojos/devcontainer-bootstrap`・`ojos/ai-playbook`・`ojos/devcontainer-host` の 3 リポジトリへ install し、権限は `contents: write` のみを与える。**`ojos/devcontainer-host` への install は、利用者の手作業である**（リポジトリそのものは `infra/github/` の Terraform が作るが、App の install は個人のアカウントでは PAT で扱えない見込みのため Terraform の範囲外。#487）。install を忘れると、`devcontainer-host` を指定したリリースは、トークンの発行または公開リポジトリへの push の段階で落ちる。Actions の `GITHUB_TOKEN` は自リポジトリにしかスコープが効かず、クロスリポジトリ push ができないため。
 - bot ユーザー ID は install 後に `gh api '/users/ojos-release-bot[bot]' --jq '.id'` で取得する。**App ID とは別番号**で、コミットを bot アカウントへ紐付けるのはこちら。
 - **配布先の公開リポジトリそのもの（存在と設定）は、このワークフローではなく `infra/github/` の Terraform が作る**（#487。`.github/project-ai-rules.md`「外部サービスの状態管理」）。新しい配布先を足すときは、先にそちらの PR で作ってから、App の install（手作業）とこのワークフローの対応を行う。
 
@@ -92,35 +93,38 @@ gh workflow run attest-recover.yml -f subject-digest=<64 桁の 16 進>
 | パッケージ | 配布方式 | 消費者が取得するもの |
 |---|---|---|
 | `devcontainer-bootstrap` | GitHub Release + 資産 | `bootstrap.sh` / `doctor.sh` / `SHA256SUMS`（curl でダウンロード） |
+| `devcontainer-host` | GitHub Release + 資産（DCB と同じ形に加え、`dev.sh` / `dev-up@.service` を個別に添付） | `dev.sh` / `dev-up@.service`（`dev self-update` は `dev.sh` を直接取得する）、または `PACKAGE_ARCHIVE.tar.gz`（ツリー一式） |
 | `ai-playbook` | git タグのみ（Release なし・資産なし） | git タグ（submodule / subtree / archive tarball で固定して取り込む） |
 
 DCB の `SHA256SUMS` は、README がダウンロードさせるファイル（`bootstrap.sh` / `doctor.sh`）だけを対象にする。
 検証する人が手元に持たないファイルを列挙すると `sha256sum -c` が失敗するため。
 ai-playbook はリリース資産を持たない。DCB の `--playbook-from` も git 由来の `archive/refs/tags/` tarball を使う。
 
-**devhost（`packages/devcontainer-host/.`）は DCB の `PACKAGE_ARCHIVE.tar.gz` に `devhost/` として同梱する（#376）。**
-個別の Release 資産としては添付しない。複数ファイル・サブディレクトリ（`devhost/termux/`）を持ち、
-`SHA256SUMS` / `RELEASE-MANIFEST.json` の資産名は単一ファイル名の前提（`is_plain_asset_name`、監査側）で
-階層を持てないため。完全性は `PACKAGE_ARCHIVE.tar.gz` のハッシュ（`RELEASE-MANIFEST.json` の `checksums`）
-で守る。導入手順は `packages/devcontainer-host/README.md`。
+**devhost（`packages/devcontainer-host/.`）は DCB に同梱せず、独自の版を持つ公開リポジトリ `ojos/devcontainer-host` から配る（#486。#376 で DCB への同梱としていたものを移した）。**
+配布先のルートに `packages/devcontainer-host/` の中身（`dev.sh`・`dev-up@.service`・`README.md`・`selftest.sh`・`*.example`・`termux/` など）が並ぶ。
+Release の資産は DCB と同じ `RELEASE-MANIFEST.json`・`SHA256SUMS`・`PACKAGE_ARCHIVE.tar.gz` に加えて、**`dev.sh` と `dev-up@.service` を個別の資産として添付する**。
+この 2 つは `SHA256SUMS` と `RELEASE-MANIFEST.json` の `checksums` の対象になる（`dev self-update` が `checksums["dev.sh"]` と取得した `dev.sh` を照合する）。
+個別の資産にするのは単一ファイル名のものだけで、複数ファイル・サブディレクトリ（`termux/`）を持つツリーは `PACKAGE_ARCHIVE.tar.gz` に乗せる（`SHA256SUMS` / `RELEASE-MANIFEST.json` の資産名は単一ファイル名の前提で、`is_plain_asset_name`・監査側）。
+`SHA256SUMS` には DCB と同じく artifact attestation を発行する。導入手順は `packages/devcontainer-host/README.md`。
+DCB の `PACKAGE_ARCHIVE.tar.gz` に `devhost/` は含まれない（`packages/devcontainer-bootstrap/tests/test-release-no-devhost-bundle.sh` が固定する）。
 
 ### 配布リポジトリのルートへ載せるファイル
 
-両パッケージ共通で、配布リポジトリのルートへ次を載せる。正本は開発リポジトリ側にあり、配布はその写しになる。
-一覧は `scripts/release-packages.sh` の `DCB_DISTRIBUTED_FILES` / `PLAYBOOK_DISTRIBUTED_FILES` が正本で、
+3 パッケージ共通で、配布リポジトリのルートへ次を載せる。正本は開発リポジトリ側にあり、配布はその写しになる。
+一覧は `scripts/release-packages.sh` の `DCB_DISTRIBUTED_FILES` / `HOST_DISTRIBUTED_FILES` / `PLAYBOOK_DISTRIBUTED_FILES` が正本で、
 dry-run（`execute: false`）が `[plan]` 行として出力する。
 
 | 配布先のファイル | 開発リポジトリ側の正本 |
 |---|---|
 | `LICENSE` | `LICENSE`（MIT） |
-| `CHANGELOG.md` | `docs/release/release-notes-devcontainer-bootstrap.md` / `docs/release/release-notes-ai-playbook.md` |
+| `CHANGELOG.md` | `docs/release/release-notes-devcontainer-bootstrap.md` / `docs/release/release-notes-devcontainer-host.md` / `docs/release/release-notes-ai-playbook.md` |
 
 配布先には `docs/` 階層が存在しないため、リリースノートはルートで解決できる `CHANGELOG.md` へ改名して配る。
 同じ理由で、リリースノート本文にリポジトリ内の相対リンクを書かない（配布先で解決できないリンクになる）。
 `LICENSE` / `CHANGELOG.md` は規範ではないため、DCB の `--with-playbook` による取り込み対象からは外れる。
 
-**DCB だけ、上の共通ファイルに加えて `devhost/`（`packages/devcontainer-host/.`）をルート直下へ載せる。**
-ai-playbook には devhost を載せない（devhost は DCB のリリースにのみ同梱する設計、上記「配布方式」参照）。
+devcontainer-host は、上の共通ファイルに加えて `packages/devcontainer-host/.` をルート直下へ載せる（一覧は `HOST_DISTRIBUTED_FILES` と `prepare_host_release_repo`）。
+`CHANGELOG.md` の正本は `docs/release/release-notes-devcontainer-host.md`。DCB と ai-playbook には devhost を載せない。
 
 外部からの貢献は受け付けない。配布リポジトリはリリースのたびに全置換されるため、直接の PR は次のリリースで失われる。
 この方針は両パッケージの README に明記する（CONTRIBUTING ファイルは置かない）。
@@ -137,10 +141,12 @@ ai-playbook には devhost を載せない（devhost は DCB のリリースに�
 | 1 | 必要コマンド（`git` / `gh` / `bash` / `tar` / `sha256sum` / `python3`）が存在する | 常時 | `require_cmd` |
 | 2 | 作業ツリーが clean | 常時 | `require_clean_worktree` |
 | 3 | タグ形式が `vX.Y.Z` | 指定した版ごと | `extract_semver` |
-| 4 | 指定バージョンが未公開（DCB は Release の有無、ai-playbook はタグの有無で判定） | 指定した版ごと | `require_version_unpublished` / `require_tag_unpublished` |
+| 4 | 指定バージョンが未公開（DCB と devcontainer-host は Release の有無、ai-playbook はタグの有無で判定） | 指定した版ごと | `require_version_unpublished` / `require_tag_unpublished` |
 | 5 | DCB のバージョン正本照合（5 箇所。「バージョンの正本」節を参照） | `--dcb-version` 指定時 | `validate_dcb_docs` |
-| 6 | Markdown の相対リンク・アンカー検証（配下の `README*.md` が対象） | `--dcb-version` 時は `packages/devcontainer-bootstrap/` と `.ai-playbook/`、`--playbook-version` 時は `.ai-playbook/` | `validate_markdown_links_in_tree` |
+| 6 | Markdown の相対リンク・アンカー検証（配下の `README*.md` が対象） | `--dcb-version` 時は `packages/devcontainer-bootstrap/` と `.ai-playbook/`、`--playbook-version` 時は `.ai-playbook/`、`--host-version` 時は `packages/devcontainer-host/` | `validate_markdown_links_in_tree` |
 | 7 | DCB 機能テスト `packages/devcontainer-bootstrap/tests/run-tests.sh`（テストファイルを CPU 数で並列に実行する。直列では約 20 分、14 コアの手元で約 4 分。Actions のランナーでは release.yml 全体で約 10 分（2026-10-07 の実測）。並列度は `DCB_TEST_JOBS` で変えられる） | `--dcb-version` 指定時 | `run_dcb_tests` |
+| 8 | `dev.sh` に `DEV_VERSION="vX.Y.Z"` の行がちょうど 1 つある（リリースの手順が公開する版を書き込む行） | `--host-version` 指定時 | `validate_host_version_anchor` |
+| 9 | devhost の自己試験 `packages/devcontainer-host/selftest.sh`（偽の `curl` / `docker` などを使い、ネットワークには出ない。数秒） | `--host-version` 指定時 | `run_host_tests` |
 
 検査は安い順に並ぶ。版の重複（#4）は問い合わせ 1 回で判定できるため、重い DCB 機能テスト（#7）より先に落ちる。
 
@@ -175,8 +181,9 @@ DCB は規範パッケージの `templates/` を配布するため、DCB リリ�
 
 - `ojos/ai-playbook` に `vX.Y.Z`
 - `ojos/devcontainer-bootstrap` に `vX.Y.Z`
+- `ojos/devcontainer-host` に `vX.Y.Z`
 
-workflow の `dcb-version` / `playbook-version` に渡す値も同じ `vX.Y.Z` 形式。
+workflow の `dcb-version` / `playbook-version` / `host-version` に渡す値も同じ `vX.Y.Z` 形式。
 `extract_semver` が `^v[0-9]+\.[0-9]+\.[0-9]+$` 以外を弾くため、接頭辞付きや `v` 無しは preflight で落ちる。
 
 ## バージョンの正本
@@ -204,6 +211,7 @@ workflow の `dcb-version` / `playbook-version` に渡す値も同じ `vX.Y.Z` �
   RUNBOOK 側のこの一覧と `validate_dcb_docs` の照合件数が一致することは
   `tests/test-dcb-version-anchors.sh` が機械照合する。一覧を増減したら
   `validate_dcb_docs` 側も同数に揃えること。
+- devcontainer-host: **版そのものの正本は、公開するタグ**（workflow の `host-version` 入力、`vX.Y.Z`）である。DCB と違い、リポジトリの中の写しとの照合ではなく**書き込み**にする。リリースの手順（`stamp_host_version`）が、配布ツリーの `dev.sh` の `DEV_VERSION="vX.Y.Z"` の行をタグの値に書き換えてから資産を作る（`dev version` / `dev --version` が出す値）。`packages/devcontainer-host/dev.sh` の中の値は次に出す版の目印で、公開物の値ではない。preflight の `validate_host_version_anchor` は、行の形が崩れていないこと（ちょうど 1 行）だけを見る。
 - ai-playbook: リリース時に `playbook-version` で指定するタグ（README 側の照合はない）
 
 ## workflow の入力
@@ -211,7 +219,8 @@ workflow の `dcb-version` / `playbook-version` に渡す値も同じ `vX.Y.Z` �
 | 入力 | 値 | 既定 | 備考 |
 |---|---|---|---|
 | `dcb-version` | `vX.Y.Z` または空欄 | 空欄 | 出さない側は空欄にする |
-| `playbook-version` | `vX.Y.Z` または空欄 | 空欄 | 両方を空欄にするとエラー |
+| `playbook-version` | `vX.Y.Z` または空欄 | 空欄 | 3 つの版（`dcb-version` / `playbook-version` / `host-version`）をすべて空欄にするとエラー |
+| `host-version` | `vX.Y.Z` または空欄 | 空欄 | 出さない側は空欄にする |
 | `execute` | `true` / `false` | `false` | `false` は dry-run。`true` は `main` からのみ起動できる |
 
 パッケージは独立してリリースできる。指定した側だけを触り、空欄にした側の公開物には手を触れない。
@@ -228,12 +237,14 @@ workflow の `dcb-version` / `playbook-version` に渡す値も同じ `vX.Y.Z` �
 
 `execute: true` は `main` からしか起動できない。次をすべてコミットし、PR を経て `main` へマージしてから起動する。
 
+- devcontainer-host を出す場合、`packages/devcontainer-host/dev.sh` の `DEV_VERSION` を目的の版へ揃えておくと読み手が迷わない（公開物の値はリリースの手順が書き込むので、揃っていなくても公開物は正しい）。
 - DCB を出す場合、バージョンの正本 5 箇所（「バージョンの正本」節。`README.md` の 3 箇所 + `bootstrap.sh` + `doctor.sh` の `DCB_VERSION`）が目的の版へ更新済みであること。
 - 各パッケージの変更点をリリースノートへ追記していること。
 
   | パッケージ | リリースノート |
   |---|---|
   | `devcontainer-bootstrap` | [release-notes-devcontainer-bootstrap.md](release-notes-devcontainer-bootstrap.md) |
+  | `devcontainer-host` | [release-notes-devcontainer-host.md](release-notes-devcontainer-host.md) |
   | `ai-playbook` | [release-notes-ai-playbook.md](release-notes-ai-playbook.md) |
 
 - [RELEASE_HISTORY](RELEASE_HISTORY.md) の現行バージョン表と版更新表を更新していること。
@@ -251,8 +262,11 @@ gh workflow run release.yml --ref main -f playbook-version=v0.1.6
 # DCB 側だけ
 gh workflow run release.yml --ref main -f dcb-version=v0.7.4
 
-# 両方まとめて
-gh workflow run release.yml --ref main -f dcb-version=v0.7.4 -f playbook-version=v0.1.6
+# devcontainer-host 側だけ
+gh workflow run release.yml --ref main -f host-version=v0.1.0
+
+# まとめて
+gh workflow run release.yml --ref main -f dcb-version=v0.7.4 -f playbook-version=v0.1.6 -f host-version=v0.1.0
 ```
 
 GitHub の Actions 画面から `Run workflow` で起動してもよい。実行ログは `gh run watch` か Actions 画面で追う。
@@ -277,6 +291,8 @@ preflight がもう一度すべて走る。dry-run 通過後に `main` や公開
 
 - **DCB**: 公開リポジトリへソースを反映し、タグを push し、GitHub Release を作成して
   `bootstrap.sh` / `doctor.sh` / `SHA256SUMS` / `RELEASE-MANIFEST.json` / `PACKAGE_ARCHIVE.tar.gz` を添付する。
+- **devcontainer-host**: 公開リポジトリへソースを反映し（`dev.sh` の `DEV_VERSION` を公開するタグへ書き換えたツリー）、タグを push し、GitHub Release を作成して
+  `dev.sh` / `dev-up@.service` / `SHA256SUMS` / `RELEASE-MANIFEST.json` / `PACKAGE_ARCHIVE.tar.gz` を添付する。`SHA256SUMS` へ attestation を発行する。
 - **ai-playbook**: 公開リポジトリへソースを反映し、タグを push する。Release も資産も作らない。
 
 公開リポジトリへの release snapshot コミットは GitHub App の bot 名義になる。実行主体とコミット名義を一致させるため。
@@ -286,7 +302,7 @@ preflight がもう一度すべて走る。dry-run 通過後に `main` や公開
 1. `scripts/update-release-status.sh` によるルート `README.md` の書き換え。
    **これは runner 上の作業ツリーに対する変更で、このリポジトリへはコミットされない**（手順 4 で手元から反映する）。
 2. 各配布リポジトリの直近 3 リリースの一覧表示。
-3. DCB のリリース資産監査（`audit_release_assets`）。手順 4 で `--audit` を別途実行する必要はない。
+3. DCB と devcontainer-host のリリース資産監査（`audit_release_assets`）。手順 4 で `--audit` を別途実行する必要はない。
 
 ### 4) 事後確認
 
@@ -298,6 +314,7 @@ preflight がもう一度すべて走る。dry-run 通過後に `main` や公開
   ```
 
 - 各リポジトリでタグがリモートに見えること。
+- devcontainer-host は、`dev self-update` の取得先（`https://github.com/ojos/devcontainer-host/releases/latest/download/RELEASE-MANIFEST.json`）が引けること、`checksums["dev.sh"]` と個別の資産 `dev.sh` のハッシュが一致すること、公開した `dev.sh` の `dev version` が公開した版を出すこと。DCB に同梱されていた古い `dev` の移行の案内（DCB のリリースノート・README）が出ていること。
 - DCB は README の手順（`curl` + `sha256sum -c`）が通ること。
 - ai-playbook は `archive/refs/tags/<tag>.tar.gz` が取得でき、展開したルートが `.ai-playbook/` の中身であること
   （配布リポジトリのルート = `.ai-playbook` の中身。`.ai-playbook` という階層は挟まらない）。
@@ -328,6 +345,8 @@ preflight がもう一度すべて走る。dry-run 通過後に `main` や公開
   ```bash
   # DCB（Release + タグ）
   gh release delete <tag> --repo ojos/devcontainer-bootstrap --cleanup-tag
+  # devcontainer-host（Release + タグ）
+  gh release delete <tag> --repo ojos/devcontainer-host --cleanup-tag
   # ai-playbook（タグのみ）
   git push https://github.com/ojos/ai-playbook.git :refs/tags/<tag>
   ```

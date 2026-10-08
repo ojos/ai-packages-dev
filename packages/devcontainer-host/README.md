@@ -6,7 +6,7 @@ devcontainer を起こし、入る**ための道具一式です。どのプロ�
 
 | ファイル | 置き場所（外部の機械 / 端末） | 役割 |
 |---|---|---|
-| `dev.sh` | `~/.local/bin/dev`（外部の機械） | 入口の道具。`ls` / `up` / `attach` / `supervise` / `rebuild` / `doctor` / `restart` / `stop` / `logs` / `enable` / `disable` / `exec` / `self-update` / `help` |
+| `dev.sh` | `~/.local/bin/dev`（外部の機械） | 入口の道具。`ls` / `up` / `attach` / `supervise` / `rebuild` / `doctor` / `restart` / `stop` / `logs` / `enable` / `disable` / `exec` / `self-update` / `version` / `help` |
 | `dev-up@.service` | `~/.config/systemd/user/`（外部の機械） | 起動時と、コンテナが止まったときに起こし直すユニット |
 | `projects.example` | `~/.config/dev/projects`（外部の機械） | 設定ファイルの雛形（名前 → パス） |
 | `ssh_config.plain.example` | 端末の `~/.ssh/config` | ssh の入口の断片（経路: 素の SSH） |
@@ -25,8 +25,7 @@ systemd を持たない OS（macOS や、systemd を使わない Linux ディス
 **ネイティブ Linux の Docker Engine でワークスペースへ書き込めない場合**は、
 devcontainer-bootstrap（DCB）の README の「ネイティブ Linux の Docker でのワークスペースの所有者」に
 従ってください。`updateRemoteUserUID` が既定で UID/GID を揃えるため、devhost 側で追加の対処はしません
-（devhost は DCB のリリースへ同梱されて配布されるため、この README と DCB の README は配布先で
-階層が変わります。相対リンクにはしません）。
+（devhost は DCB とは別のリポジトリで配布されるため、DCB の README へは相対リンクにしません）。
 
 **ネイティブ Linux の Docker Engine で codex のサンドボックスを使うには、コンテナの AppArmor と
 seccomp の既定の制限を両方外す必要があります**（seccomp は Docker Desktop でも止めます）。DCB の `--with-codex` の生成物は、`compose.yaml` に
@@ -52,30 +51,58 @@ AppArmor だけを外しても、seccomp が先に止めるので動きません
 
 ### devhost を入手する
 
-devhost は独立したリリースを持たず、**devcontainer-bootstrap（DCB）のリリースに同梱されています。**
-`RELEASE-MANIFEST.json` と `PACKAGE_ARCHIVE.tar.gz` を取得し、マニフェストが記録した archive のハッシュと照合してから取り出します。
-手順の詳細と検証の意味は DCB の README の「devhost」の節を参照してください。
+devhost は、独自の版を持つ公開リポジトリ `ojos/devcontainer-host` のリリースで配られます
+（以前は devcontainer-bootstrap（DCB）のリリースに同梱していましたが、同梱は外しました）。
+各リリースには `RELEASE-MANIFEST.json`・`SHA256SUMS`・`PACKAGE_ARCHIVE.tar.gz`（このリポジトリのツリー一式）に加えて、
+`dev.sh` と `dev-up@.service` が個別の資産として付きます。`RELEASE-MANIFEST.json` の `checksums` が
+`PACKAGE_ARCHIVE.tar.gz` / `SHA256SUMS` / `dev.sh` / `dev-up@.service` のハッシュを持つので、取得したものを照合してから使います。
 
 ```bash
-TAG=v0.17.0   # DCB の最新安定リリース（devhost を同梱したのは v0.14.0 以降）
-BASE="https://github.com/ojos/devcontainer-bootstrap/releases/download/${TAG}"
+TAG=v0.1.0   # devcontainer-host の最新安定リリース
+BASE="https://github.com/ojos/devcontainer-host/releases/download/${TAG}"
 
 curl -sSL "${BASE}/RELEASE-MANIFEST.json" -o RELEASE-MANIFEST.json
 curl -sSL "${BASE}/PACKAGE_ARCHIVE.tar.gz" -o PACKAGE_ARCHIVE.tar.gz
 
 # sha256sum は GNU coreutils のコマンドで、macOS には無い。shasum へ分岐する。
 if command -v sha256sum >/dev/null 2>&1; then sha256c="sha256sum"; else sha256c="shasum -a 256"; fi
-# マニフェストの checksums には SHA256SUMS の行もあるが、devhost に要るのは archive だけ。
-# その行だけを抜き出して照合する（SHA256SUMS を取得していないので、全行を渡すと落ちる）。
+# マニフェストの checksums には SHA256SUMS などの行もあるが、ここで使うのは archive だけ。
+# その行だけを抜き出して照合する（ほかのファイルを取得していないので、全行を渡すと落ちる）。
 jq -r '.checksums["PACKAGE_ARCHIVE.tar.gz"] + "  PACKAGE_ARCHIVE.tar.gz"' RELEASE-MANIFEST.json | $sha256c -c -
 
-# archive の中の名前は ./devhost/... なので、./ を付けて指定する（GNU tar は devhost/ だと一致しない）。
-tar -xzf PACKAGE_ARCHIVE.tar.gz ./devhost
+# archive の中身は、リポジトリのルートそのもの（dev.sh などがルート直下に並ぶ）。専用のディレクトリへ展開する。
+mkdir devhost
+tar -xzf PACKAGE_ARCHIVE.tar.gz -C devhost
 ls devhost/
+```
+
+`dev.sh` だけが要るときは、個別の資産を取得して、同じマニフェストのハッシュと照合します
+（`dev self-update` もこの形で更新します）。
+
+```bash
+curl -sSL "${BASE}/dev.sh" -o dev.sh
+jq -r '.checksums["dev.sh"] + "  dev.sh"' RELEASE-MANIFEST.json | $sha256c -c -
+```
+
+リリースの `SHA256SUMS` には、GitHub Actions が発行した artifact attestation（SLSA provenance）が付いています
+（任意の検証。[GitHub CLI](https://cli.github.com/) が要ります）。`SHA256SUMS` は `dev.sh` と `dev-up@.service` のハッシュを持ちます。
+**成功しても何も表示されません。判定は終了コードで行ってください**（0 = 成功、非 0 = 失敗）。
+
+```bash
+curl -sSL "${BASE}/SHA256SUMS" -o SHA256SUMS
+OWNER="$(printf '%s' "$BASE" | sed -n 's#^https://github.com/\([^/]*\)/.*#\1#p')"   # 取得元の owner
+if gh attestation verify SHA256SUMS --owner "$OWNER"; then echo "attestation: ok"; else echo "attestation: 検証に失敗しました" >&2; exit 1; fi
 ```
 
 以降の手順は、この `devhost/` を取り出したディレクトリで実行します
 （リポジトリを取り込んでいる場合は `packages/devcontainer-host/` を同じ意味で読んでください）。
+
+#### DCB 同梱の古い版から移るとき
+
+DCB の v0.14.0 以降に同梱されていた `dev` の `dev self-update` は、取得先が DCB のリリースです。
+DCB が devhost の同梱をやめたため、その古い版の `dev self-update` は更新できず、何も置き換えずに止まります（`archive から ./devhost/dev.sh を取り出せません` と出て終了コード 1）。
+**手で 1 度だけ入れ直してください。** 上の手順で `devhost/` を取り出し、「dev を置く」の `install` を打つと、
+以降の `dev self-update` は `ojos/devcontainer-host` から更新できます。`dev version` が版を出せば、移り終えています。
 
 ### devcontainer CLI を入れる
 
@@ -104,7 +131,7 @@ cp devhost/projects.example ~/.config/dev/projects   # 名前と絶対パスを�
 **リンクではなく写しで置きます。** リンクにすると、そのリポジトリのブランチを切り替えただけで
 外部の機械の道具が黙って変わるためです。道具を更新するには、同じ `install` をもう一度打つか、
 `dev self-update` を使います。`dev self-update` は上の「devhost を入手する」と同じ照合（マニフェストの
-ハッシュと archive の照合）を通してから、`dev.sh` だけを置き換えます（既定は最新、`--version v0.17.0` で固定）。
+ハッシュの照合）を通してから、`dev.sh` だけを置き換えます（既定は最新、`--version v0.1.0` で固定）。
 置き換え先が devhost の `dev.sh` だと確かめられないとき（リンク、別の道具など）は、何も置き換えずに止まります。
 `dev-up@.service` と `projects` は更新しません（ユニットを更新したときは「ユニットを入れる」の `install` を打ち直します）。
 
@@ -179,7 +206,8 @@ compose のサービスに `restart: always` があると、`dev disable` で止
 | `dev logs <名前> [-n <行数>]` | ユニットのログの末尾（既定 50 行） |
 | `dev enable <名前>` / `dev disable <名前>` | ユニットを有効にして起こす / 無効にして止める（`disable` はコンテナも止める） |
 | `dev exec <名前> -- <コマンド...>` | tmux を介さずにコンテナの中でコマンドを 1 つ実行する |
-| `dev self-update [--version <vX.Y.Z>]` | dev 自身を DCB の公開リリースの版へ置き換える |
+| `dev self-update [--version <vX.Y.Z>]` | dev 自身を devcontainer-host の公開リリースの版へ置き換える |
+| `dev version` | dev の版を出す（`dev --version` も同じ） |
 | `dev help [サブコマンド]` | 説明を出す |
 
 オプション・呼ぶ順序・終了コード・失敗したときの案内は、次の「コマンドの説明」にあります。
@@ -431,7 +459,7 @@ ssh のコマンド全体をクォートして、外側と内側の二重に包�
 ### dev self-update
 
 ```text
-dev self-update — dev 自身を、DCB の公開リリースの版へ置き換える。
+dev self-update — dev 自身を、devcontainer-host の公開リリースの版へ置き換える。
 
 使い方:
   dev self-update [--version <vX.Y.Z>]
@@ -439,19 +467,33 @@ dev self-update — dev 自身を、DCB の公開リリースの版へ置き換�
 呼ぶ順序:
   1. 置き換え先（この dev）が、リンクでも git の作業ツリーの中でもなく、devhost の dev.sh であることを
      確かめる（1 行目が bash の shebang、2 行目が「# dev — 」で始まる）
-  2. 公開リリースから RELEASE-MANIFEST.json と PACKAGE_ARCHIVE.tar.gz を取得する
-     （既定は最新。--version でその版に固定する）
-  3. マニフェストに記録された archive の SHA-256 と、取得した archive のハッシュを照合する
-  4. archive から ./devhost/dev.sh を取り出し、1 と同じ形（bash の shebang と「# dev — 」）であることと構文を確かめる
+  2. 公開リリースから RELEASE-MANIFEST.json を取得する（既定は最新。--version でその版に固定する）
+  3. マニフェストの checksums に記録された dev.sh の SHA-256 を読み、同じリリースの dev.sh を取得して照合する
+  4. 取得した dev.sh が 1 と同じ形（bash の shebang と「# dev — 」）であることと、構文を確かめる
   5. 同じディレクトリの一時ファイルへ写し、mv で置き換える
 どれか 1 つでも外れたら、何も置き換えずに 1 で止まる。手動の入手（README の「devhost を入手する」）と
 同じ照合。dev.sh だけを置き換える（dev-up@.service や設定ファイルには触らない）。
-curl / jq / tar と、sha256sum または shasum が要る。
+curl と jq と、sha256sum または shasum が要る。
 
 オプション:
   --version <vX.Y.Z>   取得する版（既定は最新）
 
 終了コード: 0 = 置き換えた（すでに同じ版なら置き換えずに 0） / 1 = 失敗（取得・照合・置き換え先の確認・置き換え） / 2 = 使い方の誤り
+```
+
+### dev version
+
+```text
+dev version — dev の版を出す。
+
+使い方:
+  dev version
+  dev --version
+
+出力は `dev vX.Y.Z` の 1 行。公開した版のこの値は、リリースの手順が書き込む。
+プロジェクトの設定ファイルは読まない。
+
+終了コード: 0 = 成功 / 2 = 使い方の誤り
 ```
 
 ### dev help
@@ -462,7 +504,7 @@ dev help — サブコマンドの説明を出す。
 使い方:
   dev help                  使い方の一覧
   dev help <サブコマンド>    ls / up / attach / supervise / rebuild / doctor /
-                            restart / stop / logs / enable / disable / exec / self-update の説明
+                            restart / stop / logs / enable / disable / exec / self-update / version の説明
 
 終了コード: 0 = 成功 / 2 = 知らないサブコマンド
 ```

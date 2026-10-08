@@ -57,7 +57,7 @@ require_cmd awk
   exit 1
 }
 
-# DCB は GitHub Release で配布するため、最新 Release のタグを正とする。
+# DCB と devcontainer-host は GitHub Release で配布するため、最新 Release のタグを正とする。
 get_latest_release() {
   local repo="$1" out
   # 404（Release 未作成）や権限エラー時、gh は本文を stdout に出しつつ非ゼロ終了する。
@@ -76,6 +76,7 @@ get_latest_semver_tag() {
 }
 
 DCB_TAG="$(get_latest_release devcontainer-bootstrap)"
+HOST_TAG="$(get_latest_release devcontainer-host)"
 PLAYBOOK_TAG="$(get_latest_semver_tag ai-playbook)"
 
 BLOCK_FILE="$(mktemp "${TMPDIR:-/tmp}/release-status-block.XXXXXX")"
@@ -83,6 +84,7 @@ cat >"$BLOCK_FILE" <<EOF
 | パッケージ | 配布状態 |
 |---|---|
 | devcontainer-bootstrap | $OWNER/devcontainer-bootstrap で $DCB_TAG まで公開済み |
+| devcontainer-host | $OWNER/devcontainer-host で $HOST_TAG まで公開済み |
 | ai-playbook | $OWNER/ai-playbook で $PLAYBOOK_TAG まで公開済み |
 
 リリース実行手順は [docs/release/RELEASE_EXECUTION_RUNBOOK.md](docs/release/RELEASE_EXECUTION_RUNBOOK.md) を参照する。
@@ -90,6 +92,7 @@ cat >"$BLOCK_FILE" <<EOF
 ### リリース状況
 
 - \`devcontainer-bootstrap\`: \`$OWNER/devcontainer-bootstrap\` で \`$DCB_TAG\` まで公開済み
+- \`devcontainer-host\`: \`$OWNER/devcontainer-host\` で \`$HOST_TAG\` まで公開済み
 - \`ai-playbook\`: \`$OWNER/ai-playbook\` で \`$PLAYBOOK_TAG\` まで公開済み
 EOF
 
@@ -119,4 +122,5 @@ rm -f "$BLOCK_FILE"
 
 echo "[ok] updated release status block in $README_PATH"
 echo "[info] devcontainer-bootstrap=$DCB_TAG"
+echo "[info] devcontainer-host=$HOST_TAG"
 echo "[info] ai-playbook=$PLAYBOOK_TAG"

@@ -153,7 +153,7 @@ gh CLI の認証はコンテナ内で行い、その状態を named volume に�
 
 共通規範「外部サービスの状態管理」を、このリポジトリで具体化します。
 
-- 対象の外部状態: 公開リポジトリ（`ojos/*`）、GitHub Release、タグ
+- 対象の外部状態: 公開リポジトリ（`ojos/devcontainer-bootstrap` / `ojos/ai-playbook` / `ojos/devcontainer-host`。存在と設定は `infra/github/` の Terraform、中身の反映は `scripts/release-packages.sh`）、GitHub Release、タグ
 - 宣言・適用の手段: `scripts/release-packages.sh`。ソースの反映・タグ付け・Release 作成を冪等に行い、公開済みバージョンの再公開を preflight で拒否します（不変性）
 - **実行場所は GitHub Actions（`.github/workflows/release.yml` の `workflow_dispatch`）です。ローカルからのリリース実行は行いません。** 実行環境を一本化し、手元の環境差に起因する失敗経路を残さないためです。手順は `docs/release/RELEASE_EXECUTION_RUNBOOK.md`
 - この禁止は文書ではなく機構で担保します。`scripts/release-packages.sh` は `GITHUB_ACTIONS` を見て、Actions 外での `--execute` を preflight より前に拒否します。副作用を持たない dry-run と `--audit` はローカルでも実行できます
