@@ -665,6 +665,28 @@ in_git_worktree() {
 SU_TMP=""
 su_cleanup() { [[ -z "$SU_TMP" ]] || rm -rf "$SU_TMP"; }
 
+# 置いてあるユニットのファイルを、同じリリースの dev-up@.service と比べ、違えば install.sh の再実行を案内する。
+# **ユニットは書き換えない**（差の検出と案内だけ。書き換えは install.sh の再実行に任せる）。
+# 比べる相手は、マニフェストの checksums["dev-up@.service"]（照合済みの dev.sh と同じリリースのマニフェスト）。
+# ユニットを置いていない機械（手動で使う）、マニフェストにハッシュが無い版では何も言わない。
+# 案内が出せなくても self-update 自体は失敗させない（dev.sh の置き換えはもう済んでいる）。
+# 使い方: su_check_unit <マニフェスト> <版>
+su_check_unit() {
+  local manifest="$1" ver="$2" unit want got
+  unit="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/dev-up@.service"
+  [[ -f "$unit" ]] || return 0
+  want="$(jq -r '.checksums["dev-up@.service"] // empty' "$manifest" 2>/dev/null)" || return 0
+  [[ "$want" =~ ^[0-9a-f]{64}$ ]] || return 0
+  got="$(sha256_of "$unit")" || {
+    echo "[$PROG] 警告: $unit のハッシュを計算できないので、リリースのユニットとは比べていません。" >&2
+    return 0
+  }
+  if [[ "$got" != "$want" ]]; then
+    echo "[$PROG] 置いてあるユニット（$unit）が、リリース${ver:+（$ver）}の dev-up@.service と違います。"
+    echo "[$PROG]   install.sh を再実行してユニットを更新してください（README.md の「install.sh で入れる」。self-update はユニットを書き換えません）。"
+  fi
+}
+
 # dev 自身を、devcontainer-host の公開リリースの dev.sh へ置き換える。
 # 手順は README.md の手動の入手と同じ: RELEASE-MANIFEST.json と dev.sh を取得し、
 # マニフェストが記録した dev.sh のハッシュ（checksums の dev.sh）と照合する。dev.sh は個別の資産として
@@ -691,7 +713,7 @@ cmd_self_update() {
   fi
   need curl "curl を入れてください。"
   need jq "jq を入れてください（マニフェストを読む。README.md の手動の入手と同じ）。"
-  local base self selfdir
+  local base self selfdir mver=""
   # 最新のとき、マニフェストだけを latest から取り、そこに書かれた版で dev.sh を取る
   # （latest を 2 回引くと、間にリリースが出たときに、別の版のマニフェストと dev.sh を組み合わせうる）。
   local mbase
@@ -711,7 +733,6 @@ cmd_self_update() {
   echo "[$PROG] 取得先: $mbase"
   curl -fsSL "$mbase/RELEASE-MANIFEST.json" -o "$SU_TMP/RELEASE-MANIFEST.json" || die "RELEASE-MANIFEST.json を取得できません。何も置き換えていません。"
   if [[ -z "$version" ]]; then
-    local mver
     mver="$(jq -r '.version // empty' "$SU_TMP/RELEASE-MANIFEST.json")" || die "RELEASE-MANIFEST.json を読めません。何も置き換えていません。"
     [[ "$mver" == v* ]] || mver="v$mver"
     [[ "$mver" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-+.][0-9A-Za-z.-]+)?$ ]] || die "最新の版をマニフェストから読めません（version: $mver）。--version vX.Y.Z で版を指定してください。何も置き換えていません。"
@@ -730,8 +751,10 @@ cmd_self_update() {
   is_devhost_dev_sh "$SU_TMP/dev.sh" || die "取得した dev.sh が devhost の dev.sh だと確かめられません（1 行目が bash の shebang、2 行目が「# dev — 」で始まる形ではない）。何も置き換えていません。"
   "${BASH:-bash}" -n "$SU_TMP/dev.sh" || die "取得した dev.sh に構文の誤りがあります。何も置き換えていません。"
 
+  local relver="${version:-${mver:-}}"
   if cmp -s "$SU_TMP/dev.sh" "$self"; then
     echo "[$PROG] すでにこの版です（$self は取得した dev.sh と同じ）。置き換えません。"
+    su_check_unit "$SU_TMP/RELEASE-MANIFEST.json" "$relver"
     return 0
   fi
   local tmp
@@ -741,6 +764,8 @@ cmd_self_update() {
     die "置き換えに失敗しました。何も置き換えていません（置き換え先: $self）。"
   fi
   echo "[$PROG] 置き換えました: $self"
+  su_check_unit "$SU_TMP/RELEASE-MANIFEST.json" "$relver"
+  echo "[$PROG] すでに動いているユニットは、起こし直すまで古い dev のまま動き続けます。dev restart <名前>（コンテナも再起動します）か systemctl --user restart dev-up@<名前>.service で起こし直してください。"
 }
 
 # dev の版を出す。
@@ -1266,8 +1291,14 @@ dev self-update — dev 自身を、devcontainer-host の公開リリースの�
   3. マニフェストの checksums に記録された dev.sh の SHA-256 を読み、同じリリースの dev.sh を取得して照合する
   4. 取得した dev.sh が 1 と同じ形（bash の shebang と「# dev — 」）であることと、構文を確かめる
   5. 同じディレクトリの一時ファイルへ写し、mv で置き換える
-どれか 1 つでも外れたら、何も置き換えずに 1 で止まる。手動の入手（README の「devhost を入手する」）と
-同じ照合。dev.sh だけを置き換える（dev-up@.service や設定ファイルには触らない）。
+  6. 置いてあるユニットのファイル（~/.config/systemd/user/dev-up@.service）を、同じリリースのマニフェストの
+     checksums の dev-up@.service と比べる。違えば、install.sh を再実行してユニットを更新するよう案内する
+     （ユニットのファイルを置いていない、マニフェストにハッシュが無いときは何も言わない）
+  7. 置き換えたあと、動いているユニットは起こし直すまで古い dev のまま動き続けることを案内する
+     （dev restart <名前>、または systemctl --user restart dev-up@<名前>.service）
+どれか 1 つでも外れたら（1〜5）、何も置き換えずに 1 で止まる。手動の入手（README の「devhost を入手する」）と
+同じ照合。dev.sh だけを置き換える。**ユニットのファイルや設定ファイルは書き換えない**（6 は差の案内だけで、
+更新は install.sh の再実行に任せる）。
 curl と jq と、sha256sum または shasum が要る。
 
 オプション:

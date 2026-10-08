@@ -287,7 +287,7 @@ jobs:
           subject-digest: ${{ steps.subject.outputs.digest }}
 
       # devcontainer-host も DCB と同じ形（SHA256SUMS 1 つが対象）で発行する。
-      # SHA256SUMS は dev.sh・dev-up@.service・PACKAGE_ARCHIVE.tar.gz のハッシュを持ち、マニフェストの
+      # SHA256SUMS は dev.sh・dev-up@.service・install.sh・projects.example・PACKAGE_ARCHIVE.tar.gz のハッシュを持ち、マニフェストの
       # checksums も同じファイルを指すので、ここを起点に配布物全体まで辿れる。
       - name: Attest the checksum file (devcontainer-host)
         if: ${{ !cancelled() && steps.subject.outputs.digest-host != '' }}

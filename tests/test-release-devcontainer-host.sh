@@ -8,7 +8,7 @@
 # ここでは副作用の無い範囲を確かめる。
 #
 #   1. 配布ツリーの生成と資産の生成（実物のスクリプトの関数を取り込んで通す）
-#      - dev.sh・dev-up@.service・SHA256SUMS・RELEASE-MANIFEST.json・PACKAGE_ARCHIVE.tar.gz が揃う
+#      - dev.sh・dev-up@.service・install.sh・projects.example・SHA256SUMS・RELEASE-MANIFEST.json・PACKAGE_ARCHIVE.tar.gz が揃う
 #      - マニフェストの checksums と SHA256SUMS が、実物のハッシュと一致する
 #      - 配布ツリーの dev.sh の `dev --version` が、指定した版を出す
 #      - 公開済みの監査（verify_release_assets_dir）が通る
@@ -69,9 +69,9 @@ else
   fail "生成に失敗した（終了コード $stage_rc）: $(tail -5 "$WORK/stage.log")"
 fi
 
-it "ステージングに dev.sh・dev-up@.service・SHA256SUMS・RELEASE-MANIFEST.json・PACKAGE_ARCHIVE.tar.gz がある"
+it "ステージングに dev.sh・dev-up@.service・install.sh・projects.example・SHA256SUMS・RELEASE-MANIFEST.json・PACKAGE_ARCHIVE.tar.gz がある"
 missing=""
-for f in dev.sh dev-up@.service SHA256SUMS RELEASE-MANIFEST.json PACKAGE_ARCHIVE.tar.gz; do
+for f in dev.sh dev-up@.service install.sh projects.example SHA256SUMS RELEASE-MANIFEST.json PACKAGE_ARCHIVE.tar.gz; do
   [[ -f "$rel/$f" ]] || missing="$missing $f"
 done
 if [[ -z "$missing" ]]; then
@@ -105,10 +105,10 @@ else
   fail "配布ツリーに無い:$missing"
 fi
 
-it "SHA256SUMS は dev.sh・dev-up@.service・PACKAGE_ARCHIVE.tar.gz を対象にし（attestation からアーカイブまで辿れる）、チェックサムの照合が通る"
+it "SHA256SUMS は dev.sh・dev-up@.service・install.sh・projects.example・PACKAGE_ARCHIVE.tar.gz を対象にし（attestation からアーカイブまで辿れる）、チェックサムの照合が通る"
 if [[ -f "$rel/SHA256SUMS" ]]; then
   names="$(awk '{print $2}' "$rel/SHA256SUMS" | tr '\n' ' ')"
-  if [[ "$names" == "dev.sh dev-up@.service PACKAGE_ARCHIVE.tar.gz " ]] && (cd "$rel" && sha256sum -c SHA256SUMS >/dev/null 2>&1); then  # bsd-ok: Linux で回す
+  if [[ "$names" == "dev.sh dev-up@.service install.sh projects.example PACKAGE_ARCHIVE.tar.gz " ]] && (cd "$rel" && sha256sum -c SHA256SUMS >/dev/null 2>&1); then  # bsd-ok: Linux で回す
     pass
   else
     fail "SHA256SUMS の対象が違う、または照合に失敗する: $names"
@@ -117,10 +117,10 @@ else
   fail "SHA256SUMS が無い"
 fi
 
-it "マニフェストの checksums が、実物（archive・SHA256SUMS・dev.sh・dev-up@.service）と一致する"
+it "マニフェストの checksums が、実物（archive・SHA256SUMS・dev.sh・dev-up@.service・install.sh・projects.example）と一致する"
 if [[ -f "$rel/RELEASE-MANIFEST.json" ]]; then
   bad=""
-  for f in PACKAGE_ARCHIVE.tar.gz SHA256SUMS dev.sh dev-up@.service; do
+  for f in PACKAGE_ARCHIVE.tar.gz SHA256SUMS dev.sh dev-up@.service install.sh projects.example; do
     want="$(jq -r --arg k "$f" '.checksums[$k] // empty' "$rel/RELEASE-MANIFEST.json")"
     got="$(sha_of "$rel/$f")"
     [[ -n "$want" && "$want" == "$got" ]] || bad="$bad $f(manifest=${want:-なし})"
@@ -137,10 +137,10 @@ else
   fail "RELEASE-MANIFEST.json が無い"
 fi
 
-it "マニフェストの assets に、dev.sh と dev-up@.service を含む 5 資産が載る"
+it "マニフェストの assets に、dev.sh・dev-up@.service・install.sh・projects.example を含む 7 資産が載る"
 if [[ -f "$rel/RELEASE-MANIFEST.json" ]]; then
   assets="$(jq -r '.assets | sort | join(" ")' "$rel/RELEASE-MANIFEST.json")"
-  assert_eq "$assets" "PACKAGE_ARCHIVE.tar.gz RELEASE-MANIFEST.json SHA256SUMS dev-up@.service dev.sh" "assets"
+  assert_eq "$assets" "PACKAGE_ARCHIVE.tar.gz RELEASE-MANIFEST.json SHA256SUMS dev-up@.service dev.sh install.sh projects.example" "assets"
 else
   fail "RELEASE-MANIFEST.json が無い"
 fi
@@ -311,6 +311,7 @@ extract_block() { # $1 = ファイル, $2 = needle
 }
 BLOCK_ARCHIVE="$(extract_block "$HOST_README" 'mkdir -p devhost')"
 BLOCK_DEVSH="$(extract_block "$HOST_README" '-o dev.sh')"
+BLOCK_INSTALL="$(extract_block "$HOST_README" '-o install.sh')"
 
 # 偽の curl: URL 末尾のファイル名で $FAKE_REL_DIR のファイルを写す（ネットワークには出ない）。
 rb_bin="$WORK/readme-bin"
@@ -368,6 +369,34 @@ $BLOCK_DEVSH"
 # アーカイブ側は正しいので、最後の終了コードが dev.sh の照合の結果になる。
 if [[ $RUN_RC -ne 0 && ! -e "$RUN_WORK/dev.sh" ]]; then pass; else fail "終了コード $RUN_RC、設置: $(ls "$RUN_WORK" | tr '\n' ' ')"; fi
 
+it "README の install.sh の取得手順のコードブロックを抜き出せ、照合と実行が && でつながっている"
+if [[ -n "$BLOCK_INSTALL" && "$BLOCK_INSTALL" == *'RELEASE-MANIFEST.json | $sha256c -c - '* && "$BLOCK_INSTALL" == *'\
+  && bash install.sh'* ]]; then pass; else fail "block を抜き出せない、または && でつながっていない（${#BLOCK_INSTALL} 字）"; fi
+
+# install.sh の代わりに、実行されたら印を残す偽物を置く（実行の有無を直接見る）。
+inst_rel="$WORK/inst-rel"
+mkdir -p "$inst_rel"
+printf '#!/usr/bin/env bash\necho ran > "$PWD/INSTALL_RAN"\n' > "$inst_rel/install.sh"
+jq -n --arg h "$(sha_of "$inst_rel/install.sh")" '{checksums: {"install.sh": $h}}' > "$inst_rel/RELEASE-MANIFEST.json"
+
+it "対照: install.sh のハッシュが合えば、取得した install.sh が実行される"
+run_readme_code "$inst_rel" "$BLOCK_INSTALL"
+if [[ $RUN_RC -eq 0 && -f "$RUN_WORK/INSTALL_RAN" ]]; then pass; else fail "実行されなかった（rc=$RUN_RC）: $(ls "$RUN_WORK" | tr '\n' ' ')"; fi
+
+it "install.sh のハッシュが食い違うと、install.sh は実行されず、非 0 で終わる"
+bad_inst="$WORK/inst-bad"
+cp -R "$inst_rel" "$bad_inst"
+printf 'echo 改ざん\n' >> "$bad_inst/install.sh"
+run_readme_code "$bad_inst" "$BLOCK_INSTALL"
+if [[ $RUN_RC -ne 0 && ! -e "$RUN_WORK/INSTALL_RAN" ]]; then pass; else fail "終了コード $RUN_RC、実行の印: $(ls "$RUN_WORK" | tr '\n' ' ')"; fi
+
+it "マニフェストに install.sh のハッシュが無いときも、実行されず非 0 で終わる"
+no_inst="$WORK/inst-none"
+cp -R "$inst_rel" "$no_inst"
+printf '{"checksums": {}}\n' > "$no_inst/RELEASE-MANIFEST.json"
+run_readme_code "$no_inst" "$BLOCK_INSTALL"
+if [[ $RUN_RC -ne 0 && ! -e "$RUN_WORK/INSTALL_RAN" ]]; then pass; else fail "終了コード $RUN_RC、実行の印: $(ls "$RUN_WORK" | tr '\n' ' ')"; fi
+
 # ── 2. --host-version の dry-run ─────────────────────────────────────────────
 
 stub="$WORK/bin"
@@ -396,7 +425,7 @@ code=$?
 if [[ $code -eq 0 ]] \
    && [[ "$out" == *'[ok] preflight checks passed'* ]] \
    && [[ "$out" == *'devcontainer-host distributed files'* ]] \
-   && [[ "$out" == *'dev.sh dev-up@.service RELEASE-MANIFEST.json SHA256SUMS PACKAGE_ARCHIVE.tar.gz'* ]] \
+   && [[ "$out" == *'dev.sh dev-up@.service install.sh projects.example RELEASE-MANIFEST.json SHA256SUMS PACKAGE_ARCHIVE.tar.gz'* ]] \
    && [[ "$out" == *'dry-run mode'* ]]; then
   pass
 else

@@ -624,14 +624,15 @@ DCB_DISTRIBUTED_FILES=(
 # 開発リポジトリの別階層にある共通ファイルを追加で載せる（DCB の配布先と同じ形）。
 # CHANGELOG.md の正本は docs/release/release-notes-devcontainer-host.md。
 # 個別の資産として出し、SHA256SUMS とマニフェストの checksums の両方に載せるファイル
-# （dev self-update が checksums["dev.sh"] と取得した dev.sh を照合する）。1 か所で持つ。
-HOST_INDIVIDUAL_ASSETS=(dev.sh dev-up@.service)
+# （dev self-update と install.sh が、checksums の dev.sh / dev-up@.service / projects.example と取得物を照合する。
+# install.sh は README の手順でマニフェストの checksums["install.sh"] と照合してから実行する）。1 か所で持つ。
+HOST_INDIVIDUAL_ASSETS=(dev.sh dev-up@.service install.sh projects.example)
 
 # SHA256SUMS の対象。個別の資産に加えて PACKAGE_ARCHIVE.tar.gz を含める。attestation の対象は
 # SHA256SUMS 1 つなので、アーカイブがここに無いと、アーカイブとマニフェストの archive 用ハッシュを
 # 一緒に差し替えられても attestation の検証が通ってしまう。generate_standard_assets は
 # アーカイブを作ってから SHA256SUMS を作るので、この順序で足りる。
-HOST_SUMS_TARGETS=(dev.sh dev-up@.service PACKAGE_ARCHIVE.tar.gz)
+HOST_SUMS_TARGETS=(dev.sh dev-up@.service install.sh projects.example PACKAGE_ARCHIVE.tar.gz)
 
 HOST_DISTRIBUTED_FILES=(
   "LICENSE:LICENSE"
@@ -1194,7 +1195,7 @@ if [[ -n "$HOST_TAG" ]]; then
   echo "[plan]   packages/devcontainer-host/（追跡ファイルのみ） -> (repository root)"
   print_distribution_plan "devcontainer-host (additional)" "${HOST_DISTRIBUTED_FILES[@]}"
   echo "[plan]   dev.sh DEV_VERSION -> \"$HOST_TAG\""
-  echo "[plan] devcontainer-host release assets: dev.sh dev-up@.service RELEASE-MANIFEST.json SHA256SUMS PACKAGE_ARCHIVE.tar.gz"
+  echo "[plan] devcontainer-host release assets: dev.sh dev-up@.service install.sh projects.example RELEASE-MANIFEST.json SHA256SUMS PACKAGE_ARCHIVE.tar.gz"
 fi
 
 if [[ "$EXECUTE" != "true" ]]; then
@@ -1250,6 +1251,8 @@ if [[ -n "$HOST_TAG" ]]; then
   tag_and_release "$HOST_DIR" "$OWNER/devcontainer-host" "$HOST_TAG" "Release $HOST_TAG" \
     "$HOST_DIR/dev.sh" \
     "$HOST_DIR/dev-up@.service" \
+    "$HOST_DIR/install.sh" \
+    "$HOST_DIR/projects.example" \
     "$HOST_DIR/RELEASE-MANIFEST.json" \
     "$HOST_DIR/SHA256SUMS" \
     "$HOST_DIR/PACKAGE_ARCHIVE.tar.gz"

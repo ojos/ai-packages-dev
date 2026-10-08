@@ -1297,6 +1297,58 @@ run 1 "self-update: archive のハッシュしか無いマニフェストでは�
 expect_self_unchanged
 write_manifest "$good_sum"
 
+# ユニットのファイルの差の案内。ユニットは書き換えず、install.sh の再実行を案内する。
+# 置き換えたあとは、動いているユニットの起こし直しも案内する。
+UNIT_PATH="$WORK/home/.config/systemd/user/dev-up@.service"
+printf '[Unit]\nDescription=リリースのユニット\n' >"$REL/dev-up@.service"
+unit_good_sum="$($sum_cmd "$REL/dev-up@.service" | awk '{ print $1 }')"
+write_manifest_unit() { printf '{\n  "package": "devcontainer-host",\n  "version": "0.0.0",\n  "checksums": {\n    "dev.sh": "%s",\n    "dev-up@.service": "%s"\n  }\n}\n' "$good_sum" "$1" >"$REL/RELEASE-MANIFEST.json"; }
+put_unit() { mkdir -p "$(dirname "$UNIT_PATH")"; printf '%s' "$1" >"$UNIT_PATH"; }
+expect_out_lacks() { if grep -qF -- "$1" "$OUT"; then ng "$CUR: 標準出力に「$1」があります（出さないはず）"; fi; }
+write_manifest_unit "$unit_good_sum"
+
+mk_self
+put_unit $'[Unit]\nDescription=古いユニット\n'
+run 0 "self-update: ユニットのファイルがリリースと違えば、install.sh の再実行を案内する" -- DEV_SELF_PATH="$SELF" FAKE_CURL_DIR="$REL" -- self-update
+expect_out_line 'install.sh を再実行してユニットを更新してください'
+expect_out_line '置いてあるユニット（.*dev-up@.service）が、リリース（v0.0.0）の dev-up@.service と違います'
+[[ "$(cat "$UNIT_PATH")" == "$(printf '[Unit]\nDescription=古いユニット')" ]] || ng "self-update: ユニットのファイルが書き換わっています"
+expect_log_lacks "systemctl"
+expect_log_lacks "dev-up@.service] [-o]"
+cmp -s "$REL/dev.sh" "$SELF" || ng "self-update: ユニットが違っても dev.sh は置き換えるはずです"
+expect_out_line '起こし直すまで古い dev のまま動き続けます'
+expect_out_line 'dev restart <名前>'
+expect_out_line 'systemctl --user restart dev-up@<名前>.service'
+
+mk_self
+cp "$REL/dev-up@.service" "$UNIT_PATH"
+run 0 "self-update: ユニットのファイルがリリースと同じなら、install.sh の再実行は案内しない" -- DEV_SELF_PATH="$SELF" FAKE_CURL_DIR="$REL" -- self-update
+expect_out_lacks 'install.sh を再実行'
+expect_out_line '起こし直すまで古い dev のまま動き続けます'
+cmp -s "$REL/dev-up@.service" "$UNIT_PATH" || ng "self-update: ユニットのファイルが書き換わっています"
+
+put_unit $'[Unit]\nDescription=古いユニット\n'
+run 0 "self-update: すでに同じ dev でも、ユニットが違えば install.sh の再実行を案内する（起こし直しは案内しない）" -- DEV_SELF_PATH="$SELF" FAKE_CURL_DIR="$REL" -- self-update
+expect_out_line 'すでにこの版です'
+expect_out_line 'install.sh を再実行してユニットを更新してください'
+expect_out_lacks '起こし直すまで'
+
+rm -f "$UNIT_PATH"
+mk_self
+run 0 "self-update: ユニットのファイルを置いていなければ、ユニットの案内はしない" -- DEV_SELF_PATH="$SELF" FAKE_CURL_DIR="$REL" -- self-update
+expect_out_lacks 'install.sh を再実行'
+[[ ! -e "$UNIT_PATH" ]] || ng "self-update: ユニットのファイルを作っています"
+
+mk_self
+put_unit $'[Unit]\nDescription=古いユニット\n'
+write_manifest "$good_sum"
+run 0 "self-update: マニフェストにユニットのハッシュが無ければ、ユニットの案内はしない" -- DEV_SELF_PATH="$SELF" FAKE_CURL_DIR="$REL" -- self-update
+expect_out_lacks 'install.sh を再実行'
+rm -f "$UNIT_PATH"
+write_manifest "$good_sum"
+rm -f "$REL/dev-up@.service"
+mk_self
+
 # 版のないマニフェスト（最新を指定したとき）では、dev.sh をどの版から取るか決められないので止まる。
 printf '{ "checksums": { "dev.sh": "%s" } }\n' "$good_sum" >"$REL/RELEASE-MANIFEST.json"
 run 1 "self-update: 最新で、マニフェストに版が無ければ置き換えない" -- DEV_SELF_PATH="$SELF" FAKE_CURL_DIR="$REL" -- self-update
