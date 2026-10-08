@@ -12,7 +12,7 @@
 - **README に 3 パッケージ（ai-playbook / devcontainer-bootstrap / devcontainer-host）の関係を明示した**（ojos/ai-packages-dev#494）。ai-playbook は単体で使える（AI 運用の規範だけを入れる）。devcontainer-bootstrap（DCB）と組み合わせると、DCB が生成先のプロジェクトへ規範を配置し、`--upgrade` に新しい `--playbook-version` を渡して新しい版へ移れる。devcontainer-host とは、今は直接の関係が無い。**規範の文書と雛形は変わらない**（破壊的変更なし。雛形は 16 種のまま）。
 
 ### 移行
-- 規範と雛形は v0.8.1 と同じなので、移行の作業は要らない。DCB で規範を配置している場合、`bootstrap.sh --upgrade --playbook-version v0.8.2` で更新しても、変わるのは `.ai-playbook/VERSION` の版の記録だけ（README は配布先へ配置されない）。
+- 規範と雛形は v0.8.1 と同じなので、移行の作業は要らない。DCB で規範を配置している場合、`bootstrap.sh --upgrade --playbook-version v0.8.2` で更新しても、変わるのは版の記録だけ（`.ai-playbook/VERSION` と、`.devcontainer/ORIGIN` の `input:playbook-ref`。README は配布先へ配置されない）。
 
 ## v0.8.1
 
