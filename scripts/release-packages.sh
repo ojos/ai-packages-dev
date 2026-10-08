@@ -180,6 +180,30 @@ validate_host_version_anchor() {
   }
 }
 
+# devcontainer-host の文書が、公開するタグと食い違っていないこと（validate_dcb_docs と同じ方式）。
+#
+# README の導入手順は固定の版（TAG=vX.Y.Z / --version vX.Y.Z）を例示している。公開する版を
+# 上げても README を直し忘れると、利用者が古い版を取得する手順がそのまま残る。リリース準備で
+# 人手により揃え、ここで照合して食い違えば落とす。リリースノートにも公開するタグの見出しを要る。
+validate_host_docs() {
+  local tag="$1"
+  local readme="packages/devcontainer-host/README.md"
+  local notes="docs/release/release-notes-devcontainer-host.md"
+
+  grep -Fq -- "TAG=$tag" "$readme" || {
+    echo "error: devcontainer-host README.md の取得手順の TAG= が $tag と一致しません" >&2
+    exit 1
+  }
+  grep -Fq -- "--version $tag" "$readme" || {
+    echo "error: devcontainer-host README.md の self-update の例（--version）が $tag と一致しません" >&2
+    exit 1
+  }
+  grep -Fxq -- "## $tag" "$notes" || {
+    echo "error: $notes に公開するタグの見出し「## $tag」がありません" >&2
+    exit 1
+  }
+}
+
 # 配布ツリーの dev.sh の DEV_VERSION を、公開するタグに書き換える（`dev version` が出す値）。
 # 使い方: stamp_host_version <配布ツリー> <vX.Y.Z>
 # 書き換えのあとで、行がタグと一致していることを確かめる。確かめられなければ公開しない。
@@ -564,6 +588,10 @@ DCB_DISTRIBUTED_FILES=(
 # devcontainer-host はツリー全体（packages/devcontainer-host/.）を配布先のルートへ展開したうえで、
 # 開発リポジトリの別階層にある共通ファイルを追加で載せる（DCB の配布先と同じ形）。
 # CHANGELOG.md の正本は docs/release/release-notes-devcontainer-host.md。
+# 個別の資産として出し、SHA256SUMS とマニフェストの checksums の両方に載せるファイル
+# （dev self-update が checksums["dev.sh"] と取得した dev.sh を照合する）。1 か所で持つ。
+HOST_INDIVIDUAL_ASSETS=(dev.sh dev-up@.service)
+
 HOST_DISTRIBUTED_FILES=(
   "LICENSE:LICENSE"
   "docs/release/release-notes-devcontainer-host.md:CHANGELOG.md"
@@ -627,15 +655,25 @@ prepare_playbook_release_repo() {
   copy_distributed_files "$dir" "${PLAYBOOK_DISTRIBUTED_FILES[@]}"
 }
 
-# devcontainer-host の配布ツリーを作る。ルートに packages/devcontainer-host/ の中身（dev.sh・
+# devcontainer-host の配布ツリーを作る。ルートに packages/devcontainer-host/ の追跡ファイル（dev.sh・
 # dev-up@.service・README.md・selftest.sh・*.example・termux/ など）を置き、dev.sh の版を
 # 公開するタグへ書き換える。
 # 使い方: prepare_host_release_repo <配布ツリー> <vX.Y.Z>
 prepare_host_release_repo() {
-  local dir="$1" tag="$2"
+  local dir="$1" tag="$2" f rel
   rm -rf "$dir"
   mkdir -p "$dir"
-  cp -R packages/devcontainer-host/. "$dir/"
+  # 追跡しているファイルだけを写す。ディレクトリごと写すと、追跡外のファイルや .gitignore の
+  # ファイル（作業中のメモ、資格情報を含みうるもの）が公開物へ入りうる。
+  while IFS= read -r -d '' f; do
+    rel="${f#packages/devcontainer-host/}"
+    [[ -f "$f" ]] || {
+      echo "error: 追跡しているファイルが作業ツリーに無い: $f" >&2
+      exit 1
+    }
+    mkdir -p "$dir/$(dirname "$rel")"
+    cp "$f" "$dir/$rel"
+  done < <(git ls-files -z -- packages/devcontainer-host)
   copy_distributed_files "$dir" "${HOST_DISTRIBUTED_FILES[@]}"
   stamp_host_version "$dir" "$tag"
 }
@@ -1071,6 +1109,17 @@ require_clean_worktree
 # 検査は安い順に並べる。版の重複は問い合わせ 1 回で分かるため、テスト実行のような
 # 重い検査より先に判定する。手戻りが早いだけでなく、テストから release-packages.sh を
 # 呼んだときに run_dcb_tests が再びテスト一式を起動する再帰も避けられる。
+# devcontainer-host の検査は、DCB の機能テスト（run_dcb_tests）より前に置く。安い検査から先に落とす
+# ためと、公開の途中（DCB の公開のあと）で host の不備が見つかる形を作らないため。
+if [[ -n "$HOST_TAG" ]]; then
+  extract_semver "$HOST_TAG" >/dev/null
+  require_version_unpublished "$OWNER/devcontainer-host" "$HOST_TAG"
+  validate_host_version_anchor
+  validate_host_docs "$HOST_TAG"
+  validate_markdown_links_in_tree "$(pwd)/packages/devcontainer-host"
+  run_host_tests
+fi
+
 if [[ -n "$DCB_TAG" ]]; then
   extract_semver "$DCB_TAG" >/dev/null
   require_version_unpublished "$OWNER/devcontainer-bootstrap" "$DCB_TAG"
@@ -1087,14 +1136,6 @@ if [[ -n "$PLAYBOOK_TAG" ]]; then
   validate_markdown_links_in_tree "$(pwd)/.ai-playbook"
 fi
 
-if [[ -n "$HOST_TAG" ]]; then
-  extract_semver "$HOST_TAG" >/dev/null
-  require_version_unpublished "$OWNER/devcontainer-host" "$HOST_TAG"
-  validate_host_version_anchor
-  validate_markdown_links_in_tree "$(pwd)/packages/devcontainer-host"
-  run_host_tests
-fi
-
 echo "[ok] preflight checks passed"
 
 if [[ -n "$DCB_TAG" ]]; then
@@ -1109,7 +1150,7 @@ fi
 
 if [[ -n "$HOST_TAG" ]]; then
   echo "[plan] devcontainer-host distributed files:"
-  echo "[plan]   packages/devcontainer-host/. -> (repository root)"
+  echo "[plan]   packages/devcontainer-host/（追跡ファイルのみ） -> (repository root)"
   print_distribution_plan "devcontainer-host (additional)" "${HOST_DISTRIBUTED_FILES[@]}"
   echo "[plan]   dev.sh DEV_VERSION -> \"$HOST_TAG\""
   echo "[plan] devcontainer-host release assets: dev.sh dev-up@.service RELEASE-MANIFEST.json SHA256SUMS PACKAGE_ARCHIVE.tar.gz"
@@ -1131,12 +1172,27 @@ DCB_DIR="/tmp/dcb-release"
 PLAYBOOK_DIR="/tmp/playbook-release"
 HOST_DIR="/tmp/host-release"
 
+# 公開より前に、公開する配布ツリーと資産をすべて作る（ステージング）。生成で落ちる不備
+# （追跡ファイルの欠落、版の書き込み失敗など）を、どのパッケージの公開よりも前に見つける。
+# 公開の途中で別のパッケージの不備が見つかると、先に公開した側だけが残るため。
 if [[ -n "$DCB_TAG" ]]; then
   DCB_VER="$(extract_semver "$DCB_TAG")"
   prepare_dcb_release_repo "$DCB_DIR"
   # ユーザーは bootstrap.sh と SHA256SUMS だけを取得する（README の手順）。
   SUMS_TARGETS=(bootstrap.sh doctor.sh)
   generate_standard_assets "$DCB_DIR" "devcontainer-bootstrap" "$DCB_VER"
+fi
+
+if [[ -n "$HOST_TAG" ]]; then
+  HOST_VER="$(extract_semver "$HOST_TAG")"
+  prepare_host_release_repo "$HOST_DIR" "$HOST_TAG"
+  SUMS_TARGETS=("${HOST_INDIVIDUAL_ASSETS[@]}")
+  MANIFEST_CHECKSUM_TARGETS=("${HOST_INDIVIDUAL_ASSETS[@]}")
+  generate_standard_assets "$HOST_DIR" "devcontainer-host" "$HOST_VER"
+  MANIFEST_CHECKSUM_TARGETS=()
+fi
+
+if [[ -n "$DCB_TAG" ]]; then
   init_and_push_release_repo "$DCB_DIR" "$OWNER/devcontainer-bootstrap" public
   tag_and_release "$DCB_DIR" "$OWNER/devcontainer-bootstrap" "$DCB_TAG" "Release $DCB_TAG" \
     "$DCB_DIR/bootstrap.sh" \
@@ -1147,13 +1203,6 @@ if [[ -n "$DCB_TAG" ]]; then
 fi
 
 if [[ -n "$HOST_TAG" ]]; then
-  HOST_VER="$(extract_semver "$HOST_TAG")"
-  prepare_host_release_repo "$HOST_DIR" "$HOST_TAG"
-  # dev.sh と dev-up@.service を個別の資産として出す。SHA256SUMS とマニフェストの checksums の
-  # 両方に載せる（dev self-update が checksums["dev.sh"] と取得した dev.sh を照合する）。
-  SUMS_TARGETS=(dev.sh dev-up@.service)
-  MANIFEST_CHECKSUM_TARGETS=(dev.sh dev-up@.service)
-  generate_standard_assets "$HOST_DIR" "devcontainer-host" "$HOST_VER"
   init_and_push_release_repo "$HOST_DIR" "$OWNER/devcontainer-host" public
   tag_and_release "$HOST_DIR" "$OWNER/devcontainer-host" "$HOST_TAG" "Release $HOST_TAG" \
     "$HOST_DIR/dev.sh" \
@@ -1161,7 +1210,6 @@ if [[ -n "$HOST_TAG" ]]; then
     "$HOST_DIR/RELEASE-MANIFEST.json" \
     "$HOST_DIR/SHA256SUMS" \
     "$HOST_DIR/PACKAGE_ARCHIVE.tar.gz"
-  MANIFEST_CHECKSUM_TARGETS=()
 fi
 
 if [[ -n "$PLAYBOOK_TAG" ]]; then

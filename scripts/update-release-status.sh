@@ -79,12 +79,22 @@ DCB_TAG="$(get_latest_release devcontainer-bootstrap)"
 HOST_TAG="$(get_latest_release devcontainer-host)"
 PLAYBOOK_TAG="$(get_latest_semver_tag ai-playbook)"
 
+# 未公開（Release が無い）のとき「<none> まで公開済み」と出すと、公開済みと読める。
+# 未公開であることが分かる表示にする。
+if [[ "$HOST_TAG" == "<none>" ]]; then
+  HOST_TABLE="$OWNER/devcontainer-host は未公開（Release なし）"
+  HOST_LIST="\`$OWNER/devcontainer-host\` は未公開（Release なし）"
+else
+  HOST_TABLE="$OWNER/devcontainer-host で $HOST_TAG まで公開済み"
+  HOST_LIST="\`$OWNER/devcontainer-host\` で \`$HOST_TAG\` まで公開済み"
+fi
+
 BLOCK_FILE="$(mktemp "${TMPDIR:-/tmp}/release-status-block.XXXXXX")"
 cat >"$BLOCK_FILE" <<EOF
 | パッケージ | 配布状態 |
 |---|---|
 | devcontainer-bootstrap | $OWNER/devcontainer-bootstrap で $DCB_TAG まで公開済み |
-| devcontainer-host | $OWNER/devcontainer-host で $HOST_TAG まで公開済み |
+| devcontainer-host | $HOST_TABLE |
 | ai-playbook | $OWNER/ai-playbook で $PLAYBOOK_TAG まで公開済み |
 
 リリース実行手順は [docs/release/RELEASE_EXECUTION_RUNBOOK.md](docs/release/RELEASE_EXECUTION_RUNBOOK.md) を参照する。
@@ -92,7 +102,7 @@ cat >"$BLOCK_FILE" <<EOF
 ### リリース状況
 
 - \`devcontainer-bootstrap\`: \`$OWNER/devcontainer-bootstrap\` で \`$DCB_TAG\` まで公開済み
-- \`devcontainer-host\`: \`$OWNER/devcontainer-host\` で \`$HOST_TAG\` まで公開済み
+- \`devcontainer-host\`: $HOST_LIST
 - \`ai-playbook\`: \`$OWNER/ai-playbook\` で \`$PLAYBOOK_TAG\` まで公開済み
 EOF
 

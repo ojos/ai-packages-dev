@@ -43,7 +43,7 @@ workflow は認証と identity をリポジトリ設定から解決する。値�
 
 いずれも Settings > Secrets and variables > Actions に置く（Secrets と Variables はタブが分かれている）。
 
-- App は `ojos/devcontainer-bootstrap`・`ojos/ai-playbook`・`ojos/devcontainer-host` の 3 リポジトリへ install し、権限は `contents: write` のみを与える。**`ojos/devcontainer-host` への install は、利用者の手作業である**（リポジトリそのものは `infra/github/` の Terraform が作るが、App の install は個人のアカウントでは PAT で扱えない見込みのため Terraform の範囲外。#487）。install を忘れると、`devcontainer-host` を指定したリリースは、トークンの発行または公開リポジトリへの push の段階で落ちる。Actions の `GITHUB_TOKEN` は自リポジトリにしかスコープが効かず、クロスリポジトリ push ができないため。
+- App は `ojos/devcontainer-bootstrap`・`ojos/ai-playbook`・`ojos/devcontainer-host` の 3 リポジトリへ install し、権限は `contents: write` のみを与える。**`ojos/devcontainer-host` への install は、利用者の手作業である**（リポジトリそのものは `infra/github/` の Terraform が作るが、App の install は個人のアカウントでは PAT で扱えない見込みのため Terraform の範囲外。#487）。トークンの対象リポジトリは、公開する側だけに絞る（`release.yml` の手前のステップが、`host-version` を指定したときだけ `devcontainer-host` を加える）。install 前でも、DCB だけ・ai-playbook だけのリリースは通る。`host-version` を指定したときに install を忘れていると、トークンの発行で落ちる。Actions の `GITHUB_TOKEN` は自リポジトリにしかスコープが効かず、クロスリポジトリ push ができないため。
 - bot ユーザー ID は install 後に `gh api '/users/ojos-release-bot[bot]' --jq '.id'` で取得する。**App ID とは別番号**で、コミットを bot アカウントへ紐付けるのはこちら。
 - **配布先の公開リポジトリそのもの（存在と設定）は、このワークフローではなく `infra/github/` の Terraform が作る**（#487。`.github/project-ai-rules.md`「外部サービスの状態管理」）。新しい配布先を足すときは、先にそちらの PR で作ってから、App の install（手作業）とこのワークフローの対応を行う。
 
@@ -146,6 +146,7 @@ devcontainer-host は、上の共通ファイルに加えて `packages/devcontai
 | 6 | Markdown の相対リンク・アンカー検証（配下の `README*.md` が対象） | `--dcb-version` 時は `packages/devcontainer-bootstrap/` と `.ai-playbook/`、`--playbook-version` 時は `.ai-playbook/`、`--host-version` 時は `packages/devcontainer-host/` | `validate_markdown_links_in_tree` |
 | 7 | DCB 機能テスト `packages/devcontainer-bootstrap/tests/run-tests.sh`（テストファイルを CPU 数で並列に実行する。直列では約 20 分、14 コアの手元で約 4 分。Actions のランナーでは release.yml 全体で約 10 分（2026-10-07 の実測）。並列度は `DCB_TEST_JOBS` で変えられる） | `--dcb-version` 指定時 | `run_dcb_tests` |
 | 8 | `dev.sh` に `DEV_VERSION="vX.Y.Z"` の行がちょうど 1 つある（リリースの手順が公開する版を書き込む行） | `--host-version` 指定時 | `validate_host_version_anchor` |
+| 10 | devcontainer-host の文書が公開するタグと一致する（`README.md` の `TAG=` と `--version` の例、リリースノートの `## vX.Y.Z` の見出し） | `--host-version` 指定時 | `validate_host_docs` |
 | 9 | devhost の自己試験 `packages/devcontainer-host/selftest.sh`（偽の `curl` / `docker` などを使い、ネットワークには出ない。数秒） | `--host-version` 指定時 | `run_host_tests` |
 
 検査は安い順に並ぶ。版の重複（#4）は問い合わせ 1 回で判定できるため、重い DCB 機能テスト（#7）より先に落ちる。
@@ -211,7 +212,7 @@ workflow の `dcb-version` / `playbook-version` / `host-version` に渡す値も
   RUNBOOK 側のこの一覧と `validate_dcb_docs` の照合件数が一致することは
   `tests/test-dcb-version-anchors.sh` が機械照合する。一覧を増減したら
   `validate_dcb_docs` 側も同数に揃えること。
-- devcontainer-host: **版そのものの正本は、公開するタグ**（workflow の `host-version` 入力、`vX.Y.Z`）である。DCB と違い、リポジトリの中の写しとの照合ではなく**書き込み**にする。リリースの手順（`stamp_host_version`）が、配布ツリーの `dev.sh` の `DEV_VERSION="vX.Y.Z"` の行をタグの値に書き換えてから資産を作る（`dev version` / `dev --version` が出す値）。`packages/devcontainer-host/dev.sh` の中の値は次に出す版の目印で、公開物の値ではない。preflight の `validate_host_version_anchor` は、行の形が崩れていないこと（ちょうど 1 行）だけを見る。
+- devcontainer-host: **版そのものの正本は、公開するタグ**（workflow の `host-version` 入力、`vX.Y.Z`）である。DCB と違い、リポジトリの中の写しとの照合ではなく**書き込み**にする。リリースの手順（`stamp_host_version`）が、配布ツリーの `dev.sh` の `DEV_VERSION="vX.Y.Z"` の行をタグの値に書き換えてから資産を作る（`dev version` / `dev --version` が出す値）。`packages/devcontainer-host/dev.sh` の中の値は次に出す版の目印で、公開物の値ではない。preflight の `validate_host_version_anchor` は、行の形が崩れていないこと（ちょうど 1 行）だけを見る。`packages/devcontainer-host/README.md` の `TAG=vX.Y.Z` と `--version vX.Y.Z` の例、`release-notes-devcontainer-host.md` の `## vX.Y.Z` の見出しは、リリース準備で人手により公開するタグへ揃え、`validate_host_docs` が照合する（食い違えば落ちる。DCB の `validate_dcb_docs` と同じ方式）。
 - ai-playbook: リリース時に `playbook-version` で指定するタグ（README 側の照合はない）
 
 ## workflow の入力
@@ -237,7 +238,7 @@ workflow の `dcb-version` / `playbook-version` / `host-version` に渡す値も
 
 `execute: true` は `main` からしか起動できない。次をすべてコミットし、PR を経て `main` へマージしてから起動する。
 
-- devcontainer-host を出す場合、`packages/devcontainer-host/dev.sh` の `DEV_VERSION` を目的の版へ揃えておくと読み手が迷わない（公開物の値はリリースの手順が書き込むので、揃っていなくても公開物は正しい）。
+- devcontainer-host を出す場合、`README.md` の `TAG=` / `--version` の例とリリースノートの見出しを目的の版へ揃えていること（必須。`validate_host_docs`）。`packages/devcontainer-host/dev.sh` の `DEV_VERSION` も揃えておくと読み手が迷わない（公開物の値はリリースの手順が書き込むので、揃っていなくても公開物は正しい）。
 - DCB を出す場合、バージョンの正本 5 箇所（「バージョンの正本」節。`README.md` の 3 箇所 + `bootstrap.sh` + `doctor.sh` の `DCB_VERSION`）が目的の版へ更新済みであること。
 - 各パッケージの変更点をリリースノートへ追記していること。
 

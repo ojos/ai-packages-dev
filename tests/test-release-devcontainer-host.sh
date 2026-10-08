@@ -56,8 +56,8 @@ rel="$WORK/host-release"
   cd "$REPO_ROOT"
   prepare_host_release_repo "$rel" "$TEST_HOST_TAG"
   # 実行ブロックと同じ指定（scripts/release-packages.sh の --host-version の節）。
-  SUMS_TARGETS=(dev.sh dev-up@.service)
-  MANIFEST_CHECKSUM_TARGETS=(dev.sh dev-up@.service)
+  SUMS_TARGETS=("${HOST_INDIVIDUAL_ASSETS[@]}")
+  MANIFEST_CHECKSUM_TARGETS=("${HOST_INDIVIDUAL_ASSETS[@]}")
   generate_standard_assets "$rel" "devcontainer-host" "$TEST_HOST_VER"
 ) >"$WORK/stage.log" 2>&1
 stage_rc=$?
@@ -235,6 +235,29 @@ it "開発リポジトリの dev.sh に DEV_VERSION=\"vX.Y.Z\" の行がちょ�
 n="$(grep -cE '^DEV_VERSION="v[0-9]+\.[0-9]+\.[0-9]+"$' "$REPO_ROOT/packages/devcontainer-host/dev.sh" || true)"
 assert_eq "$n" "1" "DEV_VERSION の行数"
 
+it "追跡外のファイルは、配布ツリーに入らない"
+untracked="$REPO_ROOT/packages/devcontainer-host/zz-untracked-$$.txt"
+printf 'secret\n' > "$untracked"
+rel2="$WORK/host-release-untracked"
+( set -euo pipefail; . "$fns"; cd "$REPO_ROOT"; prepare_host_release_repo "$rel2" "$TEST_HOST_TAG" ) >/dev/null 2>&1
+rc2=$?
+rm -f "$untracked"
+if [[ $rc2 -eq 0 && -f "$rel2/dev.sh" && ! -e "$rel2/zz-untracked-$$.txt" ]]; then
+  pass
+else
+  fail "追跡外のファイルが配布ツリーに入った、または生成に失敗した（終了コード $rc2）"
+fi
+
+it "README の固定の版・リリースノートの見出しが公開するタグと食い違うと、preflight の文書検査が落ちる"
+docs_ok=0
+( . "$fns"; cd "$REPO_ROOT"; validate_host_docs v0.1.0 ) >/dev/null 2>&1 || docs_ok=1
+( . "$fns"; cd "$REPO_ROOT"; validate_host_docs v9.9.9 ) >/dev/null 2>&1 && docs_ok=2
+if [[ $docs_ok -eq 0 ]]; then
+  pass
+else
+  fail "validate_host_docs の判定が期待と違う（$docs_ok: 1 = 現行の版で落ちた / 2 = 食い違う版で通った）"
+fi
+
 # ── 2. --host-version の dry-run ─────────────────────────────────────────────
 
 stub="$WORK/bin"
@@ -324,11 +347,22 @@ else
 fi
 
 it "release.yml の GitHub App のトークンが devcontainer-host を対象に含む"
-repos_block="$(awk '/repositories: \|/ {f=1; next} f && /^[[:space:]]+[a-z-]+[[:space:]]*$/ {print; next} f {exit}' "$WF" | tr -d ' ' | tr '\n' ' ')"
-if [[ "$repos_block" == *devcontainer-host* ]]; then
+repos_step="$(awk '/- name: Resolve the repositories/,/- name: Generate a release bot token/' "$WF")"
+# devcontainer-host は host-version を指定したときだけ加える（常に含めると、App が install されていない間は
+# DCB だけ・ai-playbook だけのリリースまで落ちる）。
+if [[ "$repos_step" == *'if [ -n "$HOST_VERSION" ]'*'echo devcontainer-host'* ]] \
+   && [[ "$(cat "$WF")" == *'repositories: ${{ steps.repos.outputs.list }}'* ]]; then
   pass
 else
-  fail "create-github-app-token の repositories に devcontainer-host が無い（得られた: $repos_block）"
+  fail "create-github-app-token の対象に devcontainer-host を host-version のときだけ加える手前のステップが無い"
+fi
+
+it "release.yml の App のトークンの repositories に、devcontainer-host を固定で書いていない"
+tokblock="$(awk '/- name: Generate a release bot token/,/repositories:/' "$WF")"
+if [[ "$tokblock" == *devcontainer-host* ]]; then
+  fail "トークンのステップに devcontainer-host が固定で書かれている"
+else
+  pass
 fi
 
 it "release.yml の入力検証が host-version だけの指定を許す"
@@ -340,7 +374,7 @@ else
 fi
 
 it "release.yml が devcontainer-host の SHA256SUMS を attestation の対象にしている"
-if grep -q 'devcontainer-host.sha256' "$WF"; then
+if grep -qF 'devcontainer-host:digest-host' "$WF"; then
   pass
 else
   fail "attestation の対象に devcontainer-host の digest が無い"

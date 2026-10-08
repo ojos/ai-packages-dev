@@ -153,6 +153,24 @@ jobs:
       # クロスリポジトリ push の権限は、実行ごとに発行する短命の install トークンで得る
       # （#189 の決定 1）。secret に残るのは App の秘密鍵だけで、長命の push 権限を
       # 保存しない。トークンはジョブ終了後に失効する。
+      # トークンの対象リポジトリは、公開する側だけに絞る。devcontainer-host は host-version を
+      # 指定したときだけ加える。常に含めると、App が devcontainer-host へ install されていない
+      # 間は、DCB だけ・ai-playbook だけのリリースまでトークンの発行で落ちる。
+      - name: Resolve the repositories for the release bot token
+        id: repos
+        env:
+          HOST_VERSION: ${{ inputs['host-version'] }}
+        run: |
+          {
+            echo 'list<<REPOS_EOF'
+            echo devcontainer-bootstrap
+            echo ai-playbook
+            if [ -n "$HOST_VERSION" ]; then
+              echo devcontainer-host
+            fi
+            echo 'REPOS_EOF'
+          } >> "$GITHUB_OUTPUT"
+
       - name: Generate a release bot token
         id: app-token
         uses: actions/create-github-app-token@v3
@@ -160,12 +178,9 @@ jobs:
           client-id: ${{ secrets.RELEASE_APP_CLIENT_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
-          # 配布先の 3 リポジトリだけに絞る。App が他リポジトリへ install されても、
+          # 配布先に限る（最大 3 リポジトリ）。App が他リポジトリへ install されても、
           # このワークフローが受け取る権限は広がらない。
-          repositories: |
-            devcontainer-bootstrap
-            ai-playbook
-            devcontainer-host
+          repositories: ${{ steps.repos.outputs.list }}
 
       # release-packages.sh は /tmp の一時クローンに対して git clone / push する。
       # actions/checkout が張る認証はチェックアウト先のリポジトリにしか効かないため、
@@ -235,23 +250,32 @@ jobs:
       #
       # **発行元はこのリポジトリになる。** 資産は配布リポジトリのリリースに置かれる
       # ので、利用者は発行元の owner を指して検証する（README に手順がある）。
-      - name: Read the attestation subject
+      #
+      # **release-packages.sh が途中で失敗しても走らせる**（`!cancelled()`）。DCB を公開したあとに
+      # 別のパッケージの公開が失敗すると、このステップが飛ばされ、公開済みの DCB の SHA256SUMS に
+      # attestation が付かないまま残る。digest のファイルがあるものだけを対象にする。
+      - name: Read the attestation subjects
         id: subject
+        if: ${{ !cancelled() }}
         run: |
           set -euo pipefail
-          f="${ATTEST_SUBJECTS_DIR}/devcontainer-bootstrap.sha256"
-          if [[ -f "$f" ]]; then
-            digest="$(cat "$f")"
-            echo "digest=sha256:${digest}" >> "$GITHUB_OUTPUT"
-            echo "[attest] subject digest: sha256:${digest}"
-          else
-            echo "[attest] 対象がありません（DCB を公開していない実行）。発行を飛ばします。"
-          fi
+          for pair in "devcontainer-bootstrap:digest" "devcontainer-host:digest-host"; do
+            pkg="${pair%%:*}"
+            out="${pair##*:}"
+            f="${ATTEST_SUBJECTS_DIR}/${pkg}.sha256"
+            if [[ -f "$f" ]]; then
+              digest="$(cat "$f")"
+              echo "${out}=sha256:${digest}" >> "$GITHUB_OUTPUT"
+              echo "[attest] subject digest (${pkg}): sha256:${digest}"
+            else
+              echo "[attest] 対象がありません（${pkg} を公開していない実行）。発行を飛ばします。"
+            fi
+          done
         env:
           ATTEST_SUBJECTS_DIR: ${{ github.workspace }}/attest-subjects
 
       - name: Attest the checksum file
-        if: steps.subject.outputs.digest != ''
+        if: ${{ !cancelled() && steps.subject.outputs.digest != '' }}
         uses: actions/attest-build-provenance@v4
         with:
           subject-name: SHA256SUMS
@@ -260,27 +284,12 @@ jobs:
       # devcontainer-host も DCB と同じ形（SHA256SUMS 1 つが対象）で発行する。
       # SHA256SUMS は dev.sh と dev-up@.service のハッシュを持ち、マニフェストの
       # checksums も同じファイルを指すので、ここを起点に配布物全体まで辿れる。
-      - name: Read the attestation subject (devcontainer-host)
-        id: subject-host
-        run: |
-          set -euo pipefail
-          f="${ATTEST_SUBJECTS_DIR}/devcontainer-host.sha256"
-          if [[ -f "$f" ]]; then
-            digest="$(cat "$f")"
-            echo "digest=sha256:${digest}" >> "$GITHUB_OUTPUT"
-            echo "[attest] subject digest: sha256:${digest}"
-          else
-            echo "[attest] 対象がありません（devcontainer-host を公開していない実行）。発行を飛ばします。"
-          fi
-        env:
-          ATTEST_SUBJECTS_DIR: ${{ github.workspace }}/attest-subjects
-
       - name: Attest the checksum file (devcontainer-host)
-        if: steps.subject-host.outputs.digest != ''
+        if: ${{ !cancelled() && steps.subject.outputs.digest-host != '' }}
         uses: actions/attest-build-provenance@v4
         with:
           subject-name: SHA256SUMS
-          subject-digest: ${{ steps.subject-host.outputs.digest }}
+          subject-digest: ${{ steps.subject.outputs.digest-host }}
 
       - name: Report the follow-up diff
         if: ${{ inputs.execute }}
