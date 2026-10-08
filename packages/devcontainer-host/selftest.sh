@@ -25,7 +25,7 @@
 #   procps-ng 4.0.4 の出力に合わせた）。cgroup の所属は ps に出させず、dev が
 #   /proc/<PID>/cgroup を読む（ps の cgroup 列はルートの cgroup で `-` と出る環境があり、
 #   パスの形が信用できないため）
-# - git: `-C <dir> pull --ff-only` だけ。失敗は本物と同じ形の `fatal: ...` を 128 で返す
+# - git: `-C <dir> pull --ff-only` と、`-C <dir> ls-files --error-unmatch -- <名前>`（常に追跡なし。記録しない）だけ。失敗は本物と同じ形の `fatal: ...` を 128 で返す
 # - journalctl: `--user -u <unit> -n <N> --no-pager` だけ。履歴が無ければ本物と同じ `-- No entries --`
 # - systemctl: `--user is-active|is-enabled|stop|start <unit>` と `--user enable|disable --now <unit>`。stop / start / enable / disable は何も出さず 0
 # - docker `restart|stop <id>...`: 状態を running / exited にする（ID は複数可）。無い ID は 1
@@ -366,6 +366,12 @@ set -euo pipefail
 . "$FAKEBIN/_log"
 EOF
 cat >>"$FAKEBIN/git" <<'EOF'
+# `-C <dir> ls-files --error-unmatch -- <名前>`（self-update が置き換え先の追跡を見る）は、追跡されていないと答える。
+# dev の道具の呼び出しではないので、記録しない。追跡されているファイルの試験は、本物の git で行う。
+if [[ $# -eq 6 && "$1" == "-C" && "$3" == "ls-files" && "$4" == "--error-unmatch" && "$5" == "--" ]]; then
+  echo "error: pathspec '$6' did not match any file(s) known to git" >&2
+  exit 1
+fi
 log_call git "$@"
 [[ $# -eq 4 && "$1" == "-C" && "$3" == "pull" && "$4" == "--ff-only" ]] || { echo "fake git: 想定外の呼び出し: $*" >&2; exit 2; }
 [[ -d "$2" ]] || { echo "fatal: cannot change to '$2': No such file or directory" >&2; exit 128; }
@@ -1341,6 +1347,15 @@ expect_out_lacks 'install.sh を再実行'
 
 mk_self
 put_unit $'[Unit]\nDescription=古いユニット\n'
+run 0 "self-update --version: ユニットの差の案内に --version を引き継ぐ" -- DEV_SELF_PATH="$SELF" FAKE_CURL_DIR="$REL" -- self-update --version v9.8.7
+expect_out_line 'bash install.sh --version v9.8.7'
+mk_self
+run 0 "self-update（版の指定なし）: 案内に --version は付けない" -- DEV_SELF_PATH="$SELF" FAKE_CURL_DIR="$REL" -- self-update
+expect_out_line 'install.sh を再実行してユニットを更新してください'
+expect_out_lacks 'bash install.sh --version'
+
+mk_self
+put_unit $'[Unit]\nDescription=古いユニット\n'
 write_manifest "$good_sum"
 run 0 "self-update: マニフェストにユニットのハッシュが無ければ、ユニットの案内はしない" -- DEV_SELF_PATH="$SELF" FAKE_CURL_DIR="$REL" -- self-update
 expect_out_lacks 'install.sh を再実行'
@@ -1361,18 +1376,38 @@ run 0 "self-update --version: マニフェストに版が無くても固定し�
 write_manifest "$good_sum"
 mk_self
 
-# git の作業ツリーの中（リポジトリのチェックアウトや、展開しただけのディレクトリ）は置き換えない。
-GITDIR="$WORK/checkout"
-mkdir -p "$GITDIR/.git" "$GITDIR/packages/devcontainer-host"
-printf '%s\n%s\necho old\n' "$HDR1" "$HDR2" >"$GITDIR/packages/devcontainer-host/dev.sh"
-run 1 "self-update: git の作業ツリーの中の dev.sh は置き換えない" -- DEV_SELF_PATH="$GITDIR/packages/devcontainer-host/dev.sh" FAKE_CURL_DIR="$REL" -- self-update
-expect_err "git の作業ツリーの中です"
-expect_no_calls
-[[ "$(cat "$GITDIR/packages/devcontainer-host/dev.sh")" == "$(printf '%s\n%s\necho old' "$HDR1" "$HDR2")" ]] || ng "self-update: git の作業ツリーの dev.sh が書き換わっています"
-# 作業ツリーが worktree / submodule のように .git がファイルの形でも同じ。
-rm -rf "$GITDIR/.git"
-printf 'gitdir: /elsewhere\n' >"$GITDIR/.git"
-run 1 "self-update: .git がファイルの作業ツリーの中も置き換えない" -- DEV_SELF_PATH="$GITDIR/packages/devcontainer-host/dev.sh" FAKE_CURL_DIR="$REL" -- self-update
+# git で追跡されている dev.sh（リポジトリのチェックアウト）は置き換えない。追跡されていなければ、
+# 作業ツリーの中（ホームを ~/.git で管理している機械など）でも置き換える。
+# 偽の git ではなく本物の git が要るので、PATH に本物の git を足した実行環境を作る（git が無い環境では飛ばす）。
+if REAL_GIT="$(command -v git)"; then
+  GITPATH="$WORK/gitpath"
+  mkdir -p "$GITPATH"
+  ln -s "$REAL_GIT" "$GITPATH/git"
+  ln -s "$FAKEBIN/curl" "$GITPATH/curl"
+  ln -s "$BASH_BIN" "$GITPATH/bash"  # git がラッパー（#!/usr/bin/env bash）でも動くように
+  GITDIR="$WORK/checkout"
+  mkdir -p "$GITDIR/packages/devcontainer-host"
+  printf '%s\n%s\necho old\n' "$HDR1" "$HDR2" >"$GITDIR/packages/devcontainer-host/dev.sh"
+  "$REAL_GIT" -C "$GITDIR" init -q
+  "$REAL_GIT" -C "$GITDIR" add packages/devcontainer-host/dev.sh
+  run 1 "self-update: git で追跡されている dev.sh は置き換えない" -- PATH="$GITPATH:$TOOLBIN" DEV_SELF_PATH="$GITDIR/packages/devcontainer-host/dev.sh" FAKE_CURL_DIR="$REL" -- self-update
+  expect_err "git で追跡されているファイルです"
+  expect_no_calls
+  [[ "$(cat "$GITDIR/packages/devcontainer-host/dev.sh")" == "$(printf '%s\n%s\necho old' "$HDR1" "$HDR2")" ]] || ng "self-update: git で追跡されている dev.sh が書き換わっています"
+  # ホームが git の作業ツリーでも、置いた dev（追跡されていない）は更新できる。
+  GITHOME="$WORK/githome"
+  mkdir -p "$GITHOME/.local/bin"
+  "$REAL_GIT" -C "$GITHOME" init -q
+  printf '%s\n%s\necho old\n' "$HDR1" "$HDR2" >"$GITHOME/.local/bin/dev"
+  run 0 "self-update: ~/.git があるホームでも、追跡されていない dev は更新できる" -- PATH="$GITPATH:$TOOLBIN" DEV_SELF_PATH="$GITHOME/.local/bin/dev" FAKE_CURL_DIR="$REL" -- self-update
+  cmp -s "$REL/dev.sh" "$GITHOME/.local/bin/dev" || ng "self-update: ~/.git があるホームの dev が更新されていません"
+else
+  echo "[devhost-selftest] git が無いので、追跡されているファイルの試験を飛ばします" >&2
+fi
+# ディレクトリは置き換えない。
+mkdir -p "$WORK/dirdev"
+run 1 "self-update: 置き換え先がディレクトリなら止まる" -- DEV_SELF_PATH="$WORK/dirdev" FAKE_CURL_DIR="$REL" -- self-update
+expect_err "ディレクトリです"
 expect_no_calls
 
 # 置き換え先は、2 行目が説明文の全文と違っても「# dev — 」で始まれば devhost の dev.sh とみなす（版をまたいで更新できる）。

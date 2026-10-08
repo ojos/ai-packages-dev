@@ -74,7 +74,7 @@ jq -r '.checksums["install.sh"] + "  install.sh"' RELEASE-MANIFEST.json | $sha25
 
 1. 同じ版の `RELEASE-MANIFEST.json`・`dev.sh`・`dev-up@.service`・`projects.example` を取得し、マニフェストの `checksums` と照合します。
    **1 つでも食い違えば、何も置かずに非 0 で止まります。** `dev.sh` は devhost の `dev.sh` の形か（1 行目が bash の shebang、2 行目が `# dev — ` で始まる）と構文も確かめます。
-2. `dev` を `~/.local/bin/dev` へ**写しで**置きます。置き換え先がリンク・git の作業ツリーの中・devhost の `dev.sh` でないファイルなら、
+2. `dev` を `~/.local/bin/dev` へ**写しで**置きます。置き換え先がリンク・ディレクトリ・git で追跡されているファイル・devhost の `dev.sh` でないファイルなら、
    `dev self-update` と同じく置き換えずに止まります。
 3. `dev-up@.service` を `~/.config/systemd/user/` へ置き、`systemctl --user daemon-reload` を呼びます。
 4. `~/.config/dev/projects` が無ければ `projects.example` から作ります。**あれば決して上書きしません。**
@@ -520,7 +520,7 @@ dev self-update — dev 自身を、devcontainer-host の公開リリースの�
   dev self-update [--version <vX.Y.Z>]
 
 呼ぶ順序:
-  1. 置き換え先（この dev）が、リンクでも git の作業ツリーの中でもなく、devhost の dev.sh であることを
+  1. 置き換え先（この dev）が、リンクでもディレクトリでも git で追跡されているファイルでもなく、devhost の dev.sh であることを
      確かめる（1 行目が bash の shebang、2 行目が「# dev — 」で始まる）
   2. 公開リリースから RELEASE-MANIFEST.json を取得する（既定は最新。--version でその版に固定する）
   3. マニフェストの checksums に記録された dev.sh の SHA-256 を読み、同じリリースの dev.sh を取得して照合する

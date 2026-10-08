@@ -15,10 +15,13 @@ set -euo pipefail
 PROG="install.sh"
 RELEASE_BASE_URL="https://github.com/ojos/devcontainer-host/releases"
 
-# ── dev.sh の判定（dev.sh の self-update と同じ。写しなので、変えるときは両方を同じに保つ） ──
-# install.sh は dev.sh が無い状態で動くので、dev.sh から読み込めない。packages/devcontainer-host/ の試験が、
-# 下の 4 つ（SELF_HEADER_PREFIX / is_devhost_dev_sh / sha256_of / in_git_worktree）が dev.sh と同じ本文であることを機械で照合する。
+# ── ここから ──「dev.sh からの写し」（変えるときは dev.sh と同じ本文に保つ） ───────────
+# install.sh は dev.sh が無い状態で動くので、dev.sh から読み込めない。この「ここから」から「写しここまで」の間に
+# あるものは、すべて dev.sh の同名のものと同じ本文でなければならない。tests/test-devcontainer-host-install.sh が、
+# この間の関数と代入の一覧を取り、その全部を dev.sh と機械で突き合わせる（一覧にないものが混ざっても落ちる）。
 SELF_HEADER_PREFIX='# dev — '
+# 版（vX.Y.Z）の形。--version の値とマニフェストの版に課す（URL の一部になるため）。
+SEMVER_RE='^v[0-9]+\.[0-9]+\.[0-9]+([-+.][0-9A-Za-z.-]+)?$'
 
 # ファイルの先頭 2 行が devhost の dev.sh のものであること。
 is_devhost_dev_sh() {
@@ -41,17 +44,39 @@ sha256_of() {
   fi
 }
 
-# パスの祖先に .git（ディレクトリでもファイルでも）があれば git の作業ツリーの中。
-in_git_worktree() {
-  local d
-  d="$(cd "$(dirname "$1")" && pwd -P)" || return 1
-  while :; do
-    [[ -e "$d/.git" ]] && return 0
-    [[ "$d" == "/" ]] && return 1
-    d="${d%/*}"
-    [[ -n "$d" ]] || d="/"
-  done
+# ファイルが git で追跡されているか。git が無い機械では、追跡されていないとみなす。
+# リポジトリのチェックアウトの packages/devcontainer-host/dev.sh を、置き換え先にしないため。
+# 「祖先に .git がある」では判定しない（ホームを ~/.git で管理している機械で、置いた dev まで拒んでしまう）。
+is_git_tracked() {
+  local f="$1" d
+  command -v git >/dev/null 2>&1 || return 1
+  d="$(cd "$(dirname "$f")" && pwd -P)" || return 1
+  git -C "$d" ls-files --error-unmatch -- "${f##*/}" >/dev/null 2>&1
 }
+
+# 置き換え先の dev を書き換えてよいか。だめなら理由を標準出力へ出して 1 を返す（呼び出し側が「何も置いていない」を添えて止まる）。
+# リンク（先を書き換えない）・ディレクトリ・git で追跡されているファイル・devhost の dev.sh でないもの、のいずれかなら拒む。
+dev_target_refusal() {
+  local p="$1"
+  if [[ -L "$p" ]]; then
+    echo "置き換え先 $p はリンクです。リンクの先は書き換えません（README.md の「dev を置く」のとおり、写しで置いてください）。"
+    return 1
+  fi
+  if [[ -d "$p" ]]; then
+    echo "置き換え先 $p はディレクトリです。"
+    return 1
+  fi
+  if is_git_tracked "$p"; then
+    echo "置き換え先 $p は git で追跡されているファイルです（リポジトリのチェックアウトの dev.sh は書き換えません。~/.local/bin/dev などへ写して置いたものを更新してください）。"
+    return 1
+  fi
+  if ! is_devhost_dev_sh "$p"; then
+    echo "置き換え先 $p が devhost の dev.sh だと確かめられません（1 行目が bash の shebang、2 行目が「# dev — 」で始まる形ではない、または読めない）。"
+    return 1
+  fi
+  return 0
+}
+# ── 写しここまで ──
 
 # ── 共通 ──────────────────────────────────────────────────────────────────────
 die() {
@@ -75,7 +100,7 @@ install.sh — 外部の機械へ devhost を入れる（再実行すれば新�
   1. 公開リリースから RELEASE-MANIFEST.json を取得する（既定は最新。--version でその版に固定する）
   2. 同じリリースの dev.sh・dev-up@.service・projects.example を取得し、マニフェストの checksums と照合する
      （dev.sh は devhost の dev.sh の形であることと構文も確かめる）。1 つでも外れたら何も置かずに 1 で止まる
-  3. dev を ~/.local/bin/dev へ写しで置く（置き換え先がリンク・git の作業ツリーの中・devhost の dev.sh でない
+  3. dev を ~/.local/bin/dev へ写しで置く（置き換え先がリンク・ディレクトリ・git で追跡されているファイル・devhost の dev.sh でない
      ファイルなら置き換えずに止まる）
   4. dev-up@.service を ~/.config/systemd/user/ へ置き、systemctl --user daemon-reload を呼ぶ
   5. ~/.config/dev/projects が無ければ projects.example から作る（あれば決して上書きしない）
@@ -136,7 +161,7 @@ main() {
     esac
     shift
   done
-  if [[ -n "$version" && ! "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-+.][0-9A-Za-z.-]+)?$ ]]; then
+  if [[ -n "$version" && ! "$version" =~ $SEMVER_RE ]]; then
     usage_error "版は vX.Y.Z の形で指定します（URL の一部になるため）: $version"
   fi
 
@@ -155,15 +180,15 @@ main() {
   projects_path="$conf_home/dev/projects"
 
   # 置き換え先の確認。取得より先に行う（置けないと分かっているのに取りにいかない）。
-  if [[ -L "$bin_path" ]]; then
-    die "置き換え先 $bin_path はリンクです。リンクの先は書き換えません（写しで置いてください）。何も置いていません。"
-  fi
-  if [[ -e "$bin_path" ]]; then
-    ! in_git_worktree "$bin_path" || die "置き換え先 $bin_path は git の作業ツリーの中です（リポジトリのチェックアウトや、展開しただけのディレクトリは書き換えません）。何も置いていません。"
-    is_devhost_dev_sh "$bin_path" || die "置き換え先 $bin_path が devhost の dev.sh だと確かめられません（1 行目が bash の shebang、2 行目が「# dev — 」で始まる形ではない、または読めない）。何も置いていません。"
+  local why
+  if [[ -e "$bin_path" || -L "$bin_path" ]]; then
+    why="$(dev_target_refusal "$bin_path")" || die "$why 何も置いていません。"
   fi
   if [[ -L "$unit_path" ]]; then
     die "置き換え先 $unit_path はリンクです。リンクの先は書き換えません。何も置いていません。"
+  fi
+  if [[ -d "$unit_path" ]]; then
+    die "置き換え先 $unit_path はディレクトリです。何も置いていません。"
   fi
 
   IT_TMP="$(mktemp -d "${TMPDIR:-/tmp}/devhost-install.XXXXXX")" || die "作業ディレクトリを作れません。何も置いていません。"
@@ -187,7 +212,7 @@ main() {
     [[ "$mver" == v* ]] || mver="v$mver"
   fi
   if [[ -z "$version" ]]; then
-    [[ "$mver" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-+.][0-9A-Za-z.-]+)?$ ]] || die "最新の版をマニフェストから読めません（version: $mver）。--version vX.Y.Z で版を指定してください。何も置いていません。"
+    [[ "$mver" =~ $SEMVER_RE ]] || die "最新の版をマニフェストから読めません（version: $mver）。--version vX.Y.Z で版を指定してください。何も置いていません。"
     version="$mver"
     base="$RELEASE_BASE_URL/download/$version"
     echo "[$PROG] 最新の版: $version（残りは $base から取る）"
@@ -248,12 +273,12 @@ main() {
     fi
   fi
 
-  report_next_steps "$dry_run" "$dev_state" "$proj_state" "$bin_path" "$projects_path"
+  report_next_steps "$dry_run" "$dev_state" "$unit_state" "$proj_state" "$bin_path" "$projects_path"
 }
 
 # 足りないものと、次にすること（自動では行わない）を案内する。
 report_next_steps() {
-  local dry_run="$1" dev_state="$2" proj_state="$3" bin_path="$4" projects_path="$5"
+  local dry_run="$1" dev_state="$2" unit_state="$3" proj_state="$4" bin_path="$5" projects_path="$6"
   echo "[$PROG] 次にすること（自動では行いません）:"
   if ! command -v devcontainer >/dev/null 2>&1 && [[ ! -x "$HOME/.devcontainers/bin/devcontainer" && ! -x "$HOME/.local/bin/devcontainer" ]]; then
     echo "[$PROG]   - devcontainer CLI がありません。README.md の「devcontainer CLI を入れる」の手順で入れてください。"
@@ -273,8 +298,12 @@ report_next_steps() {
   fi
   echo "[$PROG]   - ログインしていない間も動かすなら: sudo loginctl enable-linger \"\$USER\""
   echo "[$PROG]   - 常駐させるプロジェクトごとに: systemctl --user enable --now dev-up@<名前>.service"
-  if [[ "$dev_state" == "update" ]]; then
-    echo "[$PROG]   - すでに動いているユニットは、起こし直すまで古い dev のまま動きます。dev restart <名前>（コンテナも再起動します）か systemctl --user restart dev-up@<名前>.service で起こし直してください。"
+  if [[ "$dev_state" == "update" || "$unit_state" == "update" ]]; then
+    if [[ "$dry_run" -eq 1 ]]; then
+      echo "[$PROG]   - 実行すると dev かユニットのファイルを更新します。動いているユニットは起こし直すまで古いままなので、実行したあとに起こし直しを案内します。"
+    else
+      echo "[$PROG]   - すでに動いているユニットは、起こし直すまで古い版（dev またはユニットの定義）のまま動きます。dev restart <名前>（コンテナも再起動します）か systemctl --user restart dev-up@<名前>.service で起こし直してください。"
+    fi
   fi
 }
 

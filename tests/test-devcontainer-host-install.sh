@@ -180,7 +180,27 @@ if [[ $RC -eq 0 ]] && cmp -s "$REL2/dev.sh" "$(BIN)" && grep -q "releases/downlo
 it "更新のとき、動いているユニットの起こし直し（dev restart / systemctl --user restart）を案内する"
 cp "$REL1/dev.sh" "$(BIN)"
 run_install "$REL2"
-if grep -q '起こし直すまで古い dev のまま' "$OUT" && grep -q 'dev restart <名前>' "$OUT" && grep -q 'systemctl --user restart dev-up@<名前>.service' "$OUT"; then pass; else fail "案内が無い: $(cat "$OUT")"; fi
+if grep -q '起こし直すまで古い版' "$OUT" && grep -q 'dev restart <名前>' "$OUT" && grep -q 'systemctl --user restart dev-up@<名前>.service' "$OUT"; then pass; else fail "案内が無い: $(cat "$OUT")"; fi
+
+it "ユニットのファイルだけを更新したときも（dev は同じ）、起こし直しの案内を出し、daemon-reload は呼ぶ"
+new_home
+run_install "$REL1"
+REL3="$WORK/rel3"
+rm -rf "$REL3"
+cp -R "$REL1" "$REL3"
+printf '# ユニットだけ更新\n' >> "$REL3/dev-up@.service"
+write_manifest "$REL3" "0.1.1"
+run_install "$REL3" --version v0.1.1
+if [[ $RC -eq 0 ]] && cmp -s "$REL3/dev-up@.service" "$(UNIT)" && grep -q 'dev: すでにこの版' "$OUT" \
+   && grep -q '起こし直すまで古い版' "$OUT" && grep -q 'dev restart <名前>' "$OUT" && grep -qxF "systemctl --user daemon-reload" "$LOG"; then
+  pass
+else
+  fail "終了コード $RC: $(cat "$OUT")"
+fi
+
+it "何も更新しない再実行では、起こし直しの案内は出さない"
+run_install "$REL3" --version v0.1.1
+if [[ $RC -eq 0 ]] && ! grep -q '起こし直す' "$OUT"; then pass; else fail "出ている: $(cat "$OUT")"; fi
 
 it "新規の導入では、起こし直しの案内は出さない"
 new_home
@@ -294,12 +314,53 @@ ln -s "$H/elsewhere/dev.sh" "$(BIN)"
 run_install "$REL2"
 if [[ $RC -ne 0 && -L "$(BIN)" && ! -e "$(UNIT)" ]] && cmp -s "$DEV_SH" "$H/elsewhere/dev.sh"; then pass; else fail "終了コード $RC"; fi
 
-it "置き換え先の dev が git の作業ツリーの中なら、何も置かずに非 0 で止まる"
+it "置き換え先の dev が git で追跡されているファイルなら（リポジトリのチェックアウトの dev.sh）、何も変えずに非 0 で止まる"
 new_home
-mkdir -p "$H/.git" "$H/.local/bin"
+mkdir -p "$H/.local/bin"
 cp "$DEV_SH" "$(BIN)"
+git -C "$H" init -q
+git -C "$H" add .local/bin/dev
 run_install "$REL2"
-if [[ $RC -ne 0 && ! -e "$(UNIT)" ]] && cmp -s "$DEV_SH" "$(BIN)"; then pass; else fail "終了コード $RC"; fi
+if [[ $RC -ne 0 && ! -e "$(UNIT)" ]] && cmp -s "$DEV_SH" "$(BIN)" && grep -q 'git で追跡されているファイル' "$ERR"; then pass; else fail "終了コード $RC: $(tail -3 "$ERR")"; fi
+
+it "ホームが git の作業ツリー（~/.git）でも、追跡されていなければ、初回も再実行（更新）も通る"
+new_home
+git -C "$H" init -q
+run_install "$REL1"
+rc1=$RC
+ok1=0
+cmp -s "$REL1/dev.sh" "$(BIN)" && ok1=1
+run_install "$REL2" --version v0.2.0
+if [[ $rc1 -eq 0 && $ok1 -eq 1 && $RC -eq 0 ]] && cmp -s "$REL2/dev.sh" "$(BIN)" && cmp -s "$REL2/dev-up@.service" "$(UNIT)"; then pass; else fail "初回 rc=$rc1、再実行 rc=$RC: $(tail -3 "$ERR")"; fi
+
+it "git が無い機械では、追跡されていないとみなして更新できる"
+new_home
+run_install "$REL1"
+# git を隠した PATH（偽の curl・systemctl と、install.sh が使う最小限の道具だけ）で再実行する。
+NOGIT="$WORK/nogit"
+rm -rf "$NOGIT"
+mkdir -p "$NOGIT"
+for t in curl systemctl; do ln -s "$FAKEBIN/$t" "$NOGIT/$t"; done
+for t in bash jq sed awk cat cp mv rm mkdir mktemp chmod cmp dirname grep sha256sum shasum tr head; do
+  tp="$(command -v "$t" 2>/dev/null || true)"
+  [[ -z "$tp" ]] || ln -s "$tp" "$NOGIT/$t"
+done
+LOG="$WORK/calls.log"; : > "$LOG"; OUT="$WORK/out.txt"; ERR="$WORK/err.txt"
+RC=0
+env -u XDG_CONFIG_HOME HOME="$H" PATH="$NOGIT" FAKE_LOG="$LOG" FAKE_CURL_DIR="$REL2" "$(command -v bash)" "$INSTALL" --version v0.2.0 > "$OUT" 2> "$ERR" < /dev/null || RC=$?
+if [[ $RC -eq 0 ]] && cmp -s "$REL2/dev.sh" "$(BIN)"; then pass; else fail "終了コード $RC: $(tail -3 "$ERR")"; fi
+
+it "置き換え先の dev がディレクトリなら、何も置かずに非 0 で止まる"
+new_home
+mkdir -p "$(BIN)"
+run_install "$REL1"
+if [[ $RC -ne 0 && "$(files_in_home)" == "0" && ! -s "$LOG" ]]; then pass; else fail "終了コード $RC、置かれたファイル: $(find "$H" -type f | tr '\n' ' ')"; fi
+
+it "置き換え先のユニットがディレクトリなら、ディレクトリの中へ置かず、何も置かずに非 0 で止まる"
+new_home
+mkdir -p "$(UNIT)"
+run_install "$REL1"
+if [[ $RC -ne 0 && "$(files_in_home)" == "0" && ! -e "$(BIN)" ]] && ! grep -q '置きました' "$OUT"; then pass; else fail "終了コード $RC、置かれたファイル: $(find "$H" -type f | tr '\n' ' ')"; fi
 
 it "置き換え先のユニットがリンクなら、何も置かずに非 0 で止まる"
 new_home
@@ -333,7 +394,8 @@ run_install "$REL1"
 before="$(cat "$(BIN)" "$(UNIT)" "$(PROJ)" | cksum)"
 run_install "$REL2" --version v0.2.0 --dry-run
 after="$(cat "$(BIN)" "$(UNIT)" "$(PROJ)" | cksum)"
-if [[ $RC -eq 0 && "$before" == "$after" ]] && grep -q '新しい版へ置き換える' "$OUT"; then pass; else fail "終了コード $RC"; fi
+if [[ $RC -eq 0 && "$before" == "$after" ]] && grep -q '新しい版へ置き換える' "$OUT" \
+   && grep -q '実行すると dev かユニットのファイルを更新します' "$OUT" && ! grep -q 'dev restart' "$OUT"; then pass; else fail "終了コード $RC: $(cat "$OUT")"; fi
 
 # ── 5. 使い方の誤り ───────────────────────────────────────────────────────────
 
@@ -352,22 +414,52 @@ if [[ $RC -eq 0 && "$(files_in_home)" == "0" ]] && grep -q '^install.sh — ' "$
 
 # ── 6. dev.sh と写している判定の一致 ──────────────────────────────────────────
 
-# install.sh は dev.sh が無い状態で動くので、判定の関数を dev.sh から写している。
-# 片方だけを直すと食い違うため、本文を機械で突き合わせる。
+# install.sh は dev.sh が無い状態で動くので、判定を dev.sh から写している。片方だけを直すと食い違うため、
+# 写しの一覧をここに 1 か所で持ち、その全部を dev.sh の本文と機械で突き合わせる。
+# さらに、install.sh の「ここから」〜「写しここまで」の間にあるものがこの一覧と一致することも確かめる
+# （写しを足したのに一覧へ足し忘れる、一覧にないものが混ざる、を落とす）。
+COPIED_FUNCS="is_devhost_dev_sh sha256_of is_git_tracked dev_target_refusal"
+COPIED_VARS="SELF_HEADER_PREFIX SEMVER_RE"
+
 func_body() { # $1 = ファイル, $2 = 関数名
   awk -v n="$2" '$0 == n "() {" { f = 1 } f { print } f && $0 == "}" { exit }' "$1"
 }
-for fn in is_devhost_dev_sh sha256_of in_git_worktree; do
+for fn in $COPIED_FUNCS; do
   it "install.sh の $fn は、dev.sh のものと同じ本文である"
   a="$(func_body "$INSTALL" "$fn")"
   b="$(func_body "$DEV_SH" "$fn")"
   if [[ -n "$a" && "$a" == "$b" ]]; then pass; else fail "本文が違う、または見つからない（install.sh ${#a} 字 / dev.sh ${#b} 字）"; fi
 done
+for v in $COPIED_VARS; do
+  it "install.sh の $v は、dev.sh のものと同じである"
+  a="$(grep -m1 "^$v=" "$INSTALL" || true)"
+  b="$(grep -m1 "^$v=" "$DEV_SH" || true)"
+  if [[ -n "$a" && "$a" == "$b" ]]; then pass; else fail "違う: [$a] / [$b]"; fi
+done
 
-it "install.sh の SELF_HEADER_PREFIX は、dev.sh のものと同じである"
-a="$(grep -m1 '^SELF_HEADER_PREFIX=' "$INSTALL" || true)"
-b="$(grep -m1 '^SELF_HEADER_PREFIX=' "$DEV_SH" || true)"
-if [[ -n "$a" && "$a" == "$b" ]]; then pass; else fail "違う: [$a] / [$b]"; fi
+it "install.sh の写しの区間にある関数と代入が、写しの一覧と過不足なく一致する"
+region="$(awk '/^# ── ここから ──/ { f = 1 } /^# ── 写しここまで/ { f = 0 } f' "$INSTALL")"
+found="$( { printf '%s\n' "$region" | sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\)() {$/\1/p'; printf '%s\n' "$region" | sed -n 's/^\([A-Z][A-Z0-9_]*\)=.*/\1/p'; } | sort -u)"
+listed="$(printf '%s\n' $COPIED_FUNCS $COPIED_VARS | sort -u)"
+assert_same_set "$found" "$listed" "install.sh の写しの区間" "写しの一覧"
+
+it "dev.sh の self-update と install.sh が、置き換え先の確認（dev_target_refusal）と版の形（SEMVER_RE）を使っている"
+if grep -q 'dev_target_refusal "\$self"' "$DEV_SH" && grep -q 'dev_target_refusal "\$bin_path"' "$INSTALL" \
+   && [[ "$(grep -c '=~ \$SEMVER_RE' "$DEV_SH")" == "2" && "$(grep -c '=~ \$SEMVER_RE' "$INSTALL")" == "2" ]]; then
+  pass
+else
+  fail "どちらかが、写しを使わず独自の条件を持っている"
+fi
+
+# ── 7. 公開物に入る .sh の実行権限 ────────────────────────────────────────────
+
+# 編集の道具（sed -i など）が、一時ファイルを作り直して実行権限を落とすことがある。公開物に入るので、
+# git に記録されたモードが 100755 であることを確かめる。
+for f in packages/devcontainer-host/install.sh packages/devcontainer-host/dev.sh packages/devcontainer-host/selftest.sh scripts/release-packages.sh; do
+  it "$f は git 上で実行権限（100755）を持つ"
+  mode="$(git -C "$REPO_ROOT" ls-files -s -- "$f" | awk '{print $1}')"
+  if [[ "$mode" == "100755" ]]; then pass; else fail "モード: ${mode:-追跡されていない}"; fi
+done
 
 it "install.sh は実行権限を持ち、構文が通る"
 if [[ -x "$INSTALL" ]] && bash -n "$INSTALL"; then pass; else fail "実行権限が無い、または構文の誤り"; fi
