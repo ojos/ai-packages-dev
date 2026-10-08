@@ -5,10 +5,19 @@ name: Terraform (public repositories)
 #
 # - 状態ファイルは HCP Terraform（Execution Mode は Local）。HCP は置き場所としてだけ使い、
 #   plan / apply はこのランナーの中で走る。
-# - apply に要る GitHub の PAT（TF_GITHUB_PAT）は Actions の secret にだけ置く。手元の .env には
-#   置かないので、手元からは apply できない。これが「Actions からだけ apply する」の担保である。
 # - fmt / validate は資格情報が要らないので、ci.yml の terraform ジョブ（scripts/acceptance.sh が
 #   ミラーする）で回す。ここは資格情報の要る plan / apply だけを持つ。
+#
+# ## 資格情報を 2 つに分ける理由
+#
+# pull_request は **PR のブランチにあるこのファイル**で走る。同じリポジトリのブランチなら、
+# ワークフローを書き換えた PR にも secret が渡る。書き込みの PAT を PR から読める場所に置くと、
+# 「plan は PR、apply は main」という約束はこのファイルの記述だけになり、PR 自身が書き換えられる。
+#
+# - plan 用（TF_GITHUB_PAT_READ。Administration: read）: リポジトリの secret。PR からも使える。
+# - apply 用（TF_GITHUB_PAT。Administration: write）: Environment「terraform-apply」の secret。
+#   Environment の配備先を main ブランチだけに絞るので、PR のブランチのジョブからは渡らない。
+#   ここが「Actions の main からだけ apply する」の機構による担保である。
 
 on:
   pull_request:
@@ -32,25 +41,31 @@ on:
 permissions:
   contents: read
 
-# 同じ状態ファイルへの plan / apply を重ねない。HCP Terraform も状態をロックするが、
-# 待ち合わせをロックの取り合いに任せず、ここで直列にする。途中で止めると状態の書き込みが
-# 中断されうるので、新しい実行で古い実行を止めない。
+# 同じ ref の実行だけを直列にする。GitHub は 1 つのグループに待ちを 1 件しか持たないので、
+# plan と apply を同じグループに入れると、後から来た PR の plan が待っている apply を
+# 置き換えて消す。ref ごとに分ければ、main の apply は main の実行としか待ち合わせない。
+# 別の ref の plan と apply が重なったときは、HCP Terraform の状態のロックで待ち合わせる
+# （-lock-timeout）。途中で止めると状態の書き込みが中断されうるので、古い実行は止めない。
 concurrency:
-  group: terraform-public-repositories
+  group: terraform-public-repositories-${{ github.ref }}
   cancel-in-progress: false
 
 env:
   TF_IN_AUTOMATION: "true"
   TF_INPUT: "false"
   TF_DIR: infra/github
+  TF_VERSION: 1.16.5
 
 jobs:
-  plan-or-apply:
-    name: Terraform plan / apply
+  plan:
+    name: Terraform plan
     runs-on: ubuntu-latest
     # フォークからの PR では secret が渡らず、plan できない。このリポジトリは外部からの PR を
     # 受け付けない方針（CONTRIBUTING.md）なので、フォークは対象外にする。
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    # main で apply するときは apply ジョブが plan も行うので、ここは走らない。
+    if: >-
+      (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)
+      || (github.event_name == 'workflow_dispatch' && !(github.ref == 'refs/heads/main' && inputs.apply))
     permissions:
       contents: read
       # plan の結果を PR へコメントする。
@@ -58,26 +73,91 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Decide mode
-        id: mode
-        run: |
-          mode=plan
-          if [ "$GITHUB_REF" = "refs/heads/main" ]; then
-            if [ "$GITHUB_EVENT_NAME" = "push" ]; then mode=apply; fi
-            if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] && [ "$INPUT_APPLY" = "true" ]; then mode=apply; fi
-          fi
-          echo "mode=$mode" >> "$GITHUB_OUTPUT"
-          echo "mode: $mode"
-        env:
-          INPUT_APPLY: ${{ inputs.apply }}
-
       # secret が無いまま進むと、provider が匿名で読みにいき、権限不足とも未設定とも
       # 読めない失敗になる。先に名前を挙げて落とす。
       - name: Require secrets
         run: |
           missing=""
           [ -n "$TF_API_TOKEN" ] || missing="$missing TF_API_TOKEN"
-          [ -n "$TF_GITHUB_PAT" ] || missing="$missing TF_GITHUB_PAT"
+          [ -n "$TF_GITHUB_PAT_READ" ] || missing="$missing TF_GITHUB_PAT_READ"
+          if [ -n "$missing" ]; then
+            echo "::error::Actions の secret が未設定です:$missing（infra/github/README.md）"
+            exit 1
+          fi
+        env:
+          TF_API_TOKEN: ${{ secrets.TF_API_TOKEN }}
+          TF_GITHUB_PAT_READ: ${{ secrets.TF_GITHUB_PAT_READ }}
+
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
+          # plan の出力を自分で扱うので、ラッパー（stdout を出力変数へ写す）は使わない。
+          terraform_wrapper: false
+
+      - name: Init
+        run: terraform -chdir="$TF_DIR" init
+
+      - name: Plan
+        run: |
+          set -o pipefail
+          terraform -chdir="$TF_DIR" plan -no-color -lock-timeout=10m -out=tfplan 2>&1 | tee "$RUNNER_TEMP/plan.txt"
+        env:
+          GITHUB_TOKEN: ${{ secrets.TF_GITHUB_PAT_READ }}
+
+      # 公開リポジトリを消す・作り直す plan を落とす。普段は repositories.tf の prevent_destroy が
+      # plan そのものを誤りにするので、ここへは来ない。prevent_destroy が外されたときの 2 枚目。
+      # terraform_data の作り直しは gh api を打ち直すだけなので対象にしない。
+      - name: Refuse to destroy repositories
+        run: bash scripts/terraform-refuse-destroy.sh "$TF_DIR" tfplan
+
+      # 失敗したときも結果を書く。--edit-last で前回のコメントを上書きするので、書かずに
+      # 終わると、PR には前の成功した plan が残り、今の commit も通ったように読めてしまう。
+      - name: Comment plan on PR
+        if: always() && github.event_name == 'pull_request'
+        run: |
+          {
+            echo "### Terraform plan（infra/github）: $JOB_STATUS"
+            echo
+            echo "commit: \`$HEAD_SHA\`"
+            echo
+            echo '```'
+            # コメントの上限（65536 文字）に収める。全文は実行のログにある。
+            if [ -f "$RUNNER_TEMP/plan.txt" ]; then
+              tail -c 60000 "$RUNNER_TEMP/plan.txt"
+            else
+              echo "plan まで進みませんでした。実行のログを見てください。"
+            fi
+            echo '```'
+          } > "$RUNNER_TEMP/comment.md"
+          gh pr comment "$PR_NUMBER" --body-file "$RUNNER_TEMP/comment.md" --edit-last --create-if-none
+        env:
+          # コメントはこのワークフローのトークンで書く（PAT には PR への書き込みを与えない）。
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          JOB_STATUS: ${{ job.status }}
+
+  apply:
+    name: Terraform apply
+    runs-on: ubuntu-latest
+    if: >-
+      github.ref == 'refs/heads/main'
+      && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.apply))
+    # 書き込みの PAT はこの Environment にだけ置く。配備先を main に絞る設定は Environment 側
+    # （Settings > Environments > terraform-apply > Deployment branches）。
+    environment: terraform-apply
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Require secrets
+        run: |
+          missing=""
+          [ -n "$TF_API_TOKEN" ] || missing="$missing TF_API_TOKEN"
+          [ -n "$TF_GITHUB_PAT" ] || missing="$missing TF_GITHUB_PAT（Environment terraform-apply）"
           if [ -n "$missing" ]; then
             echo "::error::Actions の secret が未設定です:$missing（infra/github/README.md）"
             exit 1
@@ -88,61 +168,23 @@ jobs:
 
       - uses: hashicorp/setup-terraform@v4
         with:
-          terraform_version: 1.16.5
+          terraform_version: ${{ env.TF_VERSION }}
           cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
-          # plan の出力を自分で扱うので、ラッパー（stdout を出力変数へ写す）は使わない。
           terraform_wrapper: false
 
       - name: Init
         run: terraform -chdir="$TF_DIR" init
 
       - name: Plan
-        id: plan
-        run: |
-          set -o pipefail
-          terraform -chdir="$TF_DIR" plan -no-color -out=tfplan 2>&1 | tee "$RUNNER_TEMP/plan.txt"
+        run: terraform -chdir="$TF_DIR" plan -no-color -lock-timeout=10m -out=tfplan
         env:
           GITHUB_TOKEN: ${{ secrets.TF_GITHUB_PAT }}
 
-      # 公開リポジトリを消す・作り直す plan は、apply の前に落とす。prevent_destroy も止めるが、
-      # 設定から外れた場合に備えて、plan の中身そのものを確かめる（terraform_data の作り直しは
-      # gh api を打ち直すだけなので対象にしない）。
       - name: Refuse to destroy repositories
-        run: |
-          terraform -chdir="$TF_DIR" show -json tfplan > "$RUNNER_TEMP/plan.json"
-          bad="$(jq -r '.resource_changes[]? | select(.type == "github_repository") | select(.change.actions | index("delete")) | .address' "$RUNNER_TEMP/plan.json")"
-          if [ -n "$bad" ]; then
-            echo "::error::公開リポジトリを消す・作り直す plan です。apply しません:"
-            printf '%s\n' "$bad"
-            exit 1
-          fi
-        env:
-          GITHUB_TOKEN: ${{ secrets.TF_GITHUB_PAT }}
-
-      - name: Comment plan on PR
-        if: github.event_name == 'pull_request'
-        run: |
-          {
-            echo "### Terraform plan（infra/github）"
-            echo
-            echo "commit: \`$HEAD_SHA\`"
-            echo
-            echo '```'
-            # コメントの上限（65536 文字）に収める。全文は実行のログにある。
-            tail -c 60000 "$RUNNER_TEMP/plan.txt"
-            echo '```'
-          } > "$RUNNER_TEMP/comment.md"
-          gh pr comment "$PR_NUMBER" --body-file "$RUNNER_TEMP/comment.md" --edit-last --create-if-none
-        env:
-          # コメントはこのワークフローのトークンで書く（PAT には PR への書き込みを与えない）。
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: bash scripts/terraform-refuse-destroy.sh "$TF_DIR" tfplan
 
       - name: Apply
-        if: steps.mode.outputs.mode == 'apply'
-        run: terraform -chdir="$TF_DIR" apply -no-color tfplan
+        run: terraform -chdir="$TF_DIR" apply -no-color -lock-timeout=10m tfplan
         env:
           GITHUB_TOKEN: ${{ secrets.TF_GITHUB_PAT }}
           # security.tf の terraform_data が gh api で使う。

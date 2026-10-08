@@ -151,7 +151,7 @@ jobs:
 
       - name: Validate
         run: |
-          terraform -chdir=infra/github init -backend=false -input=false
+          terraform -chdir=infra/github init -backend=false -input=false -lockfile=readonly
           terraform -chdir=infra/github validate
 
   neutrality:

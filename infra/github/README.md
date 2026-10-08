@@ -7,7 +7,20 @@
 | 管理する対象 | `repositories.tf` の `local.repositories` に並べたリポジトリ |
 | 状態ファイル | HCP Terraform（組織 `OJOS` / ワークスペース `github-ai-packages-dev`。Execution Mode は Local） |
 | 実行する場所 | GitHub Actions（`.github/workflows/terraform.yml`）。PR で plan、`main` へのマージで apply |
-| 資格情報 | Actions の secret の `TF_GITHUB_PAT`（GitHub）と `TF_API_TOKEN`（HCP Terraform） |
+| 資格情報 | 下の「資格情報」の 3 つ |
+
+## 資格情報
+
+| 名前 | 置き場所 | 中身 | 使う場面 |
+|---|---|---|---|
+| `TF_API_TOKEN` | リポジトリの secret | HCP Terraform の API トークン（状態ファイルの読み書き） | plan / apply |
+| `TF_GITHUB_PAT_READ` | リポジトリの secret | fine-grained PAT。Administration: read（Metadata: read は自動） | PR の plan |
+| `TF_GITHUB_PAT` | **Environment `terraform-apply` の secret** | fine-grained PAT。Administration: write | `main` の apply |
+
+- **書き込みの PAT を Environment に分けるのは、PR から使えないようにするためです。** PR のワークフローは PR のブランチにある `terraform.yml` で走るので、同じリポジトリのブランチならワークフローを書き換えて secret を使えます。Environment `terraform-apply` の配備先（Settings > Environments > terraform-apply > Deployment branches and tags）を `main` だけに絞ると、PR のブランチのジョブには渡りません。
+- 読み取りの PAT と HCP のトークンは PR からも使えます。読み取りの PAT で読めるのは公開リポジトリの設定だけです。HCP のトークンは状態ファイルを書き換えられますが、HCP Terraform は状態の版を履歴に残すので、戻せます。
+- PAT の対象リポジトリは、管理するリポジトリに絞ります。**ただし、新しいリポジトリを作る apply のときだけ、書き込みの PAT の対象を「All repositories」にする必要がある見込みです**（まだ存在しないリポジトリは選べないため。最初の apply で確かめます）。作り終えたら、対象を管理するリポジトリに絞り直し、読み取りの PAT にも新しいリポジトリを足します。
+- Environment とこれらの secret はこのモノレポの設定で、Terraform の管理の外です（このモノレポ自身は対象外のため）。手で設定します。
 
 ## 手元でできること
 

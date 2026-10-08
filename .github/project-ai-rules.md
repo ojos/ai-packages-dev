@@ -163,8 +163,8 @@ gh CLI の認証はコンテナ内で行い、その状態を named volume に�
   - 対象: 配布先の公開リポジトリ（`infra/github/repositories.tf` の一覧）。このモノレポ自身と、配布物以外の `ojos/*` は対象外です
   - 状態ファイルは HCP Terraform（組織 `OJOS` / ワークスペース `github-ai-packages-dev`）に置きます。Execution Mode は Local で、HCP は置き場所としてだけ使います
   - **実行場所は GitHub Actions（`.github/workflows/terraform.yml`）です。** PR で plan を出して PR へコメントし、`main` へのマージで apply します。fmt / validate は資格情報が要らないので `ci.yml` の `terraform` ジョブ（`scripts/acceptance.sh` がミラー）で回します
-  - **手元から apply しないことは、資格情報の置き場所で担保します。** apply に要る GitHub の fine-grained PAT（`TF_GITHUB_PAT`）と HCP のトークン（`TF_API_TOKEN`）は Actions の secret にだけ置き、`.env` には置きません。terraform のコマンドは手元からも打てるので、スクリプトで拒否しても迂回できるためです
-  - **公開リポジトリを消す plan は apply しません。** リポジトリに `prevent_destroy` と `archive_on_destroy` を付け、`terraform.yml` も plan の中にリポジトリの削除・作り直しがあれば apply の前に落とします。PAT の Administration: write は削除もできる権限だからです
+  - **apply を `main` の Actions からだけにすることは、資格情報の置き場所で担保します。** 書き込みの fine-grained PAT（`TF_GITHUB_PAT`）は、配備先を `main` に絞った Environment `terraform-apply` の secret にだけ置き、`.env` にもリポジトリの secret にも置きません。terraform のコマンドは手元からも打てるのでスクリプトで拒否しても迂回でき、PR のワークフローは PR のブランチで書き換えられるので、ワークフローの記述でも担保できないためです。PR の plan には、読み取りの PAT（`TF_GITHUB_PAT_READ`）を使います。一覧と設定の手順は `infra/github/README.md`「資格情報」
+  - **公開リポジトリを消す plan は apply しません。** リポジトリに `prevent_destroy` と `archive_on_destroy` を付け、`terraform.yml` も plan の中にリポジトリの削除・作り直しがあれば apply の前に落とします（`scripts/terraform-refuse-destroy.sh`）。PAT の Administration: write は削除もできる権限だからです
   - リリースの GitHub App を新しいリポジトリへ install することは、手作業のまま残します（個人のアカウントでは PAT で扱えない見込みのため。#487 の scope.out）
 
 ### 脆弱性の報告と通知

@@ -5,9 +5,11 @@
 #
 # SECURITY.md は「Security タブの Report a vulnerability から知らせてください」と案内する。
 # **案内している窓口が手で切られたり、有効にし忘れたりしたまま、案内だけが残る**と、
-# 善意の発見者は公開の issue に書くか、黙るかの二択に戻る。この 3 つは IaC で宣言して
-# いない（手で有効にする。手順は .github/project-ai-rules.md「脆弱性の報告と通知」）ので、
-# 宣言の代わりにここで照合する。
+# 善意の発見者は公開の issue に書くか、黙るかの二択に戻る。配布先の公開リポジトリでは
+# この 3 つを Terraform（infra/github/security.tf。#487）で有効にするが、Private vulnerability
+# reporting は provider が扱えず、作成時に gh api を打つだけなので、外で無効にされても
+# plan に差分が出ない。このモノレポ自身は Terraform の対象外で、手で有効にする。どちらも
+# 「有効であること」の照合はここで行う（.github/project-ai-rules.md「脆弱性の報告と通知」）。
 #
 # ## 何を見るか
 #
