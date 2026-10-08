@@ -94,8 +94,12 @@ curl -sSL "${BASE}/SHA256SUMS" -o SHA256SUMS
 OWNER="$(printf '%s' "$BASE" | sed -n 's#^https://github.com/\([^/]*\)/.*#\1#p')"   # 取得元の owner
 if gh attestation verify SHA256SUMS --owner "$OWNER"; then echo "attestation: ok"; else echo "attestation: 検証に失敗しました" >&2; exit 1; fi
 
-# 検証済みの SHA256SUMS と、取得した archive・dev.sh を照合する（dev-up@.service も取得したなら加える）
-grep -E '  (dev\.sh|PACKAGE_ARCHIVE\.tar\.gz)$' SHA256SUMS | $sha256c -c -
+# 検証済みの SHA256SUMS と、取得したものだけを照合する（取得していないファイルは飛ばす。
+# 全行を渡すと、取得していない dev.sh などが無いことで落ちる）
+for f in PACKAGE_ARCHIVE.tar.gz dev.sh dev-up@.service; do
+  [ -f "$f" ] || continue
+  awk -v f="$f" '$2 == f' SHA256SUMS | $sha256c -c - || { echo "$f: 照合に失敗しました" >&2; exit 1; }
+done
 ```
 
 以降の手順は、この `devhost/` を取り出したディレクトリで実行します
