@@ -66,7 +66,7 @@ ai-playbook・devcontainer-bootstrap（DCB）・devcontainer-host（devhost）�
 <!-- package-relations:end -->
 
 `packages/devcontainer-host/`（devhost）は、SSH で届く外部の機械の上で devcontainer を保つための道具一式です。
-DCB のリリースには同梱せず、独自の版を持つ公開リポジトリ `ojos/devcontainer-host` のリリースで配ります（最初の版は v0.1.0 の予定。公開前は下の「リリース状況」が「未公開」になります）。
+DCB のリリースには同梱せず、独自の版を持つ公開リポジトリ `ojos/devcontainer-host` のリリースで配ります（最初の版は v0.1.0）。
 
 **設計思想:**
 
@@ -121,17 +121,17 @@ ASF は 2026-07 に退役しました。
 <!-- RELEASE_STATUS:START -->
 | パッケージ | 配布状態 |
 |---|---|
-| devcontainer-bootstrap | ojos/devcontainer-bootstrap で v0.17.0 まで公開済み |
-| devcontainer-host | ojos/devcontainer-host は未公開（Release なし） |
-| ai-playbook | ojos/ai-playbook で v0.8.1 まで公開済み |
+| devcontainer-bootstrap | ojos/devcontainer-bootstrap で v0.18.0 まで公開済み |
+| devcontainer-host | ojos/devcontainer-host で v0.1.0 まで公開済み |
+| ai-playbook | ojos/ai-playbook で v0.8.2 まで公開済み |
 
 リリース実行手順は [docs/release/RELEASE_EXECUTION_RUNBOOK.md](docs/release/RELEASE_EXECUTION_RUNBOOK.md) を参照する。
 
 ### リリース状況
 
-- `devcontainer-bootstrap`: `ojos/devcontainer-bootstrap` で `v0.17.0` まで公開済み
-- `devcontainer-host`: `ojos/devcontainer-host` は未公開（Release なし）
-- `ai-playbook`: `ojos/ai-playbook` で `v0.8.1` まで公開済み
+- `devcontainer-bootstrap`: `ojos/devcontainer-bootstrap` で `v0.18.0` まで公開済み
+- `devcontainer-host`: `ojos/devcontainer-host` で `v0.1.0` まで公開済み
+- `ai-playbook`: `ojos/ai-playbook` で `v0.8.2` まで公開済み
 <!-- RELEASE_STATUS:END -->
 
 ---
