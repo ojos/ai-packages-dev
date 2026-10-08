@@ -186,6 +186,109 @@ else
   fail "dry-run の exit が資産生成より後にある（$EXIT_LINE >= $GEN_LINE）"
 fi
 
+# ── 公開に進まなかったパッケージには発行しない（#491） ─────────────────────────
+#
+# digest のファイルはステージング（公開より前）に書かれる。それだけを根拠に発行すると、
+# 公開に進まなかった（あるいは公開に失敗した）パッケージの SHA256SUMS にも attestation が付く。
+# 公開に成功した時点で release-packages.sh が書く印（<パッケージ名>.published）を、発行の条件にする。
+
+it "workflow の対象の読み取りが、公開の印（.published）を条件にしている"
+if [[ -n "$( { grep -nE '\.published' "$WF" || true; } )" ]]; then
+  pass
+else
+  fail "release.yml が <パッケージ名>.published を見ていない（digest だけで発行しうる）"
+fi
+
+# workflow の「Read the attestation subjects」ステップの run: をそのまま取り出して実行する。
+# 条件の綴りの照合ではなく、実際の判定（出力に digest が出るか）を見る。
+STEP_SH="$(mktemp "${TMPDIR:-/tmp}/attest-step.XXXXXX")"
+awk '
+  /- name: Read the attestation subjects/ { insec = 1; next }
+  insec && /^[[:space:]]+run: \|/ { inrun = 1; next }
+  insec && inrun && /^        env:/ { exit }
+  insec && inrun { sub(/^          /, ""); print }
+' "$WF" > "$STEP_SH"
+
+# run_step <ATTEST_SUBJECTS_DIR> → GITHUB_OUTPUT の内容を返す
+run_step() {
+  local dir="$1" out
+  out="$(mktemp "${TMPDIR:-/tmp}/attest-out.XXXXXX")"
+  ATTEST_SUBJECTS_DIR="$dir" GITHUB_OUTPUT="$out" bash "$STEP_SH" >/dev/null 2>&1
+  cat "$out"
+  rm -f "$out"
+}
+
+D1="64a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f"
+SUBJ="$(mktemp -d "${TMPDIR:-/tmp}/attest-subj.XXXXXX")"
+
+it "ステップの取り出しに成功している（以降の検査が空振りしない）"
+if [[ -s "$STEP_SH" ]] && grep -q 'GITHUB_OUTPUT' "$STEP_SH"; then pass; else fail "run: を取り出せない"; fi
+
+it "対照: digest と印の両方がある DCB は発行の対象になる"
+printf '%s\n' "$D1" > "$SUBJ/devcontainer-bootstrap.sha256"
+: > "$SUBJ/devcontainer-bootstrap.published"
+out="$(run_step "$SUBJ")"
+if [[ "$out" == "digest=sha256:$D1" ]]; then pass; else fail "期待した出力が無い: $out"; fi
+
+it "digest だけで印の無い devcontainer-host（公開に進まなかった・失敗した）は発行の対象にならない"
+printf '%s\n' "$D1" > "$SUBJ/devcontainer-host.sha256"
+out="$(run_step "$SUBJ")"
+if [[ "$out" == "digest=sha256:$D1" ]]; then pass; else fail "印の無いパッケージが対象に入った: $out"; fi
+
+it "印があれば devcontainer-host も対象になる（公開に成功したものは発行する）"
+: > "$SUBJ/devcontainer-host.published"
+out="$(run_step "$SUBJ")"
+if [[ "$out" == *"digest-host=sha256:$D1"* && "$out" == *"digest=sha256:$D1"* ]]; then pass; else fail "期待した出力が無い: $out"; fi
+
+it "印だけで digest が無いものは対象にならない"
+rm -f "$SUBJ/devcontainer-bootstrap.sha256"
+out="$(run_step "$SUBJ")"
+if [[ "$out" == "digest-host=sha256:$D1" ]]; then pass; else fail "digest の無いパッケージが対象に入った: $out"; fi
+rm -rf "$SUBJ" "$STEP_SH"
+
+# スクリプト側: ステージングでは印を書かず、公開に成功した後にだけ書く。
+end="$(grep -n '^EXECUTE="false"' "$SCRIPT" | head -1 | cut -d: -f1)"
+FNS="$(mktemp "${TMPDIR:-/tmp}/attest-fns.XXXXXX")"
+head -n $((end - 1)) "$SCRIPT" > "$FNS"
+
+it "generate_standard_assets は digest を書くが、公開の印は書かない"
+STG="$(mktemp -d "${TMPDIR:-/tmp}/attest-stg.XXXXXX")"
+SUBJ2="$(mktemp -d "${TMPDIR:-/tmp}/attest-subj2.XXXXXX")"
+mkdir -p "$STG/rel"
+printf 'x\n' > "$STG/rel/a.txt"
+(
+  set -euo pipefail
+  . "$FNS"
+  SUMS_TARGETS=(a.txt PACKAGE_ARCHIVE.tar.gz)
+  ATTEST_SUBJECTS_DIR="$SUBJ2" generate_standard_assets "$STG/rel" "pkg-x" "0.0.0"
+) >/dev/null 2>&1
+if [[ -s "$SUBJ2/pkg-x.sha256" && ! -e "$SUBJ2/pkg-x.published" ]]; then pass; else fail "ステージング後の状態が違う: $(ls "$SUBJ2" | tr '\n' ' ')"; fi
+
+it "mark_attest_published が印を書く（環境変数が無ければ何もせず成功する）"
+( . "$FNS"; ATTEST_SUBJECTS_DIR="$SUBJ2" mark_attest_published "pkg-x" ) >/dev/null 2>&1
+( . "$FNS"; unset ATTEST_SUBJECTS_DIR; mark_attest_published "pkg-x" ) >/dev/null 2>&1
+rc=$?
+if [[ -e "$SUBJ2/pkg-x.published" && $rc -eq 0 ]]; then pass; else fail "印が無い、または環境変数なしで失敗した（rc=$rc）"; fi
+rm -rf "$STG" "$SUBJ2" "$FNS"
+
+it "印は tag_and_release の成功後（同じ if ブロックの中）に書かれ、パッケージごとに対応している"
+# 公開より前に呼ばれていれば、公開に失敗したパッケージにも印が付く。
+bad=""
+for pair in 'DCB_DIR:devcontainer-bootstrap' 'HOST_DIR:devcontainer-host'; do
+  dir="${pair%%:*}"
+  pkg="${pair##*:}"
+  tag_line="$( { grep -nE "^[[:space:]]*tag_and_release \"\\\$$dir\"" "$SCRIPT" || true; } | head -n 1 | cut -d: -f1)"
+  mark_line="$( { grep -nF "mark_attest_published \"$pkg\"" "$SCRIPT" || true; } | head -n 1 | cut -d: -f1)"
+  if [[ -z "$tag_line" || -z "$mark_line" ]]; then
+    bad="$bad $pkg(行が取れない)"
+  elif [[ "$mark_line" -le "$tag_line" ]]; then
+    bad="$bad $pkg(印が公開より前: $mark_line <= $tag_line)"
+  elif [[ "$(sed -n "${tag_line},${mark_line}p" "$SCRIPT" | { grep -c '^fi$' || true; })" -ne 0 ]]; then
+    bad="$bad $pkg(公開のブロックの外)"
+  fi
+done
+if [[ -z "$bad" ]]; then pass; else fail "印の位置が違う:$bad"; fi
+
 # ── 復旧経路 ──────────────────────────────────────────────────────────────────
 #
 # release.yml の attest ステップは gh release create の**後**に走る。attestation の

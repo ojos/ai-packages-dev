@@ -123,7 +123,11 @@ if command -v sha256sum >/dev/null 2>&1; then sha256c="sha256sum"; else sha256c=
 bash "$d/doctor.sh" --target-dir ./myapp
 ```
 
-診断のたびに取得すれば、生成先のリポジトリへ `doctor.sh` を混入させずに済みます。手元へ置いて繰り返し使う場合は、`bootstrap.sh` と `doctor.sh` を同じディレクトリへ取得し、行を抜き出さずに `$sha256c -c SHA256SUMS` で両方を検証してください。
+診断のたびに取得すれば、生成先のリポジトリへ `doctor.sh` を混入させずに済みます。手元へ置いて繰り返し使う場合は、`bootstrap.sh` と `doctor.sh` を同じディレクトリへ取得し、`SHA256SUMS` から両方の行を抜き出して検証してください（`SHA256SUMS` は `PACKAGE_ARCHIVE.tar.gz` の行も持つため、アーカイブを取得していなければ行を抜き出さない `$sha256c -c SHA256SUMS` は失敗します）。
+
+```bash
+grep -E ' (bootstrap|doctor)\.sh$' SHA256SUMS | $sha256c -c -
+```
 
 ### リリース資産
 
@@ -133,11 +137,17 @@ bash "$d/doctor.sh" --target-dir ./myapp
 |---|---|
 | `bootstrap.sh` | 生成コマンド本体。単体で動作します |
 | `doctor.sh` | 生成後の自己診断コマンド。単体で動作します |
-| `SHA256SUMS` | 上の 2 つのチェックサム。`sha256sum -c SHA256SUMS`（macOS では `shasum -a 256 -c SHA256SUMS`）で**取得の破損**を検出します（守る範囲は [公開リリースからの利用](#公開リリースからの利用) の但し書きを参照）。片方だけ取得した場合は、その行を `grep` で抜き出して `-c -` へ渡します |
+| `SHA256SUMS` | `bootstrap.sh` / `doctor.sh` / `PACKAGE_ARCHIVE.tar.gz` のチェックサム。3 つすべてを取得したなら `sha256sum -c SHA256SUMS`（macOS では `shasum -a 256 -c SHA256SUMS`）で**取得の破損**を検出します（守る範囲は [公開リリースからの利用](#公開リリースからの利用) の但し書きを参照）。一部だけ取得した場合は、その行を `grep` で抜き出して `-c -` へ渡します |
 | `PACKAGE_ARCHIVE.tar.gz` | そのリリース時点の公開リポジトリのツリー一式（`.git` と生成した 3 資産を除く。`bootstrap.sh` / `doctor.sh` / この README / `LICENSE` / `CHANGELOG.md`）。スクリプトと手順書を 1 つの塊として手元へ固定したい場合や、リリース間の差分を追いたい場合に使います |
 | `RELEASE-MANIFEST.json` | パッケージ名・版・資産一覧・チェックサムを機械可読にまとめたもの。`assets` がそのリリースに添付された資産の一覧、`checksums` が `PACKAGE_ARCHIVE.tar.gz` と `SHA256SUMS` のハッシュです |
 
-検証は 2 段構えです。`RELEASE-MANIFEST.json` が `SHA256SUMS` のハッシュを持ち、`SHA256SUMS` が `bootstrap.sh` / `doctor.sh` のハッシュを持つため、マニフェストを起点に配布物全体まで辿れます。
+検証は 2 段構えです。`RELEASE-MANIFEST.json` が `SHA256SUMS` と `PACKAGE_ARCHIVE.tar.gz` のハッシュを持ち、`SHA256SUMS` が `bootstrap.sh` / `doctor.sh` / `PACKAGE_ARCHIVE.tar.gz` のハッシュを持ちます。
+**どの検証が何を保証するか**は次のとおりです。
+
+- この 2 段（マニフェスト → `SHA256SUMS` → 各ファイル）が検出するのは、取得の破損と、公開物どうしの食い違いです。マニフェストも `SHA256SUMS` と同じ経路で取得するため、リリースを書き換えられる立場なら両方を揃えて差し替えられます。
+- 後述の attestation が保証するのは、`SHA256SUMS` 1 つです。`SHA256SUMS` が `bootstrap.sh` / `doctor.sh` / `PACKAGE_ARCHIVE.tar.gz` のハッシュを持つので、attestation の検証に続けて `SHA256SUMS` と取得物を照合すれば、この 3 つまで辿れます。**`RELEASE-MANIFEST.json` と `CHANGELOG.md` などアーカイブの外の資産は、attestation の保証に入りません。**
+
+照合と展開は `&&` でつなぎ、照合に失敗したら展開しません（行を分けると、失敗しても次の行が走ります）。
 
 ```bash
 TAG=v0.17.0
@@ -145,20 +155,18 @@ BASE="https://github.com/ojos/devcontainer-bootstrap/releases/download/${TAG}"
 curl -sSL "${BASE}/RELEASE-MANIFEST.json" -o RELEASE-MANIFEST.json
 curl -sSL "${BASE}/PACKAGE_ARCHIVE.tar.gz" -o PACKAGE_ARCHIVE.tar.gz
 curl -sSL "${BASE}/SHA256SUMS" -o SHA256SUMS
+curl -sSL "${BASE}/bootstrap.sh" -o bootstrap.sh
+curl -sSL "${BASE}/doctor.sh" -o doctor.sh
 
 # sha256sum は GNU coreutils のコマンドで、macOS には無い。shasum へ分岐する。
 if command -v sha256sum >/dev/null 2>&1; then sha256c="sha256sum"; else sha256c="shasum -a 256"; fi
 
 # 1. マニフェストが記録したハッシュと実物を突き合わせる
-jq -r '.checksums | to_entries[] | "\(.value)  \(.key)"' RELEASE-MANIFEST.json | $sha256c -c -
-
-# 2. マニフェストが検証した SHA256SUMS で、実行するスクリプトを検証する
-curl -sSL "${BASE}/bootstrap.sh" -o bootstrap.sh
-curl -sSL "${BASE}/doctor.sh" -o doctor.sh
-$sha256c -c SHA256SUMS
-
-# アーカイブから中身を取り出す場合
-tar -xzf PACKAGE_ARCHIVE.tar.gz
+# 2. 検証したいスクリプトとアーカイブを SHA256SUMS で検証する
+# 3. 展開する（1 と 2 の両方が通ったときだけ）。アーカイブの中身はリポジトリのルートそのものなので、専用のディレクトリへ展開する
+jq -r '.checksums | to_entries[] | "\(.value)  \(.key)"' RELEASE-MANIFEST.json | $sha256c -c - \
+  && $sha256c -c SHA256SUMS \
+  && mkdir dcb && tar -xzf PACKAGE_ARCHIVE.tar.gz -C dcb && ls dcb/
 ```
 
 ### devhost — 外部の機械で devcontainer を保つ道具
@@ -174,9 +182,9 @@ SSH で届く外部の機械（自宅のラップトップ、社内のサーバ�
 
 ### 任意: 署名の検証（artifact attestation）
 
-**この手順は任意です。** 上の 2 段検証は `curl` とチェックサム実装（`sha256sum` か `shasum -a 256`）だけで閉じていますが、こちらは [GitHub CLI](https://cli.github.com/) が要ります。
+**この手順は任意です。** 上の 2 段の検証は `curl` とチェックサム実装（`sha256sum` か `shasum -a 256`）だけで閉じていますが、こちらは [GitHub CLI](https://cli.github.com/) が要ります。
 
-リリースの `SHA256SUMS` には、GitHub Actions が発行した **artifact attestation**（SLSA provenance）が付いています。**そこから先は上のハッシュチェーンが繋ぐ**ので、検証するのは `SHA256SUMS` 1 つで足ります。
+リリースの `SHA256SUMS` には、GitHub Actions が発行した **artifact attestation**（SLSA provenance）が付いています。attestation の対象は `SHA256SUMS` 1 つで、`SHA256SUMS` が `bootstrap.sh` / `doctor.sh` / `PACKAGE_ARCHIVE.tar.gz` のハッシュを持ちます。**attestation の検証に続けて、上の手順で `SHA256SUMS` と取得物を照合してください**（attestation だけでは取得物までは確かめられません）。
 
 ```bash
 # 取得元の owner を BASE から取り出す（固有名を手で書かない）

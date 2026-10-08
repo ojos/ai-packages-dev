@@ -192,16 +192,26 @@ validate_host_docs() {
 
   # 語の境界で照合する。部分一致だと、公開タグ v0.1.0 に対して TAG=v0.1.00 を通してしまう。
   # 版の後ろに英数字・ドット・ハイフンが続く形は、別の版として落とす。
+  #
+  # **README 全体から版を探さない。** 説明文に新しい版が書いてあるだけで通ってしまい、入手手順の
+  # TAG= が古いままでも公開できる。照合するのは次の 2 種類の行そのものである。
+  #   - 入手手順の `TAG=` の行（行頭が `TAG=`）。1 行以上あり、すべてが公開するタグであること。
+  #   - `--version vX.Y.Z` の例を書いた行。1 行以上あり、そこに現れる版がすべて公開するタグであること。
   local tag_re="${tag//./\\.}"
   local boundary='([^0-9A-Za-z.-]|$)'
-  grep -Eq -- "TAG=${tag_re}${boundary}" "$readme" || {
-    echo "error: devcontainer-host README.md の取得手順の TAG= が $tag と一致しません" >&2
+  local lines bad
+  lines="$(grep -E -- '^TAG=' "$readme" || true)"
+  bad="$(printf '%s\n' "$lines" | grep -v '^$' | grep -Ev -- "^TAG=${tag_re}${boundary}" || true)"
+  if [[ -z "$lines" || -n "$bad" ]]; then
+    echo "error: devcontainer-host README.md の取得手順の TAG= の行が $tag と一致しません" >&2
     exit 1
-  }
-  grep -Eq -- "--version ${tag_re}${boundary}" "$readme" || {
-    echo "error: devcontainer-host README.md の self-update の例（--version）が $tag と一致しません" >&2
+  fi
+  lines="$(grep -oE -- '--version v[0-9][0-9A-Za-z.+-]*' "$readme" | sed 's/^--version //' || true)"
+  bad="$(printf '%s\n' "$lines" | grep -v '^$' | grep -Evx -- "$tag_re" || true)"
+  if [[ -z "$lines" || -n "$bad" ]]; then
+    echo "error: devcontainer-host README.md の self-update の例（--version の行）が $tag と一致しません" >&2
     exit 1
-  }
+  fi
   grep -Fxq -- "## $tag" "$notes" || {
     echo "error: $notes に公開するタグの見出し「## $tag」がありません" >&2
     exit 1
@@ -484,7 +494,10 @@ generate_standard_assets() {
   # 手元に無いファイルを列挙していると FAILED になり非ゼロ終了する。
   # 検証ファイルは「検証する人が持っているもの」を列挙しなければ意味がない。
   #
-  # 追加の資産（PACKAGE_ARCHIVE.tar.gz）のハッシュは RELEASE-MANIFEST.json 側が持つ。
+  # ただし PACKAGE_ARCHIVE.tar.gz は呼び出し側が SUMS_TARGETS に含める（DCB・devcontainer-host とも）。
+  # attestation の対象は SHA256SUMS 1 つなので、アーカイブがここに無いと attestation から
+  # アーカイブまで辿れない。上でアーカイブを作ってから SHA256SUMS を作るので、順序はこれで足りる。
+  # 手元に無いファイルを列挙しないという上の方針は、README の手順がアーカイブも取得することで保つ。
   if [[ ${#SUMS_TARGETS[@]} -eq 0 ]]; then
     echo "error: internal: SUMS_TARGETS not set for $pkg_name" >&2
     exit 1
@@ -503,6 +516,10 @@ generate_standard_assets() {
   # **対象は SHA256SUMS 1 つで足りる。** RELEASE-MANIFEST.json が SHA256SUMS の
   # ハッシュを持ち、SHA256SUMS が各ファイルのハッシュを持つため、ここを起点に
   # 配布物全体まで辿れる（README の 2 段検証）。
+  #
+  # **ここで書くのは「ステージングできた」という事実だけで、公開の証明ではない。**
+  # 公開に成功したパッケージには、tag_and_release のあとで mark_attest_published が印を書く。
+  # workflow は印のあるものにだけ attestation を発行する。
   #
   # **資産は一時クローンの中にあり、この関数を抜けると呼び出し側からは辿れない。**
   # そのため digest をファイルへ書き出し、workflow 側が subject-digest として
@@ -568,6 +585,20 @@ $assets_json
 JSON
 
   popd >/dev/null
+}
+
+# 公開に成功したパッケージの印を、attestation の対象の置き場に書く。
+# 使い方: mark_attest_published <package-name>
+# **tag_and_release が成功したあとにだけ呼ぶ。** workflow は <package-name>.published があるものにだけ
+# attestation を発行する。ステージングの時点で書く digest は、公開に進まなかった（あるいは公開に
+# 失敗した）パッケージにも残るため、それだけを根拠にすると未公開の SHA256SUMS へ発行しうる。
+# ATTEST_SUBJECTS_DIR が無ければ何もしない（手元の実行やテストは Actions の外で走る）。
+mark_attest_published() {
+  local pkg_name="$1"
+  [[ -n "${ATTEST_SUBJECTS_DIR:-}" ]] || return 0
+  mkdir -p "$ATTEST_SUBJECTS_DIR"
+  : > "$ATTEST_SUBJECTS_DIR/$pkg_name.published"
+  echo "[release] attestation target published: $pkg_name"
 }
 
 # 公開配布物のファイル一覧。開発リポジトリ内のパスと、配布先ルートでの名前を
@@ -1188,8 +1219,9 @@ HOST_DIR="/tmp/host-release"
 if [[ -n "$DCB_TAG" ]]; then
   DCB_VER="$(extract_semver "$DCB_TAG")"
   prepare_dcb_release_repo "$DCB_DIR"
-  # ユーザーは bootstrap.sh と SHA256SUMS だけを取得する（README の手順）。
-  SUMS_TARGETS=(bootstrap.sh doctor.sh)
+  # ユーザーは bootstrap.sh と SHA256SUMS を取得する（README の手順）。アーカイブも対象に含め、
+  # attestation（SHA256SUMS が対象）からアーカイブまで辿れるようにする。
+  SUMS_TARGETS=(bootstrap.sh doctor.sh PACKAGE_ARCHIVE.tar.gz)
   generate_standard_assets "$DCB_DIR" "devcontainer-bootstrap" "$DCB_VER"
 fi
 
@@ -1210,6 +1242,7 @@ if [[ -n "$DCB_TAG" ]]; then
     "$DCB_DIR/RELEASE-MANIFEST.json" \
     "$DCB_DIR/SHA256SUMS" \
     "$DCB_DIR/PACKAGE_ARCHIVE.tar.gz"
+  mark_attest_published "devcontainer-bootstrap"
 fi
 
 if [[ -n "$HOST_TAG" ]]; then
@@ -1220,6 +1253,7 @@ if [[ -n "$HOST_TAG" ]]; then
     "$HOST_DIR/RELEASE-MANIFEST.json" \
     "$HOST_DIR/SHA256SUMS" \
     "$HOST_DIR/PACKAGE_ARCHIVE.tar.gz"
+  mark_attest_published "devcontainer-host"
 fi
 
 if [[ -n "$PLAYBOOK_TAG" ]]; then

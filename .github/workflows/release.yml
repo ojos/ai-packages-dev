@@ -253,7 +253,12 @@ jobs:
       #
       # **release-packages.sh が途中で失敗しても走らせる**（`!cancelled()`）。DCB を公開したあとに
       # 別のパッケージの公開が失敗すると、このステップが飛ばされ、公開済みの DCB の SHA256SUMS に
-      # attestation が付かないまま残る。digest のファイルがあるものだけを対象にする。
+      # attestation が付かないまま残る。
+      #
+      # **対象は「公開に成功した」印（<パッケージ名>.published）があるものだけ。** digest のファイルは
+      # ステージングの時点で書かれるため、公開に進まなかった（あるいは公開に失敗した）パッケージにも
+      # 残る。digest だけを根拠にすると、未公開の SHA256SUMS に attestation が発行されうる。
+      # 印は release-packages.sh が tag_and_release の成功後に書く（mark_attest_published）。
       - name: Read the attestation subjects
         id: subject
         if: ${{ !cancelled() }}
@@ -263,12 +268,12 @@ jobs:
             pkg="${pair%%:*}"
             out="${pair##*:}"
             f="${ATTEST_SUBJECTS_DIR}/${pkg}.sha256"
-            if [[ -f "$f" ]]; then
+            if [[ -f "$f" && -f "${ATTEST_SUBJECTS_DIR}/${pkg}.published" ]]; then
               digest="$(cat "$f")"
               echo "${out}=sha256:${digest}" >> "$GITHUB_OUTPUT"
               echo "[attest] subject digest (${pkg}): sha256:${digest}"
             else
-              echo "[attest] 対象がありません（${pkg} を公開していない実行）。発行を飛ばします。"
+              echo "[attest] 対象がありません（${pkg} を公開していない、または公開に成功していない実行）。発行を飛ばします。"
             fi
           done
         env:

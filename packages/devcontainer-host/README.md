@@ -79,8 +79,10 @@ jq -r '.checksums["PACKAGE_ARCHIVE.tar.gz"] + "  PACKAGE_ARCHIVE.tar.gz"' RELEAS
 
 ```bash
 curl -sSL "${BASE}/dev.sh" -o dev.sh
-# 照合に失敗したら、取得した dev.sh を消す（未検証のものを残さない）
-jq -r '.checksums["dev.sh"] + "  dev.sh"' RELEASE-MANIFEST.json | $sha256c -c - || rm -f dev.sh
+# 照合に失敗したら、取得した dev.sh を消したうえで非 0 で終わる（未検証のものを残さない。
+# `|| rm -f dev.sh` だけだと rm が成功して 0 になり、失敗が成功として扱われる）
+jq -r '.checksums["dev.sh"] + "  dev.sh"' RELEASE-MANIFEST.json | $sha256c -c - \
+  || { rm -f dev.sh; echo "dev.sh: 照合に失敗しました" >&2; false; }
 ```
 
 リリースの `SHA256SUMS` には、GitHub Actions が発行した artifact attestation（SLSA provenance）が付いています

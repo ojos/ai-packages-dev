@@ -55,9 +55,12 @@ workflow は認証と identity をリポジトリ設定から解決する。値�
 
 発行の流れ:
 
-1. `release-packages.sh` が一時クローンで `SHA256SUMS` を作り、`ATTEST_SUBJECTS_DIR` が設定されていればその digest を `<package>.sha256` へ書く
-2. workflow が digest を読み、`actions/attest-build-provenance` へ `subject-digest` として渡す
-3. 対象が無い実行（playbook だけのリリース）では `if` で飛ばす
+1. `release-packages.sh` が一時クローンで `SHA256SUMS` を作り、`ATTEST_SUBJECTS_DIR` が設定されていればその digest を `<package>.sha256` へ書く（ステージングの時点。公開の証明ではない）
+2. `release-packages.sh` が、そのパッケージの公開（`tag_and_release`）に成功した時点で `<package>.published` の印を同じ場所へ書く（`mark_attest_published`）
+3. workflow が、**印のあるパッケージの digest だけ**を読み、`actions/attest-build-provenance` へ `subject-digest` として渡す。公開に進まなかった（あるいは公開に失敗した）パッケージには発行しない
+4. 対象が無い実行（playbook だけのリリース）では `if` で飛ばす
+
+途中で失敗しても、公開に成功したパッケージの attestation は発行される（`!cancelled()`）。
 
 **dry-run では発行されない。** `--execute` が無ければ資産生成より前に終了する。
 
@@ -96,8 +99,8 @@ gh workflow run attest-recover.yml -f subject-digest=<64 桁の 16 進>
 | `devcontainer-host` | GitHub Release + 資産（DCB と同じ形に加え、`dev.sh` / `dev-up@.service` を個別に添付） | `dev.sh` / `dev-up@.service`（`dev self-update` は `dev.sh` を直接取得する）、または `PACKAGE_ARCHIVE.tar.gz`（ツリー一式） |
 | `ai-playbook` | git タグのみ（Release なし・資産なし） | git タグ（submodule / subtree / archive tarball で固定して取り込む） |
 
-DCB の `SHA256SUMS` は、README がダウンロードさせるファイル（`bootstrap.sh` / `doctor.sh`）だけを対象にする。
-検証する人が手元に持たないファイルを列挙すると `sha256sum -c` が失敗するため。
+DCB の `SHA256SUMS` は、README がダウンロードさせるファイル（`bootstrap.sh` / `doctor.sh` / `PACKAGE_ARCHIVE.tar.gz`）を対象にする（アーカイブは attestation からアーカイブまで辿れるようにするため。#491）。
+検証する人が手元に持たないファイルを列挙すると `sha256sum -c` が失敗するため、README の手順は取得したファイルの行だけを抜き出して検証する。
 ai-playbook はリリース資産を持たない。DCB の `--playbook-from` も git 由来の `archive/refs/tags/` tarball を使う。
 
 **devhost（`packages/devcontainer-host/.`）は DCB に同梱せず、独自の版を持つ公開リポジトリ `ojos/devcontainer-host` から配る（#486。#376 で DCB への同梱としていたものを移した）。**
@@ -107,6 +110,8 @@ Release の資産は DCB と同じ `RELEASE-MANIFEST.json`・`SHA256SUMS`・`PAC
 個別の資産にするのは単一ファイル名のものだけで、複数ファイル・サブディレクトリ（`termux/`）を持つツリーは `PACKAGE_ARCHIVE.tar.gz` に乗せる（`SHA256SUMS` / `RELEASE-MANIFEST.json` の資産名は単一ファイル名の前提で、`is_plain_asset_name`・監査側）。
 `SHA256SUMS` には DCB と同じく artifact attestation を発行する。**DCB と違い、devcontainer-host の `SHA256SUMS` は `PACKAGE_ARCHIVE.tar.gz` も対象に含める**（attestation の対象は `SHA256SUMS` 1 つなので、アーカイブが無いと、アーカイブとマニフェストの archive 用ハッシュを一緒に差し替えられても検証が通る）。導入手順は `packages/devcontainer-host/README.md`。
 DCB の `PACKAGE_ARCHIVE.tar.gz` に `devhost/` は含まれない（`packages/devcontainer-bootstrap/tests/test-release-no-devhost-bundle.sh` が固定する）。
+
+**#376 の acceptance と、実際に入った旧方式は違う。** #376（devhost を DCB のリリースへ同梱する）の acceptance は「配布ツリーと `SHA256SUMS` に devhost の一式が含まれる」だった。実際に入った方式（v0.14.0〜v0.17.0）は、devhost を `PACKAGE_ARCHIVE.tar.gz` の `devhost/` に載せただけで、**`SHA256SUMS` には含めなかった**（対象は `bootstrap.sh` / `doctor.sh` のまま）。つまり acceptance の「`SHA256SUMS` に含める」は満たされておらず、アーカイブ内の devhost は `SHA256SUMS` の行を持たなかった（マニフェストの `PACKAGE_ARCHIVE.tar.gz` のハッシュ経由でしか辿れなかった）。#486 で同梱ごと外したため旧方式は現行ではないが、旧版（v0.14.0〜v0.17.0）の検証範囲を読むときはこの差に注意する。現行は、DCB・devcontainer-host とも `SHA256SUMS` が `PACKAGE_ARCHIVE.tar.gz` を持つ（#491）。
 
 ### 配布リポジトリのルートへ載せるファイル
 

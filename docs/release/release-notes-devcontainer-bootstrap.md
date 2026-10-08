@@ -9,6 +9,7 @@
 ## Unreleased
 
 ### Summary
+- **`SHA256SUMS` に `PACKAGE_ARCHIVE.tar.gz` を加えた**（ojos/ai-packages-dev#491）。attestation の対象は `SHA256SUMS` 1 つなので、アーカイブが含まれていないと attestation からアーカイブまで辿れなかった。README の入手手順も、`SHA256SUMS` の行を抜き出して検証する形と、照合に失敗したら展開しない形（`&&` でつなぐ）に合わせた。
 - **devhost の同梱をやめた**（ojos/ai-packages-dev#486）。`PACKAGE_ARCHIVE.tar.gz` の `devhost/` と、README の「devhost」の節が指していた入手方法は、この版から無い。devhost（SSH で届く外部の機械で devcontainer を保つ道具。コマンド `dev`）は、独自の版を持つ公開リポジトリ `ojos/devcontainer-host` のリリースで配る。入手の手順は、そのリポジトリの README の「devhost を入手する」にある。`bootstrap.sh` / `doctor.sh` / 生成物は変わらない。
 - **古い `dev` の移行（DCB v0.14.0〜v0.17.0 に同梱されていた `dev` を使っている場合）**: その `dev self-update` は取得先が DCB のリリースなので、この版以降の最新リリースでは `devhost/` が無く、何も置き換えずに止まる（終了コード 1）。**手で 1 度だけ入れ直す。** `ojos/devcontainer-host` のリリースから `RELEASE-MANIFEST.json` と `PACKAGE_ARCHIVE.tar.gz` を取得し、マニフェストの `checksums` と照合してから、`dev.sh` を `~/.local/bin/dev` へ置き直す。以降の `dev self-update` は `ojos/devcontainer-host` のリリースから更新できる。DCB の v0.17.0 以前のリリースに残る `devhost/` を取り出して使い続けることもできるが、更新は止まる。
 
