@@ -194,11 +194,11 @@ jq -r '.checksums | to_entries[] | "\(.value)  \(.key)"' RELEASE-MANIFEST.json |
   && mkdir -p dcb && tar -xzf PACKAGE_ARCHIVE.tar.gz -C dcb && ls dcb/
 ```
 
-### devhost — DCB で作った devcontainer を外部の機械で常駐させる道具
+### devhost — devcontainer を外部の機械で常駐させる道具
 
-DCB で作った devcontainer を、SSH で届く外部の機械（自宅のラップトップ、社内のサーバーなど）の上で起動したまま保ち、
+devcontainer を、SSH で届く外部の機械（自宅のラップトップ、社内のサーバーなど）の上で起動したまま保ち、
 スマホやほかの端末から入って AI コーディングを続けるための道具一式（コマンド `dev`）です。
-生成物には、devhost が前提にする、または助かるもの（tmux、compose の `init: true` など）が入っています。関係の全体は上の「3 パッケージの関係」を参照してください。
+`devcontainer.json` を持つプロジェクトなら、DCB の生成物でなくても使えます。DCB の生成物には、devhost が前提にする、または助かるもの（tmux、compose の `init: true` など）が入っているので、組み合わせると前提が最初から揃います。関係の全体は上の「3 パッケージの関係」を参照してください。
 **DCB のリリースには同梱していません。** 独自の版を持つ公開リポジトリ `ojos/devcontainer-host` のリリースで配っています。
 外部の機械への導入の手順（マニフェストのハッシュの照合を含む）と使い方は、そのリポジトリの README の「外部の機械への導入」を参照してください。
 

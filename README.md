@@ -42,12 +42,6 @@ ai-packages-dev/
 
 ## パッケージの役割と関係
 
-| パッケージ | 役割 | 配布先リポジトリ |
-|---|---|---|
-| ai-playbook | AI 運用規範の正本。ランタイムを持たない | ojos/ai-playbook |
-| devcontainer-bootstrap (DCB) | Dev Container 環境を 1 コマンドで生成し、規範を配置する | ojos/devcontainer-bootstrap |
-| devcontainer-host (devhost) | SSH で届く外部の機械で devcontainer を起こし、保つ。コマンド `dev` | ojos/devcontainer-host |
-
 ### 3 パッケージの関係
 
 <!-- package-relations:begin -->
