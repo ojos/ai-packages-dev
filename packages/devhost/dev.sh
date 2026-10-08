@@ -499,7 +499,8 @@ cmd_stop() {
   [[ $# -eq 1 ]] || usage_error "使い方: dev stop <名前>"
   load_projects
   find_project "$1"
-  need_project_dir
+  # need_project_dir は見ない。コンテナはパスのラベルで探すので、登録先のディレクトリを動かした・消した
+  # あとでも、動き続けるユニットとコンテナを止められるようにする。
   need docker "Docker Engine を入れてください。"
   local name="$1" unit="dev-up@${1}.service"
   # 止めるのが目的なので、HUP（ssh の切断）と PIPE（閉じた出力）は無視して、ユニットを止めたあとの
@@ -511,8 +512,17 @@ cmd_stop() {
     systemctl --user stop "$unit" || die "$name: ユニット $unit を止められませんでした。コンテナには触っていません。"
   fi
   stop_containers "$name" "${P_PATHS[$IDX]}"
-  rb_say "[$PROG] $name: 止めました。ユニットは disable していません（有効なら、外部の機械の再起動の後は戻ります）。"
-  rb_say "[$PROG] 戻す: dev enable $name（ユニットを有効にして起こす。コンテナも戻る。dev up ではユニットは起き直りません）"
+  case "$USTATE" in
+    unknown | -)
+      # ユニットを入れていない、または systemctl が無い機械では、dev enable は使えない。
+      rb_say "[$PROG] $name: 止めました。"
+      rb_say "[$PROG] 戻す: dev up $name（ユニット $unit が無いので、コンテナを起こすだけ）"
+      ;;
+    *)
+      rb_say "[$PROG] $name: 止めました。ユニットは disable していません（有効なら、外部の機械の再起動の後は戻ります）。"
+      rb_say "[$PROG] 戻す: dev enable $name（ユニットを有効にして起こす。コンテナも戻る。dev up ではユニットは起き直りません）"
+      ;;
+  esac
 }
 
 # ユニットのログの末尾。journalctl --user -u dev-up@<名前>.service。
@@ -562,7 +572,7 @@ cmd_disable() {
   [[ $# -eq 1 ]] || usage_error "使い方: dev disable <名前>"
   load_projects
   find_project "$1"
-  need_project_dir
+  # dev stop と同じく need_project_dir は見ない（登録先のディレクトリが無くても、ユニットを無効にできるように）。
   need systemctl "systemd の systemctl が要ります（dev-up@.service を使う機械で使う）。"
   need docker "Docker Engine を入れてください。"
   # dev stop と同じく、止めるのが目的なので HUP と PIPE は無視する。

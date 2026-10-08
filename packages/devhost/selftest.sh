@@ -1094,6 +1094,16 @@ expect_calls "$IS_ACTIVE" "systemctl [--user] [stop] [$UNIT_A]" "$DOCKER_PS_A"
 expect_out_line '止めるものはありません'
 run 2 "stop: 名前が無い" -- -- stop
 expect_no_calls
+run 0 "stop: ユニットを入れていない機械では、戻し方に dev up を案内する" -- FAKE_UNKNOWN_UNITS="$UNIT_A" -- stop alpha
+expect_out_line '戻す: dev up alpha'
+if grep -qF 'dev enable' "$OUT"; then ng "stop: ユニットが無いのに dev enable を案内しています"; fi
+# 登録先のディレクトリを動かした・消したあとでも、止められる（コンテナはパスのラベルで探す）。
+printf 'ghost %s/ghost\n' "$PROJ" >"$WORK/conf/ghost"
+DOCKER_PS_G="docker [ps] [-a] [--filter] [label=devcontainer.local_folder=$PROJ/ghost] [--format] [{{.ID}} {{.State}}]"
+T_CONF="$WORK/conf/ghost" run 0 "stop: ディレクトリが無くても、ユニットを止めてコンテナを探す" -- FAKE_ACTIVE_UNITS="dev-up@ghost.service" -- stop ghost
+expect_calls "systemctl [--user] [is-active] [dev-up@ghost.service]" "systemctl [--user] [stop] [dev-up@ghost.service]" "$DOCKER_PS_G"
+T_CONF="$WORK/conf/ghost" run 0 "disable: ディレクトリが無くても、ユニットを無効にする" -- -- disable ghost
+expect_calls "systemctl [--user] [disable] [--now] [dev-up@ghost.service]" "$DOCKER_PS_G"
 
 # ── 6c'''-b. compose のプロジェクト全体（stop / disable / restart）──────────────
 # app のコンテナの label com.docker.compose.project で、同じプロジェクトのコンテナを列挙する。
