@@ -28,7 +28,10 @@
 # - git: `-C <dir> pull --ff-only` だけ。失敗は本物と同じ形の `fatal: ...` を 128 で返す
 # - journalctl: `--user -u <unit> -n <N> --no-pager` だけ。履歴が無ければ本物と同じ `-- No entries --`
 # - systemctl: `--user is-active|is-enabled|stop|start <unit>` と `--user enable|disable --now <unit>`。stop / start / enable / disable は何も出さず 0
-# - docker `restart|stop <id>`: 状態を running / exited にする。無い ID は 1
+# - docker `restart|stop <id>...`: 状態を running / exited にする（ID は複数可）。無い ID は 1
+# - docker `inspect --format '{{index .Config.Labels "com.docker.compose.project"}}' <id>`: コンテナの compose のプロジェクト名（label が無ければ空）。
+#   `ps --filter label=com.docker.compose.project=<名>` でそのプロジェクトのコンテナを列挙する
+#   （コンテナの状態は 1 行 1 つで「パス<TAB>ID<TAB>状態<TAB>compose のプロジェクト（任意）」）
 # - curl: `-fsSL <URL> -o <出力先>` だけ。リリースの取得先（latest/download か download/v*）以外の URL は落とす
 #   （ネットワークには出ない。URL の末尾のファイル名で、試験が用意したファイルを写す。-f の失敗は 22）
 # - /proc と cgroup は偽の木（$WORK/proc と $WORK/cg）を DEV_PROC_ROOT / DEV_CGROUP_ROOT で渡す。
@@ -194,22 +197,35 @@ case "$sub" in
         *) echo "fake docker: この試験が想定していない ps の引数です: $1" >&2; exit 2 ;;
       esac
     done
-    [[ "$filter" == label=devcontainer.local_folder=* ]] || { echo "fake docker: 想定外の filter: $filter" >&2; exit 2; }
     [[ "$format" == '{{.ID}} {{.State}}' ]] || { echo "fake docker: 想定外の format: $format" >&2; exit 2; }
-    want="${filter#label=devcontainer.local_folder=}"
-    while IFS='	' read -r path id state; do
-      [[ "$path" == "$want" ]] || continue
+    case "$filter" in
+      label=devcontainer.local_folder=*) mode=path want="${filter#label=devcontainer.local_folder=}" ;;
+      label=com.docker.compose.project=*) mode=project want="${filter#label=com.docker.compose.project=}" ;;
+      *) echo "fake docker: 想定外の filter: $filter" >&2; exit 2 ;;
+    esac
+    while IFS='	' read -r path id state project; do
+      if [[ "$mode" == path ]]; then [[ "$path" == "$want" ]] || continue; else [[ "$project" == "$want" ]] || continue; fi
       [[ "$all" == 1 || "$state" == "running" ]] || continue
       printf '%s %s\n' "$id" "$state"
     done <"$STATE_FILE"
     ;;
   inspect)
-    [[ $# -eq 3 && "$1" == "--format" && "$2" == '{{.State.Pid}}' ]] || { echo "fake docker: 想定外の inspect の引数: $*" >&2; exit 2; }
+    [[ $# -eq 3 && "$1" == "--format" ]] || { echo "fake docker: 想定外の inspect の引数: $*" >&2; exit 2; }
     row="$(grep -F "	$3	" "$STATE_FILE" || true)"
     if [[ -z "$row" ]]; then
       echo "Error: No such object: $3" >&2
       exit 1
     fi
+    if [[ "${FAKE_DOCKER_FAIL:-}" == "inspect" ]]; then
+      echo "Error: inspect に失敗しました" >&2
+      exit 1
+    fi
+    if [[ "$2" == '{{index .Config.Labels "com.docker.compose.project"}}' ]]; then
+      # compose の label。無いコンテナは空文字（本物は index が空文字を返す）。
+      printf '%s\n' "$(printf '%s\n' "$row" | cut -f 4)"
+      exit 0
+    fi
+    [[ "$2" == '{{.State.Pid}}' ]] || { echo "fake docker: 想定外の inspect の format: $2" >&2; exit 2; }
     if [[ "$(printf '%s\n' "$row" | cut -f 3)" == "running" ]]; then
       echo "${FAKE_CONTAINER_PID:-4242}"
     else
@@ -223,16 +239,18 @@ case "$sub" in
       exit 1
     fi
     # 止まったことにする（本物はここで止まるまで待つ）。
-    sed "s/	$1	running\$/	$1	exited/" "$STATE_FILE" >"$STATE_FILE.new"
+    sed "s/	$1	running/	$1	exited/" "$STATE_FILE" >"$STATE_FILE.new"
     mv "$STATE_FILE.new" "$STATE_FILE"
     echo "${FAKE_WAIT_CODE:-137}"
     ;;
   restart | stop)
-    [[ $# -eq 1 ]] || { echo "fake docker: $sub の引数は 1 つだけを想定しています" >&2; exit 2; }
-    if ! grep -qF "	$1	" "$STATE_FILE"; then
-      echo "Error response from daemon: No such container: $1" >&2
-      exit 1
-    fi
+    [[ $# -ge 1 ]] || { echo "fake docker: $sub に ID がありません" >&2; exit 2; }
+    for cid in "$@"; do
+      if ! grep -qF "	$cid	" "$STATE_FILE"; then
+        echo "Error response from daemon: No such container: $cid" >&2
+        exit 1
+      fi
+    done
     if [[ -n "${FAKE_DOCKER_SIGNAL:-}" && "$sub" == "restart" ]]; then
       # 再起動の最中に、dev（親）がシグナルを受ける状況（ssh の切断など）を作る。
       kill -s "$FAKE_DOCKER_SIGNAL" "$PPID"
@@ -243,9 +261,11 @@ case "$sub" in
       exit 1
     fi
     if [[ "$sub" == "restart" ]]; then new=running; else new=exited; fi
-    sed "s/	$1	[a-z]*\$/	$1	$new/" "$STATE_FILE" >"$STATE_FILE.new"
-    mv "$STATE_FILE.new" "$STATE_FILE"
-    echo "$1"
+    for cid in "$@"; do
+      sed "s/	$cid	[a-z]*/	$cid	$new/" "$STATE_FILE" >"$STATE_FILE.new"
+      mv "$STATE_FILE.new" "$STATE_FILE"
+      echo "$cid"
+    done
     ;;
   *) echo "fake docker: この試験が想定していないサブコマンドです: $sub" >&2; exit 2 ;;
 esac
@@ -282,6 +302,9 @@ log_call systemctl "$@"
 case "${2:-}" in
   enable | disable)
     [[ $# -eq 4 && "$3" == "--now" ]] || { echo "fake systemctl: 想定外の呼び出し: $*" >&2; exit 2; }
+    if [[ "$2" == "disable" && -n "${FAKE_SYSTEMCTL_STOP_SIGNAL:-}" ]]; then
+      kill -s "$FAKE_SYSTEMCTL_STOP_SIGNAL" "$PPID"
+    fi
     if [[ "${FAKE_SYSTEMCTL_FAIL:-}" == "$2" ]]; then
       echo "Failed to $2 unit: Unit file $4 does not exist." >&2
       exit 1
@@ -955,13 +978,15 @@ expect_no_calls
 
 # ── 6c'. restart ──────────────────────────────────────────────────────────────
 UNIT_A="dev-up@alpha.service"
+# compose の label を引く docker inspect の記録（restart / stop / disable は、まず app のコンテナの label を見る）。
+insp() { printf 'docker [inspect] [--format] [{{index .Config.Labels "com.docker.compose.project"}}] [%s]' "$1"; }
 IS_ACTIVE="systemctl [--user] [is-active] [$UNIT_A]"
 reset_state
 run 0 "up alpha（restart の仕込み）" -- -- up alpha
 id_a="$(cut -f 2 "$STATE/containers")"
 DOCKER_RESTART="docker [restart] [$id_a]"
 RESTART_FLOW=(
-  "$DOCKER_PS_A"
+  "$DOCKER_PS_A" "$(insp "$id_a")"
   "$IS_ACTIVE"
   "systemctl [--user] [stop] [$UNIT_A]"
   "$DOCKER_RESTART"
@@ -971,26 +996,26 @@ run 0 "restart: 動いているユニットを止め → docker restart → 起�
 expect_calls "${RESTART_FLOW[@]}"
 expect_out_line '再起動しました'
 run 0 "restart: 動いていないユニットは止めも起こしもしない" -- -- restart alpha
-expect_calls "$DOCKER_PS_A" "$IS_ACTIVE" "$DOCKER_RESTART"
+expect_calls "$DOCKER_PS_A" "$(insp "$id_a")" "$IS_ACTIVE" "$DOCKER_RESTART"
 run 0 "restart: failed のユニットは触らない" -- FAKE_FAILED_UNITS="$UNIT_A" -- restart alpha
-expect_calls "$DOCKER_PS_A" "$IS_ACTIVE" "$DOCKER_RESTART"
+expect_calls "$DOCKER_PS_A" "$(insp "$id_a")" "$IS_ACTIVE" "$DOCKER_RESTART"
 run 0 "restart: unknown（ユニットを入れていない）は触らない" -- FAKE_UNKNOWN_UNITS="$UNIT_A" -- restart alpha
-expect_calls "$DOCKER_PS_A" "$IS_ACTIVE" "$DOCKER_RESTART"
+expect_calls "$DOCKER_PS_A" "$(insp "$id_a")" "$IS_ACTIVE" "$DOCKER_RESTART"
 run 0 "restart: activating のユニットも止めて、起こし直す" -- FAKE_ACTIVATING_UNITS="$UNIT_A" -- restart alpha
 expect_calls "${RESTART_FLOW[@]}"
 mv "$FAKEBIN/systemctl" "$WORK/systemctl.off"
 run 0 "restart: systemctl が無い機械ではユニットに触らない" -- -- restart alpha
-expect_calls "$DOCKER_PS_A" "$DOCKER_RESTART"
+expect_calls "$DOCKER_PS_A" "$(insp "$id_a")" "$DOCKER_RESTART"
 mv "$WORK/systemctl.off" "$FAKEBIN/systemctl"
 run 1 "restart: docker restart が失敗しても、止めたユニットは起こし直す" -- FAKE_ACTIVE_UNITS="$UNIT_A" FAKE_DOCKER_FAIL=restart -- restart alpha
 expect_calls "${RESTART_FLOW[@]}"
 expect_err "再起動が失敗しました"
 run 1 "restart: ユニットを止められなければ再起動しない" -- FAKE_ACTIVE_UNITS="$UNIT_A" FAKE_SYSTEMCTL_FAIL=stop -- restart alpha
-expect_calls "$DOCKER_PS_A" "$IS_ACTIVE" "systemctl [--user] [stop] [$UNIT_A]"
+expect_calls "$DOCKER_PS_A" "$(insp "$id_a")" "$IS_ACTIVE" "systemctl [--user] [stop] [$UNIT_A]"
 run 1 "restart: 起こし直しに失敗したら 1" -- FAKE_ACTIVE_UNITS="$UNIT_A" FAKE_SYSTEMCTL_FAIL=start -- restart alpha
 expect_err "を起こせませんでした"
 run 1 "restart: ユニットの状態を引けなければ再起動しない" -- FAKE_SYSTEMCTL_FAIL=is-active -- restart alpha
-expect_calls "$DOCKER_PS_A" "$IS_ACTIVE"
+expect_calls "$DOCKER_PS_A" "$(insp "$id_a")" "$IS_ACTIVE"
 expect_err "状態が分からない"
 # 再起動の最中の中断（ssh の切断など）でも、止めたユニットは起こし直してから抜ける。
 for sg in "TERM 143" "INT 130" "HUP 129"; do
@@ -1019,39 +1044,34 @@ run 0 "stop: ユニットを先に止めてから、コンテナを止める（�
 expect_calls \
   "$IS_ACTIVE" \
   "systemctl [--user] [stop] [$UNIT_A]" \
-  "$DOCKER_PS_A" \
-  "docker [stop] [$id_a]" \
-  "systemctl [--user] [is-enabled] [$UNIT_A]"
+  "$DOCKER_PS_A" "$(insp "$id_a")" \
+  "docker [stop] [$id_a]"
 grep -qF "$A	$id_a	exited" "$STATE/containers" || ng "stop: コンテナが exited になっていません"
-expect_out_line '外部の機械の再起動の後は戻ります'
-expect_out_line '戻す: systemctl --user start dev-up@alpha.service'
-run 0 "up alpha（stop の仕込み 0）" -- -- up alpha
-run 0 "stop: enable されていないユニットでは、再起動の後に戻る案内を出さない" -- -- stop alpha
-expect_out_line '再起動の後も戻りません'
-expect_out_line '戻す: dev up alpha$'
-if grep -qF 'systemctl --user start' "$OUT"; then ng "stop: enable されていないのに systemctl --user start を案内しています"; fi
+# 戻す案内は dev enable に統一する（dev up ではユニットが起き直らない）。
+expect_out_line '戻す: dev enable alpha'
+if grep -qF '戻す: dev up' "$OUT"; then ng "stop: 戻す手段として dev up を案内しています（ユニットが起き直らない）"; fi
 run 0 "stop: 止まっているコンテナには docker stop しない" -- -- stop alpha
-expect_calls "$IS_ACTIVE" "$DOCKER_PS_A" "systemctl [--user] [is-enabled] [$UNIT_A]"
+expect_calls "$IS_ACTIVE" "$DOCKER_PS_A" "$(insp "$id_a")"
 for st in paused restarting; do
   printf '%s\t%s\t%s\n' "$A" "$id_a" "$st" >"$STATE/containers"
   run 0 "stop: running でなくても $st のコンテナは止める" -- -- stop alpha
-  expect_calls "$IS_ACTIVE" "$DOCKER_PS_A" "docker [stop] [$id_a]" "systemctl [--user] [is-enabled] [$UNIT_A]"
+  expect_calls "$IS_ACTIVE" "$DOCKER_PS_A" "$(insp "$id_a")" "docker [stop] [$id_a]"
   grep -qF "$A	$id_a	exited" "$STATE/containers" || ng "stop: $st のコンテナが exited になっていません"
 done
 run 0 "up alpha（stop の仕込み 2）" -- -- up alpha
 run 0 "stop: 動いていないユニットは止めない" -- -- stop alpha
-expect_calls "$IS_ACTIVE" "$DOCKER_PS_A" "docker [stop] [$id_a]" "systemctl [--user] [is-enabled] [$UNIT_A]"
+expect_calls "$IS_ACTIVE" "$DOCKER_PS_A" "$(insp "$id_a")" "docker [stop] [$id_a]"
 run 0 "up alpha（stop の仕込み 3）" -- -- up alpha
 run 0 "stop: unknown（ユニットを入れていない）は触らずにコンテナを止める" -- FAKE_UNKNOWN_UNITS="$UNIT_A" -- stop alpha
-expect_calls "$IS_ACTIVE" "$DOCKER_PS_A" "docker [stop] [$id_a]" "systemctl [--user] [is-enabled] [$UNIT_A]"
+expect_calls "$IS_ACTIVE" "$DOCKER_PS_A" "$(insp "$id_a")" "docker [stop] [$id_a]"
 run 0 "up alpha（stop の仕込み 4）" -- -- up alpha
 # ユニットを止めた直後に HUP（ssh の切断）を受けても、docker stop まで走る。
 run 0 "stop: HUP を受けても docker stop まで走らせる" -- FAKE_ACTIVE_UNITS="$UNIT_A" FAKE_SYSTEMCTL_STOP_SIGNAL=HUP -- stop alpha
-expect_calls "$IS_ACTIVE" "systemctl [--user] [stop] [$UNIT_A]" "$DOCKER_PS_A" "docker [stop] [$id_a]" "systemctl [--user] [is-enabled] [$UNIT_A]"
+expect_calls "$IS_ACTIVE" "systemctl [--user] [stop] [$UNIT_A]" "$DOCKER_PS_A" "$(insp "$id_a")" "docker [stop] [$id_a]"
 for how in fd pipe; do
   run 0 "up alpha（stop の閉じた出力の仕込み）" -- -- up alpha
   run_closed "$how" "stop: 出力が閉じていても（$how）、docker stop まで走らせる" -- FAKE_ACTIVE_UNITS="$UNIT_A" -- stop alpha
-  expect_calls "$IS_ACTIVE" "systemctl [--user] [stop] [$UNIT_A]" "$DOCKER_PS_A" "docker [stop] [$id_a]" "systemctl [--user] [is-enabled] [$UNIT_A]"
+  expect_calls "$IS_ACTIVE" "systemctl [--user] [stop] [$UNIT_A]" "$DOCKER_PS_A" "$(insp "$id_a")" "docker [stop] [$id_a]"
 done
 run 0 "up alpha（stop の仕込み 4b）" -- -- up alpha
 run 1 "stop: ユニットを止められなければ、コンテナには触らない" -- FAKE_ACTIVE_UNITS="$UNIT_A" FAKE_SYSTEMCTL_FAIL=stop -- stop alpha
@@ -1059,8 +1079,8 @@ expect_calls "$IS_ACTIVE" "systemctl [--user] [stop] [$UNIT_A]"
 run 1 "stop: ユニットの状態を引けなければ止めない" -- FAKE_SYSTEMCTL_FAIL=is-active -- stop alpha
 expect_calls "$IS_ACTIVE"
 run 1 "stop: docker stop が失敗したら 1（ユニットは止めたまま）" -- FAKE_ACTIVE_UNITS="$UNIT_A" FAKE_DOCKER_FAIL=stop -- stop alpha
-expect_calls "$IS_ACTIVE" "systemctl [--user] [stop] [$UNIT_A]" "$DOCKER_PS_A" "docker [stop] [$id_a]"
-expect_err "戻す: dev up alpha"
+expect_calls "$IS_ACTIVE" "systemctl [--user] [stop] [$UNIT_A]" "$DOCKER_PS_A" "$(insp "$id_a")" "docker [stop] [$id_a]"
+expect_err "戻す: dev enable alpha"
 run 1 "stop: docker ps が失敗したら「コンテナが無い」にせず 1（ユニットは止めたあと）" -- FAKE_ACTIVE_UNITS="$UNIT_A" FAKE_DOCKER_FAIL=ps -- stop alpha
 expect_calls "$IS_ACTIVE" "systemctl [--user] [stop] [$UNIT_A]" "$DOCKER_PS_A"
 expect_err "コンテナの状態を引けませんでした"
@@ -1070,10 +1090,69 @@ expect_calls "$DOCKER_PS_A"
 expect_err "コンテナの状態を引けませんでした"
 reset_state
 run 0 "stop: コンテナが無ければ止めるものは無い（ユニットは止める）" -- FAKE_ACTIVE_UNITS="$UNIT_A" -- stop alpha
-expect_calls "$IS_ACTIVE" "systemctl [--user] [stop] [$UNIT_A]" "$DOCKER_PS_A" "systemctl [--user] [is-enabled] [$UNIT_A]"
+expect_calls "$IS_ACTIVE" "systemctl [--user] [stop] [$UNIT_A]" "$DOCKER_PS_A"
 expect_out_line '止めるものはありません'
 run 2 "stop: 名前が無い" -- -- stop
 expect_no_calls
+
+# ── 6c'''-b. compose のプロジェクト全体（stop / disable / restart）──────────────
+# app のコンテナの label com.docker.compose.project で、同じプロジェクトのコンテナを列挙する。
+# 別のプロジェクトのコンテナ（other1）には触らない。cache1 は止まりきっている（exited）。
+PS_PROJ="docker [ps] [-a] [--filter] [label=com.docker.compose.project=proj] [--format] [{{.ID}} {{.State}}]"
+mk_compose() {
+  reset_state
+  printf '%s\tapp1\trunning\tproj\n-\tdb1\trunning\tproj\n-\tcache1\texited\tproj\n-\tother1\trunning\totherproj\n' "$A" >"$STATE/containers"
+}
+state_of() { grep -F "	$1	" "$STATE/containers" | cut -f 3; }
+mk_compose
+run 0 "stop(compose): ユニットを先に止め、プロジェクト全体の動いているコンテナをまとめて止める" -- FAKE_ACTIVE_UNITS="$UNIT_A" -- stop alpha
+expect_calls \
+  "$IS_ACTIVE" \
+  "systemctl [--user] [stop] [$UNIT_A]" \
+  "$DOCKER_PS_A" "$(insp app1)" "$PS_PROJ" \
+  "docker [stop] [app1] [db1]"
+[[ "$(state_of app1)" == exited && "$(state_of db1)" == exited ]] || ng "stop(compose): app1 / db1 が止まっていません"
+[[ "$(state_of other1)" == running ]] || ng "stop(compose): 別のプロジェクトのコンテナを止めています"
+expect_out_line 'コンテナ cache1 は動いていません（exited）'
+mk_compose
+run 0 "disable(compose): disable --now のあと、プロジェクト全体を止める" -- -- disable alpha
+expect_calls \
+  "systemctl [--user] [disable] [--now] [$UNIT_A]" \
+  "$DOCKER_PS_A" "$(insp app1)" "$PS_PROJ" \
+  "docker [stop] [app1] [db1]"
+[[ "$(state_of other1)" == running ]] || ng "disable(compose): 別のプロジェクトのコンテナを止めています"
+mk_compose
+RESTART_COMPOSE=(
+  "$DOCKER_PS_A" "$(insp app1)" "$PS_PROJ"
+  "$IS_ACTIVE"
+  "systemctl [--user] [stop] [$UNIT_A]"
+  "docker [restart] [app1] [db1] [cache1]"
+  "systemctl [--user] [start] [$UNIT_A]"
+)
+run 0 "restart(compose): ユニットを止め、プロジェクト全体を再起動して、起こし直す" -- FAKE_ACTIVE_UNITS="$UNIT_A" -- restart alpha
+expect_calls "${RESTART_COMPOSE[@]}"
+[[ "$(state_of cache1)" == running && "$(state_of other1)" == running ]] || ng "restart(compose): 再起動後の状態が違います"
+for sg in "TERM 143" "HUP 129"; do
+  mk_compose
+  run "${sg#* }" "restart(compose): ${sg% *} で中断されても起こし直す" -- FAKE_ACTIVE_UNITS="$UNIT_A" FAKE_DOCKER_SIGNAL="${sg% *}" -- restart alpha
+  expect_calls "${RESTART_COMPOSE[@]}"
+  expect_err "起こし直しました"
+done
+mk_compose
+run 1 "restart(compose): 再起動が失敗しても起こし直す" -- FAKE_ACTIVE_UNITS="$UNIT_A" FAKE_DOCKER_FAIL=restart -- restart alpha
+expect_calls "${RESTART_COMPOSE[@]}"
+mk_compose
+run 1 "stop(compose): label を引けなければ「無い」にせず 1（ユニットは止めたまま）" -- FAKE_ACTIVE_UNITS="$UNIT_A" FAKE_DOCKER_FAIL=inspect -- stop alpha
+expect_calls "$IS_ACTIVE" "systemctl [--user] [stop] [$UNIT_A]" "$DOCKER_PS_A" "$(insp app1)"
+expect_err "コンテナの状態を引けませんでした"
+run 1 "restart(compose): label を引けなければ、ユニットにも触らず 1" -- FAKE_ACTIVE_UNITS="$UNIT_A" FAKE_DOCKER_FAIL=inspect -- restart alpha
+expect_calls "$DOCKER_PS_A" "$(insp app1)"
+# compose の label が無いコンテナは、これまでどおり 1 つだけ（同じ名前のプロジェクトの列挙はしない）。
+reset_state
+printf '%s\tsolo1\trunning\n-\tdb9\trunning\tproj\n' "$A" >"$STATE/containers"
+run 0 "stop(label なし): コンテナ 1 つだけ止める" -- -- stop alpha
+expect_calls "$IS_ACTIVE" "$DOCKER_PS_A" "$(insp solo1)" "docker [stop] [solo1]"
+[[ "$(state_of db9)" == running ]] || ng "stop(label なし): 関係ないコンテナを止めています"
 
 # ── 6c'''. logs / enable / disable ────────────────────────────────────────────
 reset_state
@@ -1095,9 +1174,31 @@ run 2 "logs: 知らないオプション" -- -- logs alpha --since today
 expect_no_calls
 run 0 "enable" -- -- enable alpha
 expect_calls "systemctl [--user] [enable] [--now] [$UNIT_A]"
-run 0 "disable（コンテナは止めない）" -- -- disable alpha
+# disable は disable --now のあと、stop と同じ順番でコンテナまで止める（ユニットが先）。
+reset_state
+run 0 "up alpha（disable の仕込み）" -- -- up alpha
+id_a="$(cut -f 2 "$STATE/containers")"
+run 0 "disable: disable --now がコンテナの停止より先" -- -- disable alpha
+expect_calls \
+  "systemctl [--user] [disable] [--now] [$UNIT_A]" \
+  "$DOCKER_PS_A" "$(insp "$id_a")" \
+  "docker [stop] [$id_a]"
+grep -qF "$A	$id_a	exited" "$STATE/containers" || ng "disable: コンテナが exited になっていません"
+expect_out_line '戻す: dev enable alpha'
+run 0 "disable: 止まっているコンテナには docker stop しない" -- -- disable alpha
+expect_calls "systemctl [--user] [disable] [--now] [$UNIT_A]" "$DOCKER_PS_A" "$(insp "$id_a")"
+run 1 "disable: ユニットを無効にできなければ、コンテナには触らない" -- FAKE_SYSTEMCTL_FAIL=disable -- disable alpha
 expect_calls "systemctl [--user] [disable] [--now] [$UNIT_A]"
-expect_out_line 'コンテナは止めていません'
+run 0 "up alpha（disable の仕込み 2）" -- -- up alpha
+run 1 "disable: docker ps が失敗したら「コンテナが無い」にせず 1" -- FAKE_DOCKER_FAIL=ps -- disable alpha
+expect_calls "systemctl [--user] [disable] [--now] [$UNIT_A]" "$DOCKER_PS_A"
+expect_err "コンテナの状態を引けませんでした"
+run 0 "disable: ユニットを止めた直後に HUP を受けても、docker stop まで走らせる" -- FAKE_SYSTEMCTL_STOP_SIGNAL=HUP -- disable alpha
+expect_calls "systemctl [--user] [disable] [--now] [$UNIT_A]" "$DOCKER_PS_A" "$(insp "$id_a")" "docker [stop] [$id_a]"
+reset_state
+run 0 "disable: コンテナが無ければ止めるものは無い" -- -- disable alpha
+expect_calls "systemctl [--user] [disable] [--now] [$UNIT_A]" "$DOCKER_PS_A"
+expect_out_line '止めるものはありません'
 run 1 "enable: systemctl が失敗したら 1" -- FAKE_SYSTEMCTL_FAIL=enable -- enable alpha
 run 1 "disable: systemctl が失敗したら 1" -- FAKE_SYSTEMCTL_FAIL=disable -- disable alpha
 run 2 "enable: 引数が多い" -- -- enable alpha beta

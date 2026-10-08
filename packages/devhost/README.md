@@ -145,10 +145,13 @@ devcontainer.json が `shutdownAction: stopCompose` のプロジェクトでは�
 デーモンの再起動も同じ扱いです。
 
 **引き換えに、意図して止めたいときはユニットを先に止めます。** 止めるだけなら `dev stop <名前>`
-（ユニットを止めてからコンテナを止める。disable はしないので、外部の機械の再起動の後は戻ります。
-ユニットが有効なら、戻すのは `systemctl --user start dev-up@<名前>.service` です。`dev up <名前>` は
-コンテナを起こすだけで、止めたユニットは起き直りません）、作り直さずに再起動するなら
-`dev restart <名前>` を使います。作り直しは `dev rebuild <名前>` が
+（ユニットを止めてからコンテナを止める。disable はしないので、ユニットが有効なら外部の機械の再起動の後は戻ります。
+戻すのは `dev enable <名前>` です。`dev up <名前>` はコンテナを起こすだけで、止めたユニットは起き直りません）。
+再起動の後も止めたままにするなら `dev disable <名前>`（ユニットを無効にして、同じ順番でコンテナも止める）、
+作り直さずに再起動するなら `dev restart <名前>` を使います。`dev stop` / `dev disable` / `dev restart` の範囲は、
+compose で動くプロジェクトならそのプロジェクトのコンテナ全体（DB などの別のサービスを含む。VS Code の
+`stopCompose` と同じ。app のコンテナの label `com.docker.compose.project` で列挙し、compose ファイルは読みも
+書き換えもしません）で、label が無ければコンテナ 1 つです。作り直しは `dev rebuild <名前>` が
 ユニットの停止と起こし直しまで行います（止めずに作り直すと、30 秒後にユニットの `up` が作り直しの
 途中に重なりえます。VS Code の Rebuild Container も同じなので、VS Code から作り直すときは先に
 `systemctl --user stop dev-up@<名前>.service` で止め、終わったら `start` で戻します）。
@@ -165,9 +168,9 @@ devcontainer.json が `shutdownAction: stopCompose` のプロジェクトでは�
 | `dev rebuild <名前> [--pull]` | コンテナを作り直す |
 | `dev doctor <名前>` | 「動いているのに入れない」を見分ける |
 | `dev restart <名前>` | 作り直さずに再起動する |
-| `dev stop <名前>` | 意図して止める（ユニットを先に止める） |
+| `dev stop <名前>` | 意図して止める（ユニットを先に止める。戻すのは `dev enable`） |
 | `dev logs <名前> [-n <行数>]` | ユニットのログの末尾（既定 50 行） |
-| `dev enable <名前>` / `dev disable <名前>` | ユニットを有効にして起こす / 無効にして止める |
+| `dev enable <名前>` / `dev disable <名前>` | ユニットを有効にして起こす / 無効にして止める（`disable` はコンテナも止める） |
 | `dev exec <名前> -- <コマンド...>` | tmux を介さずにコンテナの中でコマンドを 1 つ実行する |
 | `dev self-update [--version <vX.Y.Z>]` | dev 自身を DCB の公開リリースの版へ置き換える |
 | `dev help [サブコマンド]` | 説明を出す |
@@ -306,12 +309,17 @@ dev restart — 作り直さずにコンテナを再起動する。
   dev restart <名前>
 
 呼ぶ順序:
-  1. コンテナを探す。無ければ、ユニットにも触らずに 1 で止まる（dev up <名前>）
+  1. 対象のコンテナを集める。無ければ、ユニットにも触らずに 1 で止まる（dev up <名前>）。
+     docker の問い合わせが失敗したときも、何も変えずに 1 で止まる（「無い」とは区別する）
   2. ユニット dev-up@<名前> を、dev rebuild と同じ基準で止める（inactive / failed / unknown /
      systemctl が無い、のときは触らない。状態の語が得られないときは、何も変えずに 1 で止まる）
-  3. docker restart <コンテナ>
+  3. docker restart <対象のコンテナ>
   4. 2 で止めたときだけ、ユニットを起こし直す。3 が失敗しても、INT / HUP / TERM で中断されても
      （ssh の切断など）起こし直してから終わる（中断の終了コードは 130 / 129 / 143）
+範囲: コンテナ 1 つではなく、compose で動くプロジェクトならそのプロジェクトのコンテナ全体
+（app のコンテナの label com.docker.compose.project で同じプロジェクトを列挙する。DB などの別のサービスも
+含む。VS Code の stopCompose と同じ範囲）。label が無いものは、これまでどおりコンテナ 1 つ。
+各プロジェクトの compose ファイルは読まず、書き換えない。
 ユニットを先に止めるのは、再起動でコンテナが一瞬止まったときに、ユニットが up を重ねないようにするため。
 作り直しはしない（定義を変えたときは dev rebuild）。各プロジェクトの compose や devcontainer.json は書き換えない。
 
@@ -330,13 +338,19 @@ dev stop — 意図してコンテナを止める。
 呼ぶ順序:
   1. ユニット dev-up@<名前> を、dev rebuild と同じ基準で先に止める
      （コンテナだけを止めると、ユニットが 30 秒後に起こし直すため）。止められなければ、コンテナには触らない
-  2. docker stop <コンテナ>（無い・動いていないときは何もしない）
-ユニットは disable しない。外部の機械を再起動すれば、ユニットが戻ってコンテナも戻る。
-戻すとき: ユニットが有効なら systemctl --user start dev-up@<名前>.service（dev up ではユニットが
-起き直らない）。有効でなければ dev up <名前>。
-再起動の後も戻したくないときは、dev disable <名前> も行う。
+  2. 対象のコンテナを集めて docker stop する。無いときは何もしない。止まりきった状態
+     （exited / created / dead）のコンテナは、コンテナごとに止めない（paused / restarting などは止める）。
+     docker の問い合わせが失敗したときは、「無い」とせずに 1 で終わる（ユニットは止めたまま）
+範囲: コンテナ 1 つではなく、compose で動くプロジェクトならそのプロジェクトのコンテナ全体
+（app のコンテナの label com.docker.compose.project で同じプロジェクトを列挙する。DB などの別のサービスも
+含む。VS Code の stopCompose と同じ範囲）。label が無いものは、これまでどおりコンテナ 1 つ。
+各プロジェクトの compose ファイルは読まず、書き換えない。
+ユニットは disable しない（有効なら、外部の機械を再起動すれば、ユニットが戻ってコンテナも戻る）。
+戻すとき: dev enable <名前>。enable --now は、無効のユニットにも、有効のまま止まっているユニットにも効く。
+dev up はコンテナを起こすだけで、止めたユニットは起き直らないので、戻すのには使わない。
+再起動の後も戻したくないときは、dev disable <名前>（ユニットを無効にして、コンテナも止める）。
 
-終了コード: 0 = 止めた（元から無い・止まっているときも 0） / 1 = 失敗（ユニットの停止・docker stop） / 2 = 使い方か設定の誤り
+終了コード: 0 = 止めた（元から無い・止まっているときも 0） / 1 = 失敗（ユニットの停止・docker の問い合わせ・docker stop） / 2 = 使い方か設定の誤り
 ```
 
 ### dev logs
@@ -372,16 +386,19 @@ systemctl --user enable --now dev-up@<名前>.service を呼ぶ。外部の機�
 ### dev disable
 
 ```text
-dev disable — ユニットを無効にして止める。
+dev disable — ユニットを無効にして、コンテナも止める。
 
 使い方:
   dev disable <名前>
 
-systemctl --user disable --now dev-up@<名前>.service を呼ぶ。コンテナは止めない
-（止めるときは dev stop <名前>）。無効にすると、コンテナが止まっても自動では戻らない。
-戻すときは dev enable <名前>。
+呼ぶ順序（dev stop と同じ、ユニット → コンテナ）:
+  1. systemctl --user disable --now dev-up@<名前>.service（ユニットを無効にして止める）。失敗したら、コンテナには触らない
+  2. 対象のコンテナを docker stop する（範囲・止まりきった状態の扱い・docker の問い合わせの失敗の扱いは dev stop と同じ。
+     compose で動くプロジェクトなら、そのプロジェクトのコンテナ全体）
+外部の機械を再起動した後も、止めたままになる。戻すときは dev enable <名前>
+（ユニットを有効にして起こす。コンテナも戻る）。コンテナだけを止めて再起動の後は戻したいときは dev stop <名前>。
 
-終了コード: 0 = 成功 / 1 = systemctl が失敗した（または無い） / 2 = 使い方か設定の誤り
+終了コード: 0 = 無効にして止めた / 1 = 失敗（systemctl・docker の問い合わせ・docker stop） / 2 = 使い方か設定の誤り
 ```
 
 ### dev exec
