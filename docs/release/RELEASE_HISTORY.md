@@ -9,13 +9,17 @@
 
 | パッケージ | リポジトリ | 現行バージョン | 配布形態 |
 |---|---|---|---|
-| devcontainer-bootstrap | `ojos/devcontainer-bootstrap` | v0.17.0 | GitHub Release + 資産 5 点（配布スクリプト 2: `bootstrap.sh` / `doctor.sh`、生成物 3: `SHA256SUMS` / `RELEASE-MANIFEST.json` / `PACKAGE_ARCHIVE.tar.gz`） |
-| ai-playbook | `ojos/ai-playbook` | v0.8.1 | git タグのみ |
+| devcontainer-bootstrap | `ojos/devcontainer-bootstrap` | v0.18.0 | GitHub Release + 資産 5 点（配布スクリプト 2: `bootstrap.sh` / `doctor.sh`、生成物 3: `SHA256SUMS` / `RELEASE-MANIFEST.json` / `PACKAGE_ARCHIVE.tar.gz`） |
+| ai-playbook | `ojos/ai-playbook` | v0.8.2 | git タグのみ |
+| devcontainer-host | `ojos/devcontainer-host` | v0.1.0 | GitHub Release + 資産 7 点（個別 4: `dev.sh` / `dev-up@.service` / `install.sh` / `projects.example`、生成物 3: `SHA256SUMS` / `RELEASE-MANIFEST.json` / `PACKAGE_ARCHIVE.tar.gz`） |
 
 ### 新世代の版更新
 
 | パッケージ | 版 | 公開日 | 要点 |
 |---|---|---|---|
+| devcontainer-host | v0.1.0 | 2026-10-08 | **最初の版**。devhost を DCB への同梱から独立させ、`ojos/devcontainer-host` から独自の版で配る（#486）。`dev` に restart / stop / logs / enable / disable / exec / self-update（#482）。**外部の機械へ 1 コマンドで入れる `install.sh`**（照合してから置く。#495）。`dev version`。self-update はマニフェストで照合した `dev.sh` を直接取得し、ユニットのファイルの差と起こし直しを案内する（#495）。`SHA256SUMS` にアーカイブを含め、attestation から辿れる（#491）。README に 3 パッケージの関係・tmux の前提・DCB と一緒に使うと揃うもの（#494） |
+| devcontainer-bootstrap | v0.18.0 | 2026-10-08 | **devhost の同梱をやめた**（#486。`ojos/devcontainer-host` へ移った。DCB から入れた古い `dev` は self-update できないので、手で 1 度入れ直す）。**`SHA256SUMS` に `PACKAGE_ARCHIVE.tar.gz` を加えた**（#491。attestation からアーカイブまで辿れる。入手手順は照合に失敗したら展開しない）。README に 3 パッケージの関係（#494）。テストのベースイメージの固定（#480）。`bootstrap.sh` / `doctor.sh` / 生成物は変わらない（版の記録を除く）。要求する ai-playbook は v0.5.0 以降のまま（v0.8.2 を推奨） |
+| ai-playbook | v0.8.2 | 2026-10-08 | README に 3 パッケージの関係を明示した（#494）。規範の文書と雛形は変わらない。破壊的変更なし。雛形は 16 種のまま |
 | devcontainer-bootstrap | v0.17.0 | 2026-10-08 | **生成する `compose.yaml` に `init: true`**（#469。PID 1 の `sleep infinity` が孤児を回収せず、ゾンビが溜まってプロセス数の上限に達し、`docker exec` もセッションも止まっていた。効かせるには作り直しが要る）。**`bootstrap.sh --accept <path>...` を追加**（#461。手を入れて取り込んだファイルを ORIGIN に記録し、`doctor.sh` の FAIL を解消できる。雛形が変わっていない版では、取り込み済みのファイルに `.dcb-new` を置かない）。生成物の末尾を改行で終える（#462。生成物の中身が変わる）。`.gitignore` の空行の累積（#460）。配布スクリプトの `grep -q` の SIGPIPE（#471）。**devhost に `dev rebuild` / `dev doctor` / `dev help`**（#472 / #475）。要求する ai-playbook は v0.5.0 以降のまま（v0.8.1 を推奨） |
 | ai-playbook | v0.8.1 | 2026-10-08 | 雛形の修正だけ。記録の投稿の手順に PR を作る段を足した（#462）。`second-opinion-review.sh` の `grep -q` の SIGPIPE（#471）。破壊的変更なし。雛形は 16 種のまま |
 | devcontainer-bootstrap | v0.16.0 | 2026-10-06 | **`--upgrade --without-<名前>` で装備を外せるようにした**（#444 / #453）。外したフラグでだけ生成していたファイルは、手を入れていなければ削除する。リモート最終ゲートの「置く / 置かない」を生成後も両方向へ切り替えられる。**生成する `CLAUDE.md` が規範 2 つを `@` で全文取り込む**（#441）。協調フックが add / commit / rm / mv も拒否の対象にする（#438）。check-doc-links.sh のフェンスの閉じ判定（#439）。identity の検査が空の範囲で通ったときの案内（#442）。最初の push の順番の案内（#443）。台帳の開始時刻のキー（#433）。workflow の `actions/checkout` を v7 へ（#432） |

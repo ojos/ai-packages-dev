@@ -72,12 +72,12 @@ ai-playbook・devcontainer-bootstrap（DCB）・devcontainer-host（devhost）�
 - https://github.com/ojos/devcontainer-bootstrap
 
 最新安定リリース:
-- `v0.17.0`
+- `v0.18.0`
 
 取得したスクリプトは実行前に必ず検証します。取得と実行は一時ディレクトリで行い、生成先は `--output-dir` で指定します。スクリプトの置き場所と生成先は独立しているため、実行後は `trap` で作業ディレクトリごと破棄でき、手元に取得物や後片付けが残りません。
 
 ```bash
-TAG=v0.17.0
+TAG=v0.18.0
 BASE="https://github.com/ojos/devcontainer-bootstrap/releases/download/${TAG}"
 
 d="$(mktemp -d "${TMPDIR:-/tmp}/dcb.XXXXXX")" || exit 1
@@ -120,7 +120,7 @@ AI 共通ルールも配置する場合は、ルールの取得元を指定し�
 if command -v sha256sum >/dev/null 2>&1; then sha256c="sha256sum"; else sha256c="shasum -a 256"; fi
 ( cd "$d" && grep ' bootstrap.sh$' SHA256SUMS | $sha256c -c - ) &&
 bash "$d/bootstrap.sh" --project-name myapp --output-dir "$PWD/myapp" \
-  --languages node,go --with-claude --playbook-version v0.8.1
+  --languages node,go --with-claude --playbook-version v0.8.2
 ```
 
 `--playbook-version` は既定ソース `ojos/ai-playbook` のタグ tarball への糖衣で、長い archive URL を打たずに済みます。ソースを指定した時点で配置されるため `--with-playbook` は不要です。別 owner・任意の URL・ローカルディレクトリから取得する場合は、従来どおり `--playbook-from` を使います（`--playbook-version` とは排他）。
@@ -133,7 +133,7 @@ bash "$d/bootstrap.sh" --project-name myapp --output-dir "$PWD/myapp" \
 上の手順は `bootstrap.sh` だけを取得します。生成後の自己診断（[Doctor 自己診断](#doctor-自己診断)）を実行するときに、同じ要領で `doctor.sh` を取得します。`doctor.sh` も診断対象を `--target-dir` で受け取るため、一時ディレクトリから実行できます。
 
 ```bash
-TAG=v0.17.0
+TAG=v0.18.0
 BASE="https://github.com/ojos/devcontainer-bootstrap/releases/download/${TAG}"
 
 d="$(mktemp -d "${TMPDIR:-/tmp}/dcb.XXXXXX")" || exit 1
@@ -169,12 +169,12 @@ grep -E ' (bootstrap|doctor)\.sh$' SHA256SUMS | $sha256c -c -
 
 - この 2 段（マニフェスト → `SHA256SUMS` → 各ファイル）が検出するのは、取得の破損と、公開物どうしの食い違いです。マニフェストも `SHA256SUMS` と同じ経路で取得するため、リリースを書き換えられる立場なら両方を揃えて差し替えられます。
 - 後述の attestation が保証するのは、`SHA256SUMS` 1 つです。`SHA256SUMS` が `bootstrap.sh` / `doctor.sh` / `PACKAGE_ARCHIVE.tar.gz` のハッシュを持つので、attestation の検証に続けて `SHA256SUMS` と取得物を照合すれば、この 3 つと、アーカイブの中身（`CHANGELOG.md` や README など）まで辿れます。**個別の資産として添付される `RELEASE-MANIFEST.json` は `SHA256SUMS` に載らないため、attestation の保証に入りません**（アーカイブの中の `CHANGELOG.md` は保証の範囲内で、アーカイブの外に個別に添付されたものがあれば範囲外です）。
-- **`PACKAGE_ARCHIVE.tar.gz` が `SHA256SUMS` に載るのは、この変更を含むリリースからです。** それより前の版（v0.17.0 まで）の `SHA256SUMS` には、アーカイブの行がありません。その場合、`SHA256SUMS` の照合（下の 2 行目）はアーカイブを確かめず、attestation もアーカイブには及びません。アーカイブはマニフェストのハッシュ（1 行目）だけで確かめることになり、マニフェストも attestation の保証外です。古い版のアーカイブを attestation の保証つきで使うことはできないので、保証が要るときは、アーカイブの行がある版を使ってください（`grep PACKAGE_ARCHIVE.tar.gz SHA256SUMS` で行の有無を確かめられます）。
+- **`PACKAGE_ARCHIVE.tar.gz` が `SHA256SUMS` に載るのは、v0.18.0 からです。** それより前の版（v0.17.0 まで）の `SHA256SUMS` には、アーカイブの行がありません。その場合、`SHA256SUMS` の照合（下の 2 行目）はアーカイブを確かめず、attestation もアーカイブには及びません。アーカイブはマニフェストのハッシュ（1 行目）だけで確かめることになり、マニフェストも attestation の保証外です。古い版のアーカイブを attestation の保証つきで使うことはできないので、保証が要るときは、アーカイブの行がある版を使ってください（`grep PACKAGE_ARCHIVE.tar.gz SHA256SUMS` で行の有無を確かめられます）。
 
 照合と展開は `&&` でつなぎ、照合に失敗したら展開しません（行を分けると、失敗しても次の行が走ります）。
 
 ```bash
-TAG=v0.17.0
+TAG=v0.18.0
 BASE="https://github.com/ojos/devcontainer-bootstrap/releases/download/${TAG}"
 curl -sSL "${BASE}/RELEASE-MANIFEST.json" -o RELEASE-MANIFEST.json
 curl -sSL "${BASE}/PACKAGE_ARCHIVE.tar.gz" -o PACKAGE_ARCHIVE.tar.gz
@@ -210,7 +210,7 @@ devcontainer を、SSH で届く外部の機械（自宅のラップトップ、
 
 **この手順は任意です。** 上の 2 段の検証は `curl` とチェックサム実装（`sha256sum` か `shasum -a 256`）だけで閉じていますが、こちらは [GitHub CLI](https://cli.github.com/) が要ります。
 
-リリースの `SHA256SUMS` には、GitHub Actions が発行した **artifact attestation**（SLSA provenance）が付いています。attestation の対象は `SHA256SUMS` 1 つで、`SHA256SUMS` が `bootstrap.sh` / `doctor.sh` / `PACKAGE_ARCHIVE.tar.gz` のハッシュを持ちます（アーカイブの行は、この変更を含むリリースから。それより前の版では、attestation はスクリプトの 2 つまでしか及びません）。**attestation の検証に続けて、上の手順で `SHA256SUMS` と取得物を照合してください**（attestation だけでは取得物までは確かめられません）。
+リリースの `SHA256SUMS` には、GitHub Actions が発行した **artifact attestation**（SLSA provenance）が付いています。attestation の対象は `SHA256SUMS` 1 つで、`SHA256SUMS` が `bootstrap.sh` / `doctor.sh` / `PACKAGE_ARCHIVE.tar.gz` のハッシュを持ちます（アーカイブの行は、v0.18.0 から。それより前の版では、attestation はスクリプトの 2 つまでしか及びません）。**attestation の検証に続けて、上の手順で `SHA256SUMS` と取得物を照合してください**（attestation だけでは取得物までは確かめられません）。
 
 ```bash
 # 取得元の owner を BASE から取り出す（固有名を手で書かない）
@@ -914,7 +914,7 @@ OAuth トークン（`CLAUDE_CODE_OAUTH_TOKEN`）を `remoteEnv` へ注入する
 ```
 # devcontainer-bootstrap が記録した生成物の由来。
 # doctor.sh はこの記録と現物を突き合わせて乖離を診断する。手で編集しないこと。
-version=v0.17.0
+version=v0.18.0
 flags=aws,claude
 inputs-format=1
 input:project-name=myapp
@@ -925,7 +925,7 @@ input:manage-gitignore=true
 input:gitignore-targets=
 input:playbook=installed
 input:playbook-source=tag
-input:playbook-ref=v0.8.1
+input:playbook-ref=v0.8.2
 hash:.devcontainer/compose.yaml=<sha256>
 hash:.devcontainer/devcontainer.json=<sha256>
 hash:.env.example=<sha256>

@@ -6,6 +6,14 @@
 >
 > 同じ理由で、issue 参照は `ojos/ai-packages-dev#NNN` の形で書いてください。裸の `#NNN` は GitHub のオートリンクが**配布先リポジトリの issue** として解決するため、配布後は存在しない issue や無関係な issue を指します。
 
+## v0.8.2
+
+### Summary
+- **README に 3 パッケージ（ai-playbook / devcontainer-bootstrap / devcontainer-host）の関係を明示した**（ojos/ai-packages-dev#494）。ai-playbook は単体で使える（AI 運用の規範だけを入れる）。devcontainer-bootstrap（DCB）と組み合わせると、DCB が生成先のプロジェクトへ規範を配置し、`--upgrade` に新しい `--playbook-version` を渡して新しい版へ移れる。devcontainer-host とは、今は直接の関係が無い。**規範の文書と雛形は変わらない**（破壊的変更なし。雛形は 16 種のまま）。
+
+### 移行
+- 規範と雛形は v0.8.1 と同じなので、移行の作業は要らない。DCB で規範を配置している場合、`bootstrap.sh --upgrade --playbook-version v0.8.2` で更新しても、変わるのは `.ai-playbook/VERSION` の版の記録だけ（README は配布先へ配置されない）。
+
 ## v0.8.1
 
 ### Summary
