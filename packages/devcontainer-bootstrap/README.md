@@ -402,6 +402,7 @@ bash bootstrap.sh --accept scripts/verify.sh --output-dir <生成先> --dry-run 
 | `CLAUDE.md` / `AGENTS.md` / `.github/copilot-instructions.md` | 実行環境の入口ファイル（3 層の優先順位を配線）。`CLAUDE.md` だけは、末尾に規範 2 つ（`.ai-playbook/shared-ai-rules.md` / `.github/project-ai-rules.md`）を `@` で取り込む節を足す。Claude Code は、これで規範の全文を毎セッションの文脈へ載せる（生成物で約 53KB） |
 | `scripts/second-opinion-review.sh` | 第二意見レビューの実行体。`scripts/loop-gate.sh` が存在すれば自動で直列化する。既定は `gemini` CLI（Antigravity CLI への切り替えにも対応するが、`agy` の導入はこの生成器の対象外） |
 | `.claude/skills/intake/SKILL.md` | Claude Code 向け intake 起点スキル（`--with-claude` 指定時のみ）。規範を複製せず `.ai-playbook/intake/` を参照するだけの薄いスキル |
+| `.claude/skills/peers/SKILL.md` | Claude Code 向けの、ほかのセッションの一覧・宛先の解決・送信・一斉送信の呼び出し口（`--with-claude` 指定時のみ）。実体は `scripts/session-peers.sh`。一斉送信も承認の根拠にならない（`.ai-playbook/shared-ai-rules.md` 16 章） |
 | `.claude/skills/land/SKILL.md` | Claude Code 向け PR 確認・マージ起点スキル（`--with-claude` 指定時のみ）。判定基準を複製せず `.ai-playbook/review-workflow.md` と `.ai-playbook/task-playbooks/pr-review.md` を参照する。マージ直前の確認そのものは `scripts/confirm-merge-hook.sh`（下記）が機構として保証する |
 | `.claude/agents/explorer.md` / `.claude/agents/implementer.md` | Claude Code 向け委譲先エージェント定義（`--with-claude` 指定時のみ）。`model` と `tools` を frontmatter で固定する。判定の導線は規範側（`shared-ai-rules.md` の「実装委譲パターン」）が持ち、ここでは再定義しない |
 
@@ -881,6 +882,8 @@ OAuth トークン（`CLAUDE_CODE_OAUTH_TOKEN`）を `remoteEnv` へ注入する
 
 - `scripts/confirm-merge-hook.sh`（マージ実行の前に確認を挟む PreToolUse フックの本体）
 - `scripts/session-coord-hook.sh`（並行セッションの共有台帳を操作の直前に確かめるフックの本体。下記「[セッション協調フック](#セッション協調フックclaude-code)」参照）
+- `scripts/claude-session-wrapper.sh`（セッションの宛先名に場所と作業ツリーを自動で含める起動ラッパー。`.devcontainer/devcontainer.json` が VS Code の設定 `claudeCode.claudeProcessWrapper` へ**絶対パス**（`/workspaces/<プロジェクト名>/scripts/claude-session-wrapper.sh`）で配線します。拡張は設定値をそのまま実行ファイルのパスにし、`${workspaceFolder}` を展開しないためです。`.env` の `SESSION_HOST_LABEL` が空なら宛先名を変えず、どんな失敗でも本体の起動まで進みます）
+- `scripts/session-peers.sh`（同じプロジェクトで動くほかのセッションの一覧・宛先の解決・送信元の署名。`.claude/skills/peers/SKILL.md` の `/peers` が呼びます。`~/.claude/sessions/*.json` は公開された仕様ではないため、読めなければ警告して `ListAgents` を案内します）
 - `.claude/settings.json`（上記 2 つのフックの配線。既存ファイルは既定ポリシー `skip` で温存します）
 - `.claude/.gitignore`（`settings.local.json` を追跡しない）
 
@@ -896,6 +899,7 @@ OAuth トークン（`CLAUDE_CODE_OAUTH_TOKEN`）を `remoteEnv` へ注入する
 - `.github/workflows/copilot-review.yml` / `.github/workflows/review-gate.yml` / `scripts/review-usable.sh` / `scripts/check-review-usable.sh`（`--with-copilot-review` を併せて選択した場合のみ。4 本で 1 組。下記参照）
 - `.claude/skills/intake/SKILL.md`（`--with-claude` を併せて指定した場合のみ。intake 起点スキル）
 - `.claude/skills/land/SKILL.md`（`--with-claude` を併せて指定した場合のみ。PR 確認・マージ起点スキル）
+- `.claude/skills/peers/SKILL.md`（`--with-claude` を併せて指定した場合のみ。ほかのセッションの一覧・送信・一斉送信の呼び出し口。実体は `scripts/session-peers.sh`）
 - `.claude/agents/explorer.md` / `.claude/agents/implementer.md`（`--with-claude` を併せて指定した場合のみ。委譲先エージェント定義）
 
 `--with-aws` / `--with-gcp` のいずれかを選択した場合は、加えて次を出力します（規範の配置は前提としません）。
@@ -1160,6 +1164,8 @@ github/gitignore のテンプレートは言語・OS・エディタの生成物�
 | `scripts/on-attach.sh` | そのまま書き出す | — |
 | `scripts/session-coord-hook.sh` | そのまま書き出す | —（`--with-claude` のときだけ生成） |
 | `scripts/session-ledger.sh` | そのまま書き出す | — |
+| `scripts/session-peers.sh` | そのまま書き出す | —（`--with-claude` のときだけ生成） |
+| `scripts/claude-session-wrapper.sh` | そのまま書き出す | —（`--with-claude` のときだけ生成） |
 | `scripts/setup-git-identity.sh` | そのまま書き出す | — |
 | `scripts/verify-commit-identity.sh` | そのまま書き出す | — |
 | `scripts/verify-commit-identity-selftest.sh` | そのまま書き出す | — |

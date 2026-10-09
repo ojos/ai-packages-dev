@@ -62,6 +62,7 @@ for rel in \
   .github/workflows/review-gate.yml \
   .claude/skills/intake/SKILL.md \
   .claude/skills/land/SKILL.md \
+  .claude/skills/peers/SKILL.md \
   .claude/agents/explorer.md \
   .claude/agents/implementer.md \
   .github/project-ai-rules.md \
