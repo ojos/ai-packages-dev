@@ -22,6 +22,10 @@
 #   - その PID のプロセスが生きていて、開始時刻が json の procStart と一致する
 #     （PID が再利用された別のプロセスを除く）
 #   - json の cwd の git-common-dir が自分と同じ（別の作業ツリーでも同じリポジトリなら出る）
+#   /proc を読めない環境（macOS など）では、pidDomain と開始時刻の照合を省き、
+#   kill -0 による生存の確認だけにする。
+#
+# 台帳の issue は session-ledger.sh list --all の pid= の列と、json の pid を突き合わせて引く。
 #
 # 制約と fail-open:
 #   - ~/.claude/sessions/*.json は公開された仕様ではない（Claude Code 2.1.296 で実測）。
@@ -31,13 +35,18 @@
 # 環境変数: SESSION_PEERS_SESSIONS_DIR（json の置き場所。既定 ~/.claude/sessions）/
 #           SESSION_PEERS_PID_DOMAIN（自分の pidDomain。既定は /proc/self/ns/pid から）/
 #           SESSION_PEERS_SELF_PID（自分のセッションの PID。既定は祖先をたどって特定）/
-#           SESSION_HOST_LABEL（署名に入れる場所。.env にもある。値は固有なのでここには書かない）
+#           SESSION_PEERS_NO_PROC（空でなければ /proc を読めない扱いにする。試験用）/
+#           SESSION_HOST_LABEL（署名に入れる場所。.env が先、無ければこの環境変数。値は固有なので
+#           ここには書かない）
 #
 # bash 3.2 互換（連想配列・mapfile を使わない）。
 set -u
 
-TAB="$(printf '\t')"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
+TAB=$'\t'
+NL=$'\n'
+SEP=$'\001'
+SCRIPT_DIR="${BASH_SOURCE[0]%/*}"
+[ "$SCRIPT_DIR" != "${BASH_SOURCE[0]}" ] || SCRIPT_DIR="."
 LEDGER="$SCRIPT_DIR/session-ledger.sh"
 SESSIONS_DIR="${SESSION_PEERS_SESSIONS_DIR:-$HOME/.claude/sessions}"
 
@@ -55,17 +64,78 @@ fallback_hint() {
   warn "$1。ListAgents で動いているセッションを確かめてください。"
 }
 
-# /proc/<PID>/stat の 22 列目（起動からの経過のクロック数）。取れなければ空。
-proc_start() { # pid
+# read_host_label の本体は scripts/claude-session-wrapper.sh と同一でなければならない
+# （ラッパーと /peers の署名が同じラベルを返すため。packages/devcontainer-bootstrap/tests/
+# test-claude-session-wrapper.sh が、2 つの本体の一致を検査する）。
+# SESSION_HOST_LABEL を変数 HOST_LABEL へ読む。外部コマンドを使わない。
+#   順序: .env（スクリプトの 1 つ上。git worktree で .env が無ければ本体の作業コピー）→ 環境変数
+#   .env は source しない。export 記法・前後の空白・全体を囲む引用符・CRLF を許し、最後の定義を採る。
+read_host_label() { # スクリプトのあるディレクトリ
+  local root="$1/.." env_file line value gitdir
+  HOST_LABEL=""
+  env_file="$root/.env"
+  if [ ! -f "$env_file" ] && [ -f "$root/.git" ]; then
+    IFS= read -r gitdir <"$root/.git" 2>/dev/null || gitdir=""
+    gitdir="${gitdir%$'\r'}"
+    case "$gitdir" in
+      "gitdir: "*/.git/worktrees/*)
+        gitdir="${gitdir#gitdir: }"
+        env_file="${gitdir%/.git/worktrees/*}/.env"
+        ;;
+    esac
+  fi
+  if [ -r "$env_file" ]; then
+    while IFS= read -r line || [ -n "$line" ]; do
+      line="${line%$'\r'}"
+      line="${line#"${line%%[![:space:]]*}"}"
+      case "$line" in
+        export[[:blank:]]*)
+          line="${line#export}"
+          line="${line#"${line%%[![:space:]]*}"}"
+          ;;
+      esac
+      case "$line" in
+        SESSION_HOST_LABEL=*) value="${line#SESSION_HOST_LABEL=}" ;;
+        *) continue ;;
+      esac
+      value="${value%%#*}"
+      value="${value#"${value%%[![:space:]]*}"}"
+      value="${value%"${value##*[![:space:]]}"}"
+      case "$value" in
+        \"*\") value="${value#\"}"; value="${value%\"}" ;;
+        \'*\') value="${value#\'}"; value="${value%\'}" ;;
+      esac
+      HOST_LABEL="$value"
+    done <"$env_file"
+  fi
+  [ -n "$HOST_LABEL" ] || HOST_LABEL="${SESSION_HOST_LABEL:-}"
+}
+
+# /proc を読める環境か。
+# SESSION_PEERS_NO_PROC が空でなければ読めない扱いにする（試験用）。
+have_proc() { [ -z "${SESSION_PEERS_NO_PROC:-}" ] && [ -r "/proc/$$/stat" ]; }
+
+# /proc/<PID>/stat の 3 列目以降を配列 PROC_F に読む（PROC_F[0] = 状態、[1] = 親の PID、
+# [19] = 22 列目の開始時刻）。ps・cat・awk を使わない。読めなければ 1。
+proc_fields() { # pid
   local stat
-  case "$1" in '' | *[!0-9]*) return 0 ;; esac
-  [ -r "/proc/$1/stat" ] || return 0
-  stat="$(cat "/proc/$1/stat" 2>/dev/null)" || return 0
+  PROC_F=()
+  case "$1" in '' | *[!0-9]*) return 1 ;; esac
+  IFS= read -r stat <"/proc/$1/stat" 2>/dev/null || return 1
   case "$stat" in
-    *')'*) stat="${stat##*\)}" ;;
-    *) return 0 ;;
+    *')'*) ;;
+    *) return 1 ;;
   esac
-  printf '%s\n' "$stat" | awk '{ print $20 }'
+  # shellcheck disable=SC2206
+  PROC_F=(${stat##*)})
+  [ "${#PROC_F[@]}" -ge 20 ]
+}
+
+# /proc/<PID>/stat の 22 列目（起動からの経過のクロック数）を変数 PROC_START へ。取れなければ空で 1。
+proc_start() { # pid
+  PROC_START=""
+  proc_fields "$1" || return 1
+  PROC_START="${PROC_F[19]}"
 }
 
 # 自分の pidDomain。取れなければ空（その場合は pidDomain を検査しない）。
@@ -80,39 +150,51 @@ self_domain() {
   return 0
 }
 
-# git-common-dir を実体のパスで返す。取れなければ空。
-common_dir_of() { # ディレクトリ
-  local common
-  [ -d "$1" ] || return 0
-  common="$(git -C "$1" rev-parse --git-common-dir 2>/dev/null)" || return 0
-  [ -n "$common" ] || return 0
-  case "$common" in /*) ;; *) common="$1/$common" ;; esac
-  (cd -P "$common" 2>/dev/null && pwd -P)
+# ディレクトリの git-common-dir（実体のパス）と作業ツリーのルートを、git 1 回の呼び出しで
+# 変数 G_COMMON / G_TOP へ読む。取れなければ空。
+git_info() { # ディレクトリ
+  local out c
+  G_COMMON=""
+  G_TOP=""
+  [ -d "$1" ] || return 1
+  out="$(git -C "$1" rev-parse --git-common-dir --show-toplevel 2>/dev/null)" || return 1
+  c="${out%%$'\n'*}"
+  G_TOP="${out#*$'\n'}"
+  [ -n "$c" ] || return 1
+  case "$c" in /*) ;; *) c="$1/$c" ;; esac
+  G_COMMON="$(cd -P "$c" 2>/dev/null && pwd -P)" || G_COMMON=""
+  [ -n "$G_COMMON" ]
 }
 
-# 作業ツリーの名前（ルートのディレクトリ名）。git でなければ cwd の名前。
-worktree_name_of() { # ディレクトリ
-  local top
-  top="$(git -C "$1" rev-parse --show-toplevel 2>/dev/null)" || top=""
+# 作業ツリーの名前（ルートのディレクトリ名）を変数 WT_NAME へ。git でなければ引数の名前。
+worktree_name_of() { # ディレクトリ（git_info の直後に G_TOP を使う）
+  local top="${G_TOP:-}"
   [ -n "$top" ] || top="$1"
-  printf '%s' "${top##*/}"
+  WT_NAME="${top##*/}"
 }
 
-# 自分のセッションの PID。祖先をたどり、json のあるプロセスを最初に見つけたもの。
+# 自分のセッションの PID を変数 SELF_PID へ。祖先をたどり、json のあるプロセスを最初に見つけたもの。
 self_pid() {
   local p pp i
+  SELF_PID=""
   if [ -n "${SESSION_PEERS_SELF_PID:-}" ]; then
-    printf '%s' "$SESSION_PEERS_SELF_PID"
+    SELF_PID="$SESSION_PEERS_SELF_PID"
     return 0
   fi
   p=$$
   i=0
   while [ "$i" -lt 32 ]; do
-    pp="$(ps -o ppid= -p "$p" 2>/dev/null | tr -d ' ')"
+    if have_proc; then
+      proc_fields "$p" || return 0
+      pp="${PROC_F[1]}"
+    else
+      pp="$(ps -o ppid= -p "$p" 2>/dev/null)"
+      pp="${pp//[[:space:]]/}"
+    fi
     case "$pp" in '' | *[!0-9]*) return 0 ;; esac
     [ "$pp" -gt 1 ] || return 0
     if [ -f "$SESSIONS_DIR/$pp.json" ]; then
-      printf '%s' "$pp"
+      SELF_PID="$pp"
       return 0
     fi
     p="$pp"
@@ -121,33 +203,37 @@ self_pid() {
   return 0
 }
 
-# 台帳から、セッション識別子ごとの issue（#番号のカンマ区切り）を TSV で出す。
-#   <識別子>\t#1,#2
+# 台帳から、持ち主の PID（pid= の列）ごとの issue を、変数 ISSUES へ読む。
+#   各行: <PID>\t#1,#2
 ledger_issues() {
+  ISSUES=""
   [ -f "$LEDGER" ] || return 0
-  bash "$LEDGER" list --all 2>/dev/null | awk '
+  ISSUES="$(bash "$LEDGER" list --all 2>/dev/null | awk '
     {
-      sid = ""; kind = ""; tgt = ""; state = ""
+      pid = ""; kind = ""; tgt = ""; state = ""
       for (i = 1; i <= NF; i++) {
-        if ($i ~ /^session=/) sid = substr($i, 9)
+        if ($i ~ /^pid=/) pid = substr($i, 5)
         else if ($i ~ /^kind=/) kind = substr($i, 6)
         else if ($i ~ /^target=/) tgt = substr($i, 8)
         else if ($i ~ /^state=/) state = substr($i, 7)
       }
-      if (kind == "issue" && state == "live" && tgt != "") {
-        if (acc[sid] == "") acc[sid] = "#" tgt
-        else acc[sid] = acc[sid] ",#" tgt
+      if (kind == "issue" && state == "live" && tgt != "" && pid ~ /^[0-9]+$/) {
+        if (acc[pid] == "") acc[pid] = "#" tgt
+        else acc[pid] = acc[pid] ",#" tgt
       }
     }
-    END { for (s in acc) printf "%s\t%s\n", s, acc[s] }
-  '
+    END { for (p in acc) printf "%s\t%s\n", p, acc[p] }
+  ')"
 }
+
+# jq の出力 1 行ぶんの抽出式。ファイル名の先頭に付け、区切りは \u0001。
+JQ_FIELDS='[input_filename, .pid, .procStart, .name, .cwd, (.status // "-"), (.startedAt // 0), (.pidDomain // "")] | map(tostring) | join("\u0001")'
 
 # 同じプロジェクトの生きているセッションを集めて TSV で出す（startedAt 昇順）:
 #   宛先名 \t 作業ツリー名 \t issue \t 状態 \t PID \t 自分なら self、他は -
 collect_rows() {
-  local f raw domain mine_common me pid proc_start_json name cwd status started pdomain
-  local alive_start wt issues key sid
+  local f base files=() raw out line domain mine_common proc_ok=0
+  local file pid pstart name cwd status started pdomain sid tmp self
   if ! command -v jq >/dev/null 2>&1; then
     fallback_hint "jq が無いため、セッションの json を読めません"
     return 0
@@ -156,48 +242,84 @@ collect_rows() {
     fallback_hint "セッションの json の置き場所が見つかりません（$SESSIONS_DIR）"
     return 0
   fi
-  domain="$(self_domain)"
-  mine_common="$(common_dir_of "$(pwd)")"
+  git_info "$PWD" || true
+  mine_common="$G_COMMON"
   if [ -z "$mine_common" ]; then
     fallback_hint "git リポジトリの共通ディレクトリを解決できないため、同じプロジェクトを判定できません"
     return 0
   fi
-  me="$(self_pid)"
-  issues="$(ledger_issues)"
+  if have_proc; then
+    proc_ok=1
+    domain="$(self_domain)"
+  else
+    domain=""
+  fi
+  self_pid
+  ledger_issues
 
+  # jq を呼ぶ前に、ファイル名の PID が生きていないものを外す。
   for f in "$SESSIONS_DIR"/*.json; do
     [ -e "$f" ] || continue
-    raw="$(jq -r '[.pid, .procStart, .name, .cwd, (.status // "-"), (.startedAt // 0), (.pidDomain // "")] | map(tostring) | join("\u0001")' "$f" 2>/dev/null)" || raw=""
-    if [ -z "$raw" ]; then
-      warn "読めない、または形が違う json を読み飛ばします: $f"
-      continue
+    base="${f##*/}"
+    base="${base%.json}"
+    case "$base" in '' | *[!0-9]*) continue ;; esac
+    if [ "$proc_ok" -eq 1 ]; then
+      [ -d "/proc/$base" ] || continue
+    else
+      kill -0 "$base" 2>/dev/null || continue
     fi
-    pid="${raw%%$'\001'*}"; raw="${raw#*$'\001'}"
-    proc_start_json="${raw%%$'\001'*}"; raw="${raw#*$'\001'}"
-    name="${raw%%$'\001'*}"; raw="${raw#*$'\001'}"
-    cwd="${raw%%$'\001'*}"; raw="${raw#*$'\001'}"
-    status="${raw%%$'\001'*}"; raw="${raw#*$'\001'}"
-    started="${raw%%$'\001'*}"; raw="${raw#*$'\001'}"
-    pdomain="$raw"
-    case "$pid" in '' | *[!0-9]* | null) warn "pid が数字でない json を読み飛ばします: $f"; continue ;; esac
-    case "$name" in '' | null) warn "name が無い json を読み飛ばします: $f"; continue ;; esac
+    files[${#files[@]}]="$f"
+  done
+  [ "${#files[@]}" -gt 0 ] || return 0
+
+  # まとめて 1 回。壊れた json があると全体が失敗するので、そのときだけ 1 件ずつ読み直して警告する。
+  if out="$(jq -r "$JQ_FIELDS" "${files[@]}" 2>/dev/null)"; then
+    raw="$out"
+  else
+    raw=""
+    for f in "${files[@]}"; do
+      if out="$(jq -r "$JQ_FIELDS" "$f" 2>/dev/null)" && [ -n "$out" ]; then
+        raw="$raw$out$NL"
+      else
+        warn "読めない、または形が違う json を読み飛ばします: $f"
+      fi
+    done
+  fi
+  [ -n "$raw" ] || return 0
+
+  local ISSUES_NL="$NL$ISSUES$NL"
+  while IFS="$SEP" read -r file pid pstart name cwd status started pdomain; do
+    [ -n "$file" ] || continue
+    case "$pid" in '' | *[!0-9]* | null) warn "pid が数字でない json を読み飛ばします: $file"; continue ;; esac
+    case "$name" in '' | null) warn "name が無い json を読み飛ばします: $file"; continue ;; esac
     case "$started" in '' | *[!0-9]*) started=0 ;; esac
 
-    # 別のコンテナの json は無関係。
-    if [ -n "$domain" ] && [ "$pdomain" != "$domain" ]; then continue; fi
-    # PID が生きていて、開始時刻が一致すること（再利用された PID を除く）。
-    alive_start="$(proc_start "$pid")"
-    [ -n "$alive_start" ] && [ "$alive_start" = "$proc_start_json" ] || continue
+    if [ "$proc_ok" -eq 1 ]; then
+      # 別のコンテナの json は無関係。
+      if [ -n "$domain" ] && [ "$pdomain" != "$domain" ]; then continue; fi
+      # PID が生きていて、開始時刻が一致すること（再利用された PID を除く）。
+      proc_start "$pid" && [ "$PROC_START" = "$pstart" ] || continue
+    else
+      kill -0 "$pid" 2>/dev/null || continue
+    fi
     # 同じリポジトリ（git-common-dir が同じ）であること。
-    [ "$(common_dir_of "$cwd")" = "$mine_common" ] || continue
+    git_info "$cwd" || true
+    [ "$G_COMMON" = "$mine_common" ] || continue
 
-    wt="$(worktree_name_of "$cwd")"
-    key="pid-$pid-$proc_start_json"
-    sid="$(printf '%s\n' "$issues" | awk -F'\t' -v k="$key" '$1 == k { print $2; exit }')"
-    [ -n "$sid" ] || sid="-"
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$started" "$name" "$wt" "$sid" "$status" "$pid" \
-      "$([ "$pid" = "$me" ] && echo self || echo -)"
-  done | sort -t "$TAB" -k1,1n -k6,6n | cut -f2-
+    worktree_name_of "$cwd"
+    sid="-"
+    case "$ISSUES_NL" in
+      *"$NL$pid$TAB"*)
+        tmp="${ISSUES_NL#*"$NL$pid$TAB"}"
+        sid="${tmp%%"$NL"*}"
+        ;;
+    esac
+    self="-"
+    if [ "$pid" = "$SELF_PID" ]; then self="self"; fi
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$started" "$name" "$WT_NAME" "$sid" "$status" "$pid" "$self"
+  done <<EOF | sort -t "$TAB" -k1,1n -k6,6n | cut -f2-
+$raw
+EOF
 }
 
 cmd_list() {
@@ -243,7 +365,7 @@ EOF
 }
 
 cmd_resolve() {
-  local spec="${1:-}" rows matched count
+  local spec="${1:-}" rows matched="" count
   if [ -z "$spec" ]; then usage; return 2; fi
   rows="$(collect_rows)"
   if [ -z "$rows" ]; then
@@ -252,19 +374,14 @@ cmd_resolve() {
   fi
 
   # 段ごとに絞り、最初に 1 件以上あった段で決める（複数件ならそこで曖昧として止める）。
-  matched=""
   case "$spec" in
-    '' | *[!0-9]*) ;;
+    \#*)
+      matched="$(printf '%s\n' "$rows" | awk -F'\t' -v q="$spec" '
+        { m = split($3, a, ","); for (i = 1; i <= m; i++) if (a[i] == q) { print; break } }')"
+      ;;
+    *[!0-9]*) ;;
     *) matched="$(printf '%s\n' "$rows" | awk -F'\t' -v n="$spec" 'NR == n + 0 { print }')" ;;
   esac
-  if [ -z "$matched" ]; then
-    case "$spec" in
-      \#*)
-        matched="$(printf '%s\n' "$rows" | awk -F'\t' -v q="$spec" '
-          { m = split($3, a, ","); for (i = 1; i <= m; i++) if (a[i] == q) { print; break } }')"
-        ;;
-    esac
-  fi
   [ -n "$matched" ] || matched="$(printf '%s\n' "$rows" | awk -F'\t' -v q="$spec" '$1 == q')"
   [ -n "$matched" ] || matched="$(printf '%s\n' "$rows" | awk -F'\t' -v q="$spec" 'index($1, q) == 1')"
   [ -n "$matched" ] || matched="$(printf '%s\n' "$rows" | awk -F'\t' -v q="$spec" '$2 == q')"
@@ -280,31 +397,31 @@ cmd_resolve() {
     print_candidates "$matched"
     return 3
   fi
-  printf '%s\n' "$matched" | cut -f1
+  printf '%s\n' "${matched%%"$TAB"*}"
   return 0
 }
 
 cmd_whoami() {
-  local rows name="" wt iss label root line
+  local rows line name="" wt="" iss="" self found=0
   rows="$(collect_rows)"
-  line="$(printf '%s\n' "$rows" | awk -F'\t' '$6 == "self" { print; exit }')"
-  if [ -n "$line" ]; then
-    name="$(printf '%s' "$line" | cut -f1)"
-    wt="$(printf '%s' "$line" | cut -f2)"
-    iss="$(printf '%s' "$line" | cut -f3)"
-  else
+  # 列は 宛先名 / 作業ツリー / issue / 状態 / PID / self。self の行を探す。
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    IFS="$TAB" read -r name wt iss _ _ self <<<"$line"
+    if [ "$self" = "self" ]; then found=1; break; fi
+  done <<EOF
+$rows
+EOF
+  if [ "$found" -eq 0 ]; then
     warn "自分のセッションの json を特定できません（-p の非対話セッションは登録されません）。"
     name="(宛先名不明)"
-    wt="$(worktree_name_of "$(pwd)")"
+    git_info "$PWD" || true
+    worktree_name_of "$PWD"
+    wt="$WT_NAME"
     iss="-"
   fi
-  root="$(dirname "$SCRIPT_DIR")"
-  label="${SESSION_HOST_LABEL:-}"
-  if [ -z "$label" ] && [ -r "$root/.env" ]; then
-    label="$(command grep -E '^[[:space:]]*SESSION_HOST_LABEL=' "$root/.env" 2>/dev/null | tail -n 1 | sed -e 's/^[^=]*=//' -e 's/[[:space:]]*#.*$//' -e 's/^["'\'']//' -e 's/["'\'']$//')"
-  fi
-  [ -n "$label" ] || label="-"
-  printf '[from: %s | 場所: %s | 作業ツリー: %s | issue: %s]\n' "$name" "$label" "$wt" "$iss"
+  read_host_label "$SCRIPT_DIR"
+  printf '[from: %s | 場所: %s | 作業ツリー: %s | issue: %s]\n' "$name" "${HOST_LABEL:--}" "$wt" "$iss"
 }
 
 main() {

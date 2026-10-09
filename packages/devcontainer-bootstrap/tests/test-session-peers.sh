@@ -66,12 +66,9 @@ mkrepo "$OTHER"
 DOMAIN="linux::pid:[4026500001]"
 OTHER_DOMAIN="linux::pid:[4026599999]"
 
-proc_start_of() { # pid
-  local stat
-  stat="$(cat "/proc/$1/stat")"
-  stat="${stat##*\)}"
-  printf '%s\n' "$stat" | awk '{ print $20 }'
-}
+# 開始時刻の読み取りは、検査対象のスクリプトの proc_start を使う（source ガードで関数だけが入る）。
+# shellcheck disable=SC1090
+. "$PEERS"
 
 PIDS=""
 cleanup() {
@@ -105,26 +102,33 @@ spawn; PID_B="$SPAWNED"
 spawn; PID_D="$SPAWNED"
 spawn; PID_R="$SPAWNED"
 spawn; PID_X="$SPAWNED"
-write_json "$PID_A1" "$(proc_start_of "$PID_A1")" "lab-proj-a1" "$REPO" "$DOMAIN" idle 1000
-write_json "$PID_A2" "$(proc_start_of "$PID_A2")" "lab-proj-wt2-b2" "$WT2" "$DOMAIN" busy 2000
+write_live() { # PID 名前 cwd pidDomain 状態 startedAt（開始時刻は実プロセスから読む）
+  proc_start "$1"
+  write_json "$1" "$PROC_START" "$2" "$3" "$4" "$5" "$6"
+}
+write_live "$PID_A1" "lab-proj-a1" "$REPO" "$DOMAIN" idle 1000
+write_live "$PID_A2" "lab-proj-wt2-b2" "$WT2" "$DOMAIN" busy 2000
 # 別のリポジトリ
-write_json "$PID_B" "$(proc_start_of "$PID_B")" "private-chat" "$OTHER" "$DOMAIN" idle 3000
+write_live "$PID_B" "private-chat" "$OTHER" "$DOMAIN" idle 3000
 # 別の pidDomain（前のコンテナの json が残ったもの）
-write_json "$PID_D" "$(proc_start_of "$PID_D")" "stale-domain" "$REPO" "$OTHER_DOMAIN" idle 4000
+write_live "$PID_D" "stale-domain" "$REPO" "$OTHER_DOMAIN" idle 4000
 # PID は生きているが、procStart が違う（PID が再利用された別のプロセス）
 write_json "$PID_R" "1" "reused-pid" "$REPO" "$DOMAIN" idle 5000
 # 終了したプロセス
-write_json "$PID_X" "$(proc_start_of "$PID_X")" "dead-proc" "$REPO" "$DOMAIN" idle 6000
+write_live "$PID_X" "dead-proc" "$REPO" "$DOMAIN" idle 6000
 kill "$PID_X" 2>/dev/null
 wait "$PID_X" 2>/dev/null
 
-# 台帳: A1 は #502、A2 は #7 と #8 に着手している。
-claim_issue() { # PID issue
-  (cd "$REPO" && SESSION_LEDGER_ID="pid-$1-$(proc_start_of "$1")" SESSION_LEDGER_PID="$1" bash "$LEDGER" claim issue "$2" >/dev/null 2>&1)
+# 台帳の操作 <PID> <サブコマンド> [引数…]。セッション識別子は pid-<PID>-<開始時刻> にする。
+ledger_as() {
+  local pid="$1"; shift
+  proc_start "$pid"
+  (cd "$REPO" && SESSION_LEDGER_ID="pid-$pid-$PROC_START" SESSION_LEDGER_PID="$pid" bash "$LEDGER" "$@" >/dev/null 2>&1)
 }
-claim_issue "$PID_A1" 502
-claim_issue "$PID_A2" 7
-claim_issue "$PID_A2" 8
+# 台帳: A1 は #502、A2 は #7 と #8 に着手している。
+ledger_as "$PID_A1" claim issue 502
+ledger_as "$PID_A2" claim issue 7
+ledger_as "$PID_A2" claim issue 8
 
 peers() { # 引数… （自分 = A1 の作業ツリーから実行する）
   (cd "$REPO" && HOME="$HOME_DIR" SESSION_PEERS_PID_DOMAIN="$DOMAIN" SESSION_PEERS_SELF_PID="$PID_A1" bash "$PEERS" "$@")
@@ -160,10 +164,33 @@ if [[ "$issues_a1" == "#502" && ( "$issues_a2" == "#7,#8" || "$issues_a2" == "#8
 
 it "list: 台帳に issue が無いセッションは - を出す"
 # 台帳から A2 の登録を外して、同じ表示を確かめる。
-(cd "$REPO" && SESSION_LEDGER_ID="pid-$PID_A2-$(proc_start_of "$PID_A2")" SESSION_LEDGER_PID="$PID_A2" bash "$LEDGER" release >/dev/null 2>&1)
+ledger_as "$PID_A2" release
 assert_eq "$(peers list 2>/dev/null | sed -n '3p' | cut -f4)" "-" "issue 欄"
-claim_issue "$PID_A2" 7
-claim_issue "$PID_A2" 8
+ledger_as "$PID_A2" claim issue 7
+ledger_as "$PID_A2" claim issue 8
+
+it "list: SESSION_LEDGER_ID を明示して claim したセッションの issue も出る（pid の列で結ぶ）"
+# 識別子が pid-<PID>-<開始時刻> の形でないセッション。A2 の登録を、明示した別名で置き直す。
+ledger_as "$PID_A2" release
+(cd "$REPO" && SESSION_LEDGER_ID="custom-name" SESSION_LEDGER_PID="$PID_A2" bash "$LEDGER" claim issue 99 >/dev/null 2>&1)
+got="$(peers list 2>/dev/null | sed -n '3p' | cut -f4)"
+(cd "$REPO" && SESSION_LEDGER_ID="custom-name" SESSION_LEDGER_PID="$PID_A2" bash "$LEDGER" release >/dev/null 2>&1)
+ledger_as "$PID_A2" claim issue 7
+ledger_as "$PID_A2" claim issue 8
+assert_eq "$got" "#99" "issue 欄"
+
+it "list: /proc を読めない環境では、開始時刻と pidDomain の照合を省き、生きていれば出す"
+np="$(cd "$REPO" && HOME="$HOME_DIR" SESSION_PEERS_NO_PROC=1 SESSION_PEERS_SELF_PID="$PID_A1" bash "$PEERS" list --names 2>/dev/null | sort | tr '\n' ' ')"
+case "$np" in
+  *"lab-proj-a1 "*"lab-proj-wt2-b2 "*) pass ;;
+  *) fail "一覧=$np" ;;
+esac
+
+it "list: /proc を読めない環境でも、終了したプロセスは出ない"
+case "$np" in
+  *dead-proc*) fail "一覧=$np" ;;
+  *) pass ;;
+esac
 
 it "list: 状態が出る。自分の行に印が付き、--others では自分が出ない"
 if [[ "$(printf '%s\n' "$tbl" | sed -n '3p' | cut -f5)" == "busy" ]] \
@@ -230,14 +257,17 @@ if [[ "$rc" == "0" && "$sig2" == '[from: '* ]]; then pass; else fail "rc=$rc $si
 # ── fail-open ─────────────────────────────────────────────────────────────────
 
 it "json が壊れていても 0 で終わり、警告を出して、読める json は出す"
-printf '{ this is not json' >"$SESS/777777.json"
+spawn; PID_BROKEN="$SPAWNED"
+printf '{ this is not json' >"$SESS/$PID_BROKEN.json"
 out_broken="$(peers list 2>&1)"
 rc=$?
 if [[ "$rc" == "0" ]] && printf '%s' "$out_broken" | command grep -q 'WARN' && printf '%s' "$out_broken" | command grep -q 'lab-proj-a1'; then pass; else fail "rc=$rc $out_broken"; fi
 
 it "形が違う json（pid が数字でない・name が無い）も読み飛ばして 0 で終わる"
-printf '{"pid":"abc","name":"x"}' >"$SESS/777778.json"
-printf '{"pid":%s,"procStart":"1"}' "$PID_A1" >"$SESS/777779.json"
+spawn; PID_ODD1="$SPAWNED"
+spawn; PID_ODD2="$SPAWNED"
+printf '{"pid":"abc","name":"x"}' >"$SESS/$PID_ODD1.json"
+printf '{"pid":%s,"procStart":"1"}' "$PID_ODD2" >"$SESS/$PID_ODD2.json"
 peers list >/dev/null 2>&1
 assert_eq "$?" "0" "終了コード"
 

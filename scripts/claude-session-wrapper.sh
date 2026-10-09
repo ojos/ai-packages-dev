@@ -4,7 +4,8 @@
 # VS Code 拡張の設定 claudeCode.claudeProcessWrapper に指定する（--with-claude の構成では
 # .devcontainer/devcontainer.json が配線する）。拡張はこのラッパーを
 #   <ラッパー> <Claude Code 本体のパス> <引数…>
-# の形で呼ぶ。セッション以外の内部の操作にも使われる。
+# の形で呼ぶ。セッション以外の内部の操作にも使われる。起動のたびに通る経路なので、
+# bash の組み込みだけで動かし、ラベルが無いときは外部コマンドを 1 つも起動せずに exec する。
 #
 # やること:
 #   .env の SESSION_HOST_LABEL（無ければ環境変数）があれば、環境変数
@@ -24,55 +25,81 @@
 # bash 3.2 互換。set -e は使わない（途中の失敗で止めない）。
 set -u
 
-# 名前の部品を、宛先名として安全な文字（英数字と ._-）だけにする。
-sanitize_part() { # 文字列
-  printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '_'
+SCRIPT_DIR="${BASH_SOURCE[0]%/*}"
+[ "$SCRIPT_DIR" != "${BASH_SOURCE[0]}" ] || SCRIPT_DIR="."
+
+# read_host_label の本体は scripts/session-peers.sh と同一でなければならない
+# （ラッパーと /peers の署名が同じラベルを返すため。packages/devcontainer-bootstrap/tests/
+# test-claude-session-wrapper.sh が、2 つの本体の一致を検査する）。
+# SESSION_HOST_LABEL を変数 HOST_LABEL へ読む。外部コマンドを使わない。
+#   順序: .env（スクリプトの 1 つ上。git worktree で .env が無ければ本体の作業コピー）→ 環境変数
+#   .env は source しない。export 記法・前後の空白・全体を囲む引用符・CRLF を許し、最後の定義を採る。
+read_host_label() { # スクリプトのあるディレクトリ
+  local root="$1/.." env_file line value gitdir
+  HOST_LABEL=""
+  env_file="$root/.env"
+  if [ ! -f "$env_file" ] && [ -f "$root/.git" ]; then
+    IFS= read -r gitdir <"$root/.git" 2>/dev/null || gitdir=""
+    gitdir="${gitdir%$'\r'}"
+    case "$gitdir" in
+      "gitdir: "*/.git/worktrees/*)
+        gitdir="${gitdir#gitdir: }"
+        env_file="${gitdir%/.git/worktrees/*}/.env"
+        ;;
+    esac
+  fi
+  if [ -r "$env_file" ]; then
+    while IFS= read -r line || [ -n "$line" ]; do
+      line="${line%$'\r'}"
+      line="${line#"${line%%[![:space:]]*}"}"
+      case "$line" in
+        export[[:blank:]]*)
+          line="${line#export}"
+          line="${line#"${line%%[![:space:]]*}"}"
+          ;;
+      esac
+      case "$line" in
+        SESSION_HOST_LABEL=*) value="${line#SESSION_HOST_LABEL=}" ;;
+        *) continue ;;
+      esac
+      value="${value%%#*}"
+      value="${value#"${value%%[![:space:]]*}"}"
+      value="${value%"${value##*[![:space:]]}"}"
+      case "$value" in
+        \"*\") value="${value#\"}"; value="${value%\"}" ;;
+        \'*\') value="${value#\'}"; value="${value%\'}" ;;
+      esac
+      HOST_LABEL="$value"
+    done <"$env_file"
+  fi
+  [ -n "$HOST_LABEL" ] || HOST_LABEL="${SESSION_HOST_LABEL:-}"
 }
 
-# .env から SESSION_HOST_LABEL の値を読む。source はしない（任意のコードを実行しない）。
-# 最後の定義を採用し、前後の空白と、全体を囲む引用符を外す。
-read_label_from_env_file() { # .env のパス
-  local line value
-  [ -r "$1" ] || return 0
-  line="$(command grep -E '^[[:space:]]*(export[[:space:]]+)?SESSION_HOST_LABEL=' "$1" 2>/dev/null | tail -n 1)" || return 0
-  value="${line#*SESSION_HOST_LABEL=}"
-  value="${value%%#*}"
-  value="$(printf '%s' "$value" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
-  case "$value" in
-    \"*\") value="${value#\"}"; value="${value%\"}" ;;
-    \'*\') value="${value#\'}"; value="${value%\'}" ;;
-  esac
-  printf '%s' "$value"
-}
-
-# 宛先名を計算して標準出力へ出す。失敗したら何も出さず 1 を返す。
+# 宛先名を変数 SESSION_NAME へ計算する。失敗したら 1 を返す。git 以外の外部コマンドは使わない。
 compute_name() {
-  local script_dir root label top wt hex name
-  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)" || return 1
-  root="$(dirname "$script_dir")"
-  label="$(read_label_from_env_file "$root/.env")"
-  [ -n "$label" ] || label="${SESSION_HOST_LABEL:-}"
-  [ -n "$label" ] || return 1
+  local top wt hex
+  SESSION_NAME=""
+  [ -n "$HOST_LABEL" ] || return 1
 
   top="$(git rev-parse --show-toplevel 2>/dev/null)" || top=""
-  [ -n "$top" ] || top="$(pwd)"
+  [ -n "$top" ] || top="$PWD"
   wt="${top##*/}"
   [ -n "$wt" ] || return 1
 
-  hex="$(od -An -N1 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n')" || return 1
+  printf -v hex '%02x' $((RANDOM % 256)) || return 1
   case "$hex" in
     [0-9a-f][0-9a-f]) ;;
     *) return 1 ;;
   esac
 
-  name="$(sanitize_part "$label")-$(sanitize_part "$wt")-$hex"
-  [ -n "$name" ] || return 1
-  printf '%s' "$name"
+  # 宛先名として安全な文字（英数字と ._-）だけにする。
+  SESSION_NAME="${HOST_LABEL//[!A-Za-z0-9._-]/_}-${wt//[!A-Za-z0-9._-]/_}-$hex"
 }
 
 if [ -z "${CLAUDE_CODE_SESSION_NAME:-}" ]; then
-  if session_name="$(compute_name 2>/dev/null)" && [ -n "$session_name" ]; then
-    export CLAUDE_CODE_SESSION_NAME="$session_name"
+  read_host_label "$SCRIPT_DIR"
+  if [ -n "$HOST_LABEL" ] && compute_name && [ -n "$SESSION_NAME" ]; then
+    export CLAUDE_CODE_SESSION_NAME="$SESSION_NAME"
   fi
 fi
 
