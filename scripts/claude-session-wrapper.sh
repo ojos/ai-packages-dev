@@ -9,7 +9,7 @@
 #
 # やること:
 #   .env の SESSION_HOST_LABEL（無ければ環境変数）があれば、環境変数
-#   CLAUDE_CODE_SESSION_NAME を <ラベル>-<作業ツリー名>-<2桁の16進> にして exec する。
+#   CLAUDE_CODE_SESSION_NAME を <ラベル>-<作業ツリー名>-<4桁の16進> にして exec する。
 #   この値が SendMessage の宛先名になり、ListAgents にも出る。16進は起動ごとに変わる
 #   （同じ作業ツリーで複数のセッションを動かしても宛先名が重ならないようにするため）。
 #
@@ -86,9 +86,9 @@ compute_name() {
   wt="${top##*/}"
   [ -n "$wt" ] || return 1
 
-  printf -v hex '%02x' $((RANDOM % 256)) || return 1
+  printf -v hex '%04x' "$RANDOM" || return 1
   case "$hex" in
-    [0-9a-f][0-9a-f]) ;;
+    [0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;
     *) return 1 ;;
   esac
 

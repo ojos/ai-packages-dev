@@ -81,6 +81,47 @@ strip_docker_creds_store() {
 }
 strip_docker_creds_store
 
+# Claude Code の起動役を、作業ツリーの外の固定パスへ設置する（冪等）。
+#
+# VS Code の設定 claudeCode.claudeProcessWrapper は、この起動役を指す。作業ツリーの
+# scripts/claude-session-wrapper.sh を直接指すと、そのファイルが無いブランチへ切り替えた
+# だけで Claude Code が一切起動しなくなるため、作業ツリーの外に置いた極小の sh を挟む。
+# 起動役は、ラッパーが実行可能ならそれを exec し、無ければ何もせずに引数をそのまま exec する。
+# 作業ツリーの位置は設置時に焼き込む（このスクリプトの位置から決める）。
+# ラッパーを配っていない構成（--with-claude なし）では何もしない。
+# 設置先は CLAUDE_SESSION_LAUNCHER で変えられる（試験用）。失敗しても on-attach は落とさない。
+install_claude_session_launcher() {
+  local wrapper dest dir wrapper_q content current tmp
+  wrapper="$(cd "$HERE/.." && pwd)/scripts/claude-session-wrapper.sh"
+  [[ -f "$wrapper" ]] || return 0
+  dest="${CLAUDE_SESSION_LAUNCHER:-$HOME/.local/bin/claude-session-launcher}"
+  # 単一引用符で囲んで焼き込むため、パス中の ' は '\'' に直す。
+  wrapper_q="${wrapper//\'/\'\\\'\'}"
+  content="$(printf '%s\n' \
+    '#!/bin/sh' \
+    '# scripts/on-attach.sh が設置する Claude Code の起動役。手で編集しない（接続のたびに書き直される）。' \
+    '# 作業ツリーのラッパーが実行可能ならそれを、無ければ引数をそのまま exec する。' \
+    "w='$wrapper_q'" \
+    'if [ -x "$w" ]; then exec "$w" "$@"; fi' \
+    'exec "$@"')"
+  current="$(cat "$dest" 2>/dev/null || true)"
+  if [[ "$current" == "$content" && -x "$dest" ]]; then
+    return 0
+  fi
+  dir="$(dirname "$dest")"
+  tmp="$dest.on-attach.tmp"
+  if mkdir -p "$dir" 2>/dev/null \
+    && printf '%s\n' "$content" >"$tmp" 2>/dev/null \
+    && chmod 755 "$tmp" 2>/dev/null \
+    && mv "$tmp" "$dest" 2>/dev/null; then
+    echo "[on-attach] installed Claude Code launcher: $dest"
+  else
+    rm -f "$tmp" 2>/dev/null || true
+    echo "[on-attach] WARN: Claude Code の起動役を設置できませんでした: $dest" >&2
+  fi
+}
+install_claude_session_launcher
+
 # gh の認証状態を確認する。
 #
 # 判定は「いま実際に使われている資格情報が有効か」だけに絞る（--active）。環境変数の

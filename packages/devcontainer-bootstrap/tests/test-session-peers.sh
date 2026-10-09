@@ -254,6 +254,51 @@ sig2="$(cd "$REPO" && HOME="$HOME_DIR" SESSION_PEERS_PID_DOMAIN="$DOMAIN" SESSIO
 rc=$?
 if [[ "$rc" == "0" && "$sig2" == '[from: '* ]]; then pass; else fail "rc=$rc $sig2"; fi
 
+it "whoami: 場所は宛先名と同じ置き換え（英数字と ._- 以外は _）をかける"
+sig3="$(cd "$REPO" && HOME="$HOME_DIR" SESSION_PEERS_PID_DOMAIN="$DOMAIN" SESSION_PEERS_SELF_PID="$PID_A1" SESSION_HOST_LABEL='ho st/x' bash "$PEERS" whoami 2>/dev/null)"
+case "$sig3" in
+  *"場所: ho_st_x |"*) pass ;;
+  *) fail "$sig3" ;;
+esac
+
+# 祖先の PID と同じ名前の json で、自分を特定する。peers を起動するサブシェルが、その親になる。
+# 末尾の true は、サブシェルが最後のコマンドを exec で置き換えて親の関係が崩れるのを防ぐ。
+whoami_via_ancestor() { # 親の json の pidDomain 名前
+  (
+    cd "$REPO" || exit 1
+    if [[ "$1" == "stale" ]]; then
+      write_json "$BASHPID" "1" "stale-self" "$REPO" "$OTHER_DOMAIN" idle 7000
+    else
+      write_live "$BASHPID" "adopted-self" "$REPO" "$DOMAIN" idle 7000
+    fi
+    HOME="$HOME_DIR" SESSION_PEERS_PID_DOMAIN="$DOMAIN" bash "$PEERS" whoami 2>/dev/null
+    rm -f "$SESS/$BASHPID.json"
+    true
+  )
+}
+
+it "self: 祖先と同じ PID の名前で別の pidDomain の古い json が残っていても、取り違えない"
+sig_stale="$(whoami_via_ancestor stale)"
+case "$sig_stale" in
+  *"stale-self"*) fail "古い json を自分として採った: $sig_stale" ;;
+  '[from: (宛先名不明)'*) pass ;;
+  *) fail "$sig_stale" ;;
+esac
+
+it "self: 祖先と同じ PID の名前で pidDomain と procStart が一致する json は、自分として採る"
+sig_ok="$(whoami_via_ancestor ok)"
+case "$sig_ok" in
+  '[from: adopted-self |'*) pass ;;
+  *) fail "$sig_ok" ;;
+esac
+
+it "json に pidDomain / procStart が欠けていると、警告と ListAgents の案内を stderr に出す"
+spawn; PID_MISSING="$SPAWNED"
+printf '{"pid":%s,"name":"missing-fields","cwd":"%s","status":"idle","startedAt":8000}' "$PID_MISSING" "$REPO" >"$SESS/$PID_MISSING.json"
+warn_out="$(peers list 2>&1 >/dev/null)"
+if printf '%s' "$warn_out" | command grep -q 'WARN' && printf '%s' "$warn_out" | command grep -q 'ListAgents' && printf '%s' "$warn_out" | command grep -q "$PID_MISSING.json"; then pass; else fail "$warn_out"; fi
+rm -f "$SESS/$PID_MISSING.json"
+
 # ── fail-open ─────────────────────────────────────────────────────────────────
 
 it "json が壊れていても 0 で終わり、警告を出して、読める json は出す"

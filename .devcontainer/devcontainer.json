@@ -39,7 +39,7 @@
         "ms-azuretools.vscode-containers"
       ],
       "settings": {
-        "claudeCode.claudeProcessWrapper": "/workspaces/ojos-ai-packages-dev/scripts/claude-session-wrapper.sh"
+        "claudeCode.claudeProcessWrapper": "/home/vscode/.local/bin/claude-session-launcher"
       }
     }
   }

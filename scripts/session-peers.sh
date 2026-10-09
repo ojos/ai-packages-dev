@@ -25,7 +25,7 @@
 #   /proc を読めない環境（macOS など）では、pidDomain と開始時刻の照合を省き、
 #   kill -0 による生存の確認だけにする。
 #
-# 台帳の issue は session-ledger.sh list --all の pid= の列と、json の pid を突き合わせて引く。
+# 台帳の issue は session-ledger.sh list（生きている登録）の pid= の列と、json の pid を突き合わせて引く。
 #
 # 制約と fail-open:
 #   - ~/.claude/sessions/*.json は公開された仕様ではない（Claude Code 2.1.296 で実測）。
@@ -127,7 +127,7 @@ proc_fields() { # pid
     *) return 1 ;;
   esac
   # shellcheck disable=SC2206
-  PROC_F=(${stat##*)})
+  PROC_F=(${stat##*\)})
   [ "${#PROC_F[@]}" -ge 20 ]
 }
 
@@ -173,7 +173,23 @@ worktree_name_of() { # ディレクトリ（git_info の直後に G_TOP を使�
   WT_NAME="${top##*/}"
 }
 
-# 自分のセッションの PID を変数 SELF_PID へ。祖先をたどり、json のあるプロセスを最初に見つけたもの。
+# json の pidDomain / procStart が、このプロセスの環境と一致するか。/proc を読めない環境、
+# または jq が無いときは確かめられないので一致とみなす。
+json_matches_here() { # pid
+  local raw dom pstart
+  have_proc || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+  raw="$(jq -r '[(.pidDomain // ""), (.procStart // "") | tostring] | join("\u0001")' "$SESSIONS_DIR/$1.json" 2>/dev/null)" || return 1
+  dom="${raw%%"$SEP"*}"
+  pstart="${raw#*"$SEP"}"
+  [ -n "$pstart" ] || return 1
+  proc_start "$1" && [ "$PROC_START" = "$pstart" ] || return 1
+  [ -z "$SELF_DOMAIN" ] || [ "$dom" = "$SELF_DOMAIN" ]
+}
+
+# 自分のセッションの PID を変数 SELF_PID へ。祖先をたどり、<PID>.json があって、その json の
+# pidDomain と procStart がこのプロセスの環境と一致する最初のものを採る。~/.claude は
+# named volume で、前のコンテナの json が同じ PID の名前で残りうるため、名前だけでは採らない。
 self_pid() {
   local p pp i
   SELF_PID=""
@@ -193,7 +209,7 @@ self_pid() {
     fi
     case "$pp" in '' | *[!0-9]*) return 0 ;; esac
     [ "$pp" -gt 1 ] || return 0
-    if [ -f "$SESSIONS_DIR/$pp.json" ]; then
+    if [ -f "$SESSIONS_DIR/$pp.json" ] && json_matches_here "$pp"; then
       SELF_PID="$pp"
       return 0
     fi
@@ -203,21 +219,21 @@ self_pid() {
   return 0
 }
 
-# 台帳から、持ち主の PID（pid= の列）ごとの issue を、変数 ISSUES へ読む。
+# 台帳（既定の list。生きている登録だけ）から、持ち主の PID（pid= の列）ごとの issue を、
+# 変数 ISSUES へ読む。引数に PID を渡すと、その PID の分だけにする。
 #   各行: <PID>\t#1,#2
-ledger_issues() {
+ledger_issues() { # [PID]
   ISSUES=""
   [ -f "$LEDGER" ] || return 0
-  ISSUES="$(bash "$LEDGER" list --all 2>/dev/null | awk '
+  ISSUES="$(bash "$LEDGER" list 2>/dev/null | awk -v only="${1:-}" '
     {
-      pid = ""; kind = ""; tgt = ""; state = ""
+      pid = ""; kind = ""; tgt = ""
       for (i = 1; i <= NF; i++) {
         if ($i ~ /^pid=/) pid = substr($i, 5)
         else if ($i ~ /^kind=/) kind = substr($i, 6)
         else if ($i ~ /^target=/) tgt = substr($i, 8)
-        else if ($i ~ /^state=/) state = substr($i, 7)
       }
-      if (kind == "issue" && state == "live" && tgt != "" && pid ~ /^[0-9]+$/) {
+      if (kind == "issue" && tgt != "" && pid ~ /^[0-9]+$/ && (only == "" || pid == only)) {
         if (acc[pid] == "") acc[pid] = "#" tgt
         else acc[pid] = acc[pid] ",#" tgt
       }
@@ -229,31 +245,79 @@ ledger_issues() {
 # jq の出力 1 行ぶんの抽出式。ファイル名の先頭に付け、区切りは \u0001。
 JQ_FIELDS='[input_filename, .pid, .procStart, .name, .cwd, (.status // "-"), (.startedAt // 0), (.pidDomain // "")] | map(tostring) | join("\u0001")'
 
-# 同じプロジェクトの生きているセッションを集めて TSV で出す（startedAt 昇順）:
-#   宛先名 \t 作業ツリー名 \t issue \t 状態 \t PID \t 自分なら self、他は -
-collect_rows() {
-  local f base files=() raw out line domain mine_common proc_ok=0
+# 事前に SELF_DOMAIN / MINE_COMMON / PROC_OK / SELF_PID / ISSUES を決めておく。
+# jq の出力（JQ_FIELDS の行）を標準入力から読み、同じプロジェクトの生きているものを TSV で出す:
+#   開始時刻 \t 宛先名 \t 作業ツリー名 \t issue \t 状態 \t PID \t 自分なら self、他は -
+emit_rows() {
   local file pid pstart name cwd status started pdomain sid tmp self
+  local ISSUES_NL="$NL$ISSUES$NL"
+  while IFS="$SEP" read -r file pid pstart name cwd status started pdomain; do
+    [ -n "$file" ] || continue
+    case "$pid" in '' | *[!0-9]* | null) warn "pid が数字でない json を読み飛ばします: $file"; continue ;; esac
+    case "$name" in '' | null) warn "name が無い json を読み飛ばします: $file"; continue ;; esac
+    case "$started" in '' | *[!0-9]*) started=0 ;; esac
+
+    if [ "$PROC_OK" -eq 1 ]; then
+      # 形が変わった json（項目が欠けた）は判定できない。黙って落とさず知らせる。
+      if [ -z "$pdomain" ] || [ -z "$pstart" ] || [ "$pstart" = "null" ]; then
+        warn "pidDomain または procStart が欠けた json を読み飛ばします（Claude Code の版で形が変わった可能性）: $file。ListAgents を使ってください。"
+        continue
+      fi
+      # 別のコンテナの json は無関係。
+      if [ -n "$SELF_DOMAIN" ] && [ "$pdomain" != "$SELF_DOMAIN" ]; then continue; fi
+      # PID が生きていて、開始時刻が一致すること（再利用された PID を除く）。
+      proc_start "$pid" && [ "$PROC_START" = "$pstart" ] || continue
+    else
+      kill -0 "$pid" 2>/dev/null || continue
+    fi
+    # 同じリポジトリ（git-common-dir が同じ）であること。
+    git_info "$cwd" || true
+    [ "$G_COMMON" = "$MINE_COMMON" ] || continue
+
+    worktree_name_of "$cwd"
+    sid="-"
+    case "$ISSUES_NL" in
+      *"$NL$pid$TAB"*)
+        tmp="${ISSUES_NL#*"$NL$pid$TAB"}"
+        sid="${tmp%%"$NL"*}"
+        ;;
+    esac
+    self="-"
+    if [ "$pid" = "$SELF_PID" ]; then self="self"; fi
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$started" "$name" "$WT_NAME" "$sid" "$status" "$pid" "$self"
+  done
+}
+
+# 環境の前提を確かめ、SELF_DOMAIN / MINE_COMMON / PROC_OK を決める。満たさなければ案内して 1。
+prepare_env() {
   if ! command -v jq >/dev/null 2>&1; then
     fallback_hint "jq が無いため、セッションの json を読めません"
-    return 0
+    return 1
   fi
   if [ ! -d "$SESSIONS_DIR" ]; then
     fallback_hint "セッションの json の置き場所が見つかりません（$SESSIONS_DIR）"
-    return 0
+    return 1
   fi
   git_info "$PWD" || true
-  mine_common="$G_COMMON"
-  if [ -z "$mine_common" ]; then
+  MINE_COMMON="$G_COMMON"
+  if [ -z "$MINE_COMMON" ]; then
     fallback_hint "git リポジトリの共通ディレクトリを解決できないため、同じプロジェクトを判定できません"
-    return 0
+    return 1
   fi
+  PROC_OK=0
+  SELF_DOMAIN=""
   if have_proc; then
-    proc_ok=1
-    domain="$(self_domain)"
-  else
-    domain=""
+    PROC_OK=1
+    SELF_DOMAIN="$(self_domain)"
   fi
+  return 0
+}
+
+# 同じプロジェクトの生きているセッションを集めて TSV で出す（startedAt 昇順）:
+#   宛先名 \t 作業ツリー名 \t issue \t 状態 \t PID \t 自分なら self、他は -
+collect_rows() {
+  local f base files=() raw out
+  prepare_env || return 0
   self_pid
   ledger_issues
 
@@ -263,7 +327,7 @@ collect_rows() {
     base="${f##*/}"
     base="${base%.json}"
     case "$base" in '' | *[!0-9]*) continue ;; esac
-    if [ "$proc_ok" -eq 1 ]; then
+    if [ "$PROC_OK" -eq 1 ]; then
       [ -d "/proc/$base" ] || continue
     else
       kill -0 "$base" 2>/dev/null || continue
@@ -287,37 +351,22 @@ collect_rows() {
   fi
   [ -n "$raw" ] || return 0
 
-  local ISSUES_NL="$NL$ISSUES$NL"
-  while IFS="$SEP" read -r file pid pstart name cwd status started pdomain; do
-    [ -n "$file" ] || continue
-    case "$pid" in '' | *[!0-9]* | null) warn "pid が数字でない json を読み飛ばします: $file"; continue ;; esac
-    case "$name" in '' | null) warn "name が無い json を読み飛ばします: $file"; continue ;; esac
-    case "$started" in '' | *[!0-9]*) started=0 ;; esac
+  emit_rows <<EOF | sort -t "$TAB" -k1,1n -k6,6n | cut -f2-
+$raw
+EOF
+}
 
-    if [ "$proc_ok" -eq 1 ]; then
-      # 別のコンテナの json は無関係。
-      if [ -n "$domain" ] && [ "$pdomain" != "$domain" ]; then continue; fi
-      # PID が生きていて、開始時刻が一致すること（再利用された PID を除く）。
-      proc_start "$pid" && [ "$PROC_START" = "$pstart" ] || continue
-    else
-      kill -0 "$pid" 2>/dev/null || continue
-    fi
-    # 同じリポジトリ（git-common-dir が同じ）であること。
-    git_info "$cwd" || true
-    [ "$G_COMMON" = "$mine_common" ] || continue
-
-    worktree_name_of "$cwd"
-    sid="-"
-    case "$ISSUES_NL" in
-      *"$NL$pid$TAB"*)
-        tmp="${ISSUES_NL#*"$NL$pid$TAB"}"
-        sid="${tmp%%"$NL"*}"
-        ;;
-    esac
-    self="-"
-    if [ "$pid" = "$SELF_PID" ]; then self="self"; fi
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$started" "$name" "$WT_NAME" "$sid" "$status" "$pid" "$self"
-  done <<EOF | sort -t "$TAB" -k1,1n -k6,6n | cut -f2-
+# 自分のセッションの 1 行だけを、同じ形式で出す。自分の json と、その 1 セッション分の
+# git と台帳だけを読む（全件を走査しない）。
+self_row() {
+  local raw
+  prepare_env || return 0
+  self_pid
+  [ -n "$SELF_PID" ] && [ -f "$SESSIONS_DIR/$SELF_PID.json" ] || return 0
+  ledger_issues "$SELF_PID"
+  raw="$(jq -r "$JQ_FIELDS" "$SESSIONS_DIR/$SELF_PID.json" 2>/dev/null)" || raw=""
+  [ -n "$raw" ] || return 0
+  emit_rows <<EOF | cut -f2-
 $raw
 EOF
 }
@@ -402,17 +451,11 @@ cmd_resolve() {
 }
 
 cmd_whoami() {
-  local rows line name="" wt="" iss="" self found=0
-  rows="$(collect_rows)"
-  # 列は 宛先名 / 作業ツリー / issue / 状態 / PID / self。self の行を探す。
-  while IFS= read -r line; do
-    [ -n "$line" ] || continue
-    IFS="$TAB" read -r name wt iss _ _ self <<<"$line"
-    if [ "$self" = "self" ]; then found=1; break; fi
-  done <<EOF
-$rows
-EOF
-  if [ "$found" -eq 0 ]; then
+  local row name="" wt="" iss="" label
+  row="$(self_row)"
+  if [ -n "$row" ]; then
+    IFS="$TAB" read -r name wt iss _ <<<"$row"
+  else
     warn "自分のセッションの json を特定できません（-p の非対話セッションは登録されません）。"
     name="(宛先名不明)"
     git_info "$PWD" || true
@@ -421,7 +464,9 @@ EOF
     iss="-"
   fi
   read_host_label "$SCRIPT_DIR"
-  printf '[from: %s | 場所: %s | 作業ツリー: %s | issue: %s]\n' "$name" "${HOST_LABEL:--}" "$wt" "$iss"
+  # 宛先名と同じ置き換えをかける（ラッパーが作る名前の場所の部分と同じ表記にする）。
+  label="${HOST_LABEL//[!A-Za-z0-9._-]/_}"
+  printf '[from: %s | 場所: %s | 作業ツリー: %s | issue: %s]\n' "$name" "${label:--}" "$wt" "$iss"
 }
 
 main() {

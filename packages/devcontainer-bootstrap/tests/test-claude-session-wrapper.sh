@@ -2,7 +2,7 @@
 # セッションの宛先名を自動で付ける起動ラッパー（scripts/claude-session-wrapper.sh）と、
 # その配線（--with-claude の生成物）を検証する。
 #
-#   - ラベルありで、名前の形が <ラベル>-<作業ツリー名>-<2桁の16進> になる
+#   - ラベルありで、名前の形が <ラベル>-<作業ツリー名>-<4桁の16進> になる
 #   - 起動のたびに名前が変わる
 #   - ラベルなし・既に設定済み・計算の失敗のどれでも、引数がそのまま exec される
 #   - export 記法・CRLF・git worktree でも、ラッパーと /peers の署名が同じラベルを返す
@@ -82,10 +82,10 @@ whoami_label() {
 P1="$WORK/p1"
 mkproject "$P1" "lab"
 
-it "ラベルありで、名前が <ラベル>-<作業ツリー名>-<2桁の16進> になる"
+it "ラベルありで、名前が <ラベル>-<作業ツリー名>-<4桁の16進> になる"
 res="$(run_wrapper "$P1" "$REPO")"
 name="$(field NAME "$res")"
-if [[ "$name" =~ ^lab-my-repo-[0-9a-f]{2}$ ]]; then pass; else fail "名前=$name"; fi
+if [[ "$name" =~ ^lab-my-repo-[0-9a-f]{4}$ ]]; then pass; else fail "名前=$name"; fi
 
 it "ラベルありでも、本体のパスと引数がそのまま渡る（空白を含む引数も 1 個のまま）"
 if [[ "$(field ARGC "$res")" == "2" ]] \
@@ -109,17 +109,17 @@ it "ラベルに使えない文字は _ に直る"
 P2="$WORK/p2"
 mkproject "$P2" "ho st/ラベル"
 n3="$(field NAME "$(run_wrapper "$P2" "$REPO")")"
-if [[ "$n3" =~ ^[A-Za-z0-9._-]+-my-repo-[0-9a-f]{2}$ && "$n3" == ho_st_* ]]; then pass; else fail "名前=$n3"; fi
+if [[ "$n3" =~ ^[A-Za-z0-9._-]+-my-repo-[0-9a-f]{4}$ && "$n3" == ho_st_* ]]; then pass; else fail "名前=$n3"; fi
 
 it "ラベルが環境変数にだけあっても使う（.env が無いとき）"
 P3="$WORK/p3"
 mkproject "$P3"
 n4="$(field NAME "$(run_wrapper "$P3" "$REPO" SESSION_HOST_LABEL=envlab)")"
-if [[ "$n4" =~ ^envlab-my-repo-[0-9a-f]{2}$ ]]; then pass; else fail "名前=$n4"; fi
+if [[ "$n4" =~ ^envlab-my-repo-[0-9a-f]{4}$ ]]; then pass; else fail "名前=$n4"; fi
 
 it ".env と環境変数の両方にあれば .env が先"
 n4b="$(field NAME "$(run_wrapper "$P1" "$REPO" SESSION_HOST_LABEL=envlab)")"
-if [[ "$n4b" =~ ^lab-my-repo-[0-9a-f]{2}$ ]]; then pass; else fail "名前=$n4b"; fi
+if [[ "$n4b" =~ ^lab-my-repo-[0-9a-f]{4}$ ]]; then pass; else fail "名前=$n4b"; fi
 
 it "ラベルなしなら名前を変えず、引数がそのまま exec される"
 res="$(run_wrapper "$P3" "$REPO")"
@@ -152,7 +152,7 @@ it "git リポジトリの外から起動しても止まらず、cwd の名前�
 NOGIT="$WORK/plain-dir"
 mkdir -p "$NOGIT"
 n5="$(field NAME "$(run_wrapper "$P1" "$NOGIT")")"
-if [[ "$n5" =~ ^lab-plain-dir-[0-9a-f]{2}$ ]]; then pass; else fail "名前=$n5"; fi
+if [[ "$n5" =~ ^lab-plain-dir-[0-9a-f]{4}$ ]]; then pass; else fail "名前=$n5"; fi
 
 it "引数が無くても止まらない（exec するものが無いだけ）"
 (cd "$REPO" && bash "$P1/scripts/claude-session-wrapper.sh" >/dev/null 2>&1)
@@ -202,7 +202,68 @@ mkproject "$MAIN"
 printf 'SESSION_HOST_LABEL=mainlab\n' >"$MAIN/.env"
 got_w="$(field NAME "$(run_wrapper "$WTREE" "$WTREE")")"
 got_p="$(whoami_label "$WTREE" "$WTREE")"
-if [[ "$got_w" =~ ^mainlab-main-wt-[0-9a-f]{2}$ && "$got_p" == "mainlab" ]]; then pass; else fail "ラッパー=$got_w whoami=$got_p"; fi
+if [[ "$got_w" =~ ^mainlab-main-wt-[0-9a-f]{4}$ && "$got_p" == "mainlab" ]]; then pass; else fail "ラッパー=$got_w whoami=$got_p"; fi
+
+# ── 起動役（作業ツリーの外の固定パス。on-attach.sh が設置する） ─────────────────
+
+FAKE_HOME="$WORK/fake-home"
+LAUNCHER="$WORK/launcher-bin/claude-session-launcher"
+mkdir -p "$FAKE_HOME"
+run_on_attach() {
+  (cd "$out" && HOME="$FAKE_HOME" GIT_CONFIG_GLOBAL="$FAKE_HOME/.gitconfig" CLAUDE_SESSION_LAUNCHER="$LAUNCHER" bash scripts/on-attach.sh 2>&1)
+}
+
+it "on-attach.sh が起動役を設置する（実行可能。作業ツリーの外のパス）"
+attach1="$(run_on_attach)"
+if [[ -x "$LAUNCHER" ]] && printf '%s' "$attach1" | command grep -q 'installed Claude Code launcher'; then pass; else fail "$attach1"; fi
+
+it "on-attach.sh の設置は冪等である（2 回目は何も書き直さない）"
+inode1="$(ls -i "$LAUNCHER")"
+sum1="$(cksum <"$LAUNCHER")"
+attach2="$(run_on_attach)"
+inode2="$(ls -i "$LAUNCHER")"
+sum2="$(cksum <"$LAUNCHER")"
+if [[ "$inode1" == "$inode2" && "$sum1" == "$sum2" ]] && ! printf '%s' "$attach2" | command grep -q 'installed Claude Code launcher'; then pass; else fail "inode $inode1->$inode2 sum $sum1->$sum2"; fi
+
+it "起動役を壊されていても、on-attach.sh が元の内容へ戻す"
+printf '#!/bin/sh\nexit 9\n' >"$LAUNCHER"
+run_on_attach >/dev/null
+if [[ "$(cksum <"$LAUNCHER")" == "$sum1" ]]; then pass; else fail "戻っていない"; fi
+
+it "--with-claude を選ばない生成物の on-attach.sh は、起動役を設置しない"
+NOCLAUDE_LAUNCHER="$WORK/no-claude-bin/claude-session-launcher"
+(cd "$out_plain" && HOME="$FAKE_HOME" GIT_CONFIG_GLOBAL="$FAKE_HOME/.gitconfig" CLAUDE_SESSION_LAUNCHER="$NOCLAUDE_LAUNCHER" bash scripts/on-attach.sh >/dev/null 2>&1)
+if [[ ! -e "$NOCLAUDE_LAUNCHER" ]]; then pass; else fail "設置された"; fi
+
+printf 'SESSION_HOST_LABEL=viaL\n' >"$out/.env"
+
+it "起動役は、ラッパーがあるときはそれを呼ぶ（名前が付き、引数がそのまま渡る）"
+res="$(cd "$REPO" && env -u CLAUDE_CODE_SESSION_NAME -u SESSION_HOST_LABEL "$LAUNCHER" "$STUB" --flag "two words" 2>/dev/null)"
+if [[ "$(field NAME "$res")" =~ ^viaL-my-repo-[0-9a-f]{4}$ && "$(field ARGC "$res")" == "2" ]] \
+  && printf '%s\n' "$res" | command grep -qx 'ARG=two words'; then
+  pass
+else
+  fail "$res"
+fi
+
+it "起動役は、ラッパーが無いブランチでも、引数をそのまま exec する"
+mv "$out/scripts/claude-session-wrapper.sh" "$out/scripts/claude-session-wrapper.sh.away"
+res="$(cd "$REPO" && env -u CLAUDE_CODE_SESSION_NAME -u SESSION_HOST_LABEL "$LAUNCHER" "$STUB" --flag "two words" 2>/dev/null)"
+rc=$?
+if [[ "$rc" == "0" && "$(field NAME "$res")" == "<unset>" && "$(field ARGC "$res")" == "2" ]] \
+  && printf '%s\n' "$res" | command grep -qx 'ARG=two words'; then
+  pass
+else
+  fail "rc=$rc $res"
+fi
+
+it "起動役は、ラッパーが実行可能でないときも、引数をそのまま exec する"
+cp "$out/scripts/claude-session-wrapper.sh.away" "$out/scripts/claude-session-wrapper.sh"
+chmod 644 "$out/scripts/claude-session-wrapper.sh"
+res="$(cd "$REPO" && env -u CLAUDE_CODE_SESSION_NAME -u SESSION_HOST_LABEL "$LAUNCHER" "$STUB" --flag "two words" 2>/dev/null)"
+if [[ "$(field NAME "$res")" == "<unset>" && "$(field ARGC "$res")" == "2" ]]; then pass; else fail "$res"; fi
+rm -f "$out/scripts/claude-session-wrapper.sh"
+mv "$out/scripts/claude-session-wrapper.sh.away" "$out/scripts/claude-session-wrapper.sh"
 
 # ── 配線（生成物） ────────────────────────────────────────────────────────────
 
@@ -210,10 +271,10 @@ DC="$out/.devcontainer/devcontainer.json"
 
 it "--with-claude の生成物の devcontainer.json が claudeProcessWrapper を絶対パスで配線する"
 wired="$(jq -r '.customizations.vscode.settings["claudeCode.claudeProcessWrapper"] // empty' "$DC" 2>/dev/null)"
-assert_eq "$wired" "/workspaces/test/scripts/claude-session-wrapper.sh" "配線先"
+assert_eq "$wired" "/home/vscode/.local/bin/claude-session-launcher" "配線先"
 
-it "配線先は、生成されたラッパーのパス（/workspaces/<プロジェクト名>/…）に対応する"
-if [[ "$wired" == "/workspaces/test/${WRAPPER#"$out"/}" ]]; then pass; else fail "$wired"; fi
+it "配線先は作業ツリーの外の固定パスで、ラッパーを直接指さない"
+if [[ "$wired" == /home/*/.local/bin/* && "$wired" != /workspaces/* ]]; then pass; else fail "$wired"; fi
 
 it "--with-claude を選ばない生成物には claudeProcessWrapper の配線がない"
 if ! command grep -q 'claudeProcessWrapper' "$out_plain/.devcontainer/devcontainer.json"; then pass; else fail "配線が残っている"; fi

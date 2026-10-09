@@ -1440,6 +1440,47 @@ strip_docker_creds_store() {
 }
 strip_docker_creds_store
 
+# Claude Code の起動役を、作業ツリーの外の固定パスへ設置する（冪等）。
+#
+# VS Code の設定 claudeCode.claudeProcessWrapper は、この起動役を指す。作業ツリーの
+# scripts/claude-session-wrapper.sh を直接指すと、そのファイルが無いブランチへ切り替えた
+# だけで Claude Code が一切起動しなくなるため、作業ツリーの外に置いた極小の sh を挟む。
+# 起動役は、ラッパーが実行可能ならそれを exec し、無ければ何もせずに引数をそのまま exec する。
+# 作業ツリーの位置は設置時に焼き込む（このスクリプトの位置から決める）。
+# ラッパーを配っていない構成（--with-claude なし）では何もしない。
+# 設置先は CLAUDE_SESSION_LAUNCHER で変えられる（試験用）。失敗しても on-attach は落とさない。
+install_claude_session_launcher() {
+  local wrapper dest dir wrapper_q content current tmp
+  wrapper="$(cd "$HERE/.." && pwd)/scripts/claude-session-wrapper.sh"
+  [[ -f "$wrapper" ]] || return 0
+  dest="${CLAUDE_SESSION_LAUNCHER:-$HOME/.local/bin/claude-session-launcher}"
+  # 単一引用符で囲んで焼き込むため、パス中の ' は '\'' に直す。
+  wrapper_q="${wrapper//\'/\'\\\'\'}"
+  content="$(printf '%s\n' \
+    '#!/bin/sh' \
+    '# scripts/on-attach.sh が設置する Claude Code の起動役。手で編集しない（接続のたびに書き直される）。' \
+    '# 作業ツリーのラッパーが実行可能ならそれを、無ければ引数をそのまま exec する。' \
+    "w='$wrapper_q'" \
+    'if [ -x "$w" ]; then exec "$w" "$@"; fi' \
+    'exec "$@"')"
+  current="$(cat "$dest" 2>/dev/null || true)"
+  if [[ "$current" == "$content" && -x "$dest" ]]; then
+    return 0
+  fi
+  dir="$(dirname "$dest")"
+  tmp="$dest.on-attach.tmp"
+  if mkdir -p "$dir" 2>/dev/null \
+    && printf '%s\n' "$content" >"$tmp" 2>/dev/null \
+    && chmod 755 "$tmp" 2>/dev/null \
+    && mv "$tmp" "$dest" 2>/dev/null; then
+    echo "[on-attach] installed Claude Code launcher: $dest"
+  else
+    rm -f "$tmp" 2>/dev/null || true
+    echo "[on-attach] WARN: Claude Code の起動役を設置できませんでした: $dest" >&2
+  fi
+}
+install_claude_session_launcher
+
 # gh の認証状態を確認する。
 #
 # 判定は「いま実際に使われている資格情報が有効か」だけに絞る（--active）。環境変数の
@@ -8519,7 +8560,7 @@ TMPL
 #
 # やること:
 #   .env の SESSION_HOST_LABEL（無ければ環境変数）があれば、環境変数
-#   CLAUDE_CODE_SESSION_NAME を <ラベル>-<作業ツリー名>-<2桁の16進> にして exec する。
+#   CLAUDE_CODE_SESSION_NAME を <ラベル>-<作業ツリー名>-<4桁の16進> にして exec する。
 #   この値が SendMessage の宛先名になり、ListAgents にも出る。16進は起動ごとに変わる
 #   （同じ作業ツリーで複数のセッションを動かしても宛先名が重ならないようにするため）。
 #
@@ -8596,9 +8637,9 @@ compute_name() {
   wt="${top##*/}"
   [ -n "$wt" ] || return 1
 
-  printf -v hex '%02x' $((RANDOM % 256)) || return 1
+  printf -v hex '%04x' "$RANDOM" || return 1
   case "$hex" in
-    [0-9a-f][0-9a-f]) ;;
+    [0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;
     *) return 1 ;;
   esac
 
@@ -8649,7 +8690,7 @@ TMPL
 #   /proc を読めない環境（macOS など）では、pidDomain と開始時刻の照合を省き、
 #   kill -0 による生存の確認だけにする。
 #
-# 台帳の issue は session-ledger.sh list --all の pid= の列と、json の pid を突き合わせて引く。
+# 台帳の issue は session-ledger.sh list（生きている登録）の pid= の列と、json の pid を突き合わせて引く。
 #
 # 制約と fail-open:
 #   - ~/.claude/sessions/*.json は公開された仕様ではない（Claude Code 2.1.296 で実測）。
@@ -8751,7 +8792,7 @@ proc_fields() { # pid
     *) return 1 ;;
   esac
   # shellcheck disable=SC2206
-  PROC_F=(${stat##*)})
+  PROC_F=(${stat##*\)})
   [ "${#PROC_F[@]}" -ge 20 ]
 }
 
@@ -8797,7 +8838,23 @@ worktree_name_of() { # ディレクトリ（git_info の直後に G_TOP を使�
   WT_NAME="${top##*/}"
 }
 
-# 自分のセッションの PID を変数 SELF_PID へ。祖先をたどり、json のあるプロセスを最初に見つけたもの。
+# json の pidDomain / procStart が、このプロセスの環境と一致するか。/proc を読めない環境、
+# または jq が無いときは確かめられないので一致とみなす。
+json_matches_here() { # pid
+  local raw dom pstart
+  have_proc || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+  raw="$(jq -r '[(.pidDomain // ""), (.procStart // "") | tostring] | join("\u0001")' "$SESSIONS_DIR/$1.json" 2>/dev/null)" || return 1
+  dom="${raw%%"$SEP"*}"
+  pstart="${raw#*"$SEP"}"
+  [ -n "$pstart" ] || return 1
+  proc_start "$1" && [ "$PROC_START" = "$pstart" ] || return 1
+  [ -z "$SELF_DOMAIN" ] || [ "$dom" = "$SELF_DOMAIN" ]
+}
+
+# 自分のセッションの PID を変数 SELF_PID へ。祖先をたどり、<PID>.json があって、その json の
+# pidDomain と procStart がこのプロセスの環境と一致する最初のものを採る。~/.claude は
+# named volume で、前のコンテナの json が同じ PID の名前で残りうるため、名前だけでは採らない。
 self_pid() {
   local p pp i
   SELF_PID=""
@@ -8817,7 +8874,7 @@ self_pid() {
     fi
     case "$pp" in '' | *[!0-9]*) return 0 ;; esac
     [ "$pp" -gt 1 ] || return 0
-    if [ -f "$SESSIONS_DIR/$pp.json" ]; then
+    if [ -f "$SESSIONS_DIR/$pp.json" ] && json_matches_here "$pp"; then
       SELF_PID="$pp"
       return 0
     fi
@@ -8827,21 +8884,21 @@ self_pid() {
   return 0
 }
 
-# 台帳から、持ち主の PID（pid= の列）ごとの issue を、変数 ISSUES へ読む。
+# 台帳（既定の list。生きている登録だけ）から、持ち主の PID（pid= の列）ごとの issue を、
+# 変数 ISSUES へ読む。引数に PID を渡すと、その PID の分だけにする。
 #   各行: <PID>\t#1,#2
-ledger_issues() {
+ledger_issues() { # [PID]
   ISSUES=""
   [ -f "$LEDGER" ] || return 0
-  ISSUES="$(bash "$LEDGER" list --all 2>/dev/null | awk '
+  ISSUES="$(bash "$LEDGER" list 2>/dev/null | awk -v only="${1:-}" '
     {
-      pid = ""; kind = ""; tgt = ""; state = ""
+      pid = ""; kind = ""; tgt = ""
       for (i = 1; i <= NF; i++) {
         if ($i ~ /^pid=/) pid = substr($i, 5)
         else if ($i ~ /^kind=/) kind = substr($i, 6)
         else if ($i ~ /^target=/) tgt = substr($i, 8)
-        else if ($i ~ /^state=/) state = substr($i, 7)
       }
-      if (kind == "issue" && state == "live" && tgt != "" && pid ~ /^[0-9]+$/) {
+      if (kind == "issue" && tgt != "" && pid ~ /^[0-9]+$/ && (only == "" || pid == only)) {
         if (acc[pid] == "") acc[pid] = "#" tgt
         else acc[pid] = acc[pid] ",#" tgt
       }
@@ -8853,31 +8910,79 @@ ledger_issues() {
 # jq の出力 1 行ぶんの抽出式。ファイル名の先頭に付け、区切りは \u0001。
 JQ_FIELDS='[input_filename, .pid, .procStart, .name, .cwd, (.status // "-"), (.startedAt // 0), (.pidDomain // "")] | map(tostring) | join("\u0001")'
 
-# 同じプロジェクトの生きているセッションを集めて TSV で出す（startedAt 昇順）:
-#   宛先名 \t 作業ツリー名 \t issue \t 状態 \t PID \t 自分なら self、他は -
-collect_rows() {
-  local f base files=() raw out line domain mine_common proc_ok=0
+# 事前に SELF_DOMAIN / MINE_COMMON / PROC_OK / SELF_PID / ISSUES を決めておく。
+# jq の出力（JQ_FIELDS の行）を標準入力から読み、同じプロジェクトの生きているものを TSV で出す:
+#   開始時刻 \t 宛先名 \t 作業ツリー名 \t issue \t 状態 \t PID \t 自分なら self、他は -
+emit_rows() {
   local file pid pstart name cwd status started pdomain sid tmp self
+  local ISSUES_NL="$NL$ISSUES$NL"
+  while IFS="$SEP" read -r file pid pstart name cwd status started pdomain; do
+    [ -n "$file" ] || continue
+    case "$pid" in '' | *[!0-9]* | null) warn "pid が数字でない json を読み飛ばします: $file"; continue ;; esac
+    case "$name" in '' | null) warn "name が無い json を読み飛ばします: $file"; continue ;; esac
+    case "$started" in '' | *[!0-9]*) started=0 ;; esac
+
+    if [ "$PROC_OK" -eq 1 ]; then
+      # 形が変わった json（項目が欠けた）は判定できない。黙って落とさず知らせる。
+      if [ -z "$pdomain" ] || [ -z "$pstart" ] || [ "$pstart" = "null" ]; then
+        warn "pidDomain または procStart が欠けた json を読み飛ばします（Claude Code の版で形が変わった可能性）: $file。ListAgents を使ってください。"
+        continue
+      fi
+      # 別のコンテナの json は無関係。
+      if [ -n "$SELF_DOMAIN" ] && [ "$pdomain" != "$SELF_DOMAIN" ]; then continue; fi
+      # PID が生きていて、開始時刻が一致すること（再利用された PID を除く）。
+      proc_start "$pid" && [ "$PROC_START" = "$pstart" ] || continue
+    else
+      kill -0 "$pid" 2>/dev/null || continue
+    fi
+    # 同じリポジトリ（git-common-dir が同じ）であること。
+    git_info "$cwd" || true
+    [ "$G_COMMON" = "$MINE_COMMON" ] || continue
+
+    worktree_name_of "$cwd"
+    sid="-"
+    case "$ISSUES_NL" in
+      *"$NL$pid$TAB"*)
+        tmp="${ISSUES_NL#*"$NL$pid$TAB"}"
+        sid="${tmp%%"$NL"*}"
+        ;;
+    esac
+    self="-"
+    if [ "$pid" = "$SELF_PID" ]; then self="self"; fi
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$started" "$name" "$WT_NAME" "$sid" "$status" "$pid" "$self"
+  done
+}
+
+# 環境の前提を確かめ、SELF_DOMAIN / MINE_COMMON / PROC_OK を決める。満たさなければ案内して 1。
+prepare_env() {
   if ! command -v jq >/dev/null 2>&1; then
     fallback_hint "jq が無いため、セッションの json を読めません"
-    return 0
+    return 1
   fi
   if [ ! -d "$SESSIONS_DIR" ]; then
     fallback_hint "セッションの json の置き場所が見つかりません（$SESSIONS_DIR）"
-    return 0
+    return 1
   fi
   git_info "$PWD" || true
-  mine_common="$G_COMMON"
-  if [ -z "$mine_common" ]; then
+  MINE_COMMON="$G_COMMON"
+  if [ -z "$MINE_COMMON" ]; then
     fallback_hint "git リポジトリの共通ディレクトリを解決できないため、同じプロジェクトを判定できません"
-    return 0
+    return 1
   fi
+  PROC_OK=0
+  SELF_DOMAIN=""
   if have_proc; then
-    proc_ok=1
-    domain="$(self_domain)"
-  else
-    domain=""
+    PROC_OK=1
+    SELF_DOMAIN="$(self_domain)"
   fi
+  return 0
+}
+
+# 同じプロジェクトの生きているセッションを集めて TSV で出す（startedAt 昇順）:
+#   宛先名 \t 作業ツリー名 \t issue \t 状態 \t PID \t 自分なら self、他は -
+collect_rows() {
+  local f base files=() raw out
+  prepare_env || return 0
   self_pid
   ledger_issues
 
@@ -8887,7 +8992,7 @@ collect_rows() {
     base="${f##*/}"
     base="${base%.json}"
     case "$base" in '' | *[!0-9]*) continue ;; esac
-    if [ "$proc_ok" -eq 1 ]; then
+    if [ "$PROC_OK" -eq 1 ]; then
       [ -d "/proc/$base" ] || continue
     else
       kill -0 "$base" 2>/dev/null || continue
@@ -8911,37 +9016,22 @@ collect_rows() {
   fi
   [ -n "$raw" ] || return 0
 
-  local ISSUES_NL="$NL$ISSUES$NL"
-  while IFS="$SEP" read -r file pid pstart name cwd status started pdomain; do
-    [ -n "$file" ] || continue
-    case "$pid" in '' | *[!0-9]* | null) warn "pid が数字でない json を読み飛ばします: $file"; continue ;; esac
-    case "$name" in '' | null) warn "name が無い json を読み飛ばします: $file"; continue ;; esac
-    case "$started" in '' | *[!0-9]*) started=0 ;; esac
+  emit_rows <<EOF | sort -t "$TAB" -k1,1n -k6,6n | cut -f2-
+$raw
+EOF
+}
 
-    if [ "$proc_ok" -eq 1 ]; then
-      # 別のコンテナの json は無関係。
-      if [ -n "$domain" ] && [ "$pdomain" != "$domain" ]; then continue; fi
-      # PID が生きていて、開始時刻が一致すること（再利用された PID を除く）。
-      proc_start "$pid" && [ "$PROC_START" = "$pstart" ] || continue
-    else
-      kill -0 "$pid" 2>/dev/null || continue
-    fi
-    # 同じリポジトリ（git-common-dir が同じ）であること。
-    git_info "$cwd" || true
-    [ "$G_COMMON" = "$mine_common" ] || continue
-
-    worktree_name_of "$cwd"
-    sid="-"
-    case "$ISSUES_NL" in
-      *"$NL$pid$TAB"*)
-        tmp="${ISSUES_NL#*"$NL$pid$TAB"}"
-        sid="${tmp%%"$NL"*}"
-        ;;
-    esac
-    self="-"
-    if [ "$pid" = "$SELF_PID" ]; then self="self"; fi
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$started" "$name" "$WT_NAME" "$sid" "$status" "$pid" "$self"
-  done <<EOF | sort -t "$TAB" -k1,1n -k6,6n | cut -f2-
+# 自分のセッションの 1 行だけを、同じ形式で出す。自分の json と、その 1 セッション分の
+# git と台帳だけを読む（全件を走査しない）。
+self_row() {
+  local raw
+  prepare_env || return 0
+  self_pid
+  [ -n "$SELF_PID" ] && [ -f "$SESSIONS_DIR/$SELF_PID.json" ] || return 0
+  ledger_issues "$SELF_PID"
+  raw="$(jq -r "$JQ_FIELDS" "$SESSIONS_DIR/$SELF_PID.json" 2>/dev/null)" || raw=""
+  [ -n "$raw" ] || return 0
+  emit_rows <<EOF | cut -f2-
 $raw
 EOF
 }
@@ -9026,17 +9116,11 @@ cmd_resolve() {
 }
 
 cmd_whoami() {
-  local rows line name="" wt="" iss="" self found=0
-  rows="$(collect_rows)"
-  # 列は 宛先名 / 作業ツリー / issue / 状態 / PID / self。self の行を探す。
-  while IFS= read -r line; do
-    [ -n "$line" ] || continue
-    IFS="$TAB" read -r name wt iss _ _ self <<<"$line"
-    if [ "$self" = "self" ]; then found=1; break; fi
-  done <<EOF
-$rows
-EOF
-  if [ "$found" -eq 0 ]; then
+  local row name="" wt="" iss="" label
+  row="$(self_row)"
+  if [ -n "$row" ]; then
+    IFS="$TAB" read -r name wt iss _ <<<"$row"
+  else
     warn "自分のセッションの json を特定できません（-p の非対話セッションは登録されません）。"
     name="(宛先名不明)"
     git_info "$PWD" || true
@@ -9045,7 +9129,9 @@ EOF
     iss="-"
   fi
   read_host_label "$SCRIPT_DIR"
-  printf '[from: %s | 場所: %s | 作業ツリー: %s | issue: %s]\n' "$name" "${HOST_LABEL:--}" "$wt" "$iss"
+  # 宛先名と同じ置き換えをかける（ラッパーが作る名前の場所の部分と同じ表記にする）。
+  label="${HOST_LABEL//[!A-Za-z0-9._-]/_}"
+  printf '[from: %s | 場所: %s | 作業ツリー: %s | issue: %s]\n' "$name" "${label:--}" "$wt" "$iss"
 }
 
 main() {
@@ -9609,20 +9695,25 @@ build_with_extensions_block() {
 }
 
 # devcontainer.json の customizations.vscode.settings（__VSCODE_SETTINGS__）。
-# --with-claude のときだけ、claudeCode.claudeProcessWrapper に起動ラッパー
-# （scripts/claude-session-wrapper.sh）を指定する。
+# --with-claude のときだけ、claudeCode.claudeProcessWrapper に起動役
+# （~/.local/bin/claude-session-launcher）を指定する。
+#
+# 作業ツリーの scripts/claude-session-wrapper.sh を直接指さない。そのファイルが無い
+# ブランチへ切り替えただけで Claude Code が一切起動しなくなるため、作業ツリーの外の固定パスに
+# 置いた極小の sh（scripts/on-attach.sh が接続のたびに冪等に設置する）を挟む。起動役は、
+# ラッパーが実行可能ならそれを、無ければ引数をそのまま exec する。
 #
 # 絶対パスで書く。拡張（anthropic.claude-code 2.1.296）は設定値を読んだ文字列をそのまま
-# 実行ファイルのパスにし、${workspaceFolder} などの変数を展開しない（extension.js で
+# 実行ファイルのパスにし、${workspaceFolder} や ~ を展開しない（extension.js で
 # 確認。実機での起動は未検証）。この設定は scope が machine なので、利用者の設定ではなく
-# devcontainer.json の settings（コンテナ側の machine 設定）に置く。パスは
-# devcontainer.json の workspaceFolder と同じ /workspaces/<プロジェクト名>。
+# devcontainer.json の settings（コンテナ側の machine 設定）に置く。ホームは、開発コンテナの
+# 既定のユーザー vscode の /home/vscode とする。
 # 条件に合わないときは空（行ごと消え、直前の "]," の末尾カンマは write_file が畳む）。
 build_vscode_settings_block() {
   has_with claude || { printf ''; return; }
   printf '%s\n' \
     '      "settings": {' \
-    '        "claudeCode.claudeProcessWrapper": "/workspaces/__PROJECT_NAME__/scripts/claude-session-wrapper.sh"' \
+    '        "claudeCode.claudeProcessWrapper": "/home/vscode/.local/bin/claude-session-launcher"' \
     '      }'
 }
 
@@ -9634,7 +9725,7 @@ build_session_host_label_block() {
 
 # セッションの宛先名に含める場所のラベル（scripts/claude-session-wrapper.sh が読む）。
 # 空なら宛先名を変えない。設定すると、Claude Code のセッションの宛先名が
-# <ラベル>-<作業ツリー名>-<2桁の16進> になり、複数の機械・コンテナで動くセッションを
+# <ラベル>-<作業ツリー名>-<4桁の16進> になり、複数の機械・コンテナで動くセッションを
 # 宛先名から見分けられる（/peers で一覧・宛先の解決・一斉送信ができる）。
 # 英数字と . _ - だけを使う。
 SESSION_HOST_LABEL=
