@@ -53,7 +53,6 @@ done
 
 require_cmd gh
 require_cmd awk
-require_cmd jq
 
 [[ -f "$README_PATH" ]] || {
   echo "error: README not found: $README_PATH" >&2
@@ -81,8 +80,10 @@ http_status() {
 }
 
 # DCB と devcontainer-host は GitHub Release で配布するため、最新 Release のタグを正とする。
-# 404 は「Release が無い」だけでなく「リポジトリが無い」でも返るので、404 のときは
-# リポジトリ自体があるかを確かめ、無ければ止まる（リポジトリ名の誤りを「未公開」と書かない）。
+# releases/latest の 404 は「Release が無い」だけでなく、「リポジトリが無い」「Release を読む
+# 権限（Contents: read）が無い」でも返る。そこで 404 のときは Release の一覧を読み、一覧が 200 で
+# 読めたときだけ「無い（未公開）」とする。一覧も読めなければ（リポジトリが無い・権限が無い）止まる。
+# リポジトリそのもの（Metadata: read で読める）を確かめるだけでは、権限不足を「未公開」と取り違える。
 get_latest_release() {
   local repo="$1" status tag
   status="$(http_status "repos/$OWNER/$repo/releases/latest")"
@@ -94,8 +95,8 @@ get_latest_release() {
       printf '%s' "$tag"
       ;;
     404)
-      status="$(http_status "repos/$OWNER/$repo")"
-      [[ "$status" == "200" ]] || fail_read "$OWNER/$repo" "Release が 404 で、リポジトリも読めない（HTTP ${status:-応答なし}）"
+      status="$(http_status "repos/$OWNER/$repo/releases?per_page=1")"
+      [[ "$status" == "200" ]] || fail_read "$OWNER/$repo の Release の一覧" "最新の Release が 404 で、一覧も読めない（HTTP ${status:-応答なし}。リポジトリが無い、または Release を読む権限が無い）"
       printf '<none>'
       ;;
     *)

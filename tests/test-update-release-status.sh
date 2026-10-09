@@ -20,7 +20,7 @@ mkdir -p "$WORK/bin"
 
 cat > "$WORK/bin/gh" <<'FAKE'
 #!/usr/bin/env bash
-# 偽物の gh。FAKE_<名前>_RELEASE / FAKE_<名前>_REPO に HTTP の状態、FAKE_<名前>_TAG に Release のタグ、
+# 偽物の gh。FAKE_<名前>_RELEASE / FAKE_<名前>_LIST（Release の一覧）に HTTP の状態、FAKE_<名前>_TAG に Release のタグ、
 # FAKE_PLAYBOOK_TAGS にタグの一覧（改行区切り）、FAKE_PLAYBOOK_TAGS_RC に tags の終了コードを入れる。
 key_of() { case "$1" in devcontainer-bootstrap) echo DCB ;; devcontainer-host) echo HOST ;; ai-playbook) echo PLAYBOOK ;; *) echo OTHER ;; esac; }
 path=""; inc=0; jq=0
@@ -40,6 +40,10 @@ case "$path" in
     body='{"message":"x"}'; [[ "$st" == 200 ]] && body="{\"tag_name\":\"$tag\"}"
     # --jq '.tag_name' の呼び出しには、タグ名だけを返す（本物の gh と同じく、2xx 以外は非 0）
     if [[ "$jq" == 1 ]]; then [[ "$st" == 200 ]] && { printf '%s\n' "$tag"; exit 0; }; exit 1; fi
+    ;;
+  */releases\?per_page=1)
+    st_var="FAKE_${k}_LIST"; st="${!st_var:-200}"
+    body='[]'
     ;;
   */tags)
     rc="${FAKE_PLAYBOOK_TAGS_RC:-0}"
@@ -88,8 +92,8 @@ else
   fail "README: $(cat "$WORK/README.md")"
 fi
 
-it "devcontainer-host の Release が 404（リポジトリはある）なら「未公開」と書き、0 で終わる"
-assert_eq "$(run "${ok_env[@]}" FAKE_HOST_RELEASE=404 FAKE_HOST_REPO=200)" "0" "終了コード"
+it "devcontainer-host の最新の Release が 404 で、一覧が 200（空）なら「未公開」と書き、0 で終わる"
+assert_eq "$(run "${ok_env[@]}" FAKE_HOST_RELEASE=404 FAKE_HOST_LIST=200)" "0" "終了コード"
 it "「未公開（Release なし）」と書かれる"
 if grep -F 'ojos/devcontainer-host は未公開（Release なし）' "$WORK/README.md" >/dev/null; then pass; else fail "README: $(cat "$WORK/README.md")"; fi
 
@@ -99,11 +103,23 @@ for st in 401 403 500 502; do
   if [[ "$rc" != 0 ]] && diff -q "$README_SRC" "$WORK/README.md" >/dev/null; then pass; else fail "rc=$rc / 出力: $(cat "$WORK/out")"; fi
 done
 
-it "Release が 404 で、リポジトリも 404（名前の誤り・改名）なら非 0 で終わり、README を書き換えない"
-rc="$(run "${ok_env[@]}" FAKE_DCB_RELEASE=404 FAKE_DCB_REPO=404)"
+it "最新の Release が 404 で、一覧も 404（名前の誤り・改名）なら非 0 で終わり、README を書き換えない"
+rc="$(run "${ok_env[@]}" FAKE_DCB_RELEASE=404 FAKE_DCB_LIST=404)"
 if [[ "$rc" != 0 ]] && diff -q "$README_SRC" "$WORK/README.md" >/dev/null; then pass; else fail "rc=$rc / 出力: $(cat "$WORK/out")"; fi
 
+it "最新の Release が 404 で、一覧が 403（Release を読む権限が無い）なら非 0 で終わり、README を書き換えない"
+rc="$(run "${ok_env[@]}" FAKE_HOST_RELEASE=404 FAKE_HOST_LIST=403)"
+if [[ "$rc" != 0 ]] && diff -q "$README_SRC" "$WORK/README.md" >/dev/null; then pass; else fail "rc=$rc / 出力: $(cat "$WORK/out")"; fi
+
+it "jq が無くても動く（--jq は gh 自身の機能で、外部の jq は使わない）"
+mkdir -p "$WORK/nojq"
+for c in bash env awk sed tr cat mktemp mv rm sort tail printf cut; do p="$(command -v "$c")" && ln -sf "$p" "$WORK/nojq/$c"; done
+cp "$README_SRC" "$WORK/README.md"
+rc="$(env PATH="$WORK/bin:$WORK/nojq" "${ok_env[@]}" "$(command -v bash)" "$SCRIPT" --readme "$WORK/README.md" >"$WORK/out" 2>&1; echo $?)"
+assert_eq "$rc" "0" "jq の無い PATH での終了コード（出力: $(cat "$WORK/out"))"
+
 it "失敗したときは、どのリポジトリを読めなかったかを出す"
+rc="$(run "${ok_env[@]}" FAKE_DCB_RELEASE=404 FAKE_DCB_LIST=404)"
 if grep -F 'ojos/devcontainer-bootstrap' "$WORK/out" >/dev/null && grep -F 'README は書き換えていません' "$WORK/out" >/dev/null; then pass; else fail "出力: $(cat "$WORK/out")"; fi
 
 it "応答が無い（状態行が取れない）なら非 0 で終わる"
@@ -123,8 +139,8 @@ assert_eq "$(run "${ok_env[@]}" "FAKE_PLAYBOOK_TAGS=latest")" "0" "終了コー�
 it "そのとき ai-playbook は「未公開（タグなし）」と書かれる（<none> まで公開済み、とは書かない）"
 if grep -F 'ojos/ai-playbook は未公開（タグなし）' "$WORK/README.md" >/dev/null && ! grep -F '<none>' "$WORK/README.md" >/dev/null; then pass; else fail "README: $(cat "$WORK/README.md")"; fi
 
-it "devcontainer-bootstrap の Release が 404（リポジトリはある）なら「未公開（Release なし）」と書く"
-assert_eq "$(run "${ok_env[@]}" FAKE_DCB_RELEASE=404 FAKE_DCB_REPO=200)" "0" "終了コード"
+it "devcontainer-bootstrap の最新の Release が 404 で、一覧が 200（空）なら「未公開（Release なし）」と書く"
+assert_eq "$(run "${ok_env[@]}" FAKE_DCB_RELEASE=404 FAKE_DCB_LIST=200)" "0" "終了コード"
 if grep -F 'ojos/devcontainer-bootstrap は未公開（Release なし）' "$WORK/README.md" >/dev/null && ! grep -F '<none>' "$WORK/README.md" >/dev/null; then pass; else fail "README: $(cat "$WORK/README.md")"; fi
 
 exit_with_result
