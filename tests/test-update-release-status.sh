@@ -43,7 +43,10 @@ case "$path" in
     ;;
   */releases\?per_page=1)
     st_var="FAKE_${k}_LIST"; st="${!st_var:-200}"
+    cnt_var="FAKE_${k}_LIST_COUNT"; cnt="${!cnt_var:-0}"
     body='[]'
+    # --jq 'length' の呼び出しには件数を返す（2xx 以外は非 0）
+    if [[ "$jq" == 1 ]]; then [[ "$st" == 200 ]] && { printf '%s\n' "$cnt"; exit 0; }; exit 1; fi
     ;;
   */tags)
     rc="${FAKE_PLAYBOOK_TAGS_RC:-0}"
@@ -60,6 +63,10 @@ esac
 [[ "$inc" == 1 ]] && printf 'HTTP/2.0 %s X\r\nContent-Type: application/json\r\n\r\n' "$st"
 printf '%s\n' "$body"
 [[ "$st" == 2* ]] || exit 1
+# 状態行 200 を出したあと途中で切れた場合を模す（releases/latest の -i の呼び出しだけ）
+rc_var="FAKE_${k}_RELEASE_RC"
+[[ "$inc" == 1 && "$path" == */releases/latest && -n "${!rc_var:-}" ]] && exit "${!rc_var}"
+exit 0
 FAKE
 chmod +x "$WORK/bin/gh"
 
@@ -109,6 +116,14 @@ if [[ "$rc" != 0 ]] && diff -q "$README_SRC" "$WORK/README.md" >/dev/null; then 
 
 it "最新の Release が 404 で、一覧が 403（Release を読む権限が無い）なら非 0 で終わり、README を書き換えない"
 rc="$(run "${ok_env[@]}" FAKE_HOST_RELEASE=404 FAKE_HOST_LIST=403)"
+if [[ "$rc" != 0 ]] && diff -q "$README_SRC" "$WORK/README.md" >/dev/null; then pass; else fail "rc=$rc / 出力: $(cat "$WORK/out")"; fi
+
+it "最新の Release が HTTP 200 でも gh が非 0 で終わった（途中で切れた）なら非 0 で終わり、README を書き換えない"
+rc="$(run "${ok_env[@]}" FAKE_HOST_RELEASE_RC=1)"
+if [[ "$rc" != 0 ]] && diff -q "$README_SRC" "$WORK/README.md" >/dev/null; then pass; else fail "rc=$rc / 出力: $(cat "$WORK/out")"; fi
+
+it "最新の Release が 404 で、一覧に 1 件以上ある（プレリリースだけ等）なら未公開と書かずに止まる"
+rc="$(run "${ok_env[@]}" FAKE_HOST_RELEASE=404 FAKE_HOST_LIST=200 FAKE_HOST_LIST_COUNT=1)"
 if [[ "$rc" != 0 ]] && diff -q "$README_SRC" "$WORK/README.md" >/dev/null; then pass; else fail "rc=$rc / 出力: $(cat "$WORK/out")"; fi
 
 it "jq が無くても動く（--jq は gh 自身の機能で、外部の jq は使わない）"

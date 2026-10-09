@@ -70,37 +70,44 @@ fail_read() {
   exit 1
 }
 
-# gh api -i の状態（HTTP の番号）を返す。エラー文の文面には頼らない。
+# gh api -i の状態（HTTP の番号）と gh の終了コードを「状態 終了コード」の形で返す。
+# エラー文の文面には頼らない。終了コードも返すのは、状態行 200 を出したあと本文の途中で
+# 通信が切れたとき（gh は非 0 で終わる）を、読めたと取り違えないため。
 # check-repo-security.sh の fetch と同じく、端末向けの整形・色付け（GH_FORCE_TTY）を外し、
 # 改行の CR を除いてから 1 行目を読む。
 http_status() {
-  local out
-  out="$(env -u GH_FORCE_TTY NO_COLOR=1 gh api -i "$1" 2>/dev/null)" || true
-  printf '%s\n' "$out" | tr -d '\r' | awk 'NR == 1 && $1 ~ /^HTTP\// { print $2 }'
+  local out rc=0 st
+  out="$(env -u GH_FORCE_TTY NO_COLOR=1 gh api -i "$1" 2>/dev/null)" || rc=$?
+  st="$(printf '%s\n' "$out" | tr -d '\r' | awk 'NR == 1 && $1 ~ /^HTTP\// { print $2 }')"
+  printf '%s %s' "${st:-none}" "$rc"
 }
 
 # DCB と devcontainer-host は GitHub Release で配布するため、最新 Release のタグを正とする。
 # releases/latest の 404 は「Release が無い」だけでなく、「リポジトリが無い」「Release を読む
-# 権限（Contents: read）が無い」でも返る。そこで 404 のときは Release の一覧を読み、一覧が 200 で
-# 読めたときだけ「無い（未公開）」とする。一覧も読めなければ（リポジトリが無い・権限が無い）止まる。
-# リポジトリそのもの（Metadata: read で読める）を確かめるだけでは、権限不足を「未公開」と取り違える。
+# 権限（Contents: read）が無い」でも返る。そこで 404 のときは Release の一覧の件数を読み、
+# 一覧が読めて 0 件のときだけ「無い（未公開）」とする。一覧が読めない（リポジトリが無い・権限が
+# 無い・通信の失敗）とき、または 1 件以上ある（正式でない Release だけがある等）ときは止まる。
 get_latest_release() {
-  local repo="$1" status tag
-  status="$(http_status "repos/$OWNER/$repo/releases/latest")"
-  case "$status" in
+  local repo="$1" st rc tag n
+  read -r st rc <<<"$(http_status "repos/$OWNER/$repo/releases/latest")"
+  case "$st" in
     200)
+      [[ "$rc" == 0 ]] || fail_read "$OWNER/$repo の最新の Release" "HTTP 200 だが gh が終了コード $rc で終わった（応答の途中で切れた可能性）"
       # タグ名は本文を切り出さず、--jq で別に取る（-i の出力の形に依存しない）
       tag="$(env -u GH_FORCE_TTY NO_COLOR=1 gh api "repos/$OWNER/$repo/releases/latest" --jq '.tag_name // empty' 2>/dev/null)" || tag=""
       [[ -n "$tag" ]] || fail_read "$OWNER/$repo の最新の Release" "タグ名が取れない"
       printf '%s' "$tag"
       ;;
     404)
-      status="$(http_status "repos/$OWNER/$repo/releases?per_page=1")"
-      [[ "$status" == "200" ]] || fail_read "$OWNER/$repo の Release の一覧" "最新の Release が 404 で、一覧も読めない（HTTP ${status:-応答なし}。リポジトリが無い、または Release を読む権限が無い）"
-      printf '<none>'
+      n="$(env -u GH_FORCE_TTY NO_COLOR=1 gh api "repos/$OWNER/$repo/releases?per_page=1" --jq 'length' 2>/dev/null)" \
+        || fail_read "$OWNER/$repo の Release の一覧" "最新の Release が 404 で、一覧も読めない（リポジトリが無い、Release を読む権限が無い、または通信の失敗）"
+      case "$n" in
+        0) printf '<none>' ;;
+        *) fail_read "$OWNER/$repo の最新の Release" "最新の Release は 404 だが、一覧には ${n:-?} 件ある（プレリリースだけ等。未公開とは判定しない）" ;;
+      esac
       ;;
     *)
-      fail_read "$OWNER/$repo の最新の Release" "HTTP ${status:-応答なし}"
+      fail_read "$OWNER/$repo の最新の Release" "HTTP ${st}"
       ;;
   esac
 }
