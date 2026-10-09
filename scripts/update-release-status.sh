@@ -71,28 +71,30 @@ fail_read() {
   exit 1
 }
 
-# gh api -i の 1 行目（HTTP/x.y NNN ...）から状態の番号を取る。エラー文の文面には頼らない。
+# gh api -i の状態（HTTP の番号）を返す。エラー文の文面には頼らない。
+# check-repo-security.sh の fetch と同じく、端末向けの整形・色付け（GH_FORCE_TTY）を外し、
+# 改行の CR を除いてから 1 行目を読む。
 http_status() {
-  printf '%s\n' "$1" | sed -n '1s#^HTTP/[0-9.]* \([0-9][0-9][0-9]\).*#\1#p'
+  local out
+  out="$(env -u GH_FORCE_TTY NO_COLOR=1 gh api -i "$1" 2>/dev/null)" || true
+  printf '%s\n' "$out" | tr -d '\r' | awk 'NR == 1 && $1 ~ /^HTTP\// { print $2 }'
 }
 
 # DCB と devcontainer-host は GitHub Release で配布するため、最新 Release のタグを正とする。
 # 404 は「Release が無い」だけでなく「リポジトリが無い」でも返るので、404 のときは
 # リポジトリ自体があるかを確かめ、無ければ止まる（リポジトリ名の誤りを「未公開」と書かない）。
 get_latest_release() {
-  local repo="$1" resp status tag
-  # gh は 4xx / 5xx で非 0 終了するが、-i なら状態行と本文を標準出力へ出す。終了コードでは止めず、状態で判定する。
-  resp="$(gh api -i "repos/$OWNER/$repo/releases/latest" 2>/dev/null)" || true
-  status="$(http_status "$resp")"
+  local repo="$1" status tag
+  status="$(http_status "repos/$OWNER/$repo/releases/latest")"
   case "$status" in
     200)
-      tag="$(printf '%s\n' "$resp" | awk 'b { print } /^\r?$/ { b = 1 }' | jq -r '.tag_name // empty' 2>/dev/null)" || tag=""
+      # タグ名は本文を切り出さず、--jq で別に取る（-i の出力の形に依存しない）
+      tag="$(env -u GH_FORCE_TTY NO_COLOR=1 gh api "repos/$OWNER/$repo/releases/latest" --jq '.tag_name // empty' 2>/dev/null)" || tag=""
       [[ -n "$tag" ]] || fail_read "$OWNER/$repo の最新の Release" "タグ名が取れない"
       printf '%s' "$tag"
       ;;
     404)
-      resp="$(gh api -i "repos/$OWNER/$repo" 2>/dev/null)" || true
-      status="$(http_status "$resp")"
+      status="$(http_status "repos/$OWNER/$repo")"
       [[ "$status" == "200" ]] || fail_read "$OWNER/$repo" "Release が 404 で、リポジトリも読めない（HTTP ${status:-応答なし}）"
       printf '<none>'
       ;;
@@ -107,7 +109,7 @@ get_latest_release() {
 # タグの一覧そのものが読めなければ止まる。読めて semver のタグが 1 つも無いときだけ <none>。
 get_latest_semver_tag() {
   local repo="$1" names out
-  names="$(gh api --paginate "repos/$OWNER/$repo/tags" --jq '.[].name' 2>/dev/null)" \
+  names="$(env -u GH_FORCE_TTY NO_COLOR=1 gh api --paginate "repos/$OWNER/$repo/tags" --jq '.[].name' 2>/dev/null)" \
     || fail_read "$OWNER/$repo のタグの一覧" "gh api が失敗した"
   out="$(printf '%s\n' "$names" | awk '/^v[0-9]+\.[0-9]+\.[0-9]+$/' | sort -V | tail -1)"
   [[ -n "$out" ]] && printf '%s' "$out" || printf '<none>'
@@ -117,31 +119,27 @@ DCB_TAG="$(get_latest_release devcontainer-bootstrap)"
 HOST_TAG="$(get_latest_release devcontainer-host)"
 PLAYBOOK_TAG="$(get_latest_semver_tag ai-playbook)"
 
-# 未公開（Release が無い）のとき「<none> まで公開済み」と出すと、公開済みと読める。
-# 未公開であることが分かる表示にする。
-if [[ "$HOST_TAG" == "<none>" ]]; then
-  HOST_TABLE="$OWNER/devcontainer-host は未公開（Release なし）"
-  HOST_LIST="\`$OWNER/devcontainer-host\` は未公開（Release なし）"
-else
-  HOST_TABLE="$OWNER/devcontainer-host で $HOST_TAG まで公開済み"
-  HOST_LIST="\`$OWNER/devcontainer-host\` で \`$HOST_TAG\` まで公開済み"
-fi
+# 未公開（Release / タグが無い）のとき「<none> まで公開済み」と出すと、公開済みと読める。
+# 3 つとも、未公開であることが分かる表示にする。$1 はリポジトリ名、$2 は版、$3 は無いときの理由。
+status_table() { if [[ "$2" == "<none>" ]]; then printf '%s は未公開（%s）' "$OWNER/$1" "$3"; else printf '%s で %s まで公開済み' "$OWNER/$1" "$2"; fi; }
+# shellcheck disable=SC2016  # ` は Markdown のコードの記号として文字どおり出す
+status_list()  { if [[ "$2" == "<none>" ]]; then printf '`%s` は未公開（%s）' "$OWNER/$1" "$3"; else printf '`%s` で `%s` まで公開済み' "$OWNER/$1" "$2"; fi; }
 
 BLOCK_FILE="$(mktemp "${TMPDIR:-/tmp}/release-status-block.XXXXXX")"
 cat >"$BLOCK_FILE" <<EOF
 | パッケージ | 配布状態 |
 |---|---|
-| devcontainer-bootstrap | $OWNER/devcontainer-bootstrap で $DCB_TAG まで公開済み |
-| devcontainer-host | $HOST_TABLE |
-| ai-playbook | $OWNER/ai-playbook で $PLAYBOOK_TAG まで公開済み |
+| devcontainer-bootstrap | $(status_table devcontainer-bootstrap "$DCB_TAG" "Release なし") |
+| devcontainer-host | $(status_table devcontainer-host "$HOST_TAG" "Release なし") |
+| ai-playbook | $(status_table ai-playbook "$PLAYBOOK_TAG" "タグなし") |
 
 リリース実行手順は [docs/release/RELEASE_EXECUTION_RUNBOOK.md](docs/release/RELEASE_EXECUTION_RUNBOOK.md) を参照する。
 
 ### リリース状況
 
-- \`devcontainer-bootstrap\`: \`$OWNER/devcontainer-bootstrap\` で \`$DCB_TAG\` まで公開済み
-- \`devcontainer-host\`: $HOST_LIST
-- \`ai-playbook\`: \`$OWNER/ai-playbook\` で \`$PLAYBOOK_TAG\` まで公開済み
+- \`devcontainer-bootstrap\`: $(status_list devcontainer-bootstrap "$DCB_TAG" "Release なし")
+- \`devcontainer-host\`: $(status_list devcontainer-host "$HOST_TAG" "Release なし")
+- \`ai-playbook\`: $(status_list ai-playbook "$PLAYBOOK_TAG" "タグなし")
 EOF
 
 OUT_FILE="$(mktemp "${TMPDIR:-/tmp}/release-status-out.XXXXXX")"

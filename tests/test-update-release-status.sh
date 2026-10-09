@@ -23,10 +23,11 @@ cat > "$WORK/bin/gh" <<'FAKE'
 # 偽物の gh。FAKE_<名前>_RELEASE / FAKE_<名前>_REPO に HTTP の状態、FAKE_<名前>_TAG に Release のタグ、
 # FAKE_PLAYBOOK_TAGS にタグの一覧（改行区切り）、FAKE_PLAYBOOK_TAGS_RC に tags の終了コードを入れる。
 key_of() { case "$1" in devcontainer-bootstrap) echo DCB ;; devcontainer-host) echo HOST ;; ai-playbook) echo PLAYBOOK ;; *) echo OTHER ;; esac; }
-path=""; inc=0
+path=""; inc=0; jq=0
 for a in "$@"; do
   case "$a" in
     -i) inc=1 ;;
+    --jq) jq=1 ;;
     repos/*) path="$a" ;;
   esac
 done
@@ -37,6 +38,8 @@ case "$path" in
     st_var="FAKE_${k}_RELEASE"; st="${!st_var:-404}"
     tag_var="FAKE_${k}_TAG"; tag="${!tag_var:-}"
     body='{"message":"x"}'; [[ "$st" == 200 ]] && body="{\"tag_name\":\"$tag\"}"
+    # --jq '.tag_name' の呼び出しには、タグ名だけを返す（本物の gh と同じく、2xx 以外は非 0）
+    if [[ "$jq" == 1 ]]; then [[ "$st" == 200 ]] && { printf '%s\n' "$tag"; exit 0; }; exit 1; fi
     ;;
   */tags)
     rc="${FAKE_PLAYBOOK_TAGS_RC:-0}"
@@ -49,7 +52,8 @@ case "$path" in
     body='{"name":"x"}'
     ;;
 esac
-[[ "$inc" == 1 ]] && printf 'HTTP/2.0 %s X\nContent-Type: application/json\n\n' "$st"
+# 本物の gh -i と同じく、状態行・見出しと区切りの空行は CRLF で出す
+[[ "$inc" == 1 ]] && printf 'HTTP/2.0 %s X\r\nContent-Type: application/json\r\n\r\n' "$st"
 printf '%s\n' "$body"
 [[ "$st" == 2* ]] || exit 1
 FAKE
@@ -103,12 +107,9 @@ it "失敗したときは、どのリポジトリを読めなかったかを出�
 if grep -F 'ojos/devcontainer-bootstrap' "$WORK/out" >/dev/null && grep -F 'README は書き換えていません' "$WORK/out" >/dev/null; then pass; else fail "出力: $(cat "$WORK/out")"; fi
 
 it "応答が無い（状態行が取れない）なら非 0 で終わる"
-cat > "$WORK/bin/gh.silent" <<'FAKE2'
-#!/usr/bin/env bash
-exit 1
-FAKE2
-chmod +x "$WORK/bin/gh.silent"
-mkdir -p "$WORK/bin2" && cp "$WORK/bin/gh.silent" "$WORK/bin2/gh"
+mkdir -p "$WORK/bin2"
+printf '#!/usr/bin/env bash\nexit 1\n' > "$WORK/bin2/gh"
+chmod +x "$WORK/bin2/gh"
 cp "$README_SRC" "$WORK/README.md"
 rc="$(env PATH="$WORK/bin2:$PATH" bash "$SCRIPT" --readme "$WORK/README.md" >/dev/null 2>&1; echo $?)"
 if [[ "$rc" != 0 ]] && diff -q "$README_SRC" "$WORK/README.md" >/dev/null; then pass; else fail "rc=$rc"; fi
@@ -117,7 +118,13 @@ it "ai-playbook のタグの一覧が読めなければ非 0 で終わり、READ
 rc="$(run "${ok_env[@]}" FAKE_PLAYBOOK_TAGS_RC=1)"
 if [[ "$rc" != 0 ]] && diff -q "$README_SRC" "$WORK/README.md" >/dev/null; then pass; else fail "rc=$rc / 出力: $(cat "$WORK/out")"; fi
 
-it "ai-playbook のタグが読めて semver が 1 つも無ければ <none>（読めなかったとは区別する）"
+it "ai-playbook のタグが読めて semver が 1 つも無ければ 0 で終わる（読めなかったとは区別する）"
 assert_eq "$(run "${ok_env[@]}" "FAKE_PLAYBOOK_TAGS=latest")" "0" "終了コード"
+it "そのとき ai-playbook は「未公開（タグなし）」と書かれる（<none> まで公開済み、とは書かない）"
+if grep -F 'ojos/ai-playbook は未公開（タグなし）' "$WORK/README.md" >/dev/null && ! grep -F '<none>' "$WORK/README.md" >/dev/null; then pass; else fail "README: $(cat "$WORK/README.md")"; fi
+
+it "devcontainer-bootstrap の Release が 404（リポジトリはある）なら「未公開（Release なし）」と書く"
+assert_eq "$(run "${ok_env[@]}" FAKE_DCB_RELEASE=404 FAKE_DCB_REPO=200)" "0" "終了コード"
+if grep -F 'ojos/devcontainer-bootstrap は未公開（Release なし）' "$WORK/README.md" >/dev/null && ! grep -F '<none>' "$WORK/README.md" >/dev/null; then pass; else fail "README: $(cat "$WORK/README.md")"; fi
 
 exit_with_result

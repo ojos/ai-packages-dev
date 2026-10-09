@@ -1272,8 +1272,13 @@ fi
 cd "$ROOT_DIR"
 
 if [[ -x scripts/update-release-status.sh ]]; then
-  bash scripts/update-release-status.sh --owner "$OWNER" --readme README.md
-  echo "[info] README release status refreshed. commit README.md if changed."
+  # README の更新は公開のあとの付随作業なので、失敗しても公開の完了と資産の監査は続ける。
+  # update-release-status.sh は、Release / タグを読めなければ README を書き換えずに非 0 で終わる（#500）。
+  if bash scripts/update-release-status.sh --owner "$OWNER" --readme README.md; then
+    echo "[info] README release status refreshed. commit README.md if changed."
+  else
+    echo "[warn] README release status was not refreshed (could not read releases/tags). run scripts/update-release-status.sh again after publishing."
+  fi
 else
   echo "[warn] scripts/update-release-status.sh not found or not executable; skip README refresh"
 fi
