@@ -13,8 +13,12 @@
 # 要らない。所要時間も秒単位に収める。scripts/acceptance.sh はこれを DCB テスト
 # （約 4 分）より前に置き、安い検査から落ちるようにしている。
 #
-# 例外が 4 つある。いずれも持ち込んでいるのは検査対象スクリプト自身の依存で、
+# 例外が 5 つある。いずれも持ち込んでいるのは検査対象スクリプト自身の依存で、
 # テスト側が増やした依存ではない。どれもネットワークへは出ない。
+#
+#   test-update-release-status.sh
+#                              scripts/update-release-status.sh を実行するため jq を要する（Release の本文から
+#                              タグ名を読む）。gh は PATH 上の偽物で、ネットワークには出ない。
 #
 #   test-devcontainer-host-install.sh
 #                              devhost の install.sh を実行するため jq と sha256sum（または shasum）を要する

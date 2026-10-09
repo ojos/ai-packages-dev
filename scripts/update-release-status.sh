@@ -14,6 +14,8 @@ options:
 notes:
   - README 内の RELEASE_STATUS 管理ブロックを更新する。
   - 実行には gh 認証と対象リポジトリアクセス権が必要。
+  - Release / タグを読めなかったとき（認証・権限・通信の失敗、リポジトリが無い）は、
+    README を書き換えずに非 0 で終わる。Release が無い（404）だけを「未公開」として扱う。
 EOF
 }
 
@@ -51,27 +53,63 @@ done
 
 require_cmd gh
 require_cmd awk
+require_cmd jq
 
 [[ -f "$README_PATH" ]] || {
   echo "error: README not found: $README_PATH" >&2
   exit 1
 }
 
+# 読めなかったときは README を書き換えずに止まる（#500）。
+#
+# 「Release / タグが無い（未公開）」と「読めなかった（認証・権限・通信の失敗、リポジトリが無い）」を
+# 区別する。以前はどちらも <none> に倒していたため、公開済みでも API が一時的に失敗すると、
+# README に「未公開」と書き込んで正常終了していた。3 つとも読めてから README を書き換えるので、
+# どれかで止まれば README は変わらない。
+fail_read() {
+  echo "error: $1 を読めませんでした（$2）。README は書き換えていません。" >&2
+  exit 1
+}
+
+# gh api -i の 1 行目（HTTP/x.y NNN ...）から状態の番号を取る。エラー文の文面には頼らない。
+http_status() {
+  printf '%s\n' "$1" | sed -n '1s#^HTTP/[0-9.]* \([0-9][0-9][0-9]\).*#\1#p'
+}
+
 # DCB と devcontainer-host は GitHub Release で配布するため、最新 Release のタグを正とする。
+# 404 は「Release が無い」だけでなく「リポジトリが無い」でも返るので、404 のときは
+# リポジトリ自体があるかを確かめ、無ければ止まる（リポジトリ名の誤りを「未公開」と書かない）。
 get_latest_release() {
-  local repo="$1" out
-  # 404（Release 未作成）や権限エラー時、gh は本文を stdout に出しつつ非ゼロ終了する。
-  # コマンド置換がその本文を拾わないよう、代入の失敗で明示的に空へ倒す。
-  out="$(gh api "repos/$OWNER/$repo/releases/latest" --jq '.tag_name' 2>/dev/null)" || out=""
-  [[ -n "$out" ]] && printf '%s' "$out" || printf '<none>'
+  local repo="$1" resp status tag
+  # gh は 4xx / 5xx で非 0 終了するが、-i なら状態行と本文を標準出力へ出す。終了コードでは止めず、状態で判定する。
+  resp="$(gh api -i "repos/$OWNER/$repo/releases/latest" 2>/dev/null)" || true
+  status="$(http_status "$resp")"
+  case "$status" in
+    200)
+      tag="$(printf '%s\n' "$resp" | awk 'b { print } /^\r?$/ { b = 1 }' | jq -r '.tag_name // empty' 2>/dev/null)" || tag=""
+      [[ -n "$tag" ]] || fail_read "$OWNER/$repo の最新の Release" "タグ名が取れない"
+      printf '%s' "$tag"
+      ;;
+    404)
+      resp="$(gh api -i "repos/$OWNER/$repo" 2>/dev/null)" || true
+      status="$(http_status "$resp")"
+      [[ "$status" == "200" ]] || fail_read "$OWNER/$repo" "Release が 404 で、リポジトリも読めない（HTTP ${status:-応答なし}）"
+      printf '<none>'
+      ;;
+    *)
+      fail_read "$OWNER/$repo の最新の Release" "HTTP ${status:-応答なし}"
+      ;;
+  esac
 }
 
 # ai-playbook は Release を作らずタグのみで配布する。最新の semver タグを正とする。
 # tags API はタグを semver 順に返さないため、vX.Y.Z を抽出して sort -V で最大を採る。
+# タグの一覧そのものが読めなければ止まる。読めて semver のタグが 1 つも無いときだけ <none>。
 get_latest_semver_tag() {
-  local repo="$1" out
-  out="$(gh api --paginate "repos/$OWNER/$repo/tags" --jq '.[].name' 2>/dev/null \
-        | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)" || out=""
+  local repo="$1" names out
+  names="$(gh api --paginate "repos/$OWNER/$repo/tags" --jq '.[].name' 2>/dev/null)" \
+    || fail_read "$OWNER/$repo のタグの一覧" "gh api が失敗した"
+  out="$(printf '%s\n' "$names" | awk '/^v[0-9]+\.[0-9]+\.[0-9]+$/' | sort -V | tail -1)"
   [[ -n "$out" ]] && printf '%s' "$out" || printf '<none>'
 }
 
