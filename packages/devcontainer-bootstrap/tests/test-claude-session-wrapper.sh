@@ -235,6 +235,19 @@ NOCLAUDE_LAUNCHER="$WORK/no-claude-bin/claude-session-launcher"
 (cd "$out_plain" && HOME="$FAKE_HOME" GIT_CONFIG_GLOBAL="$FAKE_HOME/.gitconfig" CLAUDE_SESSION_LAUNCHER="$NOCLAUDE_LAUNCHER" bash scripts/on-attach.sh >/dev/null 2>&1)
 if [[ ! -e "$NOCLAUDE_LAUNCHER" ]]; then pass; else fail "設置された"; fi
 
+it "on-attach.sh --install-launcher は、起動役の設置だけを行う（rc 注入など他の処理を走らせない）"
+ONLY_HOME="$WORK/only-home"
+ONLY_LAUNCHER="$WORK/only-bin/claude-session-launcher"
+mkdir -p "$ONLY_HOME"
+only_out="$(cd "$out" && HOME="$ONLY_HOME" GIT_CONFIG_GLOBAL="$ONLY_HOME/.gitconfig" CLAUDE_SESSION_LAUNCHER="$ONLY_LAUNCHER" bash scripts/on-attach.sh --install-launcher 2>&1)"
+only_rc=$?
+if [[ "$only_rc" == "0" && -x "$ONLY_LAUNCHER" && ! -e "$ONLY_HOME/.bashrc" && ! -e "$ONLY_HOME/.zshrc" && ! -e "$ONLY_HOME/.gitconfig" ]] \
+  && ! printf '%s' "$only_out" | command grep -q 'bootstrap active'; then
+  pass
+else
+  fail "rc=$only_rc $only_out"
+fi
+
 printf 'SESSION_HOST_LABEL=viaL\n' >"$out/.env"
 
 it "起動役は、ラッパーがあるときはそれを呼ぶ（名前が付き、引数がそのまま渡る）"
@@ -275,6 +288,14 @@ assert_eq "$wired" "/home/vscode/.local/bin/claude-session-launcher" "配線先"
 
 it "配線先は作業ツリーの外の固定パスで、ラッパーを直接指さない"
 if [[ "$wired" == /home/*/.local/bin/* && "$wired" != /workspaces/* ]]; then pass; else fail "$wired"; fi
+
+it "--with-claude の生成物の onCreateCommand が起動役を設置し、postAttachCommand の設置も残る"
+oc="$(jq -r '.onCreateCommand // empty' "$DC" 2>/dev/null)"
+pa="$(jq -r '.postAttachCommand // empty' "$DC" 2>/dev/null)"
+if [[ "$oc" == *"scripts/on-attach.sh --install-launcher"* && "$pa" == *"scripts/on-attach.sh"* ]]; then pass; else fail "onCreate=$oc postAttach=$pa"; fi
+
+it "--with-claude を選ばない生成物には onCreateCommand の設置がない"
+if ! command grep -q 'install-launcher' "$out_plain/.devcontainer/devcontainer.json"; then pass; else fail "設置が残っている"; fi
 
 it "--with-claude を選ばない生成物には claudeProcessWrapper の配線がない"
 if ! command grep -q 'claudeProcessWrapper' "$out_plain/.devcontainer/devcontainer.json"; then pass; else fail "配線が残っている"; fi

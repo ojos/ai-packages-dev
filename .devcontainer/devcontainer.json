@@ -29,6 +29,7 @@
   "remoteEnv": {
     "LOCAL_WORKSPACE_FOLDER": "${localWorkspaceFolder}"
   },
+  "onCreateCommand": "bash scripts/on-attach.sh --install-launcher || true",
   "postCreateCommand": "bash scripts/fix-mount-owner.sh && bash scripts/install-ai-tools.sh",
   "postAttachCommand": "bash scripts/on-attach.sh",
   "customizations": {
