@@ -10457,6 +10457,44 @@ require_playbook_template() {
   printf '%s' "$path"
 }
 
+# この構成が規範パッケージから取り込む雛形の一覧（templates/ からの名前）。
+# resolve_playbook_source_or_die が、どのファイルも書き込む前にすべての存在を確かめる。
+#
+# require_playbook_template は書き込みの途中（install_playbook_rules のあと）で呼ばれる
+# ため、それだけに頼ると、雛形の無い古い規範を指定したときに DCB 自身のテンプレートと
+# 規範を書いたあとで停止し、生成物と .devcontainer/ORIGIN が食い違った中途半端な状態が
+# 残る（--upgrade に古い --playbook-version を渡したときに実測）。新しい版が必須の雛形を
+# 足すたびに踏む経路なので、書き込みの前に一括で確かめる。
+#
+# この一覧は、下の require_playbook_template の呼び出しの写しである。写し漏れは
+# packages/devcontainer-bootstrap/tests/test-playbook-template-preflight.sh が呼び出しと照合して落とす（規範 12 章「一覧の複製は
+# 機械照合で担保する」）。
+required_playbook_templates() {
+  printf '%s\n' \
+    'project-ai-rules.md' \
+    'entry.md' \
+    'second-opinion-review.sh' \
+    'second-opinion-schema.json' \
+    'second-opinion-record.sh' \
+    'second-opinion-gate-exempt.sh' \
+    'second-opinion-gate.yml'
+  if has_with copilot-review; then
+    printf '%s\n' \
+      'copilot-review.yml' \
+      'review-gate.yml' \
+      'review-usable.sh' \
+      'check-review-usable.sh'
+  fi
+  if has_with claude; then
+    printf '%s\n' \
+      'claude-skill-intake.md' \
+      'claude-skill-land.md' \
+      'claude-skill-peers.md' \
+      'claude-agent-explorer.md' \
+      'claude-agent-implementer.md'
+  fi
+}
+
 # どのファイルも書き込む前に一度だけ解決し、不正なソースは副作用なしで失敗させる。
 # コマンド置換の中ではなく必ずメインシェルから呼ぶことで、後始末の trap が
 # 展開ファイルをまだ必要とするプロセス自身に属するようにする。
@@ -10485,6 +10523,22 @@ resolve_playbook_source_or_die() {
   # `--playbook-version` が必ず失敗する原因がこれだった（PIPESTATUS=141 0 を実測）。
   if [[ -z "$(find "$PLAYBOOK_DIR" -type f -name '*.md' -print -quit 2>/dev/null)" ]]; then
     echo "error: no rule files found in playbook source: ${PLAYBOOK_FROM:-<adjacent checkout>}" >&2
+    exit 1
+  fi
+  # この構成に必要な雛形が揃っているかも、書き込みの前に確かめる（上の
+  # required_playbook_templates の説明）。欠けているものはまとめて報告する。
+  local name missing=""
+  while IFS= read -r name; do
+    [[ -n "$name" ]] || continue
+    [[ -f "$PLAYBOOK_DIR/templates/$name" ]] || missing="${missing}${name}"$'\n'
+  done < <(required_playbook_templates)
+  if [[ -n "$missing" ]]; then
+    while IFS= read -r name; do
+      [[ -n "$name" ]] || continue
+      echo "error: template not found in rules source: templates/$name" >&2
+    done <<<"$missing"
+    echo "       規範パッケージがこの版に必要な雛形を持っていません。新しい規範の版を指定してください（--playbook-version / --playbook-from）。" >&2
+    echo "       何も書き込んでいません。" >&2
     exit 1
   fi
 }
