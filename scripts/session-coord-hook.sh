@@ -56,9 +56,11 @@
 #     ときにも外れる）。
 #     バックグラウンドで起動したゲートは、起動の呼び出しが返った時点で解放される。
 #   - issue: ブランチ作成の時点で登録し、SessionEnd まで持つ。ただし、その呼び出しが失敗した
-#     （PostToolUseFailure）ときは、その呼び出しで新しく登録した issue だけを解放する（ブランチ
-#     が作れていないため）。前から持っていた登録は外さない。区別は、PreToolUse で
-#     tool_use_id を鍵にした印（一時ディレクトリ）へ新しく登録した番号を控えて行う。
+#     （PostToolUseFailure）ときは、その呼び出しで新しく登録した issue のうち、
+#     この呼び出しで作ったブランチがいま在るもの（呼び出しの前には無く、いまは在る）だけを残し、
+#     それ以外は解放する（ブランチが作れていないため）。前から持っていた登録は外さない。区別は、
+#     PreToolUse で tool_use_id を鍵にした印（一時ディレクトリ）へ、新しく登録した番号と、作る
+#     ブランチの名前・リポジトリ・呼び出しの前から在ったかを控えて行う。
 #   - doc: フックは登録しない（確かめるだけ）。長く触る文書は、セッション自身が
 #     `session-ledger.sh claim doc <パス>` で登録する。編集のたびに登録すると警告が常時出る。
 #
@@ -350,6 +352,13 @@ branch_exists() { # ディレクトリ ブランチ名
   git -C "$1" show-ref --verify --quiet "refs/heads/$2" 2>/dev/null
 }
 
+# 失敗した呼び出しの後で、ブランチ b を作ったと言えるか。最初のコミットの前のリポジトリでは
+# refs/heads/b がまだ無いので、HEAD が b を指していること（symbolic-ref）も作った印とみなす。
+branch_present() { # ディレクトリ ブランチ名
+  branch_exists "$1" "$2" && return 0
+  [[ "$(git -C "$1" symbolic-ref -q HEAD 2>/dev/null)" == "refs/heads/$2" ]]
+}
+
 # W 配列の k 番目以降から、オプションを読み飛ばして最初の位置引数を返す（番号で）。
 first_positional() { # 開始位置。結果は POS_IDX
   local j="$1" n=${#W[@]} w
@@ -404,7 +413,15 @@ classify_git() { # k（git の位置）
   while [[ $j -lt $n ]]; do
     w="${W[$j]}"
     case "$w" in
-      -C) dir="${W[$((j + 1))]:-}"; j=$((j + 2)) ;;
+      -C)
+        # -C を重ねると、後の相対パスは前の -C から解決される（絶対パスなら置き換える）。
+        w="${W[$((j + 1))]:-}"
+        if [[ -z "$w" ]]; then :
+        elif [[ "$w" == /* || -z "$dir" ]]; then dir="$w"
+        else dir="$dir/$w"
+        fi
+        j=$((j + 2))
+        ;;
       -c | --git-dir | --work-tree | --namespace | --exec-path) j=$((j + 2)) ;;
       -*) j=$((j + 1)) ;;
       *) sub="$w"; break ;;
@@ -660,6 +677,8 @@ write_issue_mark() { # 新しく登録した issue 番号（空白区切り）
     found=0
     while IFS=$'\t' read -r line d b; do
       [[ -n "$line" && "$line" == "$n" ]] || continue
+      # 印はタブ区切り。ディレクトリにタブがあれば番号だけで記録する（従来どおり解放する側）。
+      [[ "$d" != *$'\t'* ]] || continue
       found=1
       e=0
       ! branch_exists "$d" "$b" || e=1
@@ -688,7 +707,7 @@ settle_issue_mark() { # release|keep
         continue
       fi
       nums="$nums $n"
-      if [[ "$e" == "0" ]] && branch_exists "$d" "$b"; then kept="$kept$n "; fi
+      if [[ "$e" == "0" ]] && branch_present "$d" "$b"; then kept="$kept$n "; fi
     done <"$f"
     for n in $nums; do
       case "$kept" in *" $n "*) continue ;; esac

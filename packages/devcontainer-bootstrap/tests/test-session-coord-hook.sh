@@ -495,6 +495,38 @@ git -C "$repo3" branch -D 43-x >/dev/null 2>&1
 assert_eq "$kept" "LEDGER_WARN" "git -C 先で作ったブランチ"
 reset_ledger
 
+it "(#514) git -C を重ねた（後の相対パスは前の -C から解決される）ブランチの作成が失敗しても、作れていれば登録を残す"
+pre_bash s-b "$repo" "git -C $(dirname "$repo3") -C repo3 switch -c 42-x && false" toolu_g6
+git -C "$repo3" branch 42-x >/dev/null 2>&1
+fail_bash s-b "$repo" "git -C $(dirname "$repo3") -C repo3 switch -c 42-x && false" toolu_g6
+kept="$(ledger s-a "$repo" check issue 42 | sed -n 1p)"
+git -C "$repo3" branch -D 42-x >/dev/null 2>&1
+assert_eq "$kept" "LEDGER_WARN" "-C を重ねた先で作ったブランチ"
+reset_ledger
+
+repo5="$(dirname "$repo")/repo5"
+mkdir -p "$repo5"
+git -C "$repo5" init -q . >/dev/null 2>&1
+
+it "(#514) まだコミットの無いリポジトリでブランチを作ってから失敗した呼び出しでは、issue の登録を残す"
+pre_bash s-b "$repo" "git -C $repo5 checkout -b 41-x && false" toolu_g7
+git -C "$repo5" symbolic-ref HEAD refs/heads/41-x >/dev/null 2>&1
+fail_bash s-b "$repo" "git -C $repo5 checkout -b 41-x && false" toolu_g7
+kept="$(ledger s-a "$repo" check issue 41 | sed -n 1p)"
+assert_eq "$kept" "LEDGER_WARN" "コミットの無いリポジトリ"
+reset_ledger
+
+it "(#514) ディレクトリにタブを含むときは、番号だけの印で記録し、失敗時に解放する"
+repo6="$(dirname "$repo")/re"$'\t'"po6"
+mkdir -p "$repo6"
+git -C "$repo6" init -q . >/dev/null 2>&1
+pre_bash s-b "$repo" "git -C \"$repo6\" checkout -b 40-x && false" toolu_g8
+git -C "$repo6" symbolic-ref HEAD refs/heads/40-x >/dev/null 2>&1
+fail_bash s-b "$repo" "git -C \"$repo6\" checkout -b 40-x && false" toolu_g8
+gone="$(ledger s-a "$repo" check issue 40 | sed -n 1p)"
+assert_eq "$gone" "LEDGER_OK" "タブを含むディレクトリ"
+reset_ledger
+
 it "(#514) 番号だけの古い書式の印は、従来どおり失敗時に解放する"
 pre_bash s-b "$repo" 'git checkout -b feat/33-x' toolu_g5
 printf '33\n' >"${TMPDIR:-/tmp}/session-coord-toolu_g5"
