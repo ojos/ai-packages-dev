@@ -31,9 +31,13 @@ OLD_PB="$(playbook_without claude-skill-peers.md)"
 
 # ── --upgrade ───────────────────────────────────────────────────────────────────
 
-it "--upgrade に雛形の欠けた規範を渡すと、終了コード 1 で止まる"
+it "前提: 最新の規範で --with-claude の生成が成功し、ORIGIN が記録されている"
 out="$(new_workdir)/p"
 run_bootstrap "$out" --with-claude --playbook-from "$PLAYBOOK_SRC" >/dev/null 2>&1
+gen_rc=$?
+if [[ "$gen_rc" == "0" && -f "$out/.devcontainer/ORIGIN" && -f "$out/scripts/session-peers.sh" ]]; then pass; else fail "生成の終了コード=$gen_rc"; fi
+
+it "--upgrade に雛形の欠けた規範を渡すと、終了コード 1 で止まる"
 # 同じ版の bootstrap.sh で --upgrade しても、書き込む中身が変わらないので書き込みが
 # 起きても見分けられない。管理対象のファイルを 1 つ消し、--upgrade が作り直す状態に
 # してから比べる（止まる前に書き込めば、このファイルが現れる）。
@@ -77,6 +81,22 @@ if [[ -n "$called" && "$called" == "$listed" ]]; then
   pass
 else
   fail "一致しない: $(diff <(printf '%s\n' "$called") <(printf '%s\n' "$listed") | head -10)"
+fi
+
+it "一覧から名前が漏れていると、雛形の有無にかかわらず内部の誤りとして止まる"
+# 一覧の写し漏れを黙って通すと、雛形の欠けた古い規範で「書き込んでから止まる」状態に
+# 戻る。一覧から claude-skill-peers.md を除いた写しで、--with-claude の生成が内部の誤りと
+# して止まることを確かめる（規範は最新で、雛形そのものは揃っている）。
+drift="$(new_workdir)/bootstrap-drift.sh"
+command grep -v -F "'claude-skill-peers.md'" "$BOOTSTRAP" >"$drift"
+out4="$(new_workdir)/p"
+err4="$(bash "$drift" --project-name test --languages node --base-image "$TEST_BASE_IMAGE" \
+  --output-dir "$out4" --with-claude --playbook-from "$PLAYBOOK_SRC" 2>&1 >/dev/null)"
+rc4=$?
+if [[ "$rc4" == "1" ]] && printf '%s' "$err4" | command grep -F 'internal: templates/claude-skill-peers.md' >/dev/null; then
+  pass
+else
+  fail "終了コード=$rc4 出力=$(printf '%s' "$err4" | tail -2)"
 fi
 
 exit_with_result

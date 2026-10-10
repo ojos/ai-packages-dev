@@ -10446,15 +10446,38 @@ apply_file_with_policy() {
 # 入口ファイルとレビュースクリプトの雛形は、規範パッケージが持つ。
 # DCB は配置するだけで内容を持たない。内容を持つと正本が 2 つになり、規範側の
 # 変更に追随できずにずれる。
+#
+# 雛形の有無は、書き込みの前に resolve_playbook_source_or_die が required_playbook_templates
+# の一覧で確かめ済みである。ここで呼ばれた名前が一覧に無いのは、一覧の写し漏れ（名前か
+# 条件のずれ）なので、雛形の有無にかかわらず内部の誤りとして止める。黙って通すと、
+# 雛形の欠けた古い規範で「書き込んでから止まる」中途半端な状態に戻るため。既存の試験は
+# 構成ごとに生成を回すので、ずれはその構成の生成で必ず落ちる。
 require_playbook_template() {
-  local name="$1" path
+  local name="$1" path listed=0 n
+  while IFS= read -r n; do
+    [[ "$n" == "$name" ]] && { listed=1; break; }
+  done < <(required_playbook_templates)
+  if [[ "$listed" -ne 1 ]]; then
+    echo "error: internal: templates/$name is not in required_playbook_templates for this configuration." >&2
+    echo "       required_playbook_templates と require_playbook_template の呼び出しが食い違っています（DCB の不具合）。" >&2
+    exit 1
+  fi
   path="$PLAYBOOK_DIR/templates/$name"
   [[ -f "$path" ]] || {
-    echo "error: template not found in rules source: templates/$name" >&2
-    echo "       規範パッケージがこの版に必要な雛形を持っていません。" >&2
+    report_missing_playbook_templates "$name"
     exit 1
   }
   printf '%s' "$path"
+}
+
+# 規範パッケージに欠けている雛形を報告する（引数は templates/ からの名前）。
+# 書き込み前の確認と require_playbook_template の両方が使い、文言を 1 か所に保つ。
+report_missing_playbook_templates() {
+  local name
+  for name in "$@"; do
+    echo "error: template not found in rules source: templates/$name" >&2
+  done
+  echo "       規範パッケージがこの版に必要な雛形を持っていません。新しい規範の版を指定してください（--playbook-version / --playbook-from）。" >&2
 }
 
 # この構成が規範パッケージから取り込む雛形の一覧（templates/ からの名前）。
@@ -10464,7 +10487,9 @@ require_playbook_template() {
 # ため、それだけに頼ると、雛形の無い古い規範を指定したときに DCB 自身のテンプレートと
 # 規範を書いたあとで停止し、生成物と .devcontainer/ORIGIN が食い違った中途半端な状態が
 # 残る（--upgrade に古い --playbook-version を渡したときに実測）。新しい版が必須の雛形を
-# 足すたびに踏む経路なので、書き込みの前に一括で確かめる。
+# 足すたびに踏む経路なので、書き込みの前に一括で確かめる。--dry-run も同じ確認を
+# 通るので、雛形の欠けた規範では計画を出す前に止まる（実行すれば必ず止まる計画を
+# 出しても役に立たないため）。
 #
 # この一覧は、下の require_playbook_template の呼び出しの写しである。写し漏れは
 # packages/devcontainer-bootstrap/tests/test-playbook-template-preflight.sh が呼び出しと照合して落とす（規範 12 章「一覧の複製は
@@ -10527,17 +10552,14 @@ resolve_playbook_source_or_die() {
   fi
   # この構成に必要な雛形が揃っているかも、書き込みの前に確かめる（上の
   # required_playbook_templates の説明）。欠けているものはまとめて報告する。
-  local name missing=""
+  local name
+  local -a missing=()
   while IFS= read -r name; do
     [[ -n "$name" ]] || continue
-    [[ -f "$PLAYBOOK_DIR/templates/$name" ]] || missing="${missing}${name}"$'\n'
+    [[ -f "$PLAYBOOK_DIR/templates/$name" ]] || missing+=("$name")
   done < <(required_playbook_templates)
-  if [[ -n "$missing" ]]; then
-    while IFS= read -r name; do
-      [[ -n "$name" ]] || continue
-      echo "error: template not found in rules source: templates/$name" >&2
-    done <<<"$missing"
-    echo "       規範パッケージがこの版に必要な雛形を持っていません。新しい規範の版を指定してください（--playbook-version / --playbook-from）。" >&2
+  if [[ "${#missing[@]}" -gt 0 ]]; then
+    report_missing_playbook_templates "${missing[@]}"
     echo "       何も書き込んでいません。" >&2
     exit 1
   fi
