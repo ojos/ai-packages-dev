@@ -6,6 +6,18 @@
 >
 > 同じ理由で、issue 参照は `ojos/ai-packages-dev#NNN` の形で書いてください。裸の `#NNN` は GitHub のオートリンクが**配布先リポジトリの issue** として解決するため、配布後は存在しない issue や無関係な issue を指します。
 
+## Unreleased
+
+### Summary
+- **`/land` スキルの雛形（`templates/claude-skill-land.md`）の「CI の完了を待つ」が、遅れて作られる実行を見落とさないようにした**（ojos/ai-packages-dev#513。取り込み元: ojos/career-log の修正）。従来は「30 秒あけて 2 回同じ一覧なら抜ける」だけだったため、先に作られた実行（例: identity-guard）が完了したあとに、別のワークフロー（例: 受け入れ検証）の実行の作成が 30 秒を超えて遅れると、それを見ないまま `RUNS_GREEN` になった。PR の head の `.github/workflows/` から動くはずのワークフロー（`on:` に `pull_request` を持ち、`paths` / `paths-ignore` で絞っていないもの）を求め、すべてに実行が付くまで抜けない。付かなければ `RUNS_MISSING`（判定の出力は 4 通りから 5 通りへ。既存の 4 つは変えていない）。
+  - `on:` は、ブロックの形・1 行の形（`on: [push, pull_request]`、`on: pull_request`）・引用符付きの `"on":` を awk で読む。追加の道具（`yq` など）は要らない。
+  - PR の head の取得は、リモート名（`origin`）を決め打ちせず、PR 自身の URL から取得元を求める。
+  - パイプの後ろに `grep -q` を置かない。
+- 追加のみで後方互換。雛形の種類は 17 種のまま。
+
+### 移行
+- 雛形から写した `.claude/skills/land/SKILL.md` に手を入れていなければ、規範の更新で置き換わる。手を入れている場合は、2「CI の完了を待つ」のコードブロック（`# >>> land:...` の目印で囲んだ関数を含む）を取り込み直す。判定の出力に `RUNS_MISSING` が増えたので、出力を読んで分岐している箇所があれば追随させる。
+
 ## v0.9.0
 
 ### Summary

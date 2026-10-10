@@ -87,31 +87,96 @@ echo CHECKS_ATTACHED
 
 **あわせて、CI のワークフローに `workflow_dispatch` を持たせておくことを勧めます。** 手動の口が無いと、契機が届かないときに打つ手がありません。
 
-**実行だけを数えれば足りるかどうかは、プロジェクトの CI 構成によります。** パスフィルタで絞ったワークフローがあると、差分の内容によっては対象コミットに実行が 1 件も付きません。また、Actions の実行を出さない外部 CI を使っている場合は、それだけを見ても待ち条件を満たせません。この段では「対象コミットに 1 件以上の実行が付くこと」を待ち条件としていますが、これで足りるかはプロジェクト層で確認し、足りなければ確認方法を補ってください。想定するワークフローを YAML から推定することは、この手順では行いません。
+**実行だけを数えれば足りるかどうかは、プロジェクトの CI 構成によります。** パスフィルタで絞ったワークフローがあると、差分の内容によっては対象コミットに実行が 1 件も付きません。また、Actions の実行を出さない外部 CI を使っている場合は、それだけを見ても待ち条件を満たせません。この段では「対象コミットに 1 件以上の実行が付くこと」を待ち条件としていますが、これで足りるかはプロジェクト層で確認し、足りなければ確認方法を補ってください。動くはずのワークフローは、下の完了の待ちで PR の head の YAML から求めます（`pull_request` を契機に持ち、`paths` で絞っていないものだけ。外部 CI は求められません）。
 
 付いた実行が完了するまで待ち、`conclusion` で成否を判定します。**待ちには `gh run watch` を使わず、上と同じ `actions/runs` を読み直します。** `gh run watch` は実行中のジョブを表示するときに annotations（Checks の API）を読むことがあり、Checks の権限を持たないトークンでの動きを確かめられていないためです。読み直すたびに一覧を取るので、待っているあいだに増えた実行も対象に入ります。
 
-判定の対象は、次の 2 点で絞ります。
+判定の対象は、次の点で絞ります。
 
-- **完了を 2 回続けて見るまで待ちます。** ワークフローごとに実行が作られる時刻はずれるため、先に作られた実行が完了した時点では、後の実行がまだ一覧に無いことがあります。30 秒あけて読んだ一覧が前の回と同じで、すべて完了していれば抜けます。この間隔を超えて遅れる実行までは拾えません。
+- **動くはずのワークフローすべてに実行が付くまで待ちます。** 動くはずのワークフローは、PR の head（`$sha`）の `.github/workflows/` のうち、`on:` に `pull_request` を持ち、`paths:` / `paths-ignore:` で絞っていないものです。`on:` は、ブロックの形（`on:` の下に `pull_request:`）、1 行の形（`on: [push, pull_request]`、`on: pull_request`）、引用符付きの `"on":` を読みます。YAML を読む専用の道具（`yq` など）は雛形が求める道具に含めないため、awk で読みます。求める元を作業ツリーでなく `$sha` の中身にするのは、ワークフローを増減する PR で、作業ツリーの一覧が head と食い違うためです。下の「2 回続けて見る」だけでは、先に作られた実行が完了してから 30 秒を超えて遅れて作られる実行を取りこぼし、その受け入れ検証を見ないまま `RUNS_GREEN` になります。`paths` で絞ったものは、差分によって実行が作られないため数えません（付いていれば、下の判定には入ります）。`pull_request_target` や `workflow_run` など、`pull_request` 以外の契機で付く実行は数えません。
+- **完了を 2 回続けて見るまで待ちます。** ワークフローごとに実行が作られる時刻はずれるため、先に作られた実行が完了した時点では、後の実行がまだ一覧に無いことがあります。30 秒あけて読んだ一覧が前の回と同じで、すべて完了していれば抜けます。上の「動くはずのワークフロー」に入らないものは、この間隔を超えて遅れると拾えません。
 - **ワークフローごとに、最新の実行 1 件だけを見ます。** `reopened` などで同じ SHA に実行が重なると、古い失敗が一覧に残るためです。一覧は全ページを読みます（`--paginate`）。
 - **commit status を出すワークフロー（`second-opinion-gate`、`review-gate`）は、実行の成否では判定しません。** 下の commit status で判定します。たとえば `second-opinion-gate` は、記録が無いうちに起動した実行が失敗のまま残り、記録を投稿したあとの緑は、別の契機（掃き寄せ）が付ける status として出ます。実行の成否で判定すると、投稿しても緑になりません。除くワークフローの名前（`gates`）は、プロジェクトの構成に合わせて直してください。
 
+**判定に使う関数（`workflow_runs_on_pr`・`expected_workflows`・`missing_workflows`・`runs_verdict`）は、目印の行（`# >>> land:...` と `# <<< land:...`）で囲んでいます。** テストがこの部分だけを雛形から取り出し、仕込みのリポジトリや仕込みの一覧で実行して確かめるためです。目印の行を消さず、囲んだ部分が外側の変数に依存しない形を保ってください。
+
+**パイプの後ろに `grep -q` を置きません。** `pipefail` の下では、`grep -q` が一致した時点で終了し、前段が SIGPIPE で失敗して、一致しているのに不一致と判定されることがあるためです。判定は、入力を最後まで読む awk の終了コードか、`if` の条件で行います。
+
+**PR の head の取得は、リモート名（`origin`）を決め打ちしません。** `pull/N/head` を持つのは PR のあるリポジトリです。`origin` がフォーク側を指す構成などでは、`origin` から取れないことがあります。そこで PR 自身の URL（`gh pr view N --json url`）の末尾 `/pull/N` を落としたものを取得元にします。URL は PR のあるリポジトリを指すため、リモートの名前や構成に左右されません。
+
 ```bash
+# >>> land:expected-workflows
+# on: に pull_request を持ち、paths / paths-ignore で絞っていないときだけ 0 を返す（標準入力はワークフローの YAML）。
+workflow_runs_on_pr() {
+  awk '
+    function strip(s) { sub(/[ \t]+#.*$/, "", s); sub(/[ \t\r]+$/, "", s); return s }
+    function words(s) { return s ~ /(^|[^A-Za-z0-9_-])pull_request([^A-Za-z0-9_-]|$)/ }
+    function filters(s) { return s ~ /(^|[^A-Za-z0-9_-])paths(-ignore)?[ \t]*:/ }
+    BEGIN { pr = -1 }
+    /^["'\'']?on["'\'']?[ \t]*:/ {
+      inon = 1
+      v = $0; sub(/^["'\'']?on["'\'']?[ \t]*:[ \t]*/, "", v); v = strip(v)
+      if (v != "") { if (words(v)) hit = 1; if (filters(v)) filt = 1 }
+      next
+    }
+    inon && /^[^ \t#-]/ { inon = 0 }
+    inon {
+      t = $0; match(t, /^[ \t]*/); n = RLENGTH; t = strip(substr(t, n + 1))
+      if (t == "" || t ~ /^#/) next
+      if (t ~ /^(- *)?["'\'']?pull_request["'\'']?[ \t]*(:|$)/) { hit = 1; pr = n; if (filters(t)) filt = 1; next }
+      if (n <= pr) pr = -1
+      if (pr >= 0 && n > pr && filters(t)) filt = 1
+      if (t ~ /^\[/ && words(t)) hit = 1
+    }
+    END { exit (hit && !filt) ? 0 : 1 }'
+}
+# PR の head（$1）の .github/workflows/ から、動くはずのワークフローのパスを出す（作業ツリーは見ない）。
+expected_workflows() {
+  git ls-tree --name-only "$1" .github/workflows/ | while read -r f; do
+    case "$f" in *.yml|*.yaml) ;; *) continue ;; esac
+    if git show "$1:$f" | workflow_runs_on_pr; then echo "$f"; fi
+  done | sort
+}
+# <<< land:expected-workflows
+
+# >>> land:runs-verdict
+# 動くはずなのに、まだ実行が付いていないワークフローを出す。
+# $1 = 動くはずのワークフローの一覧、$2 = 実行の一覧（6 列目が path）
+missing_workflows() {
+  printf '%s\n' "$1" | while read -r f; do
+    [ -n "$f" ] || continue
+    if ! printf '%s\n' "$2" | awk -F '\t' -v f="$f" '$6 == f { h = 1 } END { exit !h }'; then echo "$f"; fi
+  done
+}
+# 最後の判定。$1 = 一覧を読めたか（1 / 0）、$2 = 実行が付いていないワークフロー（空でなければ付いていない）、
+# 標準入力 = 判定の対象の実行の一覧
+runs_verdict() {
+  awk -F '\t' -v listed="$1" -v missing="${2:+1}" '
+    NF { n++; if ($3 != "completed" || $4 !~ /^(success|skipped|neutral)$/) bad = 1 }
+    END { if (listed != 1) print "RUNS_UNKNOWN"; else if (missing == 1) print "RUNS_MISSING"; else if (n == 0) print "RUNS_NONE"; else print bad ? "RUNS_NOT_GREEN" : "RUNS_GREEN" }'
+}
+# <<< land:runs-verdict
+
 gates='second-opinion-gate|review-gate'
+# PR のあるリポジトリから head を取る（手元に無いときだけ）
+git cat-file -e "$sha^{commit}" 2>/dev/null || {
+  prurl="$(gh pr view N --json url --jq .url)" && git fetch -q "${prurl%/pull/*}" "pull/N/head"
+}
+expected="$(expected_workflows "$sha")"
 latest() (  # 対象の実行を、ワークフローごとに最新の 1 件だけ出す（全ページ）
   set -o pipefail
-  gh api --paginate "$url" --jq "$sel | [.workflow_id, .run_number, .status, (.conclusion // \"-\"), .name] | @tsv" \
+  gh api --paginate "$url" --jq "$sel | [.workflow_id, .run_number, .status, (.conclusion // \"-\"), .name, (.path | sub(\"@.*$\"; \"\"))] | @tsv" \
     | sort -t "$(printf '\t')" -k1,1 -k2,2nr | awk -F '\t' '!seen[$1]++'
 )
-listed=0; prev=""
+listed=0; prev=""; missing=""
 for _ in $(seq 120); do  # 30 秒 × 120 回 = 60 分
   if all="$(latest)"; then listed=1; else listed=0; all=""; fi
   runs="$(printf '%s\n' "$all" | awk -F '\t' -v g="^($gates)\$" 'NF && $5 !~ g')"
-  # 読めていて、ゲート以外に未完了が 1 件も無く、一覧が前の回と同じなら抜ける。
-  # 2 回続けて同じ一覧を見るのは、後から作られる実行を取りこぼさないため
-  # （awk に最後まで読ませ、終了コードで判定する。空行は数えない）。
-  if [ "$listed" = 1 ] && [ -n "$all" ] && printf '%s\n' "$all" | awk -F '\t' 'NF && $3 != "completed" { p = 1 } END { exit p }'; then
+  missing="$(missing_workflows "$expected" "$all")"
+  # 読めていて、動くはずのワークフローすべてに実行が付き、ゲート以外に未完了が 1 件も無く、
+  # 一覧が前の回と同じなら抜ける。2 回続けて同じ一覧を見るのは、後から作られる実行を
+  # 取りこぼさないため（awk に最後まで読ませ、終了コードで判定する。空行は数えない）。
+  if [ "$listed" = 1 ] && [ -n "$all" ] && [ -z "$missing" ] && printf '%s\n' "$all" | awk -F '\t' 'NF && $3 != "completed" { p = 1 } END { exit p }'; then
     [ "$all" = "$prev" ] && break
     prev="$all"
   else
@@ -120,18 +185,18 @@ for _ in $(seq 120); do  # 30 秒 × 120 回 = 60 分
   sleep 30
 done
 echo "-- 実行（判定の対象）"; printf '%s\n' "$runs"
+[ -z "$missing" ] || { echo "-- 実行が付いていないワークフロー"; printf '%s\n' "$missing"; }
 echo "-- ゲートの実行（参考。成否は commit status で判定する）"; printf '%s\n' "$all" | awk -F '\t' -v g="^($gates)\$" 'NF && $5 ~ g'
-printf '%s\n' "$runs" | awk -F '\t' -v listed="$listed" '
-  NF { n++; if ($3 != "completed" || $4 !~ /^(success|skipped|neutral)$/) bad = 1 }
-  END { if (listed != 1) print "RUNS_UNKNOWN"; else if (n == 0) print "RUNS_NONE"; else print bad ? "RUNS_NOT_GREEN" : "RUNS_GREEN" }'
+printf '%s\n' "$runs" | runs_verdict "$listed" "$missing"
 ```
 
-判定の出力は 4 通りです。
+判定の出力は 5 通りです。
 
 - `RUNS_GREEN`: ゲート以外の実行がすべて通っています。
 - `RUNS_NOT_GREEN`: 「実行（判定の対象）」の一覧（4 列目が `conclusion`）を読み、失敗した実行（`failure`、`cancelled`、`timed_out` など）を止めて報告します。60 分で終わらなかった場合もここに入ります。その場合は失敗でなく時間切れなので、3 列目（`status`）を見て、止めて報告します。
 - `RUNS_NONE`: ゲート以外の実行がありません（付いていたのはゲートの実行だけ）。CI の成否は、下の commit status だけで判定します。
 - `RUNS_UNKNOWN`: 一覧を読めませんでした。「通った」とも「落ちた」とも扱わず、止めて報告します。
+- `RUNS_MISSING`: 60 分待っても、動くはずのワークフローに実行が付きませんでした（「実行が付いていないワークフロー」の一覧）。「落ちた」ではなく「作られていない」です。上の `CHECKS_NOT_ATTACHED` と同じ切り分けの順序で確かめます。あわせて、そのワークフローの `on:` を読み直します。雛形の読み方に合わず、実際には動かないワークフローを「動くはず」と読んでいる場合があるためです。確かめたら止めて報告します。
 
 「ゲートの実行」の一覧は、判定には使いませんが、status が付かない理由を切り分けるときに読みます（下の「置いている場合」の、ジョブだけが失敗する形）。
 
