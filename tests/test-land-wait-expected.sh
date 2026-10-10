@@ -64,9 +64,11 @@ wf paths.yml 'on:' '  pull_request:' '    paths:' '      - "src/**"' 'jobs: {}'
 wf ignore.yml 'on:' '  pull_request:' '    paths-ignore:' '      - "docs/**"' 'jobs: {}'
 wf inline-paths.yml 'on:' '  pull_request: { paths: ["src/**"] }' 'jobs: {}'
 wf types.yml 'on:' '  pull_request:' '    types: [closed]' 'jobs: {}'
+wf types-two.yml 'on:' '  pull_request:' '    types: [opened, synchronize]' 'jobs: {}'
 wf types-default.yml 'on:' '  pull_request:' '    types: [opened, synchronize, reopened]' 'jobs: {}'
 wf types-ready.yml 'on:' '  pull_request:' '    types: [opened, synchronize, reopened, ready_for_review]' 'jobs: {}'
-wf types-block.yml 'on:' '  pull_request:' '    types:' '      - opened' '      - synchronize' 'jobs: {}'
+wf types-block.yml 'on:' '  pull_request:' '    types:' '      - opened' '      - synchronize' '      - reopened' 'jobs: {}'
+wf types-block-two.yml 'on:' '  pull_request:' '    types:' '      - opened' '      - synchronize' 'jobs: {}'
 wf types-block-flush.yml 'on:' '  pull_request:' '    types:' '    - reopened' '    - opened' '    - synchronize' 'jobs: {}'
 wf types-opened.yml 'on:' '  pull_request:' '    types: [opened]' 'jobs: {}'
 wf types-reopened.yml 'on:' '  pull_request:' '    types: [reopened, synchronize]' 'jobs: {}'
@@ -199,6 +201,14 @@ $ROW_CI"
 
 it "実行が付いていないワークフローを数える（identity-guard だけ付いて ci が無い）"
 assert_eq "$(missing "$EXPECTED_BOTH" "$ONLY_ID")" ".github/workflows/ci.yml" "付いていないワークフロー"
+
+it "path が空の実行が混じっているときは、照合できないので、付いていないワークフローを出さず RUNS_MISSING にならない"
+ROW_NOPATH="3${TAB}1${TAB}completed${TAB}success${TAB}x${TAB}"
+MIXED="$ROW_ID
+$ROW_NOPATH"
+M="$(missing "$EXPECTED_BOTH" "$MIXED")"
+V="$(verdict 1 "$M" "$MIXED")"
+if [[ -z "$M" && "$V" == "RUNS_GREEN" ]]; then pass; else fail "missing='${M}' 判定='${V}'"; fi
 
 it "すべてに実行が付いていれば、付いていないワークフローは無い"
 assert_eq "$(missing "$EXPECTED_BOTH" "$BOTH")" "" "付いていないワークフロー"
