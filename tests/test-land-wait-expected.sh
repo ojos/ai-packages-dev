@@ -64,6 +64,13 @@ wf paths.yml 'on:' '  pull_request:' '    paths:' '      - "src/**"' 'jobs: {}'
 wf ignore.yml 'on:' '  pull_request:' '    paths-ignore:' '      - "docs/**"' 'jobs: {}'
 wf inline-paths.yml 'on:' '  pull_request: { paths: ["src/**"] }' 'jobs: {}'
 wf types.yml 'on:' '  pull_request:' '    types: [closed]' 'jobs: {}'
+wf types-default.yml 'on:' '  pull_request:' '    types: [opened, synchronize, reopened]' 'jobs: {}'
+wf types-ready.yml 'on:' '  pull_request:' '    types: [opened, synchronize, reopened, ready_for_review]' 'jobs: {}'
+wf types-block.yml 'on:' '  pull_request:' '    types:' '      - opened' '      - synchronize' 'jobs: {}'
+wf types-block-flush.yml 'on:' '  pull_request:' '    types:' '    - reopened' '    - opened' '    - synchronize' 'jobs: {}'
+wf types-opened.yml 'on:' '  pull_request:' '    types: [opened]' 'jobs: {}'
+wf types-reopened.yml 'on:' '  pull_request:' '    types: [reopened, synchronize]' 'jobs: {}'
+wf types-block-opened.yml 'on:' '  pull_request:' '    types:' '      - opened' 'jobs: {}'
 wf branches.yml 'on:' '  pull_request:' '    branches: [develop]' 'jobs: {}'
 wf branches-ignore.yml 'on:' '  pull_request:' '    branches-ignore: [main]' 'jobs: {}'
 wf push-only.yml 'on:' '  push:' '    paths: ["x"]' 'jobs: {}'
@@ -99,6 +106,10 @@ expected_in() { # <作業ディレクトリ> <head> <base>
 # push-paths.yml / push-branches.yml は pull_request 側に絞り込みが無いので含まれる
 WANT="$(printf '%s\n' \
   .github/workflows/block.yml \
+  .github/workflows/types-default.yml \
+  .github/workflows/types-ready.yml \
+  .github/workflows/types-block.yml \
+  .github/workflows/types-block-flush.yml \
   .github/workflows/inline.yml \
   .github/workflows/listed.yml \
   .github/workflows/quoted.yaml \

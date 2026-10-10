@@ -96,7 +96,8 @@ echo CHECKS_ATTACHED
 - **動くはずのワークフローすべてに実行が付くまで待ちます。** 下の下準備で、動くはずのワークフローを求めます。下の「2 回続けて見る」だけでは、先に作られた実行が完了してから 30 秒を超えて遅れて作られる実行を取りこぼし、その受け入れ検証を見ないまま `RUNS_GREEN` になるためです。
 
   **方針は「確実に動くと言えるワークフローだけを数え、迷うものは数えない」です。** 数えなかったワークフローは、従来どおり「実行が付いていれば判定に入る」扱いなので、最悪でもこの手順を足す前の動きに戻るだけです。逆に、動かないものを数えると、実行が付かないまま 60 分待って毎回 `RUNS_MISSING` で止まり、足す前より悪くなります。そのため、次のものは数えません。
-  - **`pull_request` に `paths` / `paths-ignore` / `types` / `branches` / `branches-ignore` のどれかがあるもの。** 差分・イベントの種類・ブランチによって、実行が作られないことがあるためです。
+  - **`pull_request` に `paths` / `paths-ignore` / `branches` / `branches-ignore` のどれかがあるもの。** 差分・ブランチによって、実行が作られないことがあるためです。
+  - **`pull_request` に `types` があり、`opened` と `synchronize` の両方を含まないもの**（`[closed]`、`[labeled]`、`[opened]` だけなど）。head のコミットに実行を作る契機は、この 2 つだからです。両方を含むもの（`[opened, synchronize, reopened]`、さらに `ready_for_review` を足したもの）は、`types` を書かなかったときの既定（`opened`、`synchronize`、`reopened`）に必要な契機を含んでおり、絞り込みではないため数えます。ブロックの形（`types:` の下に `- opened` を並べる形）と 1 行の形（`types: [opened, synchronize]`）の両方を読みます。
   - **`pull_request` 以外の契機で付くもの**（`pull_request_target`、`workflow_run` など）。
   - **head と base の片方でしか「動く」と言えないもの。** GitHub は PR の実行を、head と base を合わせたマージ用の参照から作るため、ワークフローの定義も、そのマージ用の参照にあるものが使われます。head で足したワークフローは、マージ用の参照で動くとは限らず、base で消えたものは、head に残っていても動きません。確実に動くと言えるのは、両方で「動く」と判定したものです。
   - **Actions で無効にしてあるもの**（`state` が `active` でないもの）。
@@ -117,13 +118,16 @@ echo CHECKS_ATTACHED
 
 ```bash
 # >>> land:expected-workflows
-# on: に pull_request を持ち、paths / paths-ignore / types / branches / branches-ignore で絞っていないときだけ 0 を返す
+# on: に pull_request を持ち、paths / paths-ignore / branches / branches-ignore で絞らず、types を書くなら opened と synchronize の
+# 両方を含むときだけ 0 を返す
 # （標準入力はワークフローの YAML）。
 workflow_runs_on_pr() {
   awk '
     function strip(s) { sub(/[ \t]+#.*$/, "", s); sub(/[ \t\r]+$/, "", s); return s }
     function words(s) { return s ~ /(^|[^A-Za-z0-9_-])pull_request([^A-Za-z0-9_-]|$)/ }
-    function filters(s) { return s ~ /(^|[^A-Za-z0-9_-])(paths|paths-ignore|types|branches|branches-ignore)[ \t]*:/ }
+    function filters(s) { return s ~ /(^|[^A-Za-z0-9_-])(paths|paths-ignore|branches|branches-ignore)[ \t]*:/ }
+    function istypes(s) { return s ~ /(^|[^A-Za-z0-9_-])types[ \t]*:/ }
+    function has(s, w) { return s ~ ("(^|[^A-Za-z0-9_-])" w "([^A-Za-z0-9_-]|$)") }
     BEGIN { pr = -1 }
     /^["'\'']?on["'\'']?[ \t]*:/ {
       inon = 1
@@ -135,12 +139,19 @@ workflow_runs_on_pr() {
     inon {
       t = $0; match(t, /^[ \t]*/); n = RLENGTH; t = strip(substr(t, n + 1))
       if (t == "" || t ~ /^#/) next
-      if (t ~ /^(- *)?["'\'']?pull_request["'\'']?[ \t]*(:|$)/) { hit = 1; pr = n; if (filters(t)) filt = 1; next }
+      if (intypes && t ~ /^-/ && n >= tn) { ts = ts " " t; next }
+      intypes = 0
+      if (t ~ /^(- *)?["'\'']?pull_request["'\'']?[ \t]*(:|$)/) {
+        hit = 1; pr = n; if (filters(t)) filt = 1
+        if (istypes(t)) { tseen = 1; ts = ts " " t }
+        next
+      }
       if (n <= pr) pr = -1
       if (pr >= 0 && n > pr && filters(t)) filt = 1
+      if (pr >= 0 && n > pr && istypes(t)) { tseen = 1; intypes = 1; tn = n; ts = ts " " t }
       if (t ~ /^\[/ && words(t)) hit = 1
     }
-    END { exit (hit && !filt) ? 0 : 1 }'
+    END { exit (hit && !filt && (!tseen || (has(ts, "opened") && has(ts, "synchronize")))) ? 0 : 1 }'
 }
 # コミット（$1）の .github/workflows/ から、動くはずのワークフローのパスを出す（作業ツリーは見ない）。
 # 読めなかったときは 1 を返す（空の一覧と区別するため）。--full-tree は、サブディレクトリから実行しても同じ結果にするため。
