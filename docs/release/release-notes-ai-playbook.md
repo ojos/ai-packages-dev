@@ -9,14 +9,21 @@
 ## Unreleased
 
 ### Summary
-- **`/land` スキルの雛形（`templates/claude-skill-land.md`）の「CI の完了を待つ」が、遅れて作られる実行を見落とさないようにした**（ojos/ai-packages-dev#513。取り込み元: ojos/career-log の修正）。従来は「30 秒あけて 2 回同じ一覧なら抜ける」だけだったため、先に作られた実行（例: identity-guard）が完了したあとに、別のワークフロー（例: 受け入れ検証）の実行の作成が 30 秒を超えて遅れると、それを見ないまま `RUNS_GREEN` になった。PR の head の `.github/workflows/` から動くはずのワークフロー（`on:` に `pull_request` を持ち、`paths` / `branches` などで絞っておらず、確実に読める形のもの）を求め、すべてに実行が付くまで抜けない。付かなければ `RUNS_MISSING`（判定の出力は 4 通りから 6 通りへ。既存の 4 つ `RUNS_GREEN` / `RUNS_NOT_GREEN` / `RUNS_NONE` / `RUNS_UNKNOWN` は変えず、`RUNS_MISSING` と `EXPECTED_UNKNOWN`（動くはずのワークフローの一覧を求められなかったとき。待ちに入る前に止めて報告する）を加えた）。
-  - `on:` は、ブロックの形・1 行の形（`on: [push, pull_request]`、`on: pull_request`）・引用符付きの `"on":` を awk で読む。追加の道具（`yq` など）は要らない。
-  - PR の head の取得は、リモート名（`origin`）を決め打ちせず、PR 自身の URL から取得元を求める。
-  - パイプの後ろに `grep -q` を置かない。
+- **`/land` スキルの雛形（`templates/claude-skill-land.md`）の「CI の完了を待つ」が、遅れて作られる実行を見落とさないようにした**（ojos/ai-packages-dev#513。取り込み元: ojos/career-log の修正）。従来は「30 秒あけて 2 回同じ一覧なら抜ける」だけだったため、先に作られた実行（例: identity-guard）が完了したあとに、別のワークフロー（例: 受け入れ検証）の実行の作成が 30 秒を超えて遅れると、それを見ないまま `RUNS_GREEN` になった。動くはずのワークフローを求め、そのすべてに実行が付くまで抜けない。
+  - **方針は「確実に動くと言えるワークフローだけを数え、迷うものは数えない」。** 数えなかったワークフローは、従来どおり「実行が付いていれば判定に入る」扱いなので、最悪でも従来の動きに戻るだけ。動かないものを数えると、実行が付かないまま 60 分待って `RUNS_MISSING` で止まるため、そちらには倒さない。
+  - **PR の head と base の両方で「動く」と判定したものだけを数える。** GitHub は PR の実行を、head と base を合わせたマージ用の参照から作るため。その PR で新しく足したワークフローは数えない。
+  - **数えないもの:** `pull_request` の下に `types` 以外の子があるもの（`paths`・`paths-ignore`・`branches`・`branches-ignore` など）、`types` に `opened`・`synchronize`・`reopened` の 3 つが揃っていないもの、`pull_request` 以外の契機（`pull_request_target`・`workflow_run` など）、Actions で無効にしてあるもの（`actions/workflows` の `state`）。
+  - **`on:` は、認める形を限って読む。** `on: pull_request`、`on: [a, pull_request, b]`、ブロックの形で `on:` の直下にある `pull_request:` / `- pull_request` だけを数え、フローの形（`on: {pull_request: ...}`）・`pull_request` の下の引用符付きのキー（`"types":` など）・アンカーなど、ほかの形は数えない。`on:` のキー自体は、引用符付き（`"on":`）も読む。追加の道具（`yq` など）は要らない（awk で読む）。
+  - 判定の出力は 4 通りから 6 通りへ。既存の 4 つ（`RUNS_GREEN` / `RUNS_NOT_GREEN` / `RUNS_NONE` / `RUNS_UNKNOWN`）は変えず、`RUNS_MISSING`（60 分待っても、動くはずのワークフローに実行が付かなかった）と `EXPECTED_UNKNOWN`（動くはずのワークフローの一覧を求められなかった。待ちに入る前に止めて報告する）を加えた。
+  - 実行の `path` が空（null）の実行がある回は、「実行が付いていない」の判定をしない（照合できないため、その回は従来の動きに戻す）。
+  - PR の head と base の取得は、リモート名（`origin`）を決め打ちせず、PR 自身の URL から取得元を求める。base は `baseRefOid` を SHA で取る。
+  - パイプの後ろに `grep -q` を置かない。判定に使う関数は目印（`# >>> land:...`）で囲み、テストが雛形から取り出して実行する。
 - 追加のみで後方互換。雛形の種類は 17 種のまま。
 
 ### 移行
-- 雛形から写した `.claude/skills/land/SKILL.md` に手を入れていなければ、規範の更新で置き換わる。手を入れている場合は、2「CI の完了を待つ」のコードブロック（`# >>> land:...` の目印で囲んだ関数を含む）を取り込み直す。判定の出力に `RUNS_MISSING` が増えたので、出力を読んで分岐している箇所があれば追随させる。
+- 雛形から写した `.claude/skills/land/SKILL.md` に手を入れていなければ、規範の更新で置き換わる（DCB で規範を配置している場合は `bootstrap.sh --upgrade --playbook-version <この版>`）。手を入れている場合は、2「CI の完了を待つ」（`# >>> land:...` の目印で囲んだ関数を含む）を取り込み直す。
+- 判定の出力に `RUNS_MISSING` と `EXPECTED_UNKNOWN` が増えた。出力を読んで分岐している箇所があれば追随させる。
+- 待ちには、Actions の読み取り権限で `actions/workflows`（無効にしたワークフローの判定）を読む。fine-grained PAT なら Actions: Read があれば足りる（既存の `actions/runs` と同じ権限）。
 
 ## v0.9.0
 
