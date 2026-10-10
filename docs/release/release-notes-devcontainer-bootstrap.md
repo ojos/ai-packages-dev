@@ -11,7 +11,7 @@
 ### Summary
 - **同じプロジェクトで動くほかの Claude Code セッションへ、指示を簡単に送れるようにした**（ojos/ai-packages-dev#502）。どれも `--with-claude` のときだけ生成する。
   - `scripts/session-peers.sh`: 同じコンテナで生きている、同じリポジトリのセッションを、番号・宛先名・作業ツリー・台帳の issue・状態で一覧する。宛先を番号・`#issue`・宛先名・作業ツリー名で解決し、送り元の署名の行を出す。Claude Code が書く `~/.claude/sessions/*.json`（公開された仕様ではない）と、セッションの台帳を突き合わせる。読めないときは警告して `ListAgents` を案内する。
-  - `scripts/claude-session-wrapper.sh`: `.env` の `SESSION_HOST_LABEL` があれば、宛先名を `<SESSION_HOST_LABEL>-<作業ツリー名>-<PID の16進>` にする。ラベルが無い・失敗したときは何も変えずに起動する。
+  - `scripts/claude-session-wrapper.sh`: 場所ラベル `SESSION_HOST_LABEL`（`.env`、無ければ環境変数）があれば、宛先名を `<SESSION_HOST_LABEL>-<作業ツリー名>-<PID の16進>` にする。ラベルは Claude Code を起動するたびに読む。ラベルが無い・失敗した・`CLAUDE_CODE_SESSION_NAME` を自分で設定しているときは、何も変えずに起動する。
   - 起動役 `~/.local/bin/claude-session-launcher`: `devcontainer.json` の `claudeCode.claudeProcessWrapper` が指す、作業ツリーの外の小さな sh。起動したときの作業ツリーにラッパーがあれば呼び、無ければそのまま起動する（ラッパーの無いブランチへ切り替えても、Claude Code が起動しなくなることは無い）。`onCreateCommand`（`on-attach.sh --install-launcher`）と、接続のたびの `on-attach.sh` が設置する。
   - `/peers` スキル（`.claude/skills/peers/SKILL.md`。雛形は ai-playbook v0.9.0）: 一覧・宛先を解決しての送信・一斉送信。一斉送信は、送る前に宛先の一覧を利用者に確認する。
   - `.env.example` に `SESSION_HOST_LABEL=`（値なし）を足した。
@@ -21,7 +21,12 @@
 
 ### 移行
 - **`--upgrade` は、`--playbook-version v0.9.0` と合わせて当てる**（`--with-claude` の構成）。`--upgrade` は、明示しなければ ORIGIN に記録した規範の版を使い回すので、付けないと v0.8.2 以前の雛形のままになり、`template not found` で止まる（何も書き込まずに止まるので、付け直して当て直せばよい）。手を入れていないファイルは更新され、手を入れたファイル（`devcontainer.json` など）には従来どおり `.dcb-new` が置かれる。
-- **配線は、コンテナを作り直すと効く。** `claudeCode.claudeProcessWrapper` と `onCreateCommand` は、作り直したときに読まれる。宛先名に場所を入れるには、作り直す前に `.env` に `SESSION_HOST_LABEL`（例: `mac-main`）を設定する。設定しなければ、宛先名は従来どおり。
+- **作り直す前に、`devcontainer.json` と `scripts/on-attach.sh` の両方が新しい版になっていることを確かめる。** どちらかに手を入れていると、`--upgrade` はそのファイルを更新せず、隣に `<path>.dcb-new` を置く。
+  - `devcontainer.json` が古いままだと、配線（`onCreateCommand` と `claudeCode.claudeProcessWrapper`）が入らない。宛先名は従来どおりで、ほかは何も変わらない。
+  - **`devcontainer.json` だけが新しく、`on-attach.sh` が古いままだと、Claude Code が起動しなくなる。** 古い `on-attach.sh` は `--install-launcher` を知らないので起動役が置かれず、`claudeCode.claudeProcessWrapper` が存在しないパスを指すため。
+  - `.dcb-new` があれば、手を入れた箇所を残して取り込んでから作り直す（取り込んだら `bootstrap.sh --accept <path>` で記録できる）。
+- **配線は、コンテナを作り直すと効く。** `claudeCode.claudeProcessWrapper` と `onCreateCommand` は、作り直したときに読まれる。作り直したら、`test -x ~/.local/bin/claude-session-launcher` で起動役が置かれたことを確かめる。
+- **場所ラベルのためだけに作り直す必要は無い。** ラッパーは起動のたびに `.env` の `SESSION_HOST_LABEL`（例: `mac-main`）を読むので、設定したあとに開いたセッションから宛先名に場所が入る。設定しなければ、宛先名は従来どおり。
 - **万一 Claude Code が起動しなくなったら**、VS Code のリモートの設定で `claudeCode.claudeProcessWrapper` を空にすれば元に戻る。
 
 ## v0.18.0
