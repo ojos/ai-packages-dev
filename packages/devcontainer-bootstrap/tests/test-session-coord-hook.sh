@@ -430,6 +430,22 @@ gone="$(ledger s-a "$repo" check issue 395 | sed -n 1p)"
 if [[ "$held" == "LEDGER_WARN" && "$gone" == "LEDGER_OK" ]]; then pass; else fail "失敗前=$held 失敗後=$gone"; fi
 reset_ledger
 
+it "(#514) ブランチを作ってから失敗した呼び出し（git switch -c 77-x && npm test）では、issue の登録を残す"
+pre_bash s-b "$repo" 'git switch -c 77-x && npm test' toolu_f4
+git -C "$repo" branch 77-x >/dev/null 2>&1
+fail_bash s-b "$repo" 'git switch -c 77-x && npm test' toolu_f4
+kept="$(ledger s-a "$repo" check issue 77 | sed -n 1p)"
+git -C "$repo" branch -D 77-x >/dev/null 2>&1
+assert_eq "$kept" "LEDGER_WARN" "ブランチが作られた後の失敗"
+reset_ledger
+
+it "(#514) ブランチが作られずに失敗した呼び出しでは、従来どおり issue の登録を解放する"
+pre_bash s-b "$repo" 'git switch -c 88-x && npm test' toolu_f5
+fail_bash s-b "$repo" 'git switch -c 88-x && npm test' toolu_f5
+gone="$(ledger s-a "$repo" check issue 88 | sed -n 1p)"
+assert_eq "$gone" "LEDGER_OK" "ブランチが作られない失敗"
+reset_ledger
+
 it "対照: 呼び出しの前から持っていた issue の登録は、失敗しても外さない"
 ledger s-b "$repo" claim issue 395 >/dev/null
 pre_bash s-b "$repo" 'git checkout -b feat/395-x' toolu_f2

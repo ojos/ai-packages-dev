@@ -333,12 +333,24 @@ add_issue() {
 }
 
 # ブランチ名の先頭の番号（feat/395-x・395-x・fix/issue-12-x）を issue 番号とみなす。
+ISSUE_BRANCH_RE='(^|/)(issue-|gh-)?([1-9][0-9]{0,5})([-_]|$)'
 issue_from_branch() {
-  local b="$1" re
-  re='(^|/)(issue-|gh-)?([1-9][0-9]{0,5})([-_]|$)'
-  if [[ "$b" =~ $re ]]; then
+  local b="$1"
+  if [[ "$b" =~ $ISSUE_BRANCH_RE ]]; then
     add_issue "${BASH_REMATCH[3]}"
   fi
+}
+
+# 作業ディレクトリのリポジトリに、issue 番号 n に当たるローカルのブランチがあるか（読み方は issue_from_branch と同じ）。
+branch_exists_for_issue() { # 作業ディレクトリ 番号
+  local b refs
+  refs="$(git -C "$1" for-each-ref --format='%(refname:short)' refs/heads 2>/dev/null)" || return 1
+  while IFS= read -r b; do
+    [[ "$b" =~ $ISSUE_BRANCH_RE && "${BASH_REMATCH[3]}" == "$2" ]] && return 0
+  done <<EOF
+$refs
+EOF
+  return 1
 }
 
 # W 配列の k 番目以降から、オプションを読み飛ばして最初の位置引数を返す（番号で）。
@@ -654,6 +666,9 @@ settle_issue_mark() { # release|keep
   if [[ "$1" == "release" ]]; then
     nums="$(cat "$f" 2>/dev/null)"
     for n in $nums; do
+      # `git switch -c 26-x && npm test` のように、ブランチを作ったあとの段で失敗した呼び出しでも、
+      # 着手は成立している。ブランチが残っていれば登録を残す（他のセッションへの警告を消さない）。
+      branch_exists_for_issue "$cwd" "$n" && continue
       run_ledger "$cwd" release issue "$n"
     done
   fi
