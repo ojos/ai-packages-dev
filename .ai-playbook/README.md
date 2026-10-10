@@ -68,7 +68,7 @@ ai-playbook・devcontainer-bootstrap（DCB）・devcontainer-host（devhost）�
 |---|---|
 | `shared-ai-rules.md` | 共通規範（コーディング規約・機密・作業状況・テスト・コミット・命名・質問運用・重複排除ゲート・機構化の判断基準・セッション間の協調） |
 | `role-contracts/` | ロール責務の契約 7 種（目的・入力・出力・禁止事項・エスカレーション条件・完了定義） |
-| `task-playbooks/` | タスク手順 4 種（issue triage / 計画分解 / PR レビュー / issue クローズ方針） |
+| `task-playbooks/` | タスク手順 5 種（issue triage / 計画分解 / 計画のレビュー / PR レビュー / issue クローズ方針） |
 | `review-workflow.md` | クロスモデル二段ゲートによるレビュー運用 |
 | `loop-workflow.md` | ループコーディング運用の規範（受け入れ検証の機械ゲート化・verify ランナー契約・収束） |
 | `loop-coding-guide.md` | ループコーディングの解説ガイド（従来ワークフローとの違い・考え方。`loop-workflow.md` の解説版） |
