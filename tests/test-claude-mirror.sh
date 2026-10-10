@@ -298,4 +298,15 @@ if [[ -n "$TEMPLATE_SETTINGS" && "$(cat "$SETTINGS")" == "$TEMPLATE_SETTINGS" ]]
 it "配線の呼び出し先（scripts/ の 2 本）が実在する"
 if [[ -f "$REPO_ROOT/scripts/confirm-merge-hook.sh" && -f "$REPO_ROOT/scripts/session-coord-hook.sh" ]]; then pass; else fail "フック本体が無い"; fi
 
+it ".devcontainer/devcontainer.json の onCreateCommand が、DCB が --with-claude で生成するものと一致する"
+GEN_DC="$TMP_ROOT/gen-claude"
+gen_rc=0
+bash "$REPO_ROOT/packages/devcontainer-bootstrap/bootstrap.sh" --project-name test --languages node --with-claude \
+  --base-image mcr.microsoft.com/devcontainers/base:ubuntu --output-dir "$GEN_DC" >/dev/null 2>&1 || gen_rc=$?
+GEN_OC="$(jq -r '.onCreateCommand // empty' "$GEN_DC/.devcontainer/devcontainer.json" 2>/dev/null)"
+OWN_OC="$(jq -r '.onCreateCommand // empty' "$REPO_ROOT/.devcontainer/devcontainer.json" 2>/dev/null)"
+if [[ "$gen_rc" != "0" ]]; then fail "生成に失敗した（終了コード $gen_rc）"
+elif [[ -n "$GEN_OC" && "$GEN_OC" == "$OWN_OC" ]]; then pass
+else fail "生成物と食い違っている（生成物が空の場合も含む）"; fi
+
 exit_with_result

@@ -201,7 +201,7 @@ got_w="$(field NAME "$(run_wrapper "$WTREE" "$WTREE")")"
 got_p="$(whoami_label "$WTREE" "$WTREE")"
 if [[ "$got_w" =~ ^mainlab-main-wt-[0-9a-f]+$ && "$got_p" == "mainlab" ]]; then pass; else fail "ラッパー=$got_w whoami=$got_p"; fi
 
-# ── 起動役（作業ツリーの外の固定パス。on-attach.sh が設置する） ─────────────────
+# ── 起動役（作業ツリーの外の固定パス。onCreateCommand と on-attach.sh が設置する） ─────────────────
 
 FAKE_HOME="$WORK/fake-home"
 LAUNCHER="$WORK/launcher-bin/claude-session-launcher"
@@ -305,13 +305,111 @@ assert_eq "$wired" "/home/vscode/.local/bin/claude-session-launcher" "配線先"
 it "配線先は作業ツリーの外の固定パスで、ラッパーを直接指さない"
 if [[ "$wired" == /home/*/.local/bin/* && "$wired" != /workspaces/* ]]; then pass; else fail "$wired"; fi
 
-it "--with-claude の生成物の onCreateCommand が起動役を設置し、postAttachCommand の設置も残る"
+it "--with-claude の生成物の onCreateCommand は on-attach.sh を呼ばず、postAttachCommand の設置は残る"
 oc="$(jq -r '.onCreateCommand // empty' "$DC" 2>/dev/null)"
 pa="$(jq -r '.postAttachCommand // empty' "$DC" 2>/dev/null)"
-if [[ "$oc" == *"scripts/on-attach.sh --install-launcher"* && "$pa" == *"scripts/on-attach.sh"* ]]; then pass; else fail "onCreate=$oc postAttach=$pa"; fi
+if [[ -n "$oc" && "$oc" == *"claude-session-launcher"* ]] \
+  && ! printf '%s' "$oc" | command grep -q 'on-attach' \
+  && [[ "$pa" == *"scripts/on-attach.sh"* ]]; then pass; else fail "onCreate=$oc postAttach=$pa"; fi
 
-it "--with-claude を選ばない生成物には onCreateCommand の設置がない"
-if ! command grep -q 'install-launcher' "$out_plain/.devcontainer/devcontainer.json"; then pass; else fail "設置が残っている"; fi
+it "--with-claude を選ばない生成物には onCreateCommand がない"
+if ! command grep -q 'onCreateCommand' "$out_plain/.devcontainer/devcontainer.json" \
+  && [[ -z "$(jq -r '.onCreateCommand // empty' "$out_plain/.devcontainer/devcontainer.json" 2>/dev/null)" ]]; then pass; else fail "onCreateCommand が残っている"; fi
+
+# onCreateCommand の書き出し先は決め打ちの /home/vscode/…（HOME に依らない）。試験では、その
+# 接頭辞だけを仕込みのホームへ置き換えて実行する。
+# run_oncreate <ホーム> [コマンド] : コンテナが使うのと同じ形（sh -c）で実行する。
+run_oncreate() { local c="${2:-$oc}"; (cd "$out" && sh -c "${c//\/home\/vscode/$1}" 2>&1); }
+
+it "onCreateCommand の実行で、実行可能な起動役が置かれ、on-attach.sh が置くものとバイト一致する"
+OC_HOME="$WORK/oc-home"
+mkdir -p "$OC_HOME"
+run_oncreate "$OC_HOME" >/dev/null
+OC_LAUNCHER="$OC_HOME/.local/bin/claude-session-launcher"
+if [[ -x "$OC_LAUNCHER" ]] && cmp -s "$OC_LAUNCHER" "$LAUNCHER" && [[ ! -e "$OC_LAUNCHER.oncreate.tmp" ]]; then pass; else fail "置かれていない、または内容が違う"; fi
+
+it "onCreateCommand を 2 回実行しても、起動役の内容は変わらない"
+sum_before="$(cksum <"$OC_LAUNCHER")"
+run_oncreate "$OC_HOME" >/dev/null
+if [[ "$(cksum <"$OC_LAUNCHER")" == "$sum_before" && -x "$OC_LAUNCHER" ]]; then pass; else fail "内容が変わった"; fi
+
+it "onCreateCommand が置いた起動役を壊されていても、もう一度実行すれば元へ戻る"
+printf '#!/bin/sh\nexit 9\n' >"$OC_LAUNCHER"
+run_oncreate "$OC_HOME" >/dev/null
+if [[ "$(cksum <"$OC_LAUNCHER")" == "$sum_before" ]]; then pass; else fail "戻っていない"; fi
+
+it "中心の場面: on-attach.sh が --install-launcher を知らない古い版でも、onCreateCommand で起動役が置かれる"
+# 設置を知らない古い on-attach.sh を模す（引数を無視して何もしない）。onCreateCommand が
+# それを呼ぶなら、起動役は置かれない。
+out_old="$(new_workdir)/old-attach"
+run_bootstrap "$out_old" --with-claude >/dev/null 2>&1
+printf '#!/usr/bin/env bash\necho "[on-attach] bootstrap active"\n' >"$out_old/scripts/on-attach.sh"
+oc_old="$(jq -r '.onCreateCommand // empty' "$out_old/.devcontainer/devcontainer.json" 2>/dev/null)"
+OLD_HOME="$WORK/old-home"
+mkdir -p "$OLD_HOME"
+run_oncreate "$OLD_HOME" "$oc_old" >/dev/null
+if [[ -x "$OLD_HOME/.local/bin/claude-session-launcher" ]] && cmp -s "$OLD_HOME/.local/bin/claude-session-launcher" "$LAUNCHER"; then pass; else fail "起動役が置かれていない"; fi
+
+it "設置できない場合（HOME の下に書けない）も、警告を出して成功終了する（コンテナの作成を止めない）"
+BAD_HOME="$WORK/bad-home"
+mkdir -p "$BAD_HOME"
+: >"$BAD_HOME/.local"
+bad_rc=0
+bad_out="$(run_oncreate "$BAD_HOME")" || bad_rc=$?
+if [[ "$bad_rc" == "0" ]] && printf '%s' "$bad_out" | command grep -q 'WARN'; then pass; else fail "rc=$bad_rc out=$bad_out"; fi
+
+it "onCreateCommand の書き出し先と claudeProcessWrapper の配線先が同じパスである（HOME に依らない）"
+if [[ "$oc" == *"f=\"$wired\""* && "$oc" != *'$HOME'* ]]; then pass; else fail "wired=$wired"; fi
+
+# 壊した雛形（on-attach.sh の LAUNCHER ヒアドキュメント）で、生成がエラーになること。
+# bootstrap.sh のコピーの雛形だけを書き換え、パッケージの他のファイルは相対位置で解決させる。
+BROKEN_DIR="$(new_workdir)/broken-pkg"
+cp -R "$PKG_DIR" "$BROKEN_DIR"
+broken_gen() { # <sed 式> : LAUNCHER 内の行を python で書き換えた bootstrap.sh で生成する
+  python3 -I - "$BROKEN_DIR/bootstrap.sh" "$1" <<'PYEOF'
+import sys
+p, mode = sys.argv[1], sys.argv[2]
+s = open(p, encoding='utf-8').read()
+a = s.index("<<'LAUNCHER'\n") + len("<<'LAUNCHER'\n")
+b = s.index("\nLAUNCHER\n", a)
+body = s[a:b]
+if mode == 'empty':
+    s = s[:a - len("<<'LAUNCHER'\n")] + "<<'LAUNCHER_X'\n" + s[a:]
+elif mode == 'quote':
+    body = body + "\necho 'x'"
+    s = s[:a] + body + s[b:]
+elif mode == 'tab':
+    body = body + "\n\techo x"
+    s = s[:a] + body + s[b:]
+open(p, 'w', encoding='utf-8').write(s)
+PYEOF
+}
+BROKEN_ORIG="$(cat "$BROKEN_DIR/bootstrap.sh")"
+run_broken() { # <mode> : 終了コードと標準エラーを返す
+  printf '%s\n' "$BROKEN_ORIG" >"$BROKEN_DIR/bootstrap.sh"
+  broken_gen "$1"
+  bash "$BROKEN_DIR/bootstrap.sh" --project-name test --languages node --with-claude \
+    --base-image mcr.microsoft.com/devcontainers/base:ubuntu --output-dir "$(new_workdir)/o" 2>&1 >/dev/null
+}
+
+it "起動役の中身を雛形から取り出せないとき、生成が終了コード 1 で止まり、理由を出す"
+broken_rc=0
+broken_err="$(run_broken empty)" || broken_rc=$?
+if [[ "$broken_rc" == "1" && "$broken_err" == *"取り出せませんでした"* ]]; then pass; else fail "rc=$broken_rc err=$broken_err"; fi
+
+it "起動役の中身に単一引用符があるとき、生成が終了コード 1 で止まり、理由を出す"
+broken_rc=0
+broken_err="$(run_broken quote)" || broken_rc=$?
+if [[ "$broken_rc" == "1" && "$broken_err" == *"単一引用符"* ]]; then pass; else fail "rc=$broken_rc err=$broken_err"; fi
+
+it "起動役の中身に制御文字（タブ）があるとき、生成が終了コード 1 で止まり、理由を出す"
+broken_rc=0
+broken_err="$(run_broken tab)" || broken_rc=$?
+if [[ "$broken_rc" == "1" && "$broken_err" == *"制御文字"* ]]; then pass; else fail "rc=$broken_rc err=$broken_err"; fi
+
+it "onCreateCommand の起動役は、引用符を含む中身も崩れずにそのまま書き出される（行数と exec の行）"
+if [[ "$(wc -l <"$OC_LAUNCHER" | tr -d ' ')" == "9" ]] && command grep -qxF 'exec "$@"' "$OC_LAUNCHER" \
+  && command grep -qF 't="$(git rev-parse --show-toplevel 2>/dev/null)" || t=""' "$OC_LAUNCHER"; then pass; else fail "$(cat "$OC_LAUNCHER")"; fi
 
 it "--with-claude を選ばない生成物には claudeProcessWrapper の配線がない"
 if ! command grep -q 'claudeProcessWrapper' "$out_plain/.devcontainer/devcontainer.json"; then pass; else fail "配線が残っている"; fi
