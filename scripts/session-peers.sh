@@ -433,8 +433,8 @@ cmd_resolve() {
     *) matched="$(printf '%s\n' "$rows" | awk -F'\t' -v n="$spec" 'NR == n + 0 { print }')" ;;
   esac
   [ -n "$matched" ] || matched="$(printf '%s\n' "$rows" | awk -F'\t' -v q="$spec" '$1 == q')"
-  [ -n "$matched" ] || matched="$(printf '%s\n' "$rows" | awk -F'\t' -v q="$spec" 'index($1, q) == 1')"
   [ -n "$matched" ] || matched="$(printf '%s\n' "$rows" | awk -F'\t' -v q="$spec" '$2 == q')"
+  [ -n "$matched" ] || matched="$(printf '%s\n' "$rows" | awk -F'\t' -v q="$spec" 'index($1, q) == 1')"
 
   if [ -z "$matched" ]; then
     echo "[session-peers] 「$spec」に該当するセッションがありません。候補:" >&2

@@ -239,6 +239,17 @@ it "resolve: 範囲外の番号は 0 件扱い（非 0）"
 peers resolve 99 >/dev/null 2>&1
 assert_eq "$?" "1" "終了コード"
 
+it "resolve: 作業ツリー名の完全一致は、宛先名の前方一致より先に効く"
+# A1 の作業ツリー名で始まる宛先名を持つ別のセッションを置く。前方一致を先に見ると、こちらへ誤って解決する。
+spawn; PID_P="$SPAWNED"
+wt_a1="$(basename "$REPO")"
+write_live "$PID_P" "$wt_a1-zz" "$WT2" "$DOMAIN" idle 7000
+got="$(peers resolve "$wt_a1" 2>/dev/null)"
+rm -f "$SESS/$PID_P.json"
+kill "$PID_P" 2>/dev/null
+wait "$PID_P" 2>/dev/null
+assert_eq "$got" "lab-proj-a1" "宛先名"
+
 it "resolve: 指定が無いと使い方の誤りで 2"
 peers resolve >/dev/null 2>&1
 assert_eq "$?" "2" "終了コード"

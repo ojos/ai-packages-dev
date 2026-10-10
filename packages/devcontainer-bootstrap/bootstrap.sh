@@ -9111,8 +9111,8 @@ cmd_resolve() {
     *) matched="$(printf '%s\n' "$rows" | awk -F'\t' -v n="$spec" 'NR == n + 0 { print }')" ;;
   esac
   [ -n "$matched" ] || matched="$(printf '%s\n' "$rows" | awk -F'\t' -v q="$spec" '$1 == q')"
-  [ -n "$matched" ] || matched="$(printf '%s\n' "$rows" | awk -F'\t' -v q="$spec" 'index($1, q) == 1')"
   [ -n "$matched" ] || matched="$(printf '%s\n' "$rows" | awk -F'\t' -v q="$spec" '$2 == q')"
+  [ -n "$matched" ] || matched="$(printf '%s\n' "$rows" | awk -F'\t' -v q="$spec" 'index($1, q) == 1')"
 
   if [ -z "$matched" ]; then
     echo "[session-peers] 「$spec」に該当するセッションがありません。候補:" >&2
@@ -9750,7 +9750,7 @@ build_session_host_label_block() {
 
 # セッションの宛先名に含める場所のラベル（scripts/claude-session-wrapper.sh が読む）。
 # 空なら宛先名を変えない。設定すると、Claude Code のセッションの宛先名が
-# <ラベル>-<作業ツリー名>-<4桁の16進> になり、複数の機械・コンテナで動くセッションを
+# <ラベル>-<作業ツリー名>-<PID の16進> になり、複数の機械・コンテナで動くセッションを
 # 宛先名から見分けられる（/peers で一覧・宛先の解決・一斉送信ができる）。
 # 英数字と . _ - だけを使う。
 SESSION_HOST_LABEL=
