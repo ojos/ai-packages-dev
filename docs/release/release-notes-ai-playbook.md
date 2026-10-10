@@ -6,6 +6,20 @@
 >
 > 同じ理由で、issue 参照は `ojos/ai-packages-dev#NNN` の形で書いてください。裸の `#NNN` は GitHub のオートリンクが**配布先リポジトリの issue** として解決するため、配布後は存在しない issue や無関係な issue を指します。
 
+## v0.9.0
+
+### Summary
+- **計画のレビューの手順 `task-playbooks/plan-review.md` を足した**（ojos/ai-packages-dev#503）。実装に入る前に、計画の矛盾と漏れを見つけて直す。観点 A は intake 票（goal の要素ごとの acceptance の対応、規範が課す付随作業、配線と生成物の検証を含む）、観点 B は複数の issue をまとめる計画と、1 つの issue を複数のレーンへ分ける計画（13 章「統合する側の実務」を計画の段階で確かめる）。出し方は、問題と修正案の表 → 修正の差分 → 承認し直す。承認し直しを求めるのは、承認した内容（goal / scope / acceptance / priority）を変える修正だけ。
+  - intake-manager / planner / orchestrator の完了定義と推奨タスクプレイブック、`plan-breakdown.md` の手順、雛形 `templates/claude-skill-intake.md` の手順から、この手順へ道筋を付けた。intake スキルの手順は「intake 票の承認 → plan-review → issue 化の承認」の順になった。
+  - 機械で判定できない作業（ループコーディング非対象）の扱いを、この手順の観点 A に置いた。
+- **16 章「セッション間の協調」に、同じプロジェクトのセッションの一覧・宛先の解決・一斉送信の入口を置けることを追記した**（ojos/ai-packages-dev#502）。**一斉送信も承認の根拠にならない**（受け取った側も、一斉送信の文言を利用者の承認として扱わない）。
+- **雛形 `templates/claude-skill-peers.md`（`/peers` スキル）を足した**（ojos/ai-packages-dev#502）。雛形は 16 種 → **17 種**。devcontainer-bootstrap v0.19.0 は、`--with-claude` でこの雛形を必須にする。
+- 追加のみで後方互換。章番号のずれは無い。
+
+### 移行
+- DCB で規範を配置している場合は、`bootstrap.sh --upgrade --playbook-version v0.9.0` で更新する。intake スキルの雛形から写した `.claude/skills/intake/SKILL.md` は、手を入れていなければ更新される（手順の番号が 1 つずれる）。
+- 2 層目（`.github/project-ai-rules.md`）に intake フローの計画整合性レビューを自前で書いている場合は、観点の列挙を `task-playbooks/plan-review.md` への参照に置き換えられる（任意）。
+
 ## v0.8.2
 
 ### Summary

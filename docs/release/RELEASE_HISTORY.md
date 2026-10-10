@@ -9,14 +9,16 @@
 
 | パッケージ | リポジトリ | 現行バージョン | 配布形態 |
 |---|---|---|---|
-| devcontainer-bootstrap | `ojos/devcontainer-bootstrap` | v0.18.0 | GitHub Release + 資産 5 点（配布スクリプト 2: `bootstrap.sh` / `doctor.sh`、生成物 3: `SHA256SUMS` / `RELEASE-MANIFEST.json` / `PACKAGE_ARCHIVE.tar.gz`） |
-| ai-playbook | `ojos/ai-playbook` | v0.8.2 | git タグのみ |
+| devcontainer-bootstrap | `ojos/devcontainer-bootstrap` | v0.19.0 | GitHub Release + 資産 5 点（配布スクリプト 2: `bootstrap.sh` / `doctor.sh`、生成物 3: `SHA256SUMS` / `RELEASE-MANIFEST.json` / `PACKAGE_ARCHIVE.tar.gz`） |
+| ai-playbook | `ojos/ai-playbook` | v0.9.0 | git タグのみ |
 | devcontainer-host | `ojos/devcontainer-host` | v0.1.0 | GitHub Release + 資産 7 点（個別 4: `dev.sh` / `dev-up@.service` / `install.sh` / `projects.example`、生成物 3: `SHA256SUMS` / `RELEASE-MANIFEST.json` / `PACKAGE_ARCHIVE.tar.gz`） |
 
 ### 新世代の版更新
 
 | パッケージ | 版 | 公開日 | 要点 |
 |---|---|---|---|
+| devcontainer-bootstrap | v0.19.0 | 2026-10-10 | **同じプロジェクトのほかの Claude Code セッションへの一覧・宛先の解決・一斉送信**（#502。`--with-claude` の構成だけ）。`session-peers.sh`、宛先名に場所を入れるラッパー `claude-session-wrapper.sh`（`SESSION_HOST_LABEL`）、作業ツリーの外の起動役（`onCreateCommand` と `on-attach.sh` が設置し、`claudeCode.claudeProcessWrapper` が指す）、`/peers` スキル。生成物が変わる。**`--with-claude` では ai-playbook v0.9.0 以降を要求する**（雛形 `claude-skill-peers.md` が必要）。使わない場合は v0.5.0 以降のまま。配線はコンテナを作り直すと効く。規範の雛形が欠けているとき、何も書き込まずに止まる（#507） |
+| ai-playbook | v0.9.0 | 2026-10-10 | **計画のレビューの手順 `plan-review.md`**（#503。観点 A＝intake 票、観点 B＝複数 issue の計画）と、契約・`plan-breakdown`・intake スキルの雛形からの道筋。16 章に一覧・一斉送信の入口と「一斉送信も承認の根拠にならない」（#502）。雛形 16 種 → **17 種**（`claude-skill-peers.md`）。追加のみで後方互換 |
 | devcontainer-host | v0.1.0 | 2026-10-08 | **最初の版**。devhost を DCB への同梱から独立させ、`ojos/devcontainer-host` から独自の版で配る（#486）。`dev` に restart / stop / logs / enable / disable / exec / self-update（#482）。**外部の機械へ 1 コマンドで入れる `install.sh`**（照合してから置く。#495）。`dev version`。self-update はマニフェストで照合した `dev.sh` を直接取得し、ユニットのファイルの差と起こし直しを案内する（#495）。`SHA256SUMS` にアーカイブを含め、attestation から辿れる（#491）。README に 3 パッケージの関係・tmux の前提・DCB と一緒に使うと揃うもの（#494） |
 | devcontainer-bootstrap | v0.18.0 | 2026-10-08 | **devhost の同梱をやめた**（#486。`ojos/devcontainer-host` へ移った。DCB から入れた古い `dev` は self-update できないので、手で 1 度入れ直す）。**`SHA256SUMS` に `PACKAGE_ARCHIVE.tar.gz` を加えた**（#491。attestation からアーカイブまで辿れる。入手手順は照合に失敗したら展開しない）。README に 3 パッケージの関係（#494）。テストのベースイメージの固定（#480）。`bootstrap.sh` / `doctor.sh` / 生成物は変わらない（版の記録を除く）。要求する ai-playbook は v0.5.0 以降のまま（v0.8.2 を推奨） |
 | ai-playbook | v0.8.2 | 2026-10-08 | README に 3 パッケージの関係を明示した（#494）。規範の文書と雛形は変わらない。破壊的変更なし。雛形は 16 種のまま |
