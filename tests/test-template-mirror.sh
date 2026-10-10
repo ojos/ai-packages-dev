@@ -129,17 +129,25 @@ BOOTSTRAP="$REPO_ROOT/packages/devcontainer-bootstrap/bootstrap.sh"
 #   と対で配られるため、片方だけ直すと拒否の出力を読めなくなる。
 #   この開発リポジトリも .claude/settings.json で同じ配線を持つ（雛形との一致は
 #   tests/test-claude-mirror.sh が検査する）。
+#   claude-session-wrapper.sh / session-peers.sh を MIRRORED に入れる理由（#502）: どちらも
+#   --with-claude 連動で、置換プレースホルダを 1 つも持たない。ラッパーは宛先名の組み立てと
+#   「どんな失敗でも exec まで進む」ことを、session-peers.sh は一覧の条件（pidDomain・
+#   開始時刻・共通ディレクトリ）と宛先の解決を担う。場所のラベルの値は .env 側にだけあり、
+#   スクリプトには入らないので、全構成で同一になる。正本と写しがずれると、この開発リポジトリの
+#   /peers が配布物と違う挙動になる。
 MIRRORED_RELS='scripts/check-control-chars.sh
 scripts/check-doc-links.sh
 scripts/check-no-secrets.sh
 scripts/check-shell-portability.sh
 scripts/check-table-breaks.sh
+scripts/claude-session-wrapper.sh
 scripts/confirm-merge-hook.sh
 scripts/load-project-env.sh
 scripts/loop-gate.sh
 scripts/on-attach.sh
 scripts/session-coord-hook.sh
 scripts/session-ledger.sh
+scripts/session-peers.sh
 scripts/setup-git-identity.sh
 scripts/verify-commit-identity.sh
 scripts/verify-commit-identity-selftest.sh
