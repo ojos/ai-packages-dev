@@ -93,25 +93,37 @@ echo CHECKS_ATTACHED
 
 判定の対象は、次の点で絞ります。
 
-- **動くはずのワークフローすべてに実行が付くまで待ちます。** 動くはずのワークフローは、PR の head（`$sha`）の `.github/workflows/` のうち、`on:` に `pull_request` を持ち、`paths:` / `paths-ignore:` で絞っていないものです。`on:` は、ブロックの形（`on:` の下に `pull_request:`）、1 行の形（`on: [push, pull_request]`、`on: pull_request`）、引用符付きの `"on":` を読みます。YAML を読む専用の道具（`yq` など）は雛形が求める道具に含めないため、awk で読みます。求める元を作業ツリーでなく `$sha` の中身にするのは、ワークフローを増減する PR で、作業ツリーの一覧が head と食い違うためです。下の「2 回続けて見る」だけでは、先に作られた実行が完了してから 30 秒を超えて遅れて作られる実行を取りこぼし、その受け入れ検証を見ないまま `RUNS_GREEN` になります。`paths` で絞ったものは、差分によって実行が作られないため数えません（付いていれば、下の判定には入ります）。`pull_request_target` や `workflow_run` など、`pull_request` 以外の契機で付く実行は数えません。
+- **動くはずのワークフローすべてに実行が付くまで待ちます。** 下の下準備で、動くはずのワークフローを求めます。下の「2 回続けて見る」だけでは、先に作られた実行が完了してから 30 秒を超えて遅れて作られる実行を取りこぼし、その受け入れ検証を見ないまま `RUNS_GREEN` になるためです。
+
+  **方針は「確実に動くと言えるワークフローだけを数え、迷うものは数えない」です。** 数えなかったワークフローは、従来どおり「実行が付いていれば判定に入る」扱いなので、最悪でもこの手順を足す前の動きに戻るだけです。逆に、動かないものを数えると、実行が付かないまま 60 分待って毎回 `RUNS_MISSING` で止まり、足す前より悪くなります。そのため、次のものは数えません。
+  - **`pull_request` に `paths` / `paths-ignore` / `types` / `branches` / `branches-ignore` のどれかがあるもの。** 差分・イベントの種類・ブランチによって、実行が作られないことがあるためです。
+  - **`pull_request` 以外の契機で付くもの**（`pull_request_target`、`workflow_run` など）。
+  - **head と base の片方でしか「動く」と言えないもの。** GitHub は PR の実行を、head と base を合わせたマージ用の参照から作るため、ワークフローの定義も、そのマージ用の参照にあるものが使われます。head で足したワークフローは、マージ用の参照で動くとは限らず、base で消えたものは、head に残っていても動きません。確実に動くと言えるのは、両方で「動く」と判定したものです。
+  - **Actions で無効にしてあるもの**（`state` が `active` でないもの）。
+  - **1 行の形の `on:` の中で、`push` に付けた `paths` などの絞り込みも、`pull_request` の絞り込みと区別せず、数えない側に倒しています。** 数えないほうが安全側（上の方針）で、書き方を見分ける実装は誤読の余地を増やすためです。
+
+  `on:` は、ブロックの形（`on:` の下に `pull_request:`）、1 行の形（`on: [push, pull_request]`、`on: pull_request`）、引用符付きの `"on":` を読みます。YAML を読む専用の道具（`yq` など）は雛形が求める道具に含めないため、awk で読みます。求める元を作業ツリーでなく `$sha` と base の中身にするのは、ワークフローを増減する PR で、作業ツリーの一覧が食い違うためです。
 - **完了を 2 回続けて見るまで待ちます。** ワークフローごとに実行が作られる時刻はずれるため、先に作られた実行が完了した時点では、後の実行がまだ一覧に無いことがあります。30 秒あけて読んだ一覧が前の回と同じで、すべて完了していれば抜けます。上の「動くはずのワークフロー」に入らないものは、この間隔を超えて遅れると拾えません。
 - **ワークフローごとに、最新の実行 1 件だけを見ます。** `reopened` などで同じ SHA に実行が重なると、古い失敗が一覧に残るためです。一覧は全ページを読みます（`--paginate`）。
 - **commit status を出すワークフロー（`second-opinion-gate`、`review-gate`）は、実行の成否では判定しません。** 下の commit status で判定します。たとえば `second-opinion-gate` は、記録が無いうちに起動した実行が失敗のまま残り、記録を投稿したあとの緑は、別の契機（掃き寄せ）が付ける status として出ます。実行の成否で判定すると、投稿しても緑になりません。除くワークフローの名前（`gates`）は、プロジェクトの構成に合わせて直してください。
 
-**判定に使う関数（`workflow_runs_on_pr`・`expected_workflows`・`missing_workflows`・`runs_verdict`）は、目印の行（`# >>> land:...` と `# <<< land:...`）で囲んでいます。** テストがこの部分だけを雛形から取り出し、仕込みのリポジトリや仕込みの一覧で実行して確かめるためです。目印の行を消さず、囲んだ部分が外側の変数に依存しない形を保ってください。
+**判定に使う関数（`workflow_runs_on_pr`・`expected_workflows`・`filter_active`・`missing_workflows`・`runs_verdict`）と、有効なワークフローを読む jq の式（`active_jq`）は、目印の行（`# >>> land:...` と `# <<< land:...`）で囲んでいます。** テストがこの部分だけを雛形から取り出し、仕込みのリポジトリや仕込みの一覧で実行して確かめるためです。目印の行を消さず、囲んだ部分が外側の変数に依存しない形を保ってください。
 
 **パイプの後ろに `grep -q` を置きません。** `pipefail` の下では、`grep -q` が一致した時点で終了し、前段が SIGPIPE で失敗して、一致しているのに不一致と判定されることがあるためです。判定は、入力を最後まで読む awk の終了コードか、`if` の条件で行います。
 
-**PR の head の取得は、リモート名（`origin`）を決め打ちしません。** `pull/N/head` を持つのは PR のあるリポジトリです。`origin` がフォーク側を指す構成などでは、`origin` から取れないことがあります。そこで PR 自身の URL（`gh pr view N --json url`）の末尾 `/pull/N` を落としたものを取得元にします。URL は PR のあるリポジトリを指すため、リモートの名前や構成に左右されません。
+**PR の head と base の取得は、リモート名（`origin`）を決め打ちしません。** `pull/N/head` と base のコミットを持つのは PR のあるリポジトリです。`origin` がフォーク側を指す構成などでは、`origin` から取れないことがあります。そこで PR 自身の URL（`gh pr view N --json url`）の末尾 `/pull/N` を落としたものを取得元にします。URL は PR のあるリポジトリを指すため、リモートの名前や構成に左右されません。base は、`baseRefOid` を SHA で直接取ります。ブランチ名で取ると、取得のあいだに base が進んだとき、判定した SHA と食い違うためです。
+
+**動くはずのワークフローを求められなかったときは、空として扱いません。** 取得・読み取り・API のどれかが失敗したのに空の一覧で進むと、数えるものが無いまま従来の動きに黙って戻り、気づけません。`EXPECTED_UNKNOWN` を出して止め、報告します。一覧が本当に空（動くはずのものが 0 本）のときとは区別します（その場合は何も待たず、そのまま判定に進みます）。
 
 ```bash
 # >>> land:expected-workflows
-# on: に pull_request を持ち、paths / paths-ignore で絞っていないときだけ 0 を返す（標準入力はワークフローの YAML）。
+# on: に pull_request を持ち、paths / paths-ignore / types / branches / branches-ignore で絞っていないときだけ 0 を返す
+# （標準入力はワークフローの YAML）。
 workflow_runs_on_pr() {
   awk '
     function strip(s) { sub(/[ \t]+#.*$/, "", s); sub(/[ \t\r]+$/, "", s); return s }
     function words(s) { return s ~ /(^|[^A-Za-z0-9_-])pull_request([^A-Za-z0-9_-]|$)/ }
-    function filters(s) { return s ~ /(^|[^A-Za-z0-9_-])paths(-ignore)?[ \t]*:/ }
+    function filters(s) { return s ~ /(^|[^A-Za-z0-9_-])(paths|paths-ignore|types|branches|branches-ignore)[ \t]*:/ }
     BEGIN { pr = -1 }
     /^["'\'']?on["'\'']?[ \t]*:/ {
       inon = 1
@@ -130,12 +142,27 @@ workflow_runs_on_pr() {
     }
     END { exit (hit && !filt) ? 0 : 1 }'
 }
-# PR の head（$1）の .github/workflows/ から、動くはずのワークフローのパスを出す（作業ツリーは見ない）。
-expected_workflows() {
-  git ls-tree --name-only "$1" .github/workflows/ | while read -r f; do
+# コミット（$1）の .github/workflows/ から、動くはずのワークフローのパスを出す（作業ツリーは見ない）。
+# 読めなかったときは 1 を返す（空の一覧と区別するため）。--full-tree は、サブディレクトリから実行しても同じ結果にするため。
+workflows_at() {
+  files="$(git ls-tree --full-tree --name-only "$1" .github/workflows/)" || return 1
+  printf '%s\n' "$files" | while read -r f; do
     case "$f" in *.yml|*.yaml) ;; *) continue ;; esac
-    if git show "$1:$f" | workflow_runs_on_pr; then echo "$f"; fi
-  done | sort
+    body="$(git show "$1:$f")" || exit 1
+    if printf '%s\n' "$body" | workflow_runs_on_pr; then echo "$f"; fi
+  done
+}
+# head（$1）と base（$2）の両方で動くはずのワークフローのパスを出す。どちらかが読めなければ 1 を返す。
+expected_workflows() {
+  h="$(workflows_at "$1")" || return 1
+  b="$(workflows_at "$2")" || return 1
+  comm -12 <(printf '%s\n' "$h" | awk 'NF' | sort) <(printf '%s\n' "$b" | awk 'NF' | sort)
+}
+# 有効なワークフローの path を読む jq の式（gh api repos/{owner}/{repo}/actions/workflows の出力に使う）
+active_jq='.workflows[] | select(.state == "active") | .path'
+# 動くはずの一覧（$1）から、有効なもの（$2 = active_jq の出力）に無いものを除く。
+filter_active() {
+  comm -12 <(printf '%s\n' "$1" | awk 'NF' | sort) <(printf '%s\n' "$2" | awk 'NF' | sort)
 }
 # <<< land:expected-workflows
 
@@ -158,14 +185,20 @@ runs_verdict() {
 # <<< land:runs-verdict
 
 gates='second-opinion-gate|review-gate'
-# PR のあるリポジトリから head を取る（手元に無いときだけ）
-git cat-file -e "$sha^{commit}" 2>/dev/null || {
-  prurl="$(gh pr view N --json url --jq .url)" && git fetch -q "${prurl%/pull/*}" "pull/N/head"
-}
-expected="$(expected_workflows "$sha")"
+# PR のあるリポジトリから head と base を取る（手元に無いときだけ）。求められなければ EXPECTED_UNKNOWN で止める
+expected_ok=0
+if prurl="$(gh pr view N --json url --jq .url)" && base="$(gh pr view N --json baseRefOid --jq .baseRefOid)"; then
+  { git cat-file -e "$sha^{commit}" 2>/dev/null || git fetch -q "${prurl%/pull/*}" "pull/N/head"; } \
+    && { git cat-file -e "$base^{commit}" 2>/dev/null || git fetch -q "${prurl%/pull/*}" "$base"; } \
+    && expected="$(expected_workflows "$sha" "$base")" \
+    && active="$(gh api --paginate "repos/{owner}/{repo}/actions/workflows?per_page=100" --jq "$active_jq")" \
+    && expected="$(filter_active "$expected" "$active")" \
+    && expected_ok=1
+fi
+[ "$expected_ok" = 1 ] || { echo EXPECTED_UNKNOWN; exit 1; }
 latest() (  # 対象の実行を、ワークフローごとに最新の 1 件だけ出す（全ページ）
   set -o pipefail
-  gh api --paginate "$url" --jq "$sel | [.workflow_id, .run_number, .status, (.conclusion // \"-\"), .name, (.path | sub(\"@.*$\"; \"\"))] | @tsv" \
+  gh api --paginate "$url" --jq "$sel | [.workflow_id, .run_number, .status, (.conclusion // \"-\"), .name, (.path // \"\" | sub(\"@.*$\"; \"\"))] | @tsv" \
     | sort -t "$(printf '\t')" -k1,1 -k2,2nr | awk -F '\t' '!seen[$1]++'
 )
 listed=0; prev=""; missing=""
@@ -190,13 +223,14 @@ echo "-- ゲートの実行（参考。成否は commit status で判定する�
 printf '%s\n' "$runs" | runs_verdict "$listed" "$missing"
 ```
 
-判定の出力は 5 通りです。
+判定の出力は 6 通りです（`EXPECTED_UNKNOWN` は待ちに入る前に出ます）。
 
 - `RUNS_GREEN`: ゲート以外の実行がすべて通っています。
 - `RUNS_NOT_GREEN`: 「実行（判定の対象）」の一覧（4 列目が `conclusion`）を読み、失敗した実行（`failure`、`cancelled`、`timed_out` など）を止めて報告します。60 分で終わらなかった場合もここに入ります。その場合は失敗でなく時間切れなので、3 列目（`status`）を見て、止めて報告します。
 - `RUNS_NONE`: ゲート以外の実行がありません（付いていたのはゲートの実行だけ）。CI の成否は、下の commit status だけで判定します。
 - `RUNS_UNKNOWN`: 一覧を読めませんでした。「通った」とも「落ちた」とも扱わず、止めて報告します。
-- `RUNS_MISSING`: 60 分待っても、動くはずのワークフローに実行が付きませんでした（「実行が付いていないワークフロー」の一覧）。「落ちた」ではなく「作られていない」です。上の `CHECKS_NOT_ATTACHED` と同じ切り分けの順序で確かめます。あわせて、そのワークフローの `on:` を読み直します。雛形の読み方に合わず、実際には動かないワークフローを「動くはず」と読んでいる場合があるためです。確かめたら止めて報告します。
+- `EXPECTED_UNKNOWN`: 動くはずのワークフローの一覧を求められませんでした（head・base の取得、ワークフローの読み取り、`actions/workflows` の API のどれかの失敗）。「動くはずのものが無い」とは別です。空として進めず、止めて報告します。
+- `RUNS_MISSING`: 60 分待っても、動くはずのワークフローに実行が付きませんでした（「実行が付いていないワークフロー」の一覧）。「落ちた」ではなく「作られていない」です。上の `CHECKS_NOT_ATTACHED` と同じ切り分けの順序で確かめます。**数えない条件は、絞り込み（`paths` / `types` / `branches` など）・無効化・head と base の片方にしか無い、です。** これらに当たるものは一覧に入らないので、一覧に出たのは「数えた」ものです。数えたのに実行が付かないときは、(1) そのワークフローの `on:` を読み直す（雛形の読み方に合わず、動かないものを「動くはず」と読んでいないか）、(2) 無効化・ブランチ保護・ブランチ名など、`actions/workflows` の `state` に現れない理由が無いか、(3) 上の切り分けの 4 点（無効化・利用枠・実行基盤・同時間帯の別 PR）の順に見ます。確かめたら止めて報告します。
 
 「ゲートの実行」の一覧は、判定には使いませんが、status が付かない理由を切り分けるときに読みます（下の「置いている場合」の、ジョブだけが失敗する形）。
 
