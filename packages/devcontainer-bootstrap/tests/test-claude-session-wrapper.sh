@@ -2,7 +2,7 @@
 # セッションの宛先名を自動で付ける起動ラッパー（scripts/claude-session-wrapper.sh）と、
 # その配線（--with-claude の生成物）を検証する。
 #
-#   - ラベルありで、名前の形が <ラベル>-<作業ツリー名>-<4桁の16進> になる
+#   - ラベルありで、名前の形が <ラベル>-<作業ツリー名>-<$$ の 16 進> になる
 #   - 起動のたびに名前が変わる
 #   - ラベルなし・既に設定済み・計算の失敗のどれでも、引数がそのまま exec される
 #   - export 記法・CRLF・git worktree でも、ラッパーと /peers の署名が同じラベルを返す
@@ -46,6 +46,7 @@ cat >"$STUB" <<'STUBEOF'
 #!/bin/bash
 printf 'NAME=%s\n' "${CLAUDE_CODE_SESSION_NAME-<unset>}"
 printf 'ARGC=%s\n' "$#"
+printf 'PIDHEX=%x\n' "$$"
 for a in "$@"; do printf 'ARG=%s\n' "$a"; done
 STUBEOF
 chmod +x "$STUB"
@@ -82,10 +83,10 @@ whoami_label() {
 P1="$WORK/p1"
 mkproject "$P1" "lab"
 
-it "ラベルありで、名前が <ラベル>-<作業ツリー名>-<4桁の16進> になる"
+it "ラベルありで、名前が <ラベル>-<作業ツリー名>-<ラッパーの PID の 16 進> になる"
 res="$(run_wrapper "$P1" "$REPO")"
 name="$(field NAME "$res")"
-if [[ "$name" =~ ^lab-my-repo-[0-9a-f]{4}$ ]]; then pass; else fail "名前=$name"; fi
+if [[ "$name" == "lab-my-repo-$(field PIDHEX "$res")" ]]; then pass; else fail "名前=$name PIDHEX=$(field PIDHEX "$res")"; fi
 
 it "ラベルありでも、本体のパスと引数がそのまま渡る（空白を含む引数も 1 個のまま）"
 if [[ "$(field ARGC "$res")" == "2" ]] \
@@ -96,30 +97,26 @@ else
   fail "$res"
 fi
 
-it "2 回の起動で名前が異なる（16進は起動ごとに変わる。偶然の一致を避けて 30 回まで試す）"
+it "別のプロセスで起動すると、名前が異なる（末尾はラッパー自身の PID の 16 進）"
 first="$name"
-differ=0
-for _ in $(seq 1 30); do
-  n2="$(field NAME "$(run_wrapper "$P1" "$REPO")")"
-  if [[ -n "$n2" && "$n2" != "$first" ]]; then differ=1; break; fi
-done
-if [[ "$differ" -eq 1 ]]; then pass; else fail "30 回起動しても名前が変わらなかった: $first"; fi
+n2="$(field NAME "$(run_wrapper "$P1" "$REPO")")"
+if [[ -n "$n2" && "$n2" != "$first" ]]; then pass; else fail "名前が同じ: $first / $n2"; fi
 
 it "ラベルに使えない文字は _ に直る"
 P2="$WORK/p2"
 mkproject "$P2" "ho st/ラベル"
 n3="$(field NAME "$(run_wrapper "$P2" "$REPO")")"
-if [[ "$n3" =~ ^[A-Za-z0-9._-]+-my-repo-[0-9a-f]{4}$ && "$n3" == ho_st_* ]]; then pass; else fail "名前=$n3"; fi
+if [[ "$n3" =~ ^[A-Za-z0-9._-]+-my-repo-[0-9a-f]+$ && "$n3" == ho_st_* ]]; then pass; else fail "名前=$n3"; fi
 
 it "ラベルが環境変数にだけあっても使う（.env が無いとき）"
 P3="$WORK/p3"
 mkproject "$P3"
 n4="$(field NAME "$(run_wrapper "$P3" "$REPO" SESSION_HOST_LABEL=envlab)")"
-if [[ "$n4" =~ ^envlab-my-repo-[0-9a-f]{4}$ ]]; then pass; else fail "名前=$n4"; fi
+if [[ "$n4" =~ ^envlab-my-repo-[0-9a-f]+$ ]]; then pass; else fail "名前=$n4"; fi
 
 it ".env と環境変数の両方にあれば .env が先"
 n4b="$(field NAME "$(run_wrapper "$P1" "$REPO" SESSION_HOST_LABEL=envlab)")"
-if [[ "$n4b" =~ ^lab-my-repo-[0-9a-f]{4}$ ]]; then pass; else fail "名前=$n4b"; fi
+if [[ "$n4b" =~ ^lab-my-repo-[0-9a-f]+$ ]]; then pass; else fail "名前=$n4b"; fi
 
 it "ラベルなしなら名前を変えず、引数がそのまま exec される"
 res="$(run_wrapper "$P3" "$REPO")"
@@ -152,38 +149,11 @@ it "git リポジトリの外から起動しても止まらず、cwd の名前�
 NOGIT="$WORK/plain-dir"
 mkdir -p "$NOGIT"
 n5="$(field NAME "$(run_wrapper "$P1" "$NOGIT")")"
-if [[ "$n5" =~ ^lab-plain-dir-[0-9a-f]{4}$ ]]; then pass; else fail "名前=$n5"; fi
+if [[ "$n5" =~ ^lab-plain-dir-[0-9a-f]+$ ]]; then pass; else fail "名前=$n5"; fi
 
 it "引数が無くても止まらない（exec するものが無いだけ）"
 (cd "$REPO" && bash "$P1/scripts/claude-session-wrapper.sh" >/dev/null 2>&1)
 assert_eq "$?" "0" "終了コード"
-
-# ── 既存のセッションと同じ宛先名を避ける ──────────────────────────────────────
-
-NAMES_HOME="$WORK/names-sessions"
-mkdir -p "$NAMES_HOME"
-printf '{"pid":1,"name":"lab-my-repo-0001","cwd":"/x"}' >"$NAMES_HOME/1.json"
-printf '{\n  "pid": 2,\n  "name": "lab-my-repo-0002"\n}\n' >"$NAMES_HOME/2.json"
-
-it "既存の json と同じ名前の候補が出たら、選び直す（1 行の json と整形された json の両方）"
-n6="$(field NAME "$(run_wrapper "$P1" "$REPO" SESSION_PEERS_SESSIONS_DIR="$NAMES_HOME" SESSION_WRAPPER_RANDOMS="1 2 3")")"
-assert_eq "$n6" "lab-my-repo-0003" "名前"
-
-it "選び直しの上限（5 回）まで重なり続けたら、重なった名前を使わず、名前を設定せずに exec する"
-res7="$(run_wrapper "$P1" "$REPO" SESSION_PEERS_SESSIONS_DIR="$NAMES_HOME" SESSION_WRAPPER_RANDOMS="1 1 1 1 1 9")"
-if [[ "$(field NAME "$res7")" == "<unset>" && "$(field ARGC "$res7")" == "2" ]]; then pass; else fail "$res7"; fi
-
-it "上限の 5 回目で空いた名前が出れば、それを使う"
-n7b="$(field NAME "$(run_wrapper "$P1" "$REPO" SESSION_PEERS_SESSIONS_DIR="$NAMES_HOME" SESSION_WRAPPER_RANDOMS="1 1 1 2 9")")"
-assert_eq "$n7b" "lab-my-repo-0009" "名前"
-
-it "重ならない候補はそのまま使う"
-n8="$(field NAME "$(run_wrapper "$P1" "$REPO" SESSION_PEERS_SESSIONS_DIR="$NAMES_HOME" SESSION_WRAPPER_RANDOMS="255")")"
-assert_eq "$n8" "lab-my-repo-00ff" "名前"
-
-it "セッションの置き場所が無くても、名前は付く（引数もそのまま渡る）"
-n9="$(field NAME "$(run_wrapper "$P1" "$REPO" SESSION_PEERS_SESSIONS_DIR="$WORK/no-such-dir")")"
-if [[ "$n9" =~ ^lab-my-repo-[0-9a-f]{4}$ ]]; then pass; else fail "名前=$n9"; fi
 
 # ── ラッパーと /peers の署名が、同じ読み方でラベルを返す ──────────────────────
 
@@ -229,7 +199,7 @@ mkproject "$MAIN"
 printf 'SESSION_HOST_LABEL=mainlab\n' >"$MAIN/.env"
 got_w="$(field NAME "$(run_wrapper "$WTREE" "$WTREE")")"
 got_p="$(whoami_label "$WTREE" "$WTREE")"
-if [[ "$got_w" =~ ^mainlab-main-wt-[0-9a-f]{4}$ && "$got_p" == "mainlab" ]]; then pass; else fail "ラッパー=$got_w whoami=$got_p"; fi
+if [[ "$got_w" =~ ^mainlab-main-wt-[0-9a-f]+$ && "$got_p" == "mainlab" ]]; then pass; else fail "ラッパー=$got_w whoami=$got_p"; fi
 
 # ── 起動役（作業ツリーの外の固定パス。on-attach.sh が設置する） ─────────────────
 
@@ -280,7 +250,7 @@ printf 'SESSION_HOST_LABEL=viaL\n' >"$out/.env"
 
 it "起動役は、ラッパーがあるときはそれを呼ぶ（名前が付き、引数がそのまま渡る）"
 res="$(cd "$out" && env -u CLAUDE_CODE_SESSION_NAME -u SESSION_HOST_LABEL "$LAUNCHER" "$STUB" --flag "two words" 2>/dev/null)"
-if [[ "$(field NAME "$res")" =~ ^viaL-out-[0-9a-f]{4}$ && "$(field ARGC "$res")" == "2" ]] \
+if [[ "$(field NAME "$res")" =~ ^viaL-out-[0-9a-f]+$ && "$(field ARGC "$res")" == "2" ]] \
   && printf '%s\n' "$res" | command grep -qx 'ARG=two words'; then
   pass
 else
@@ -318,7 +288,7 @@ printf 'SESSION_HOST_LABEL=treeB\n' >"$out_b/.env"
 (cd "$out_b" && git init -q . >/dev/null 2>&1)
 res_a="$(cd "$out" && env -u CLAUDE_CODE_SESSION_NAME -u SESSION_HOST_LABEL "$LAUNCHER" "$STUB" 2>/dev/null)"
 res_b="$(cd "$out_b" && env -u CLAUDE_CODE_SESSION_NAME -u SESSION_HOST_LABEL "$LAUNCHER" "$STUB" 2>/dev/null)"
-if [[ "$(field NAME "$res_a")" =~ ^viaL-out-[0-9a-f]{4}$ && "$(field NAME "$res_b")" =~ ^treeB-other-tree-[0-9a-f]{4}$ ]]; then pass; else fail "A=$(field NAME "$res_a") B=$(field NAME "$res_b")"; fi
+if [[ "$(field NAME "$res_a")" =~ ^viaL-out-[0-9a-f]+$ && "$(field NAME "$res_b")" =~ ^treeB-other-tree-[0-9a-f]+$ ]]; then pass; else fail "A=$(field NAME "$res_a") B=$(field NAME "$res_b")"; fi
 
 it "起動役は、git の作業ツリーの外から起動されても、引数をそのまま exec する"
 res="$(cd "$WORK" && env -u CLAUDE_CODE_SESSION_NAME -u SESSION_HOST_LABEL "$LAUNCHER" "$STUB" a 2>/dev/null)"

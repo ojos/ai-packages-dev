@@ -8573,9 +8573,9 @@ TMPL
 #
 # やること:
 #   .env の SESSION_HOST_LABEL（無ければ環境変数）があれば、環境変数
-#   CLAUDE_CODE_SESSION_NAME を <ラベル>-<作業ツリー名>-<4桁の16進> にして exec する。
-#   この値が SendMessage の宛先名になり、ListAgents にも出る。16進は起動ごとに変わる
-#   （同じ作業ツリーで複数のセッションを動かしても宛先名が重ならないようにするため）。
+#   CLAUDE_CODE_SESSION_NAME を <ラベル>-<作業ツリー名>-<PID の 16 進> にして exec する。
+#   この値が SendMessage の宛先名になり、ListAgents にも出る。PID の 16 進は起動ごとに変わる
+#   （同じ作業ツリーで複数のセッションを動かしても、同時に起動しても宛先名が重ならないようにするため）。
 #
 # 何も変えずに exec "$@" するとき（起動を妨げないことが最優先）:
 #   - ラベルが無い
@@ -8591,8 +8591,6 @@ set -u
 
 SCRIPT_DIR="${BASH_SOURCE[0]%/*}"
 [ "$SCRIPT_DIR" != "${BASH_SOURCE[0]}" ] || SCRIPT_DIR="."
-# 既存のセッションの json の置き場所（宛先名の重なりを避けるために読む）。
-SESSIONS_DIR="${SESSION_PEERS_SESSIONS_DIR:-${HOME:-}/.claude/sessions}"
 
 # read_host_label の本体は scripts/session-peers.sh と同一でなければならない
 # （ラッパーと /peers の署名が同じラベルを返すため。packages/devcontainer-bootstrap/tests/
@@ -8641,38 +8639,12 @@ read_host_label() { # スクリプトのあるディレクトリ
   [ -n "$HOST_LABEL" ] || HOST_LABEL="${SESSION_HOST_LABEL:-}"
 }
 
-# 既存のセッションの json に、この宛先名（"name":"候補"）があるか。bash の組み込みだけで読む。
-name_taken() { # 候補の宛先名
-  local f line
-  for f in "$SESSIONS_DIR"/*.json; do
-    [ -f "$f" ] || continue
-    while IFS= read -r line || [ -n "$line" ]; do
-      case "$line" in
-        *"\"name\":\"$1\""* | *"\"name\": \"$1\""*) return 0 ;;
-      esac
-    done <"$f"
-  done
-  return 1
-}
-
-# 乱数を変数 RAND_N へ。SESSION_WRAPPER_RANDOMS（空白区切りの数。試験用）があれば先頭から使う。
-next_random() {
-  RAND_N=""
-  if [ -n "${SESSION_WRAPPER_RANDOMS:-}" ]; then
-    RAND_N="${SESSION_WRAPPER_RANDOMS%% *}"
-    case "$SESSION_WRAPPER_RANDOMS" in
-      *" "*) SESSION_WRAPPER_RANDOMS="${SESSION_WRAPPER_RANDOMS#* }" ;;
-      *) SESSION_WRAPPER_RANDOMS="" ;;
-    esac
-  else
-    RAND_N="$RANDOM"
-  fi
-  case "$RAND_N" in '' | *[!0-9]*) return 1 ;; esac
-}
-
 # 宛先名を変数 SESSION_NAME へ計算する。失敗したら 1 を返す。git 以外の外部コマンドは使わない。
+# 末尾は、このラッパー自身の PID（$$）の 16 進にする。ラッパーは最後に exec するので、$$ は
+# そのまま Claude Code の PID になる。同時に生きているセッションどうしで PID は重ならないため、
+# 2 つを同時に起動しても宛先名は重ならない（乱数だと、json が書かれる前の同時起動で重なりうる）。
 compute_name() {
-  local top wt hex base try free=0
+  local top wt hex
   SESSION_NAME=""
   [ -n "$HOST_LABEL" ] || return 1
 
@@ -8681,23 +8653,11 @@ compute_name() {
   wt="${top##*/}"
   [ -n "$wt" ] || return 1
 
+  printf -v hex '%x' "$$" || return 1
+  [ -n "$hex" ] || return 1
+
   # 宛先名として安全な文字（英数字と ._-）だけにする。
-  base="${HOST_LABEL//[!A-Za-z0-9._-]/_}-${wt//[!A-Za-z0-9._-]/_}"
-  # 既存のセッションと同じ名前を避けて選び直す。上限まで重なり続けたら名前を付けない
-  # （重なった名前を使わず、Claude Code の既定の名前に任せる）。
-  try=0
-  while [ "$try" -lt 5 ]; do
-    next_random || return 1
-    printf -v hex '%04x' "$RAND_N" || return 1
-    case "$hex" in
-      [0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;
-      *) return 1 ;;
-    esac
-    SESSION_NAME="$base-$hex"
-    if ! name_taken "$SESSION_NAME"; then free=1; break; fi
-    try=$((try + 1))
-  done
-  if [ "$free" -ne 1 ]; then SESSION_NAME=""; return 1; fi
+  SESSION_NAME="${HOST_LABEL//[!A-Za-z0-9._-]/_}-${wt//[!A-Za-z0-9._-]/_}-$hex"
 }
 
 if [ -z "${CLAUDE_CODE_SESSION_NAME:-}" ]; then
