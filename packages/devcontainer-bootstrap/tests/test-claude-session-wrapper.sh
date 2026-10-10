@@ -169,9 +169,13 @@ it "既存の json と同じ名前の候補が出たら、選び直す（1 行�
 n6="$(field NAME "$(run_wrapper "$P1" "$REPO" SESSION_PEERS_SESSIONS_DIR="$NAMES_HOME" SESSION_WRAPPER_RANDOMS="1 2 3")")"
 assert_eq "$n6" "lab-my-repo-0003" "名前"
 
-it "選び直しの上限（5 回）に達したら、最後の候補を使う"
-n7="$(field NAME "$(run_wrapper "$P1" "$REPO" SESSION_PEERS_SESSIONS_DIR="$NAMES_HOME" SESSION_WRAPPER_RANDOMS="1 1 1 1 1 9")")"
-assert_eq "$n7" "lab-my-repo-0001" "名前"
+it "選び直しの上限（5 回）まで重なり続けたら、重なった名前を使わず、名前を設定せずに exec する"
+res7="$(run_wrapper "$P1" "$REPO" SESSION_PEERS_SESSIONS_DIR="$NAMES_HOME" SESSION_WRAPPER_RANDOMS="1 1 1 1 1 9")"
+if [[ "$(field NAME "$res7")" == "<unset>" && "$(field ARGC "$res7")" == "2" ]]; then pass; else fail "$res7"; fi
+
+it "上限の 5 回目で空いた名前が出れば、それを使う"
+n7b="$(field NAME "$(run_wrapper "$P1" "$REPO" SESSION_PEERS_SESSIONS_DIR="$NAMES_HOME" SESSION_WRAPPER_RANDOMS="1 1 1 2 9")")"
+assert_eq "$n7b" "lab-my-repo-0009" "名前"
 
 it "重ならない候補はそのまま使う"
 n8="$(field NAME "$(run_wrapper "$P1" "$REPO" SESSION_PEERS_SESSIONS_DIR="$NAMES_HOME" SESSION_WRAPPER_RANDOMS="255")")"

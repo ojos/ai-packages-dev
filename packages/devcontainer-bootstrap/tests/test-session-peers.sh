@@ -327,6 +327,14 @@ odd_out2="$(peers list 2>&1 >/dev/null)"
 if printf '%s' "$odd_out" | command grep -q "pid が数字でない.*ListAgents" && printf '%s' "$odd_out2" | command grep -q "name が無い.*ListAgents"; then pass; else fail "pid: $odd_out / name: $odd_out2"; fi
 rm -f "$SESS/$PID_ODD3.json" "$SESS/$PID_ODD4.json"
 
+it "cwd が無い json を読み飛ばすときも、警告と ListAgents を使う案内を出す"
+spawn; PID_ODD5="$SPAWNED"
+proc_start "$PID_ODD5"
+printf '{"pid":%s,"procStart":"%s","pidDomain":"%s","name":"no-cwd"}' "$PID_ODD5" "$PROC_START" "$DOMAIN" >"$SESS/$PID_ODD5.json"
+nocwd_out="$(peers list 2>&1)"
+if printf '%s' "$nocwd_out" | command grep -q "cwd が無い.*ListAgents" && ! printf '%s' "$nocwd_out" | command grep -q 'no-cwd	'; then pass; else fail "$nocwd_out"; fi
+rm -f "$SESS/$PID_ODD5.json"
+
 it "壊れた json があっても resolve は読める分で解決できる"
 assert_eq "$(peers resolve lab-proj-a1 2>/dev/null)" "lab-proj-a1" "宛先名"
 

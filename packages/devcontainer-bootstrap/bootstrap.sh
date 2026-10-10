@@ -8672,7 +8672,7 @@ next_random() {
 
 # 宛先名を変数 SESSION_NAME へ計算する。失敗したら 1 を返す。git 以外の外部コマンドは使わない。
 compute_name() {
-  local top wt hex base try
+  local top wt hex base try free=0
   SESSION_NAME=""
   [ -n "$HOST_LABEL" ] || return 1
 
@@ -8683,7 +8683,8 @@ compute_name() {
 
   # 宛先名として安全な文字（英数字と ._-）だけにする。
   base="${HOST_LABEL//[!A-Za-z0-9._-]/_}-${wt//[!A-Za-z0-9._-]/_}"
-  # 既存のセッションと同じ名前を避けて選び直す。上限に達したら最後の候補を使う。
+  # 既存のセッションと同じ名前を避けて選び直す。上限まで重なり続けたら名前を付けない
+  # （重なった名前を使わず、Claude Code の既定の名前に任せる）。
   try=0
   while [ "$try" -lt 5 ]; do
     next_random || return 1
@@ -8693,9 +8694,10 @@ compute_name() {
       *) return 1 ;;
     esac
     SESSION_NAME="$base-$hex"
-    name_taken "$SESSION_NAME" || break
+    if ! name_taken "$SESSION_NAME"; then free=1; break; fi
     try=$((try + 1))
   done
+  if [ "$free" -ne 1 ]; then SESSION_NAME=""; return 1; fi
 }
 
 if [ -z "${CLAUDE_CODE_SESSION_NAME:-}" ]; then
@@ -8971,6 +8973,7 @@ emit_rows() {
     [ -n "$file" ] || continue
     case "$pid" in '' | *[!0-9]* | null) warn "pid が数字でない json を読み飛ばします: $file。ListAgents を使ってください。"; continue ;; esac
     case "$name" in '' | null) warn "name が無い json を読み飛ばします: $file。ListAgents を使ってください。"; continue ;; esac
+    case "$cwd" in '' | null) warn "cwd が無い json を読み飛ばします: $file。ListAgents を使ってください。"; continue ;; esac
     case "$started" in '' | *[!0-9]*) started=0 ;; esac
 
     if [ "$PROC_OK" -eq 1 ]; then
