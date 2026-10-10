@@ -6,6 +6,14 @@
 >
 > 同じ理由で、issue 参照は `ojos/ai-packages-dev#NNN` の形で書いてください。裸の `#NNN` は GitHub のオートリンクが**配布先リポジトリの issue** として解決するため、配布後は存在しない issue や無関係な issue を指します。
 
+## Unreleased
+
+### Summary
+- **Claude Code の起動役の設置を、`devcontainer.json` の `onCreateCommand` 自身に持たせた**（ojos/ai-packages-dev#511）。`--with-claude` の構成で、`onCreateCommand` は `scripts/on-attach.sh` を呼ばずに、起動役 `~/.local/bin/claude-session-launcher` を直接書き出す（一時ファイルへ書いて置き換える。失敗しても作成は止めず警告する）。配線（`claudeCode.claudeProcessWrapper`）と設置が同じファイルにあるので、`--upgrade` で `devcontainer.json` が更新されれば両方とも入り、`.dcb-new` になれば両方とも入らない。片方だけが新しい状態は起きない。
+  - v0.19.0 の移行の注意（作り直す前に `devcontainer.json` と `scripts/on-attach.sh` の両方が新しい版であることを確かめる）は、この版では要らない。`on-attach.sh` が古いままでも、起動役は置かれる。
+  - 起動役の中身の正本は `bootstrap.sh` の 1 か所で、`onCreateCommand` と `scripts/on-attach.sh` の両方へそこから書き出す。`scripts/on-attach.sh` の `--install-launcher` は、v0.19.0 の `devcontainer.json` が呼ぶため残す。
+- **生成物が変わる**（`--with-claude` の構成だけ）。`devcontainer.json` の `onCreateCommand`、`scripts/on-attach.sh`（コメントと、起動役の中身の 1 行のコメントだけ）が変わる。
+
 ## v0.19.0
 
 ### Summary

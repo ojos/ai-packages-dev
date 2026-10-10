@@ -1377,23 +1377,28 @@ HELPER="$HERE/load-project-env.sh"
 # git rev-parse --show-toplevel で求め、その scripts/claude-session-wrapper.sh を呼ぶ。
 # ラッパーを配っていない構成（--with-claude なし）では何もしない。
 # 設置先は CLAUDE_SESSION_LAUNCHER で変えられる（試験用）。失敗しても on-attach は落とさない。
-# `--install-launcher` で起動役の設置だけを行える。devcontainer.json の onCreateCommand が、
-# 新しいコンテナへ初めて接続する前（Dev Containers は onCreateCommand の完了を待つ）に呼ぶ。
+# `--install-launcher` で起動役の設置だけを行える。v0.19.0 の devcontainer.json の
+# onCreateCommand が呼ぶため、後方互換として残す。いまの onCreateCommand は、このスクリプトを
+# 呼ばずに同じ内容を直接書き出す（on-attach.sh の版に左右されないため）。
+# 起動役の中身の正本は下の LAUNCHER ヒアドキュメント（1 か所）。devcontainer.json の
+# onCreateCommand へは、bootstrap.sh の claude_launcher_lines がここから取り出して書き出す。
 install_claude_session_launcher() {
   local wrapper dest dir content current tmp
   wrapper="$(cd "$HERE/.." && pwd)/scripts/claude-session-wrapper.sh"
   [[ -f "$wrapper" ]] || return 0
   dest="${CLAUDE_SESSION_LAUNCHER:-$HOME/.local/bin/claude-session-launcher}"
-  content="$(printf '%s\n' \
-    '#!/bin/sh' \
-    '# scripts/on-attach.sh が設置する Claude Code の起動役。手で編集しない（接続のたびに書き直される）。' \
-    '# 起動したときの cwd の作業ツリーのラッパーが実行可能ならそれを、求められない・無いときは' \
-    '# 引数をそのまま exec する。' \
-    't="$(git rev-parse --show-toplevel 2>/dev/null)" || t=""' \
-    'if [ -n "$t" ] && [ -x "$t/scripts/claude-session-wrapper.sh" ]; then' \
-    '  exec "$t/scripts/claude-session-wrapper.sh" "$@"' \
-    'fi' \
-    'exec "$@"')"
+  content="$(cat <<'LAUNCHER'
+#!/bin/sh
+# Claude Code の起動役。コンテナの作成時と接続時に設置される。手で編集しない（書き直される）。
+# 起動したときの cwd の作業ツリーのラッパーが実行可能ならそれを、求められない・無いときは
+# 引数をそのまま exec する。
+t="$(git rev-parse --show-toplevel 2>/dev/null)" || t=""
+if [ -n "$t" ] && [ -x "$t/scripts/claude-session-wrapper.sh" ]; then
+  exec "$t/scripts/claude-session-wrapper.sh" "$@"
+fi
+exec "$@"
+LAUNCHER
+)"
   current="$(cat "$dest" 2>/dev/null || true)"
   if [[ "$current" == "$content" && -x "$dest" ]]; then
     return 0
@@ -9708,13 +9713,26 @@ build_with_extensions_block() {
   printf '%s' "$out"
 }
 
+# Claude Code の起動役（~/.local/bin/claude-session-launcher）の中身を、1 行ずつ出力する。
+# 正本は scripts/on-attach.sh の雛形にある install_claude_session_launcher の LAUNCHER
+# ヒアドキュメント（1 か所。scripts/ の写しとバイト一致する）。onCreateCommand
+# （build_on_create_command_block）へは、そこから取り出して書き出す。中身を 2 か所に書き写すと
+# 食い違うため、書き写さない。各行は単一引用符を含めない（printf の引数に入れるため）。
+claude_launcher_lines() {
+  get_template_content 'scripts/on-attach.sh' | awk '
+    $0 ~ /<<.LAUNCHER.$/ { inside = 1; next }
+    inside && $0 == "LAUNCHER" { exit }
+    inside { print }
+  '
+}
+
 # devcontainer.json の customizations.vscode.settings（__VSCODE_SETTINGS__）。
 # --with-claude のときだけ、claudeCode.claudeProcessWrapper に起動役
 # （~/.local/bin/claude-session-launcher）を指定する。
 #
 # 作業ツリーの scripts/claude-session-wrapper.sh を直接指さない。そのファイルが無い
 # ブランチへ切り替えただけで Claude Code が一切起動しなくなるため、作業ツリーの外の固定パスに
-# 置いた極小の sh（scripts/on-attach.sh が接続のたびに冪等に設置する）を挟む。起動役は、
+# 置いた極小の sh（onCreateCommand が書き出し、scripts/on-attach.sh が接続のたびに冪等に設置する）を挟む。起動役は、
 # ラッパーが実行可能ならそれを、無ければ引数をそのまま exec する。
 #
 # 絶対パスで書く。拡張（anthropic.claude-code 2.1.296）は設定値を読んだ文字列をそのまま
@@ -9732,14 +9750,26 @@ build_vscode_settings_block() {
 }
 
 # devcontainer.json の onCreateCommand（__ON_CREATE_COMMAND__）。--with-claude のときだけ、
-# Claude Code の起動役を設置する。postAttachCommand（on-attach.sh）だけだと、新しいコンテナへ
-# 初めて接続したとき、設置より先に拡張が Claude を起動しうる。Dev Containers は既定の waitFor
-# （updateContentCommand）により onCreateCommand の完了を待つので、ここで設置すれば間に合う。
-# postAttachCommand での設置も残す（既存のコンテナへ後から適用するため）。失敗しても作成を止めない。
+# Claude Code の起動役を直接書き出す。postAttachCommand（on-attach.sh）だけだと、新しい
+# コンテナへ初めて接続したとき、設置より先に拡張が Claude を起動しうる。Dev Containers は既定の
+# waitFor（updateContentCommand）により onCreateCommand の完了を待つので、ここで設置すれば間に合う。
+#
+# on-attach.sh を呼ばない。配線（claudeProcessWrapper）と設置を同じファイルに置き、--upgrade で
+# 片方だけが新しくなる状態（古い on-attach.sh が設置を知らず、配線だけが入る）を起こさないため。
+# 形は文字列（1 行の sh）にする。配列にしても同じエスケープが要り、オブジェクトは並列実行になる。
+# 一時ファイルへ書いてから mv で置き換える（冪等。途中で壊れた起動役を残さない）。失敗しても
+# コンテナの作成は止めず、警告を出して終わる。中身は claude_launcher_lines（on-attach.sh の雛形から取り出す）と同じ。JSON のため
+# バックスラッシュと二重引用符をエスケープする（jq で読むと元の sh に戻る）。
+# postAttachCommand での設置も残す（既存のコンテナへ後から適用するため）。
 # 条件に合わないときは空（行ごと消える）。末尾のカンマは write_file の整形が畳む。
 build_on_create_command_block() {
   has_with claude || { printf ''; return; }
-  printf '%s\n' '  "onCreateCommand": "bash scripts/on-attach.sh --install-launcher || true",'
+  local args cmd
+  args="$(claude_launcher_lines | sed -e "s/^/'/" -e "s/\$/'/" | tr '\n' ' ')"
+  # shellcheck disable=SC2016  # 設置する sh の $ はリテラル。展開は実行時にコンテナ側で起きる
+  cmd='f="$HOME/.local/bin/claude-session-launcher"; t="$f.oncreate.tmp"; { mkdir -p "$HOME/.local/bin" && printf '"'%s\n'"' '"$args"'>"$t" && chmod 755 "$t" && mv -f "$t" "$f"; } || { rm -f "$t"; echo "[onCreate] WARN: Claude Code の起動役を設置できませんでした: $f" >&2; }; true'
+  cmd="$(printf '%s' "$cmd" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')"
+  printf '  "onCreateCommand": "%s",\n' "$cmd"
 }
 
 # .env.example の __SESSION_HOST_LABEL_LINES__。--with-claude のときだけ、

@@ -884,7 +884,7 @@ OAuth トークン（`CLAUDE_CODE_OAUTH_TOKEN`）を `remoteEnv` へ注入する
 
 - `scripts/confirm-merge-hook.sh`（マージ実行の前に確認を挟む PreToolUse フックの本体）
 - `scripts/session-coord-hook.sh`（並行セッションの共有台帳を操作の直前に確かめるフックの本体。下記「[セッション協調フック](#セッション協調フックclaude-code)」参照）
-- `scripts/claude-session-wrapper.sh`（セッションの宛先名に場所と作業ツリーを自動で含める起動ラッパー。`.devcontainer/devcontainer.json` が VS Code の設定 `claudeCode.claudeProcessWrapper` へ、作業ツリーの外の固定パス（`/home/vscode/.local/bin/claude-session-launcher`）で配線します。このラッパーを直接指すと、ファイルが無いブランチへ切り替えただけで Claude Code が起動しなくなるため、`scripts/on-attach.sh` が接続のたびに冪等に設置する極小の起動役（ラッパーが実行可能ならそれを、無ければ引数をそのまま exec する）を挟みます。拡張は設定値をそのまま実行ファイルのパスにし、`${workspaceFolder}` や `~` を展開しないため、絶対パスで書きます。`.env` の `SESSION_HOST_LABEL` が空なら宛先名を変えず、どんな失敗でも本体の起動まで進みます）
+- `scripts/claude-session-wrapper.sh`（セッションの宛先名に場所と作業ツリーを自動で含める起動ラッパー。`.devcontainer/devcontainer.json` が VS Code の設定 `claudeCode.claudeProcessWrapper` へ、作業ツリーの外の固定パス（`/home/vscode/.local/bin/claude-session-launcher`）で配線します。このラッパーを直接指すと、ファイルが無いブランチへ切り替えただけで Claude Code が起動しなくなるため、極小の起動役（ラッパーが実行可能ならそれを、無ければ引数をそのまま exec する）を挟みます。起動役は、`devcontainer.json` の `onCreateCommand` が `scripts/on-attach.sh` を呼ばずに直接書き出し（一時ファイルへ書いて置き換える冪等な設置。失敗しても作成は止めず警告する）、`scripts/on-attach.sh` も接続のたびに冪等に設置します（既存のコンテナへの後追い）。配線と設置が同じファイルにあるので、`--upgrade` で `on-attach.sh` だけが古いまま残っても、起動役は置かれます。拡張は設定値をそのまま実行ファイルのパスにし、`${workspaceFolder}` や `~` を展開しないため、絶対パスで書きます。`.env` の `SESSION_HOST_LABEL` が空なら宛先名を変えず、どんな失敗でも本体の起動まで進みます）
 - `scripts/session-peers.sh`（同じプロジェクトで動くほかのセッションの一覧・宛先の解決・送信元の署名。`.claude/skills/peers/SKILL.md` の `/peers` が呼びます。`~/.claude/sessions/*.json` は公開された仕様ではないため、読めなければ警告して `ListAgents` を案内します）
 - `.claude/settings.json`（上記 2 つのフックの配線。既存ファイルは既定ポリシー `skip` で温存します）
 - `.claude/.gitignore`（`settings.local.json` を追跡しない）
