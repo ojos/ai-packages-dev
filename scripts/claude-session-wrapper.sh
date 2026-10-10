@@ -27,6 +27,8 @@ set -u
 
 SCRIPT_DIR="${BASH_SOURCE[0]%/*}"
 [ "$SCRIPT_DIR" != "${BASH_SOURCE[0]}" ] || SCRIPT_DIR="."
+# 既存のセッションの json の置き場所（宛先名の重なりを避けるために読む）。
+SESSIONS_DIR="${SESSION_PEERS_SESSIONS_DIR:-${HOME:-}/.claude/sessions}"
 
 # read_host_label の本体は scripts/session-peers.sh と同一でなければならない
 # （ラッパーと /peers の署名が同じラベルを返すため。packages/devcontainer-bootstrap/tests/
@@ -75,9 +77,38 @@ read_host_label() { # スクリプトのあるディレクトリ
   [ -n "$HOST_LABEL" ] || HOST_LABEL="${SESSION_HOST_LABEL:-}"
 }
 
+# 既存のセッションの json に、この宛先名（"name":"候補"）があるか。bash の組み込みだけで読む。
+name_taken() { # 候補の宛先名
+  local f line
+  for f in "$SESSIONS_DIR"/*.json; do
+    [ -f "$f" ] || continue
+    while IFS= read -r line || [ -n "$line" ]; do
+      case "$line" in
+        *"\"name\":\"$1\""* | *"\"name\": \"$1\""*) return 0 ;;
+      esac
+    done <"$f"
+  done
+  return 1
+}
+
+# 乱数を変数 RAND_N へ。SESSION_WRAPPER_RANDOMS（空白区切りの数。試験用）があれば先頭から使う。
+next_random() {
+  RAND_N=""
+  if [ -n "${SESSION_WRAPPER_RANDOMS:-}" ]; then
+    RAND_N="${SESSION_WRAPPER_RANDOMS%% *}"
+    case "$SESSION_WRAPPER_RANDOMS" in
+      *" "*) SESSION_WRAPPER_RANDOMS="${SESSION_WRAPPER_RANDOMS#* }" ;;
+      *) SESSION_WRAPPER_RANDOMS="" ;;
+    esac
+  else
+    RAND_N="$RANDOM"
+  fi
+  case "$RAND_N" in '' | *[!0-9]*) return 1 ;; esac
+}
+
 # 宛先名を変数 SESSION_NAME へ計算する。失敗したら 1 を返す。git 以外の外部コマンドは使わない。
 compute_name() {
-  local top wt hex
+  local top wt hex base try
   SESSION_NAME=""
   [ -n "$HOST_LABEL" ] || return 1
 
@@ -86,14 +117,21 @@ compute_name() {
   wt="${top##*/}"
   [ -n "$wt" ] || return 1
 
-  printf -v hex '%04x' "$RANDOM" || return 1
-  case "$hex" in
-    [0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;
-    *) return 1 ;;
-  esac
-
   # 宛先名として安全な文字（英数字と ._-）だけにする。
-  SESSION_NAME="${HOST_LABEL//[!A-Za-z0-9._-]/_}-${wt//[!A-Za-z0-9._-]/_}-$hex"
+  base="${HOST_LABEL//[!A-Za-z0-9._-]/_}-${wt//[!A-Za-z0-9._-]/_}"
+  # 既存のセッションと同じ名前を避けて選び直す。上限に達したら最後の候補を使う。
+  try=0
+  while [ "$try" -lt 5 ]; do
+    next_random || return 1
+    printf -v hex '%04x' "$RAND_N" || return 1
+    case "$hex" in
+      [0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;
+      *) return 1 ;;
+    esac
+    SESSION_NAME="$base-$hex"
+    name_taken "$SESSION_NAME" || break
+    try=$((try + 1))
+  done
 }
 
 if [ -z "${CLAUDE_CODE_SESSION_NAME:-}" ]; then

@@ -158,6 +158,29 @@ it "引数が無くても止まらない（exec するものが無いだけ）"
 (cd "$REPO" && bash "$P1/scripts/claude-session-wrapper.sh" >/dev/null 2>&1)
 assert_eq "$?" "0" "終了コード"
 
+# ── 既存のセッションと同じ宛先名を避ける ──────────────────────────────────────
+
+NAMES_HOME="$WORK/names-sessions"
+mkdir -p "$NAMES_HOME"
+printf '{"pid":1,"name":"lab-my-repo-0001","cwd":"/x"}' >"$NAMES_HOME/1.json"
+printf '{\n  "pid": 2,\n  "name": "lab-my-repo-0002"\n}\n' >"$NAMES_HOME/2.json"
+
+it "既存の json と同じ名前の候補が出たら、選び直す（1 行の json と整形された json の両方）"
+n6="$(field NAME "$(run_wrapper "$P1" "$REPO" SESSION_PEERS_SESSIONS_DIR="$NAMES_HOME" SESSION_WRAPPER_RANDOMS="1 2 3")")"
+assert_eq "$n6" "lab-my-repo-0003" "名前"
+
+it "選び直しの上限（5 回）に達したら、最後の候補を使う"
+n7="$(field NAME "$(run_wrapper "$P1" "$REPO" SESSION_PEERS_SESSIONS_DIR="$NAMES_HOME" SESSION_WRAPPER_RANDOMS="1 1 1 1 1 9")")"
+assert_eq "$n7" "lab-my-repo-0001" "名前"
+
+it "重ならない候補はそのまま使う"
+n8="$(field NAME "$(run_wrapper "$P1" "$REPO" SESSION_PEERS_SESSIONS_DIR="$NAMES_HOME" SESSION_WRAPPER_RANDOMS="255")")"
+assert_eq "$n8" "lab-my-repo-00ff" "名前"
+
+it "セッションの置き場所が無くても、名前は付く（引数もそのまま渡る）"
+n9="$(field NAME "$(run_wrapper "$P1" "$REPO" SESSION_PEERS_SESSIONS_DIR="$WORK/no-such-dir")")"
+if [[ "$n9" =~ ^lab-my-repo-[0-9a-f]{4}$ ]]; then pass; else fail "名前=$n9"; fi
+
 # ── ラッパーと /peers の署名が、同じ読み方でラベルを返す ──────────────────────
 
 it "read_host_label の本体が、ラッパーと session-peers.sh で一致する"
@@ -249,10 +272,11 @@ else
 fi
 
 printf 'SESSION_HOST_LABEL=viaL\n' >"$out/.env"
+(cd "$out" && git init -q . >/dev/null 2>&1)
 
 it "起動役は、ラッパーがあるときはそれを呼ぶ（名前が付き、引数がそのまま渡る）"
-res="$(cd "$REPO" && env -u CLAUDE_CODE_SESSION_NAME -u SESSION_HOST_LABEL "$LAUNCHER" "$STUB" --flag "two words" 2>/dev/null)"
-if [[ "$(field NAME "$res")" =~ ^viaL-my-repo-[0-9a-f]{4}$ && "$(field ARGC "$res")" == "2" ]] \
+res="$(cd "$out" && env -u CLAUDE_CODE_SESSION_NAME -u SESSION_HOST_LABEL "$LAUNCHER" "$STUB" --flag "two words" 2>/dev/null)"
+if [[ "$(field NAME "$res")" =~ ^viaL-out-[0-9a-f]{4}$ && "$(field ARGC "$res")" == "2" ]] \
   && printf '%s\n' "$res" | command grep -qx 'ARG=two words'; then
   pass
 else
@@ -261,7 +285,7 @@ fi
 
 it "起動役は、ラッパーが無いブランチでも、引数をそのまま exec する"
 mv "$out/scripts/claude-session-wrapper.sh" "$out/scripts/claude-session-wrapper.sh.away"
-res="$(cd "$REPO" && env -u CLAUDE_CODE_SESSION_NAME -u SESSION_HOST_LABEL "$LAUNCHER" "$STUB" --flag "two words" 2>/dev/null)"
+res="$(cd "$out" && env -u CLAUDE_CODE_SESSION_NAME -u SESSION_HOST_LABEL "$LAUNCHER" "$STUB" --flag "two words" 2>/dev/null)"
 rc=$?
 if [[ "$rc" == "0" && "$(field NAME "$res")" == "<unset>" && "$(field ARGC "$res")" == "2" ]] \
   && printf '%s\n' "$res" | command grep -qx 'ARG=two words'; then
@@ -273,10 +297,28 @@ fi
 it "起動役は、ラッパーが実行可能でないときも、引数をそのまま exec する"
 cp "$out/scripts/claude-session-wrapper.sh.away" "$out/scripts/claude-session-wrapper.sh"
 chmod 644 "$out/scripts/claude-session-wrapper.sh"
-res="$(cd "$REPO" && env -u CLAUDE_CODE_SESSION_NAME -u SESSION_HOST_LABEL "$LAUNCHER" "$STUB" --flag "two words" 2>/dev/null)"
+res="$(cd "$out" && env -u CLAUDE_CODE_SESSION_NAME -u SESSION_HOST_LABEL "$LAUNCHER" "$STUB" --flag "two words" 2>/dev/null)"
 if [[ "$(field NAME "$res")" == "<unset>" && "$(field ARGC "$res")" == "2" ]]; then pass; else fail "$res"; fi
 rm -f "$out/scripts/claude-session-wrapper.sh"
 mv "$out/scripts/claude-session-wrapper.sh.away" "$out/scripts/claude-session-wrapper.sh"
+
+it "起動役の内容は作業ツリーに依存しない（別の作業ツリーから設置しても同じ内容）"
+out_b="$(new_workdir)/other-tree"
+run_bootstrap "$out_b" --with-claude >/dev/null 2>&1
+LAUNCHER_B="$WORK/launcher-bin-b/claude-session-launcher"
+(cd "$out_b" && HOME="$FAKE_HOME" GIT_CONFIG_GLOBAL="$FAKE_HOME/.gitconfig" CLAUDE_SESSION_LAUNCHER="$LAUNCHER_B" bash scripts/on-attach.sh --install-launcher >/dev/null 2>&1)
+if [[ -x "$LAUNCHER_B" && "$(cksum <"$LAUNCHER")" == "$(cksum <"$LAUNCHER_B")" ]]; then pass; else fail "内容が食い違う"; fi
+
+it "起動役は、起動したときの cwd の作業ツリーのラッパーを呼ぶ（作業ツリーごとに別の .env のラベル）"
+printf 'SESSION_HOST_LABEL=treeB\n' >"$out_b/.env"
+(cd "$out_b" && git init -q . >/dev/null 2>&1)
+res_a="$(cd "$out" && env -u CLAUDE_CODE_SESSION_NAME -u SESSION_HOST_LABEL "$LAUNCHER" "$STUB" 2>/dev/null)"
+res_b="$(cd "$out_b" && env -u CLAUDE_CODE_SESSION_NAME -u SESSION_HOST_LABEL "$LAUNCHER" "$STUB" 2>/dev/null)"
+if [[ "$(field NAME "$res_a")" =~ ^viaL-out-[0-9a-f]{4}$ && "$(field NAME "$res_b")" =~ ^treeB-other-tree-[0-9a-f]{4}$ ]]; then pass; else fail "A=$(field NAME "$res_a") B=$(field NAME "$res_b")"; fi
+
+it "起動役は、git の作業ツリーの外から起動されても、引数をそのまま exec する"
+res="$(cd "$WORK" && env -u CLAUDE_CODE_SESSION_NAME -u SESSION_HOST_LABEL "$LAUNCHER" "$STUB" a 2>/dev/null)"
+if [[ "$(field NAME "$res")" == "<unset>" && "$(field ARGC "$res")" == "1" ]]; then pass; else fail "$res"; fi
 
 # ── 配線（生成物） ────────────────────────────────────────────────────────────
 

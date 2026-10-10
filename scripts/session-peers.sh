@@ -253,8 +253,8 @@ emit_rows() {
   local ISSUES_NL="$NL$ISSUES$NL"
   while IFS="$SEP" read -r file pid pstart name cwd status started pdomain; do
     [ -n "$file" ] || continue
-    case "$pid" in '' | *[!0-9]* | null) warn "pid が数字でない json を読み飛ばします: $file"; continue ;; esac
-    case "$name" in '' | null) warn "name が無い json を読み飛ばします: $file"; continue ;; esac
+    case "$pid" in '' | *[!0-9]* | null) warn "pid が数字でない json を読み飛ばします: $file。ListAgents を使ってください。"; continue ;; esac
+    case "$name" in '' | null) warn "name が無い json を読み飛ばします: $file。ListAgents を使ってください。"; continue ;; esac
     case "$started" in '' | *[!0-9]*) started=0 ;; esac
 
     if [ "$PROC_OK" -eq 1 ]; then
