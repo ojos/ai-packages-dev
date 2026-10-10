@@ -233,8 +233,9 @@ assert_contains "$(cat "$land_skill")" "PR の確認とマージ" "overwrite 後
 # ── require_playbook_template：古いソースでは失敗する ────────────────────────
 
 it "雛形を持たない古いソースでは --with-claude で失敗する"
-# 規範側に claude-skill-intake.md が無い版を再現する。他の雛形は残すため、
-# skill 配置の require_playbook_template だけが失敗経路になる。
+# 規範側に claude-skill-intake.md が無い版を再現する。他の雛形は残すため、この雛形の
+# 欠けだけが失敗の理由になる（止まるのは書き込み前の雛形の確認。
+# test-playbook-template-preflight.sh）。
 oldsrc="$(new_workdir)/old"; mkdir -p "$oldsrc"; cp -R "$PLAYBOOK_SRC/." "$oldsrc/"
 rm -f "$oldsrc/templates/claude-skill-intake.md"
 outo="$(new_workdir)/p"
@@ -250,8 +251,8 @@ it "雛形不在で失敗したときスキルは配置されない"
 assert_file_absent "$outo/$SKILL_REL"
 
 it "land 雛形を持たない古いソースでは --with-claude で失敗する"
-# intake の雛形は残し、claude-skill-land.md だけを欠いた版を再現する。land の
-# require_playbook_template だけが失敗経路になることを確かめる。
+# intake の雛形は残し、claude-skill-land.md だけを欠いた版を再現する。land の雛形の
+# 欠けだけが失敗の理由になることを確かめる（止まるのは書き込み前の雛形の確認）。
 oldsrc2="$(new_workdir)/old2"; mkdir -p "$oldsrc2"; cp -R "$PLAYBOOK_SRC/." "$oldsrc2/"
 rm -f "$oldsrc2/templates/claude-skill-land.md"
 outo2="$(new_workdir)/p"
