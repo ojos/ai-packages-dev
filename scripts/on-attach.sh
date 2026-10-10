@@ -19,7 +19,8 @@ HELPER="$HERE/load-project-env.sh"
 # 設置先は CLAUDE_SESSION_LAUNCHER で変えられる（試験用）。失敗しても on-attach は落とさない。
 # `--install-launcher` で起動役の設置だけを行える。v0.19.0 の devcontainer.json の
 # onCreateCommand が呼ぶため、後方互換として残す。いまの onCreateCommand は、このスクリプトを
-# 呼ばずに同じ内容を直接書き出す（on-attach.sh の版に左右されないため）。
+# 呼ばずに同じ中身を直接書き出す（on-attach.sh の版に左右されないため）。動きは同じではなく、
+# onCreateCommand はラッパーの有無によらず設置し、ここはラッパーが無ければ設置しない。
 # 起動役の中身の正本は下の LAUNCHER ヒアドキュメント（1 か所）。devcontainer.json の
 # onCreateCommand へは、bootstrap.sh の claude_launcher_lines がここから取り出して書き出す。
 install_claude_session_launcher() {

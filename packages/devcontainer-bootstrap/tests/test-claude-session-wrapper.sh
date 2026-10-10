@@ -316,8 +316,10 @@ it "--with-claude を選ばない生成物には onCreateCommand がない"
 if ! command grep -q 'onCreateCommand' "$out_plain/.devcontainer/devcontainer.json" \
   && [[ -z "$(jq -r '.onCreateCommand // empty' "$out_plain/.devcontainer/devcontainer.json" 2>/dev/null)" ]]; then pass; else fail "onCreateCommand が残っている"; fi
 
-# run_oncreate <HOME> : onCreateCommand を、コンテナが使うのと同じ形（sh -c）で実行する。
-run_oncreate() { (cd "$out" && HOME="$1" sh -c "$oc" 2>&1); }
+# onCreateCommand の書き出し先は決め打ちの /home/vscode/…（HOME に依らない）。試験では、その
+# 接頭辞だけを仕込みのホームへ置き換えて実行する。
+# run_oncreate <ホーム> [コマンド] : コンテナが使うのと同じ形（sh -c）で実行する。
+run_oncreate() { local c="${2:-$oc}"; (cd "$out" && sh -c "${c//\/home\/vscode/$1}" 2>&1); }
 
 it "onCreateCommand の実行で、実行可能な起動役が置かれ、on-attach.sh が置くものとバイト一致する"
 OC_HOME="$WORK/oc-home"
@@ -345,17 +347,65 @@ printf '#!/usr/bin/env bash\necho "[on-attach] bootstrap active"\n' >"$out_old/s
 oc_old="$(jq -r '.onCreateCommand // empty' "$out_old/.devcontainer/devcontainer.json" 2>/dev/null)"
 OLD_HOME="$WORK/old-home"
 mkdir -p "$OLD_HOME"
-(cd "$out_old" && HOME="$OLD_HOME" sh -c "$oc_old" >/dev/null 2>&1)
+run_oncreate "$OLD_HOME" "$oc_old" >/dev/null
 if [[ -x "$OLD_HOME/.local/bin/claude-session-launcher" ]] && cmp -s "$OLD_HOME/.local/bin/claude-session-launcher" "$LAUNCHER"; then pass; else fail "起動役が置かれていない"; fi
 
 it "設置できない場合（HOME の下に書けない）も、警告を出して成功終了する（コンテナの作成を止めない）"
 BAD_HOME="$WORK/bad-home"
 mkdir -p "$BAD_HOME"
 : >"$BAD_HOME/.local"
-bad_out="$(run_oncreate "$BAD_HOME")"
 bad_rc=0
-(cd "$out" && HOME="$BAD_HOME" sh -c "$oc" >/dev/null 2>&1) || bad_rc=$?
+bad_out="$(run_oncreate "$BAD_HOME")" || bad_rc=$?
 if [[ "$bad_rc" == "0" ]] && printf '%s' "$bad_out" | command grep -q 'WARN'; then pass; else fail "rc=$bad_rc out=$bad_out"; fi
+
+it "onCreateCommand の書き出し先と claudeProcessWrapper の配線先が同じパスである（HOME に依らない）"
+if [[ "$oc" == *"f=\"$wired\""* && "$oc" != *'$HOME'* ]]; then pass; else fail "wired=$wired"; fi
+
+# 壊した雛形（on-attach.sh の LAUNCHER ヒアドキュメント）で、生成がエラーになること。
+# bootstrap.sh のコピーの雛形だけを書き換え、パッケージの他のファイルは相対位置で解決させる。
+BROKEN_DIR="$(new_workdir)/broken-pkg"
+cp -R "$PKG_DIR" "$BROKEN_DIR"
+broken_gen() { # <sed 式> : LAUNCHER 内の行を python で書き換えた bootstrap.sh で生成する
+  python3 -I - "$BROKEN_DIR/bootstrap.sh" "$1" <<'PYEOF'
+import sys
+p, mode = sys.argv[1], sys.argv[2]
+s = open(p, encoding='utf-8').read()
+a = s.index("<<'LAUNCHER'\n") + len("<<'LAUNCHER'\n")
+b = s.index("\nLAUNCHER\n", a)
+body = s[a:b]
+if mode == 'empty':
+    s = s[:a - len("<<'LAUNCHER'\n")] + "<<'LAUNCHER_X'\n" + s[a:]
+elif mode == 'quote':
+    body = body + "\necho 'x'"
+    s = s[:a] + body + s[b:]
+elif mode == 'tab':
+    body = body + "\n\techo x"
+    s = s[:a] + body + s[b:]
+open(p, 'w', encoding='utf-8').write(s)
+PYEOF
+}
+BROKEN_ORIG="$(cat "$BROKEN_DIR/bootstrap.sh")"
+run_broken() { # <mode> : 終了コードと標準エラーを返す
+  printf '%s\n' "$BROKEN_ORIG" >"$BROKEN_DIR/bootstrap.sh"
+  broken_gen "$1"
+  bash "$BROKEN_DIR/bootstrap.sh" --project-name test --languages node --with-claude \
+    --base-image mcr.microsoft.com/devcontainers/base:ubuntu --output-dir "$(new_workdir)/o" 2>&1 >/dev/null
+}
+
+it "起動役の中身を雛形から取り出せないとき、生成が終了コード 1 で止まり、理由を出す"
+broken_rc=0
+broken_err="$(run_broken empty)" || broken_rc=$?
+if [[ "$broken_rc" == "1" && "$broken_err" == *"取り出せませんでした"* ]]; then pass; else fail "rc=$broken_rc err=$broken_err"; fi
+
+it "起動役の中身に単一引用符があるとき、生成が終了コード 1 で止まり、理由を出す"
+broken_rc=0
+broken_err="$(run_broken quote)" || broken_rc=$?
+if [[ "$broken_rc" == "1" && "$broken_err" == *"単一引用符"* ]]; then pass; else fail "rc=$broken_rc err=$broken_err"; fi
+
+it "起動役の中身に制御文字（タブ）があるとき、生成が終了コード 1 で止まり、理由を出す"
+broken_rc=0
+broken_err="$(run_broken tab)" || broken_rc=$?
+if [[ "$broken_rc" == "1" && "$broken_err" == *"制御文字"* ]]; then pass; else fail "rc=$broken_rc err=$broken_err"; fi
 
 it "onCreateCommand の起動役は、引用符を含む中身も崩れずにそのまま書き出される（行数と exec の行）"
 if [[ "$(wc -l <"$OC_LAUNCHER" | tr -d ' ')" == "9" ]] && command grep -qxF 'exec "$@"' "$OC_LAUNCHER" \

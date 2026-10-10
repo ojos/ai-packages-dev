@@ -300,10 +300,13 @@ if [[ -f "$REPO_ROOT/scripts/confirm-merge-hook.sh" && -f "$REPO_ROOT/scripts/se
 
 it ".devcontainer/devcontainer.json の onCreateCommand が、DCB が --with-claude で生成するものと一致する"
 GEN_DC="$TMP_ROOT/gen-claude"
+gen_rc=0
 bash "$REPO_ROOT/packages/devcontainer-bootstrap/bootstrap.sh" --project-name test --languages node --with-claude \
-  --base-image mcr.microsoft.com/devcontainers/base:ubuntu --output-dir "$GEN_DC" >/dev/null 2>&1
+  --base-image mcr.microsoft.com/devcontainers/base:ubuntu --output-dir "$GEN_DC" >/dev/null 2>&1 || gen_rc=$?
 GEN_OC="$(jq -r '.onCreateCommand // empty' "$GEN_DC/.devcontainer/devcontainer.json" 2>/dev/null)"
 OWN_OC="$(jq -r '.onCreateCommand // empty' "$REPO_ROOT/.devcontainer/devcontainer.json" 2>/dev/null)"
-if [[ -n "$GEN_OC" && "$GEN_OC" == "$OWN_OC" ]]; then pass; else fail "生成物と食い違っている（生成物が空の場合も含む）"; fi
+if [[ "$gen_rc" != "0" ]]; then fail "生成に失敗した（終了コード $gen_rc）"
+elif [[ -n "$GEN_OC" && "$GEN_OC" == "$OWN_OC" ]]; then pass
+else fail "生成物と食い違っている（生成物が空の場合も含む）"; fi
 
 exit_with_result

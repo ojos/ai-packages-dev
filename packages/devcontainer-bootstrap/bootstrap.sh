@@ -1379,7 +1379,8 @@ HELPER="$HERE/load-project-env.sh"
 # 設置先は CLAUDE_SESSION_LAUNCHER で変えられる（試験用）。失敗しても on-attach は落とさない。
 # `--install-launcher` で起動役の設置だけを行える。v0.19.0 の devcontainer.json の
 # onCreateCommand が呼ぶため、後方互換として残す。いまの onCreateCommand は、このスクリプトを
-# 呼ばずに同じ内容を直接書き出す（on-attach.sh の版に左右されないため）。
+# 呼ばずに同じ中身を直接書き出す（on-attach.sh の版に左右されないため）。動きは同じではなく、
+# onCreateCommand はラッパーの有無によらず設置し、ここはラッパーが無ければ設置しない。
 # 起動役の中身の正本は下の LAUNCHER ヒアドキュメント（1 か所）。devcontainer.json の
 # onCreateCommand へは、bootstrap.sh の claude_launcher_lines がここから取り出して書き出す。
 install_claude_session_launcher() {
@@ -9713,11 +9714,20 @@ build_with_extensions_block() {
   printf '%s' "$out"
 }
 
-# Claude Code の起動役（~/.local/bin/claude-session-launcher）の中身を、1 行ずつ出力する。
+# Claude Code の起動役の置き場所。claudeCode.claudeProcessWrapper の設定
+# （build_vscode_settings_block）と、onCreateCommand の書き出し先
+# （build_on_create_command_block）の両方をここから作る。配線先と設置先が食い違わないようにする。
+# 絶対パスで書く（拡張は ~ や ${workspaceFolder} を展開しない）。ホームは、開発コンテナの
+# 既定のユーザー vscode の /home/vscode とする。
+# scripts/on-attach.sh の既定（$HOME/.local/bin/…）と CLAUDE_SESSION_LAUNCHER による上書きは別で、
+# 雛形の側に持つ。
+CLAUDE_LAUNCHER_PATH="/home/vscode/.local/bin/claude-session-launcher"
+
+# Claude Code の起動役（CLAUDE_LAUNCHER_PATH）の中身を、1 行ずつ出力する。
 # 正本は scripts/on-attach.sh の雛形にある install_claude_session_launcher の LAUNCHER
 # ヒアドキュメント（1 か所。scripts/ の写しとバイト一致する）。onCreateCommand
 # （build_on_create_command_block）へは、そこから取り出して書き出す。中身を 2 か所に書き写すと
-# 食い違うため、書き写さない。各行は単一引用符を含めない（printf の引数に入れるため）。
+# 食い違うため、書き写さない。
 claude_launcher_lines() {
   get_template_content 'scripts/on-attach.sh' | awk '
     $0 ~ /<<.LAUNCHER.$/ { inside = 1; next }
@@ -9726,26 +9736,47 @@ claude_launcher_lines() {
   '
 }
 
+# 起動役の中身を検査する。onCreateCommand は中身を単一引用符で括った printf の引数にして
+# 書き出すため、空・単一引用符・制御文字（タブを含む）があると、空の起動役や壊れた sh を
+# 黙って置く devcontainer.json ができる。生成の時点で止める（終了コード 1）。
+# $(...) の中では exit しても生成が止まらないので、$(...) の外から呼ぶ。
+validate_claude_launcher_lines() {
+  local lines
+  lines="$(claude_launcher_lines)"
+  if [[ -z "$lines" ]]; then
+    echo "error: 起動役の中身を scripts/on-attach.sh の雛形（LAUNCHER ヒアドキュメント）から取り出せませんでした" >&2
+    return 1
+  fi
+  if [[ "$lines" == *"'"* ]]; then
+    echo "error: 起動役の中身に単一引用符があります（onCreateCommand の printf の引数に入れられません）" >&2
+    return 1
+  fi
+  if printf '%s\n' "$lines" | LC_ALL=C command grep -q '[[:cntrl:]]'; then
+    echo "error: 起動役の中身に制御文字（タブを含む）があります" >&2
+    return 1
+  fi
+  return 0
+}
+
 # devcontainer.json の customizations.vscode.settings（__VSCODE_SETTINGS__）。
 # --with-claude のときだけ、claudeCode.claudeProcessWrapper に起動役
-# （~/.local/bin/claude-session-launcher）を指定する。
+# （CLAUDE_LAUNCHER_PATH）を指定する。
 #
 # 作業ツリーの scripts/claude-session-wrapper.sh を直接指さない。そのファイルが無い
 # ブランチへ切り替えただけで Claude Code が一切起動しなくなるため、作業ツリーの外の固定パスに
-# 置いた極小の sh（onCreateCommand が書き出し、scripts/on-attach.sh が接続のたびに冪等に設置する）を挟む。起動役は、
+# 置いた極小の sh（onCreateCommand が書き出し、scripts/on-attach.sh も接続のたびに冪等に設置する）を挟む。起動役は、
 # ラッパーが実行可能ならそれを、無ければ引数をそのまま exec する。
 #
 # 絶対パスで書く。拡張（anthropic.claude-code 2.1.296）は設定値を読んだ文字列をそのまま
 # 実行ファイルのパスにし、${workspaceFolder} や ~ を展開しない（extension.js で
 # 確認。実機での起動は未検証）。この設定は scope が machine なので、利用者の設定ではなく
-# devcontainer.json の settings（コンテナ側の machine 設定）に置く。ホームは、開発コンテナの
-# 既定のユーザー vscode の /home/vscode とする。
+# devcontainer.json の settings（コンテナ側の machine 設定）に置く。
 # 条件に合わないときは空（行ごと消え、直前の "]," の末尾カンマは write_file が畳む）。
 build_vscode_settings_block() {
   has_with claude || { printf ''; return; }
   printf '%s\n' \
     '      "settings": {' \
-    '        "claudeCode.claudeProcessWrapper": "/home/vscode/.local/bin/claude-session-launcher"' \
+    '        "claudeCode.claudeProcessWrapper": "'"$CLAUDE_LAUNCHER_PATH"'"' \
     '      }'
 }
 
@@ -9758,8 +9789,10 @@ build_vscode_settings_block() {
 # 片方だけが新しくなる状態（古い on-attach.sh が設置を知らず、配線だけが入る）を起こさないため。
 # 形は文字列（1 行の sh）にする。配列にしても同じエスケープが要り、オブジェクトは並列実行になる。
 # 一時ファイルへ書いてから mv で置き換える（冪等。途中で壊れた起動役を残さない）。失敗しても
-# コンテナの作成は止めず、警告を出して終わる。中身は claude_launcher_lines（on-attach.sh の雛形から取り出す）と同じ。JSON のため
-# バックスラッシュと二重引用符をエスケープする（jq で読むと元の sh に戻る）。
+# コンテナの作成は止めず、警告を出して終わる。書き出し先は CLAUDE_LAUNCHER_PATH（\$HOME は使わない）。
+# 中身は claude_launcher_lines（on-attach.sh の雛形から取り出す）で、on-attach.sh が置くものと同じ。
+# 動きは同じではない: on-attach.sh はラッパーが無いと設置しないが、こちらは無条件に設置する。
+# JSON のため バックスラッシュと二重引用符をエスケープする（jq で読むと元の sh に戻る）。
 # postAttachCommand での設置も残す（既存のコンテナへ後から適用するため）。
 # 条件に合わないときは空（行ごと消える）。末尾のカンマは write_file の整形が畳む。
 build_on_create_command_block() {
@@ -9767,7 +9800,7 @@ build_on_create_command_block() {
   local args cmd
   args="$(claude_launcher_lines | sed -e "s/^/'/" -e "s/\$/'/" | tr '\n' ' ')"
   # shellcheck disable=SC2016  # 設置する sh の $ はリテラル。展開は実行時にコンテナ側で起きる
-  cmd='f="$HOME/.local/bin/claude-session-launcher"; t="$f.oncreate.tmp"; { mkdir -p "$HOME/.local/bin" && printf '"'%s\n'"' '"$args"'>"$t" && chmod 755 "$t" && mv -f "$t" "$f"; } || { rm -f "$t"; echo "[onCreate] WARN: Claude Code の起動役を設置できませんでした: $f" >&2; }; true'
+  cmd='f="'"$CLAUDE_LAUNCHER_PATH"'"; t="$f.oncreate.tmp"; { mkdir -p "${f%/*}" && printf '"'%s\n'"' '"$args"'>"$t" && chmod 755 "$t" && mv -f "$t" "$f"; } || { rm -f "$t"; echo "[onCreate] WARN: Claude Code の起動役を設置できませんでした: $f" >&2; }; true'
   cmd="$(printf '%s' "$cmd" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')"
   printf '  "onCreateCommand": "%s",\n' "$cmd"
 }
@@ -10164,6 +10197,8 @@ render_content() {
       { print }
     ' <<<"$content")"
   }
+
+  if has_with claude; then validate_claude_launcher_lines || exit 1; fi
 
   subst_block __RUNTIME_CHECK_LINES__ "$(build_runtime_check_block)"
   subst_block __ACCEPTANCE_CHECK_LINES__ "$(build_acceptance_check_block)"
