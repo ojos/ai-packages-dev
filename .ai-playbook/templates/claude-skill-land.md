@@ -96,14 +96,14 @@ echo CHECKS_ATTACHED
 - **動くはずのワークフローすべてに実行が付くまで待ちます。** 下の下準備で、動くはずのワークフローを求めます。下の「2 回続けて見る」だけでは、先に作られた実行が完了してから 30 秒を超えて遅れて作られる実行を取りこぼし、その受け入れ検証を見ないまま `RUNS_GREEN` になるためです。
 
   **方針は「確実に動くと言えるワークフローだけを数え、迷うものは数えない」です。** 数えなかったワークフローは、従来どおり「実行が付いていれば判定に入る」扱いなので、最悪でもこの手順を足す前の動きに戻るだけです。逆に、動かないものを数えると、実行が付かないまま 60 分待って毎回 `RUNS_MISSING` で止まり、足す前より悪くなります。そのため、次のものは数えません。
-  - **`pull_request` に `paths` / `paths-ignore` / `branches` / `branches-ignore` のどれかがあるもの。** 差分・ブランチによって、実行が作られないことがあるためです。
+  - **`pull_request` の下に、`types` 以外の子があるもの**（`paths`、`paths-ignore`、`branches`、`branches-ignore`、知らないキーなど）。差分・ブランチによって、実行が作られないことがあるためです。
   - **`pull_request` に `types` があり、`opened` と `synchronize` の両方を含まないもの**（`[closed]`、`[labeled]`、`[opened]` だけなど）。head のコミットに実行を作る契機は、この 2 つだからです。両方を含むもの（`[opened, synchronize, reopened]`、さらに `ready_for_review` を足したもの）は、`types` を書かなかったときの既定（`opened`、`synchronize`、`reopened`）に必要な契機を含んでおり、絞り込みではないため数えます。ブロックの形（`types:` の下に `- opened` を並べる形）と 1 行の形（`types: [opened, synchronize]`）の両方を読みます。
   - **`pull_request` 以外の契機で付くもの**（`pull_request_target`、`workflow_run` など）。
   - **head と base の片方でしか「動く」と言えないもの。** GitHub は PR の実行を、head と base を合わせたマージ用の参照から作るため、ワークフローの定義も、そのマージ用の参照にあるものが使われます。head で足したワークフローは、マージ用の参照で動くとは限らず、base で消えたものは、head に残っていても動きません。確実に動くと言えるのは、両方で「動く」と判定したものです。
   - **Actions で無効にしてあるもの**（`state` が `active` でないもの）。
   - **1 行の形の `on:` の中で、`push` に付けた `paths` などの絞り込みも、`pull_request` の絞り込みと区別せず、数えない側に倒しています。** 数えないほうが安全側（上の方針）で、書き方を見分ける実装は誤読の余地を増やすためです。
 
-  `on:` は、ブロックの形（`on:` の下に `pull_request:`）、1 行の形（`on: [push, pull_request]`、`on: pull_request`）、引用符付きの `"on":` を読みます。YAML を読む専用の道具（`yq` など）は雛形が求める道具に含めないため、awk で読みます。求める元を作業ツリーでなく `$sha` と base の中身にするのは、ワークフローを増減する PR で、作業ツリーの一覧が食い違うためです。
+  **数える形は、確実に読めるものに限ります（認める形を限る方式）。** YAML を完全には読まない（読む専用の道具を使わない）ため、すべての書き方を読もうとすると、読み違えて動かないものを数えます。読み違えて数えるより、数えずに従来どおりの動きに戻るほうが安全です（上の方針）。数えるのは、(1) `on: pull_request`、(2) `on: [a, pull_request, b]`（`{` と `:` を含まない 1 行のリスト）、(3) ブロックの形で、`on:` の直下の子にある `pull_request:`（値も子も無い）か `- pull_request`、の 3 つです。(3) で `pull_request:` の下に子があるときは、子が `types:` だけで、上の条件を満たすものに限ります。フローの形（`on: {pull_request: ...}`）、引用符付きのキー、アンカーやエイリアスなど、これに当てはまらない形はすべて数えません。`on:` の直下より深い位置にある `pull_request` という文字（`workflow_dispatch` の `inputs` の名前、`push` の `paths` の中身など）は見ません。`on:` のキー自体は、引用符付き（`"on":`）も読みます。YAML を読む専用の道具（`yq` など）は雛形が求める道具に含めないため、awk で読みます。求める元を作業ツリーでなく `$sha` と base の中身にするのは、ワークフローを増減する PR で、作業ツリーの一覧が食い違うためです。
 - **完了を 2 回続けて見るまで待ちます。** ワークフローごとに実行が作られる時刻はずれるため、先に作られた実行が完了した時点では、後の実行がまだ一覧に無いことがあります。30 秒あけて読んだ一覧が前の回と同じで、すべて完了していれば抜けます。上の「動くはずのワークフロー」に入らないものは、この間隔を超えて遅れると拾えません。
 - **ワークフローごとに、最新の実行 1 件だけを見ます。** `reopened` などで同じ SHA に実行が重なると、古い失敗が一覧に残るためです。一覧は全ページを読みます（`--paginate`）。
 - **commit status を出すワークフロー（`second-opinion-gate`、`review-gate`）は、実行の成否では判定しません。** 下の commit status で判定します。たとえば `second-opinion-gate` は、記録が無いうちに起動した実行が失敗のまま残り、記録を投稿したあとの緑は、別の契機（掃き寄せ）が付ける status として出ます。実行の成否で判定すると、投稿しても緑になりません。除くワークフローの名前（`gates`）は、プロジェクトの構成に合わせて直してください。
@@ -118,40 +118,53 @@ echo CHECKS_ATTACHED
 
 ```bash
 # >>> land:expected-workflows
-# on: に pull_request を持ち、paths / paths-ignore / branches / branches-ignore で絞らず、types を書くなら opened と synchronize の
-# 両方を含むときだけ 0 を返す
-# （標準入力はワークフローの YAML）。
+# on: に pull_request を持つか読む。標準入力はワークフローの YAML。数える（0 を返す）のは、次の形に限る。
+#   1. on: pull_request
+#   2. on: [a, pull_request, b]（1 行のリスト。{ や : を含まない）
+#   3. ブロックの形で、on: の直下の子に pull_request:（値と子が無い）か - pull_request があるもの。
+#      pull_request: の下の子が types: だけで、opened と synchronize の両方を含むものも数える。
+# それ以外（フローの形 { }、引用符付きのキー、アンカー、paths / branches など types 以外の子）は読み違えうるので、すべて数えない。
+# on: の直下より深い位置にある pull_request という文字（workflow_dispatch の inputs、push の paths の中身など）は見ない。
 workflow_runs_on_pr() {
   awk '
     function strip(s) { sub(/[ \t]+#.*$/, "", s); sub(/[ \t\r]+$/, "", s); return s }
-    function words(s) { return s ~ /(^|[^A-Za-z0-9_-])pull_request([^A-Za-z0-9_-]|$)/ }
-    function filters(s) { return s ~ /(^|[^A-Za-z0-9_-])(paths|paths-ignore|branches|branches-ignore)[ \t]*:/ }
-    function istypes(s) { return s ~ /(^|[^A-Za-z0-9_-])types[ \t]*:/ }
     function has(s, w) { return s ~ ("(^|[^A-Za-z0-9_-])" w "([^A-Za-z0-9_-]|$)") }
-    BEGIN { pr = -1 }
+    function trim(s) { sub(/^[ \t]+/, "", s); sub(/[ \t]+$/, "", s); return s }
+    BEGIN { base = -1 }
     /^["'\'']?on["'\'']?[ \t]*:/ {
-      inon = 1
       v = $0; sub(/^["'\'']?on["'\'']?[ \t]*:[ \t]*/, "", v); v = strip(v)
-      if (v != "") { if (words(v)) hit = 1; if (filters(v)) filt = 1 }
+      if (v == "") { inon = 1; next }
+      inon = 0
+      if (v == "pull_request") hit = 1
+      else if (v ~ /^\[[^{}:]*\]$/) {
+        sub(/^\[/, "", v); sub(/\]$/, "", v); k = split(v, items, ",")
+        for (i = 1; i <= k; i++) if (trim(items[i]) == "pull_request") hit = 1
+      }
       next
     }
     inon && /^[^ \t#-]/ { inon = 0 }
     inon {
       t = $0; match(t, /^[ \t]*/); n = RLENGTH; t = strip(substr(t, n + 1))
       if (t == "" || t ~ /^#/) next
-      if (intypes && t ~ /^-/ && n >= tn) { ts = ts " " t; next }
-      intypes = 0
-      if (t ~ /^(- *)?["'\'']?pull_request["'\'']?[ \t]*(:|$)/) {
-        hit = 1; pr = n; if (filters(t)) filt = 1
-        if (istypes(t)) { tseen = 1; ts = ts " " t }
+      if (base < 0) base = n
+      if (n < base) { bad = 1; next }
+      if (n == base) {
+        inpr = 0; intypes = 0; cn = -1
+        if (t == "pull_request:") { hit = 1; inpr = 1 }
+        else if (t == "- pull_request") hit = 1
         next
       }
-      if (n <= pr) pr = -1
-      if (pr >= 0 && n > pr && filters(t)) filt = 1
-      if (pr >= 0 && n > pr && istypes(t)) { tseen = 1; intypes = 1; tn = n; ts = ts " " t }
-      if (t ~ /^\[/ && words(t)) hit = 1
+      if (!inpr) next
+      if (cn < 0) cn = n
+      if (intypes && t ~ /^-/ && n >= cn) { ts = ts " " t; next }
+      intypes = 0
+      if (n == cn && t ~ /^types:/) {
+        tseen = 1; ts = ts " " t
+        w = t; sub(/^types:[ \t]*/, "", w); if (w == "") intypes = 1
+      } else if (n > cn) { }
+      else bad = 1
     }
-    END { exit (hit && !filt && (!tseen || (has(ts, "opened") && has(ts, "synchronize")))) ? 0 : 1 }'
+    END { exit (hit && !bad && (!tseen || (has(ts, "opened") && has(ts, "synchronize")))) ? 0 : 1 }'
 }
 # コミット（$1）の .github/workflows/ から、動くはずのワークフローのパスを出す（作業ツリーは見ない）。
 # 読めなかったときは 1 を返す（空の一覧と区別するため）。--full-tree は、サブディレクトリから実行しても同じ結果にするため。
