@@ -8498,7 +8498,7 @@ write_issue_mark() { # 新しく登録した issue 番号（空白区切り）
       [[ "$d" != *$'\t'* ]] || continue
       found=1
       e=0
-      ! branch_exists "$d" "$b" || e=1
+      ! branch_present "$d" "$b" || e=1
       mark="${mark:+$mark$'\n'}$n"$'\t'"$d"$'\t'"$b"$'\t'"$e"
     done <<EOF
 $HIT_BRANCHES

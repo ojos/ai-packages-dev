@@ -516,6 +516,17 @@ kept="$(ledger s-a "$repo" check issue 41 | sed -n 1p)"
 assert_eq "$kept" "LEDGER_WARN" "コミットの無いリポジトリ"
 reset_ledger
 
+it "(#514) コミットの無いリポジトリで HEAD が呼び出しの前から指しているブランチは、作らずに失敗したら解放する"
+repo7="$(dirname "$repo")/repo7"
+mkdir -p "$repo7"
+git -C "$repo7" init -q . >/dev/null 2>&1
+git -C "$repo7" symbolic-ref HEAD refs/heads/39-x >/dev/null 2>&1
+pre_bash s-b "$repo" "git -C $repo7 switch -c 39-x" toolu_g9
+fail_bash s-b "$repo" "git -C $repo7 switch -c 39-x" toolu_g9
+gone="$(ledger s-a "$repo" check issue 39 | sed -n 1p)"
+assert_eq "$gone" "LEDGER_OK" "前から HEAD が指しているブランチ"
+reset_ledger
+
 it "(#514) ディレクトリにタブを含むときは、番号だけの印で記録し、失敗時に解放する"
 repo6="$(dirname "$repo")/re"$'\t'"po6"
 mkdir -p "$repo6"
