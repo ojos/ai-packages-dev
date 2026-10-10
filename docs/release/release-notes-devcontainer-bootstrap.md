@@ -13,6 +13,7 @@
   - v0.19.0 の移行の注意（作り直す前に `devcontainer.json` と `scripts/on-attach.sh` の両方が新しい版であることを確かめる）のうち、`devcontainer.json` が新しく `on-attach.sh` が古いままのずれは、この版では起きない。`on-attach.sh` が古いままでも、起動役は置かれる。
   - 逆向きのずれ（`devcontainer.json` が v0.19.0 のまま残り、`on-attach.sh` だけが新しい）では、`onCreateCommand` が今も `on-attach.sh --install-launcher` を呼ぶので、この経路は `on-attach.sh` の `--install-launcher` に頼る。`devcontainer.json` が `.dcb-new` のまま残っていないかを、作り直す前に確かめる。
   - 起動役の中身の正本は `bootstrap.sh` の 1 か所で、`onCreateCommand` と `scripts/on-attach.sh` の両方へそこから書き出す。`scripts/on-attach.sh` の `--install-launcher` は、v0.19.0 の `devcontainer.json` の `onCreateCommand` が呼ぶため残す。
+- **`session-coord-hook.sh` が、ブランチを作ってから失敗した呼び出しで issue の登録を解放しないようにした**（ojos/ai-packages-dev#514。取り込み元: ojos/career-log の修正 `992df41`）。`git switch -c 26-x && npm test` のように、ブランチを作ったあとの段で失敗（`PostToolUseFailure`）すると、作業は issue で続いているのに登録が消え、別のセッションへの重複着手の警告が出なくなっていた。ブランチ名の読み方を `ISSUE_BRANCH_RE` の 1 か所にまとめ、呼び出しの前（PreToolUse）に、作るブランチの正確な名前・そのブランチを作るリポジトリ（`cd` や `git -C` を解決したもの）・呼び出しの前から既にあったかを印へ控え、失敗したとき、そのブランチがそのリポジトリに「いま」あり、かつ呼び出しの前には無かった場合だけ登録を残す。既にあったブランチへの `checkout -b` の失敗や、同じ番号の別のブランチがあるだけの場合、ブランチが作られずに失敗した場合は従来どおり解放する。番号だけの古い書式の印も読み、従来どおり解放する。成功した呼び出しの扱いは変えない。README の「issue はブランチ作成の時点で登録し、`SessionEnd` まで持つ」という説明に、コードを合わせる修正。
 - **生成物が変わる**（`--with-claude` の構成だけ）。`devcontainer.json` の `onCreateCommand`、`scripts/on-attach.sh`（コメントと、起動役の中身の 1 行のコメントだけ）が変わる。
 
 ## v0.19.0
