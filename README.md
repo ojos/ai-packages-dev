@@ -11,7 +11,7 @@ ai-packages-dev/
 ├── .ai-playbook/                    # AI 運用規範の正本（配布先 ojos/ai-playbook）
 │   ├── shared-ai-rules.md           # 共通規範
 │   ├── role-contracts/              # ロール責務の契約 7 種
-│   ├── task-playbooks/              # タスク手順 4 種
+│   ├── task-playbooks/              # タスク手順 5 種
 │   ├── review-workflow.md           # レビュー運用
 │   ├── loop-workflow.md             # ループコーディング運用の規範
 │   ├── loop-coding-guide.md         # ループコーディングの解説ガイド
