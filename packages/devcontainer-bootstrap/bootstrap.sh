@@ -8126,6 +8126,7 @@ HIT_MERGE=0
 HIT_GATE=0
 HIT_GIT_DIRS=""   # 改行区切り。作業ツリーのパス
 HIT_ISSUES=""     # 空白区切り。issue 番号
+HIT_BRANCHES=""   # 改行区切り。「番号 TAB リポジトリのディレクトリ TAB ブランチ名」（ブランチの作成から読んだ issue）
 
 toplevel_of() { # 基準ディレクトリ 相対ディレクトリ
   local base="$1" rel="$2" top=""
@@ -8151,23 +8152,19 @@ add_issue() {
 
 # ブランチ名の先頭の番号（feat/395-x・395-x・fix/issue-12-x）を issue 番号とみなす。
 ISSUE_BRANCH_RE='(^|/)(issue-|gh-)?([1-9][0-9]{0,5})([-_]|$)'
-issue_from_branch() {
-  local b="$1"
+issue_from_branch() { # ブランチ名 ブランチを作るリポジトリのディレクトリ
+  local b="$1" n
   if [[ "$b" =~ $ISSUE_BRANCH_RE ]]; then
-    add_issue "${BASH_REMATCH[3]}"
+    n="${BASH_REMATCH[3]}"
+    add_issue "$n"
+    # 失敗した呼び出しで「このブランチを作ったか」を確かめるため、正確な名前と場所を控える。
+    HIT_BRANCHES="${HIT_BRANCHES:+$HIT_BRANCHES$'\n'}$n"$'\t'"$2"$'\t'"$b"
   fi
 }
 
-# 作業ディレクトリのリポジトリに、issue 番号 n に当たるローカルのブランチがあるか（読み方は issue_from_branch と同じ）。
-branch_exists_for_issue() { # 作業ディレクトリ 番号
-  local b refs
-  refs="$(git -C "$1" for-each-ref --format='%(refname:short)' refs/heads 2>/dev/null)" || return 1
-  while IFS= read -r b; do
-    [[ "$b" =~ $ISSUE_BRANCH_RE && "${BASH_REMATCH[3]}" == "$2" ]] && return 0
-  done <<EOF
-$refs
-EOF
-  return 1
+# ローカルのブランチ b が、リポジトリ d にあるか（正確な ref だけを確かめる）。
+branch_exists() { # ディレクトリ ブランチ名
+  git -C "$1" show-ref --verify --quiet "refs/heads/$2" 2>/dev/null
 }
 
 # W 配列の k 番目以降から、オプションを読み飛ばして最初の位置引数を返す（番号で）。
@@ -8249,7 +8246,7 @@ classify_git() { # k（git の位置）
     w="${W[$j]}"
     case "$sub:$w" in
       checkout:-b | checkout:-B | switch:-c | switch:-C | switch:--create | switch:--force-create | worktree:-b | worktree:-B)
-        issue_from_branch "${W[$((j + 1))]:-}"
+        issue_from_branch "${W[$((j + 1))]:-}" "$(toplevel_of "$CUR_DIR" "$dir")"
         ;;
     esac
     j=$((j + 1))
@@ -8305,6 +8302,7 @@ classify_command() { # コマンド文字列、基準ディレクトリ
   HIT_GATE=0
   HIT_GIT_DIRS=""
   HIT_ISSUES=""
+  HIT_BRANCHES=""
   CUR_DIR="$2"
   # 見るべき語が無ければ、解析しない。
   case "$text" in
@@ -8470,22 +8468,49 @@ release_call_dirs() { # 改行区切りの作業ディレクトリ
 $1
 EOF
 }
-write_issue_mark() {
-  local f
+# 印の書式: 1 行 1 件。ブランチの作成から読んだ issue は「番号 TAB ディレクトリ TAB ブランチ名 TAB 呼び出しの前にあったか(1/0)」、
+# それ以外は番号だけ（古い書式の印は空白区切りの番号の行で、これも読める）。
+write_issue_mark() { # 新しく登録した issue 番号（空白区切り）
+  local f n line b d e mark="" found
   f="$(issue_mark_path)" || return 0
-  printf '%s\n' "$1" >"$f" 2>/dev/null || true
+  for n in $1; do
+    found=0
+    while IFS=$'\t' read -r line d b; do
+      [[ -n "$line" && "$line" == "$n" ]] || continue
+      found=1
+      e=0
+      ! branch_exists "$d" "$b" || e=1
+      mark="${mark:+$mark$'\n'}$n"$'\t'"$d"$'\t'"$b"$'\t'"$e"
+    done <<EOF
+$HIT_BRANCHES
+EOF
+    [[ $found -eq 1 ]] || mark="${mark:+$mark$'\n'}$n"
+  done
+  printf '%s\n' "$mark" >"$f" 2>/dev/null || true
 }
 # 印を読んで消す。成功した呼び出しでは、読まずに消す（issue は SessionEnd まで持つ）。
 settle_issue_mark() { # release|keep
-  local f nums n
+  local f n d b e rest="" nums="" kept=" "
   f="$(issue_mark_path)" || return 0
   [[ -f "$f" ]] || return 0
   if [[ "$1" == "release" ]]; then
-    nums="$(cat "$f" 2>/dev/null)"
+    # `git switch -c 26-x && npm test` のように、ブランチを作ったあとの段で失敗した呼び出しでも、
+    # 着手は成立している。記録したブランチが、記録したリポジトリに「いま」あり、かつ呼び出しの
+    # 前には無かったときだけ、登録を残す（他のセッションへの警告を消さない）。それ以外は解放する。
+    while IFS=$'\t' read -r n d b e; do
+      [[ -n "$n" ]] || continue
+      case "$n" in *[!0-9\ ]*) continue ;; esac
+      if [[ -z "$b" ]]; then
+        nums="$nums $n"   # 番号だけの行（古い書式を含む）
+        continue
+      fi
+      nums="$nums $n"
+      if [[ "$e" == "0" ]] && branch_exists "$d" "$b"; then kept="$kept$n "; fi
+    done <"$f"
     for n in $nums; do
-      # `git switch -c 26-x && npm test` のように、ブランチを作ったあとの段で失敗した呼び出しでも、
-      # 着手は成立している。ブランチが残っていれば登録を残す（他のセッションへの警告を消さない）。
-      branch_exists_for_issue "$cwd" "$n" && continue
+      case "$kept" in *" $n "*) continue ;; esac
+      case " $rest " in *" $n "*) continue ;; esac
+      rest="$rest $n"
       run_ledger "$cwd" release issue "$n"
     done
   fi

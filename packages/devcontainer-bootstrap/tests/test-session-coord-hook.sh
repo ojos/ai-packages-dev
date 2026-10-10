@@ -446,6 +446,65 @@ gone="$(ledger s-a "$repo" check issue 88 | sed -n 1p)"
 assert_eq "$gone" "LEDGER_OK" "ブランチが作られない失敗"
 reset_ledger
 
+it "(#514) 同じ名前のブランチが呼び出しの前から既にあり、checkout -b が失敗した呼び出しでは、issue の登録を解放する"
+git -C "$repo" branch feat/66-x >/dev/null 2>&1
+pre_bash s-b "$repo" 'git checkout -b feat/66-x' toolu_g1
+fail_bash s-b "$repo" 'git checkout -b feat/66-x' toolu_g1
+gone="$(ledger s-a "$repo" check issue 66 | sed -n 1p)"
+git -C "$repo" branch -D feat/66-x >/dev/null 2>&1
+assert_eq "$gone" "LEDGER_OK" "既にあったブランチ"
+reset_ledger
+
+it "(#514) 同じ番号の別のブランチが（別の作業ツリーを含め）あっても、作るのに失敗した呼び出しでは、issue の登録を解放する"
+git -C "$repo" branch 55-y >/dev/null 2>&1
+pre_bash s-b "$repo" 'git switch -c 55-x && false' toolu_g2
+fail_bash s-b "$repo" 'git switch -c 55-x && false' toolu_g2
+gone="$(ledger s-a "$repo" check issue 55 | sed -n 1p)"
+git -C "$repo" branch -D 55-y >/dev/null 2>&1
+assert_eq "$gone" "LEDGER_OK" "同じ番号の別のブランチ"
+reset_ledger
+
+repo3="$(dirname "$repo")/repo3"
+mkdir -p "$repo3"
+(
+  cd "$repo3" || exit 1
+  git init -q . 2>/dev/null
+  git config user.name test
+  git config user.email test@example.com
+  git config commit.gpgsign false
+  echo x > f.txt
+  git add f.txt
+  git commit -q -m init
+) >/dev/null 2>&1
+
+it "(#514) 別のリポジトリへ cd してブランチを作ってから失敗した呼び出しでは、issue の登録を残す"
+pre_bash s-b "$repo" "cd $repo3 && git switch -c 44-x && false" toolu_g3
+git -C "$repo3" branch 44-x >/dev/null 2>&1
+fail_bash s-b "$repo" "cd $repo3 && git switch -c 44-x && false" toolu_g3
+kept="$(ledger s-a "$repo" check issue 44 | sed -n 1p)"
+git -C "$repo3" branch -D 44-x >/dev/null 2>&1
+assert_eq "$kept" "LEDGER_WARN" "cd 先で作ったブランチ"
+reset_ledger
+
+it "(#514) git -C で別のリポジトリにブランチを作ってから失敗した呼び出しでは、issue の登録を残す"
+pre_bash s-b "$repo" "git -C $repo3 switch -c 43-x && make" toolu_g4
+git -C "$repo3" branch 43-x >/dev/null 2>&1
+fail_bash s-b "$repo" "git -C $repo3 switch -c 43-x && make" toolu_g4
+kept="$(ledger s-a "$repo" check issue 43 | sed -n 1p)"
+git -C "$repo3" branch -D 43-x >/dev/null 2>&1
+assert_eq "$kept" "LEDGER_WARN" "git -C 先で作ったブランチ"
+reset_ledger
+
+it "(#514) 番号だけの古い書式の印は、従来どおり失敗時に解放する"
+pre_bash s-b "$repo" 'git checkout -b feat/33-x' toolu_g5
+printf '33\n' >"${TMPDIR:-/tmp}/session-coord-toolu_g5"
+git -C "$repo" branch feat/33-x >/dev/null 2>&1
+fail_bash s-b "$repo" 'git checkout -b feat/33-x' toolu_g5
+gone="$(ledger s-a "$repo" check issue 33 | sed -n 1p)"
+git -C "$repo" branch -D feat/33-x >/dev/null 2>&1
+assert_eq "$gone" "LEDGER_OK" "古い書式の印"
+reset_ledger
+
 it "対照: 呼び出しの前から持っていた issue の登録は、失敗しても外さない"
 ledger s-b "$repo" claim issue 395 >/dev/null
 pre_bash s-b "$repo" 'git checkout -b feat/395-x' toolu_f2
