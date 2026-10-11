@@ -110,6 +110,8 @@ echo CHECKS_ATTACHED
 
 **判定に使う関数（`workflow_runs_on_pr`・`expected_workflows`・`filter_active`・`missing_workflows`・`runs_verdict`）と、有効なワークフローを読む jq の式（`active_jq`）は、目印の行（`# >>> land:...` と `# <<< land:...`）で囲んでいます。** テストがこの部分だけを雛形から取り出し、仕込みのリポジトリや仕込みの一覧で実行して確かめるためです。目印の行を消さず、囲んだ部分が外側の変数に依存しない形を保ってください。
 
+**このスキルの本文では、「`$` の直後に数字」を書きません。** awk の欄は `$(0)`・`$(3)`、シェルの引数は `${1}` の形で書きます（コメントの中も同じです）。Claude Code は、スキルを起動するとき、本文の「`$` の直後に数字」を、0 から数えた引数に置き換えるためです（`/land 29` では、`$` のすぐ後に `0` を書いた箇所が `29` になります）。上の 2 つの形は置き換えの規則に一致しないので、スキルとして読み込んでも、テストがファイルから取り出して実行しても、同じに動きます。`tests/test-skill-template-args.sh` がこれを検査します。
+
 **実行の `path` が空（null）の実行が一覧に混じっていたら、その回は「実行が付いていない」の判定をしません。** どのワークフローの実行か照合できず、付いているものを「付いていない」と取り違えて、実行が付いているのに `RUNS_MISSING` で止まるためです。その回だけは、この手順を足す前の動き（付いている実行だけで判定する）に戻ります。
 
 **パイプの後ろに `grep -q` を置きません。** `pipefail` の下では、`grep -q` が一致した時点で終了し、前段が SIGPIPE で失敗して、一致しているのに不一致と判定されることがあるためです。判定は、入力を最後まで読む awk の終了コードか、`if` の条件で行います。
@@ -134,7 +136,7 @@ workflow_runs_on_pr() {
     function trim(s) { sub(/^[ \t]+/, "", s); sub(/[ \t]+$/, "", s); return s }
     BEGIN { base = -1 }
     /^["'\'']?on["'\'']?[ \t]*:/ {
-      v = $0; sub(/^["'\'']?on["'\'']?[ \t]*:[ \t]*/, "", v); v = strip(v)
+      v = $(0); sub(/^["'\'']?on["'\'']?[ \t]*:[ \t]*/, "", v); v = strip(v)
       if (v == "") { inon = 1; next }
       inon = 0
       if (v == "pull_request") hit = 1
@@ -146,7 +148,7 @@ workflow_runs_on_pr() {
     }
     inon && /^[^ \t#-]/ { inon = 0 }
     inon {
-      t = $0; match(t, /^[ \t]*/); n = RLENGTH; t = strip(substr(t, n + 1))
+      t = $(0); match(t, /^[ \t]*/); n = RLENGTH; t = strip(substr(t, n + 1))
       if (t == "" || t ~ /^#/) next
       if (base < 0) base = n
       if (n < base) { bad = 1; next }
@@ -168,47 +170,47 @@ workflow_runs_on_pr() {
     }
     END { exit (hit && !bad && (!tseen || (has(ts, "opened") && has(ts, "synchronize") && has(ts, "reopened")))) ? 0 : 1 }'
 }
-# コミット（$1）の .github/workflows/ から、動くはずのワークフローのパスを出す（作業ツリーは見ない）。
+# コミット（${1}）の .github/workflows/ から、動くはずのワークフローのパスを出す（作業ツリーは見ない）。
 # 読めなかったときは 1 を返す（空の一覧と区別するため）。--full-tree は、サブディレクトリから実行しても同じ結果にするため。
 workflows_at() {
-  files="$(git ls-tree --full-tree --name-only "$1" .github/workflows/)" || return 1
+  files="$(git ls-tree --full-tree --name-only "${1}" .github/workflows/)" || return 1
   printf '%s\n' "$files" | while read -r f; do
     case "$f" in *.yml|*.yaml) ;; *) continue ;; esac
-    body="$(git show "$1:$f")" || exit 1
+    body="$(git show "${1}:$f")" || exit 1
     if printf '%s\n' "$body" | workflow_runs_on_pr; then echo "$f"; fi
   done
 }
-# head（$1）と base（$2）の両方で動くはずのワークフローのパスを出す。どちらかが読めなければ 1 を返す。
+# head（${1}）と base（${2}）の両方で動くはずのワークフローのパスを出す。どちらかが読めなければ 1 を返す。
 expected_workflows() {
-  h="$(workflows_at "$1")" || return 1
-  b="$(workflows_at "$2")" || return 1
+  h="$(workflows_at "${1}")" || return 1
+  b="$(workflows_at "${2}")" || return 1
   comm -12 <(printf '%s\n' "$h" | awk 'NF' | sort) <(printf '%s\n' "$b" | awk 'NF' | sort)
 }
 # 有効なワークフローの path を読む jq の式（gh api repos/{owner}/{repo}/actions/workflows の出力に使う）
 active_jq='.workflows[] | select(.state == "active") | .path'
-# 動くはずの一覧（$1）から、有効なもの（$2 = active_jq の出力）に無いものを除く。
+# 動くはずの一覧（${1}）から、有効なもの（${2} = active_jq の出力）に無いものを除く。
 filter_active() {
-  comm -12 <(printf '%s\n' "$1" | awk 'NF' | sort) <(printf '%s\n' "$2" | awk 'NF' | sort)
+  comm -12 <(printf '%s\n' "${1}" | awk 'NF' | sort) <(printf '%s\n' "${2}" | awk 'NF' | sort)
 }
 # <<< land:expected-workflows
 
 # >>> land:runs-verdict
 # 動くはずなのに、まだ実行が付いていないワークフローを出す。
-# $1 = 動くはずのワークフローの一覧、$2 = 実行の一覧（6 列目が path）
+# ${1} = 動くはずのワークフローの一覧、${2} = 実行の一覧（6 列目が path）
 # path が空の実行が 1 件でもあれば、どのワークフローの実行か照合できないので、その回は何も出さない（従来どおりの動きに戻す）。
 # 照合できないまま「付いていない」と判定すると、実行が付いているのに RUNS_MISSING で止まるため。
 missing_workflows() {
-  if printf '%s\n' "$2" | awk -F '\t' 'NF && $6 == "" { h = 1 } END { exit !h }'; then return 0; fi
-  printf '%s\n' "$1" | while read -r f; do
+  if printf '%s\n' "${2}" | awk -F '\t' 'NF && $(6) == "" { h = 1 } END { exit !h }'; then return 0; fi
+  printf '%s\n' "${1}" | while read -r f; do
     [ -n "$f" ] || continue
-    if ! printf '%s\n' "$2" | awk -F '\t' -v f="$f" '$6 == f { h = 1 } END { exit !h }'; then echo "$f"; fi
+    if ! printf '%s\n' "${2}" | awk -F '\t' -v f="$f" '$(6) == f { h = 1 } END { exit !h }'; then echo "$f"; fi
   done
 }
-# 最後の判定。$1 = 一覧を読めたか（1 / 0）、$2 = 実行が付いていないワークフロー（空でなければ付いていない）、
+# 最後の判定。${1} = 一覧を読めたか（1 / 0）、${2} = 実行が付いていないワークフロー（空でなければ付いていない）、
 # 標準入力 = 判定の対象の実行の一覧
 runs_verdict() {
-  awk -F '\t' -v listed="$1" -v missing="${2:+1}" '
-    NF { n++; if ($3 != "completed" || $4 !~ /^(success|skipped|neutral)$/) bad = 1 }
+  awk -F '\t' -v listed="${1}" -v missing="${2:+1}" '
+    NF { n++; if ($(3) != "completed" || $(4) !~ /^(success|skipped|neutral)$/) bad = 1 }
     END { if (listed != 1) print "RUNS_UNKNOWN"; else if (missing == 1) print "RUNS_MISSING"; else if (n == 0) print "RUNS_NONE"; else print bad ? "RUNS_NOT_GREEN" : "RUNS_GREEN" }'
 }
 # <<< land:runs-verdict
@@ -228,17 +230,17 @@ fi
 latest() (  # 対象の実行を、ワークフローごとに最新の 1 件だけ出す（全ページ）
   set -o pipefail
   gh api --paginate "$url" --jq "$sel | [.workflow_id, .run_number, .status, (.conclusion // \"-\"), .name, (.path // \"\" | sub(\"@.*$\"; \"\"))] | @tsv" \
-    | sort -t "$(printf '\t')" -k1,1 -k2,2nr | awk -F '\t' '!seen[$1]++'
+    | sort -t "$(printf '\t')" -k1,1 -k2,2nr | awk -F '\t' '!seen[$(1)]++'
 )
 listed=0; prev=""; missing=""
 for _ in $(seq 120); do  # 30 秒 × 120 回 = 60 分
   if all="$(latest)"; then listed=1; else listed=0; all=""; fi
-  runs="$(printf '%s\n' "$all" | awk -F '\t' -v g="^($gates)\$" 'NF && $5 !~ g')"
+  runs="$(printf '%s\n' "$all" | awk -F '\t' -v g="^($gates)\$" 'NF && $(5) !~ g')"
   missing="$(missing_workflows "$expected" "$all")"
   # 読めていて、動くはずのワークフローすべてに実行が付き、ゲート以外に未完了が 1 件も無く、
   # 一覧が前の回と同じなら抜ける。2 回続けて同じ一覧を見るのは、後から作られる実行を
   # 取りこぼさないため（awk に最後まで読ませ、終了コードで判定する。空行は数えない）。
-  if [ "$listed" = 1 ] && [ -n "$all" ] && [ -z "$missing" ] && printf '%s\n' "$all" | awk -F '\t' 'NF && $3 != "completed" { p = 1 } END { exit p }'; then
+  if [ "$listed" = 1 ] && [ -n "$all" ] && [ -z "$missing" ] && printf '%s\n' "$all" | awk -F '\t' 'NF && $(3) != "completed" { p = 1 } END { exit p }'; then
     [ "$all" = "$prev" ] && break
     prev="$all"
   else
@@ -248,7 +250,7 @@ for _ in $(seq 120); do  # 30 秒 × 120 回 = 60 分
 done
 echo "-- 実行（判定の対象）"; printf '%s\n' "$runs"
 [ -z "$missing" ] || { echo "-- 実行が付いていないワークフロー"; printf '%s\n' "$missing"; }
-echo "-- ゲートの実行（参考。成否は commit status で判定する）"; printf '%s\n' "$all" | awk -F '\t' -v g="^($gates)\$" 'NF && $5 ~ g'
+echo "-- ゲートの実行（参考。成否は commit status で判定する）"; printf '%s\n' "$all" | awk -F '\t' -v g="^($gates)\$" 'NF && $(5) ~ g'
 printf '%s\n' "$runs" | runs_verdict "$listed" "$missing"
 ```
 
@@ -268,7 +270,7 @@ printf '%s\n' "$runs" | runs_verdict "$listed" "$missing"
 ```bash
 for _ in $(seq 60); do  # 30 秒 × 60 回 = 30 分。ゲートの status が付き、pending でなくなるまで待つ
   st="$(gh api "repos/{owner}/{repo}/commits/$sha/status" --jq '.statuses[] | [.context, .state, .description] | @tsv')" || st=""
-  printf '%s\n' "$st" | awk -F '\t' -v g="^($gates)\$" '$1 ~ g { n++; if ($2 == "pending") p = 1 } END { exit (n > 0 && !p) ? 0 : 1 }' && break
+  printf '%s\n' "$st" | awk -F '\t' -v g="^($gates)\$" '$(1) ~ g { n++; if ($(2) == "pending") p = 1 } END { exit (n > 0 && !p) ? 0 : 1 }' && break
   sleep 30
 done
 printf '%s\n' "$st"
