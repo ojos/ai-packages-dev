@@ -596,6 +596,148 @@ check_unsafe_path "改行" "$base_dir/re"$'\n'"po9"
 it "(#528) パスの末尾が改行のときも、台帳に誤った登録が残らない"
 check_unsafe_path "末尾の改行" "$base_dir/repo10"$'\n'
 
+# 解放の経路は、cwd が危険なパスでも続ける（#528）。安全な cwd で登録した分を、危険な cwd の
+# PostToolUse / PostToolUseFailure / SessionEnd が解放しないと、失効するまで他のセッションを
+# 止め続ける。早期終了は登録する経路（PreToolUse）に限る。危険な cwd は repo の下の
+# サブディレクトリ（同じ台帳を使う）にする。
+check_release_from_unsafe_cwd() { # ラベル サブディレクトリ名
+  local label="$1" p="$repo/$2" bad="" id ev
+  unsafe_n=$((unsafe_n + 1))
+  mkdir -p "$p"
+  for ev in post fail end; do
+    reset_ledger
+    id="toolu_r${unsafe_n}${ev}"
+    pre_bash s-b "$repo" "git fetch && gh pr merge 5 && git checkout -b ${unsafe_n}-r" "$id"
+    [[ -f "${TMPDIR:-/tmp}/session-coord-${id}.dirs" ]] || bad="$bad | $ev: 登録の印が無い"
+    case "$ev" in
+      post) post_bash s-b "$p" "git fetch && gh pr merge 5 && git checkout -b ${unsafe_n}-r" "$id" ;;
+      fail) fail_bash s-b "$p" "git fetch && gh pr merge 5 && git checkout -b ${unsafe_n}-r" "$id" ;;
+      end) hook_raw s-b "$(pl_event SessionEnd "$p")" ;;
+    esac
+    [[ "$(ledger s-a "$repo" check merge | sed -n 1p)" == "LEDGER_OK" ]] || bad="$bad | $ev: merge の登録が残った"
+    [[ "$(ledger s-a "$repo" check git "$repo" | sed -n 1p)" == "LEDGER_OK" ]] || bad="$bad | $ev: git の登録が残った"
+    # issue は SessionEnd で解放される（成功した呼び出しでは SessionEnd まで持つ仕様）。
+    if [[ "$ev" == "end" ]]; then
+      [[ "$(ledger s-a "$repo" check issue "$unsafe_n" | sed -n 1p)" == "LEDGER_OK" ]] || bad="$bad | end: issue の登録が残った"
+    fi
+    [[ "$ev" == "end" || ! -f "${TMPDIR:-/tmp}/session-coord-${id}.dirs" ]] || bad="$bad | $ev: 印が残った"
+    rm -f "${TMPDIR:-/tmp}/session-coord-${id}.dirs" "${TMPDIR:-/tmp}/session-coord-${id}"
+  done
+  reset_ledger
+  rm -rf "$p"
+  if [[ -z "$bad" ]]; then pass; else fail "$label:$bad"; fi
+}
+it "(#528) cwd がタブを含むパスでも、PostToolUse / PostToolUseFailure / SessionEnd は登録を解放する"
+check_release_from_unsafe_cwd "タブ" "sub"$'\t'"dir"
+it "(#528) cwd の末尾がタブのパスでも、登録を解放する"
+check_release_from_unsafe_cwd "末尾のタブ" "sub"$'\t'
+it "(#528) cwd が改行を含むパスでも、登録を解放する"
+check_release_from_unsafe_cwd "改行" "sub"$'\n'"dir"
+it "(#528) cwd の末尾が改行のパスでも、登録を解放する"
+check_release_from_unsafe_cwd "末尾の改行" "sub"$'\n'
+
+it "(#528) Edit の file_path がタブを含むとき、別のパスの check doc は走らない"
+ledger s-a "$repo" claim doc "docs/a b" >/dev/null
+pre_edit s-b "$repo" "$repo/docs/a"$'\t'"b"
+assert_quiet_pass "タブを含む file_path"
+reset_ledger
+
+it "(#528) Edit の file_path の末尾が改行のとき、末尾が削られた別のパスの check doc は走らない"
+ledger s-a "$repo" claim doc docs/nl.md >/dev/null
+pre_edit s-b "$repo" "$repo/docs/nl.md"$'\n'
+assert_quiet_pass "末尾が改行の file_path"
+pre_edit s-b "$repo" "$repo/docs/nl.md"
+if [[ "$(context)" == *"kind=doc"* ]]; then pass; else fail "対照: 安全なパスの警告が出ない: $HOUT"; fi
+reset_ledger
+
+it "(#528) シンボリックリンクの先が末尾が改行のパスでも、解決した後の値を判定して登録しない"
+real_nl="$base_dir/real_nl"$'\n'
+mkdir -p "$real_nl"
+git -C "$real_nl" init -q . >/dev/null 2>&1
+ln -sfn "$real_nl" "$base_dir/lnk_nl"
+pre_bash s-b "$repo" "git -C \"$base_dir/lnk_nl\" fetch" toolu_l1
+if [[ "$HRC" -eq 0 && "$(decision)" == "none" && "$(count_claims s-b)" == "0" ]]; then pass; else fail "claims=$(count_claims s-b) out=$HOUT"; fi
+reset_ledger
+
+it "(#528) 改行を含むクォートの語より後ろの語も、コマンドの判定の対象になる（旧版は 1 行目で切れていた）"
+pre_bash s-b "$repo" 'MSG="a
+b" gh pr merge 5' toolu_m1
+if has_claim s-b merge; then pass; else fail "merge が登録されない: $HOUT"; fi
+post_bash s-b "$repo" 'MSG="a
+b" gh pr merge 5' toolu_m1
+reset_ledger
+
+# 解放の経路は、cwd が危険なパスでも続ける（#528）。安全な cwd で登録した分を、危険な cwd の
+# PostToolUse / PostToolUseFailure / SessionEnd が解放しないと、失効するまで他のセッションを
+# 止め続ける。早期終了は登録する経路（PreToolUse）に限る。危険な cwd は repo の下の
+# サブディレクトリ（同じ台帳を使う）にする。
+check_release_from_unsafe_cwd() { # ラベル サブディレクトリ名
+  local label="$1" p="$repo/$2" bad="" id ev
+  unsafe_n=$((unsafe_n + 1))
+  mkdir -p "$p"
+  for ev in post fail end; do
+    reset_ledger
+    id="toolu_r${unsafe_n}${ev}"
+    pre_bash s-b "$repo" "git fetch && gh pr merge 5 && git checkout -b ${unsafe_n}-r" "$id"
+    [[ -f "${TMPDIR:-/tmp}/session-coord-${id}.dirs" ]] || bad="$bad | $ev: 登録の印が無い"
+    case "$ev" in
+      post) post_bash s-b "$p" "git fetch && gh pr merge 5 && git checkout -b ${unsafe_n}-r" "$id" ;;
+      fail) fail_bash s-b "$p" "git fetch && gh pr merge 5 && git checkout -b ${unsafe_n}-r" "$id" ;;
+      end) hook_raw s-b "$(pl_event SessionEnd "$p")" ;;
+    esac
+    [[ "$(ledger s-a "$repo" check merge | sed -n 1p)" == "LEDGER_OK" ]] || bad="$bad | $ev: merge の登録が残った"
+    [[ "$(ledger s-a "$repo" check git "$repo" | sed -n 1p)" == "LEDGER_OK" ]] || bad="$bad | $ev: git の登録が残った"
+    # issue は SessionEnd で解放される（成功した呼び出しでは SessionEnd まで持つ仕様）。
+    if [[ "$ev" == "end" ]]; then
+      [[ "$(ledger s-a "$repo" check issue "$unsafe_n" | sed -n 1p)" == "LEDGER_OK" ]] || bad="$bad | end: issue の登録が残った"
+    fi
+    [[ "$ev" == "end" || ! -f "${TMPDIR:-/tmp}/session-coord-${id}.dirs" ]] || bad="$bad | $ev: 印が残った"
+    rm -f "${TMPDIR:-/tmp}/session-coord-${id}.dirs" "${TMPDIR:-/tmp}/session-coord-${id}"
+  done
+  reset_ledger
+  rm -rf "$p"
+  if [[ -z "$bad" ]]; then pass; else fail "$label:$bad"; fi
+}
+it "(#528) cwd がタブを含むパスでも、PostToolUse / PostToolUseFailure / SessionEnd は登録を解放する"
+check_release_from_unsafe_cwd "タブ" "sub"$'\t'"dir"
+it "(#528) cwd の末尾がタブのパスでも、登録を解放する"
+check_release_from_unsafe_cwd "末尾のタブ" "sub"$'\t'
+it "(#528) cwd が改行を含むパスでも、登録を解放する"
+check_release_from_unsafe_cwd "改行" "sub"$'\n'"dir"
+it "(#528) cwd の末尾が改行のパスでも、登録を解放する"
+check_release_from_unsafe_cwd "末尾の改行" "sub"$'\n'
+
+it "(#528) Edit の file_path がタブを含むとき、別のパスの check doc は走らない"
+ledger s-a "$repo" claim doc "docs/a b" >/dev/null
+pre_edit s-b "$repo" "$repo/docs/a"$'\t'"b"
+assert_quiet_pass "タブを含む file_path"
+reset_ledger
+
+it "(#528) Edit の file_path の末尾が改行のとき、末尾が削られた別のパスの check doc は走らない"
+ledger s-a "$repo" claim doc docs/nl.md >/dev/null
+pre_edit s-b "$repo" "$repo/docs/nl.md"$'\n'
+assert_quiet_pass "末尾が改行の file_path"
+pre_edit s-b "$repo" "$repo/docs/nl.md"
+if [[ "$(context)" == *"kind=doc"* ]]; then pass; else fail "対照: 安全なパスの警告が出ない: $HOUT"; fi
+reset_ledger
+
+it "(#528) シンボリックリンクの先が末尾が改行のパスでも、解決した後の値を判定して登録しない"
+real_nl="$base_dir/real_nl"$'\n'
+mkdir -p "$real_nl"
+git -C "$real_nl" init -q . >/dev/null 2>&1
+ln -sfn "$real_nl" "$base_dir/lnk_nl"
+pre_bash s-b "$repo" "git -C \"$base_dir/lnk_nl\" fetch" toolu_l1
+if [[ "$HRC" -eq 0 && "$(decision)" == "none" && "$(count_claims s-b)" == "0" ]]; then pass; else fail "claims=$(count_claims s-b) out=$HOUT"; fi
+reset_ledger
+
+it "(#528) 改行を含むクォートの語より後ろの語も、コマンドの判定の対象になる（旧版は 1 行目で切れていた）"
+pre_bash s-b "$repo" 'MSG="a
+b" gh pr merge 5' toolu_m1
+if has_claim s-b merge; then pass; else fail "merge が登録されない: $HOUT"; fi
+post_bash s-b "$repo" 'MSG="a
+b" gh pr merge 5' toolu_m1
+reset_ledger
+
 it "(#514) 番号だけの古い書式の印は、従来どおり失敗時に解放する"
 pre_bash s-b "$repo" 'git checkout -b feat/33-x' toolu_g5
 printf '33\n' >"${TMPDIR:-/tmp}/session-coord-toolu_g5"
@@ -1008,5 +1150,37 @@ w2="$(context)"
 if [[ "$w1" == *"kind=doc"* && "$w2" == *"session=s-a"* ]]; then pass; else fail "edit=$w1 start=$w2"; fi
 ledger s-a "$repo" release >/dev/null
 reset_ledger
+
+it "(#528) jq が無くても、タブを含むパスは台帳の対象にしない（file_path・git -C 先・cwd）"
+ledger s-a "$repo" claim doc "docs/a b" >/dev/null
+nojq_hook s-b "$(pl_edit "$repo" "$repo/docs/a"$'\t'"b")"
+assert_quiet_pass "jq なし・タブを含む file_path"
+reset_ledger
+nj_dir="$base_dir/nj"$'\t'"dir"
+mkdir -p "$nj_dir"
+git -C "$nj_dir" init -q . >/dev/null 2>&1
+nojq_hook s-b "$(pl_bash PreToolUse "$repo" "git -C \"$nj_dir\" fetch" toolu_nj1)"
+c1="$(count_claims s-b)"
+reset_ledger
+nojq_hook s-b "$(pl_bash PreToolUse "$nj_dir" 'git fetch' toolu_nj2)"
+c2="$(count_claims s-b)"
+reset_ledger
+if [[ "$c1" == "0" && "$c2" == "0" ]]; then pass; else fail "-C 先の登録=$c1 cwd の登録=$c2"; fi
+
+it "(#528) jq が無くても、タブを含むパスは台帳の対象にしない（file_path・git -C 先・cwd）"
+ledger s-a "$repo" claim doc "docs/a b" >/dev/null
+nojq_hook s-b "$(pl_edit "$repo" "$repo/docs/a"$'\t'"b")"
+assert_quiet_pass "jq なし・タブを含む file_path"
+reset_ledger
+nj_dir="$base_dir/nj"$'\t'"dir"
+mkdir -p "$nj_dir"
+git -C "$nj_dir" init -q . >/dev/null 2>&1
+nojq_hook s-b "$(pl_bash PreToolUse "$repo" "git -C \"$nj_dir\" fetch" toolu_nj1)"
+c1="$(count_claims s-b)"
+reset_ledger
+nojq_hook s-b "$(pl_bash PreToolUse "$nj_dir" 'git fetch' toolu_nj2)"
+c2="$(count_claims s-b)"
+reset_ledger
+if [[ "$c1" == "0" && "$c2" == "0" ]]; then pass; else fail "-C 先の登録=$c1 cwd の登録=$c2"; fi
 
 exit_with_result

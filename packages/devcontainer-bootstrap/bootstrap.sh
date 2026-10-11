@@ -7219,7 +7219,9 @@ TMPL
 #     7 列（識別子なし）の古い台帳ファイルも読める（識別子は - として扱う）。
 #   release の kind が * なら全部、target が * ならその種類すべてを解放する。
 #   作業ツリーか対象のパス（doc・git）がタブ・改行を含むときは、書式を壊すので書き込まず、
-#   警告を出して LEDGER_SKIP で通す（claim / release / check。終了コード 0）。
+#   警告を出して LEDGER_SKIP で通す（claim / release / check。終了コード 0。2 行目に
+#   `reason: unsafe-path` を出す）。ただし release は登録を減らす側なので、作業ツリーが危険な
+#   パスでも解放する（作業ツリーの欄には - を書く）。対象のパスが危険なときだけ SKIP にする。
 #
 # セッションの識別子と持ち主の PID:
 #   SESSION_LEDGER_ID があればそれを使う（英数字と ._- 以外は _ になる）。無ければ
@@ -7423,11 +7425,6 @@ resolve_dir() {
   LEDGER_DIR="$common/session-ledger"
 }
 
-TOPLEVEL="$(git rev-parse --show-toplevel 2>/dev/null || true)"
-[ -n "$TOPLEVEL" ] || TOPLEVEL="$(pwd)"
-# シンボリックリンクをたどった実体のパスに揃える（同じ作業ツリーが別の表記で現れても一致させる）。
-TOPLEVEL="$(cd -P "$TOPLEVEL" 2>/dev/null && pwd -P || printf '%s' "$TOPLEVEL")"
-
 # パスがタブか改行を含むか。台帳はタブ区切りの 1 行 1 件なので、含むパスは欄をずらす。
 path_is_unsafe() { # パス
   case "$1" in
@@ -7436,15 +7433,32 @@ path_is_unsafe() { # パス
   return 1
 }
 
-# 作業ツリーか対象のパスがタブ・改行を含むときは、台帳へ書かずに通す（fail-open）。
+# 作業ツリーのルート。$(...) は末尾の改行を削るので、末尾に目印（.）を付けて取り出し、
+# 目印と git が足す最後の改行 1 つだけを落とす（末尾が改行のパスを見分けるため）。
+TOPLEVEL="$(git rev-parse --show-toplevel 2>/dev/null; printf .)"
+TOPLEVEL="${TOPLEVEL%.}"
+TOPLEVEL="${TOPLEVEL%$'\n'}"
+[ -n "$TOPLEVEL" ] || TOPLEVEL="$PWD"
+WT_UNSAFE=0
+! path_is_unsafe "$PWD" || WT_UNSAFE=1
+! path_is_unsafe "$TOPLEVEL" || WT_UNSAFE=1
+# シンボリックリンクをたどった実体のパスに揃える（同じ作業ツリーが別の表記で現れても一致させる）。
+# 実体のパスも、末尾の改行を保って取り出して判定する。
+_real="$(cd -P "$TOPLEVEL" 2>/dev/null && pwd -P; printf .)"
+_real="${_real%.}"
+_real="${_real%$'\n'}"
+[ -z "$_real" ] || TOPLEVEL="$_real"
+unset _real
+! path_is_unsafe "$TOPLEVEL" || WT_UNSAFE=1
+# 台帳へ書く作業ツリーの欄。危険な値は書式を壊すので、安全な値（-）にする。
+WT_FIELD="$TOPLEVEL"
+[ "$WT_UNSAFE" -eq 0 ] || WT_FIELD="-"
+
+# 対象のパス（doc・git）がタブ・改行を含むときは、台帳へ書かずに通す（fail-open）。
 # 判定は正規化の前の値で行う（normalize_target と $(...) は末尾の改行を削る）。
-# 作業ツリーは $PWD（生の値）と TOPLEVEL の両方を見る。対象のパスを持つ種類は doc と git。
-# 戻り値 0 = 台帳の対象にできない（警告を出した）。
-skip_unsafe_path() { # kind target
-  if path_is_unsafe "$PWD" || path_is_unsafe "$TOPLEVEL"; then
-    warn "作業ツリーのパスがタブか改行を含みます。台帳の対象にせず通します。"
-    return 0
-  fi
+# 戻り値 0 = 台帳の対象にできない（警告を出した）。解放（release）は登録を減らす側なので、
+# 対象のパスだけを見る（作業ツリーが危険でも解放できる）。
+skip_unsafe_target() { # kind target
   case "$1" in
     doc | git)
       if path_is_unsafe "$2"; then
@@ -7454,6 +7468,22 @@ skip_unsafe_path() { # kind target
       ;;
   esac
   return 1
+}
+
+# claim / check 用。作業ツリーのパスも見る。
+skip_unsafe_path() { # kind target
+  if [ "$WT_UNSAFE" -eq 1 ]; then
+    warn "作業ツリーのパスがタブか改行を含みます。台帳の対象にせず通します。"
+    return 0
+  fi
+  skip_unsafe_target "$1" "$2"
+}
+
+# 危険なパスで書かずに通すときの出力。2 行目の理由の印で、フックは台帳が読めなかった
+# 場合の汎用の警告を重ねない。
+echo_skip_unsafe() {
+  echo "LEDGER_SKIP"
+  echo "reason: unsafe-path"
 }
 
 # 台帳の置き場所を使える状態にする。失敗したら呼び出し側が警告して通す。
@@ -7691,7 +7721,7 @@ set_call_id() { # 値
 }
 
 append_record() { # op kind target
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$(date +%s)" "$1" "$2" "$3" "$SELF_PID" "$TOPLEVEL" "$SELF_KEY" "$CALL_ID" \
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$(date +%s)" "$1" "$2" "$3" "$SELF_PID" "$WT_FIELD" "$SELF_KEY" "$CALL_ID" \
     >>"$LEDGER_DIR/$SELF_ID.tsv" 2>/dev/null
 }
 
@@ -7701,7 +7731,7 @@ cmd_check() {
   local kind="${1:-}" target
   valid_kind "$kind" || { usage; return 2; }
   if skip_unsafe_path "$kind" "${2:-}"; then
-    echo "LEDGER_SKIP"
+    echo_skip_unsafe
     return 0
   fi
   target="$(normalize_target "$kind" "${2:-}")"
@@ -7726,7 +7756,7 @@ cmd_claim() {
   kind="${1:-}"
   valid_kind "$kind" || { usage; return 2; }
   if skip_unsafe_path "$kind" "${2:-}"; then
-    echo "LEDGER_SKIP"
+    echo_skip_unsafe
     return 0
   fi
   target="$(normalize_target "$kind" "${2:-}")"
@@ -7767,8 +7797,8 @@ cmd_release() {
   if [ "$kind" != "*" ]; then
     valid_kind "$kind" || { usage; return 2; }
   fi
-  if skip_unsafe_path "$kind" "$target"; then
-    echo "LEDGER_SKIP"
+  if skip_unsafe_target "$kind" "$target"; then
+    echo_skip_unsafe
     return 0
   fi
   if [ "$kind" != "*" ]; then
@@ -7795,7 +7825,6 @@ cmd_release() {
 cmd_refresh() {
   local rows min
   owner_unknown && return 0
-  skip_unsafe_path "" "" && return 0
   min="${SESSION_LEDGER_REFRESH_MIN:-300}"
   case "$min" in '' | *[!0-9]*) min=300 ;; esac
   ensure_dir || return 0
@@ -7941,7 +7970,8 @@ TMPL
 #
 # タブか改行を含むパス（フックの作業ディレクトリ・cd 先・git -C 先・作るブランチの控え）は、
 # 台帳・印の書式（タブ区切り・改行区切り）を壊すので、解決する前の値で判定して台帳の対象に
-# せず、警告して通す。フックの作業ディレクトリが該当するときは何も登録しない。
+# せず、警告して通す。フックの作業ディレクトリが該当するときは、登録する経路（PreToolUse）で
+# 何も登録しない。解放の経路（PostToolUse など）は、安全な作業ディレクトリで登録した分を解放し続ける。
 #
 # 台帳そのものの読み書きに失敗したとき（台帳が見つからない・置き場所を作れない・出力が読めない）
 # は、警告（systemMessage）を出して通す。台帳の不具合で、すべての操作を止めない。
@@ -7973,6 +8003,7 @@ add_warn() {
   WARNS="${WARNS:+$WARNS$'\n'}$1"
 }
 
+UNSAFE_WARN="[session-coord] タブか改行を含むパスは、台帳の対象にしません。そのパスの登録は行わず通します。"
 # パスがタブか改行を含むか（台帳・印・登録の対象一覧は、タブ区切り・改行区切りなので、
 # 含むパスは 1 つの値として持てない。入口でこれに当たるパスは台帳の対象にせず、警告して通す）。
 # 判定は、解決する前の値に対して行う。$(...) は末尾の改行を削るため、解決した後では、
@@ -7989,22 +8020,37 @@ path_is_unsafe() { # パス
 HAVE_JQ=0
 command -v jq >/dev/null 2>&1 && HAVE_JQ=1
 
+# json_get は値を標準出力へ出すが、$(...) で受けると末尾の改行が削られる。パスの判定には、
+# 呼び出しを部分シェルにせず、JSON_VAL（末尾の改行を保った値）を読む。
+JSON_VAL=""
 json_get() { # key（payload の中の文字列値。入れ子は区別しない）
   local key="$1" v
   if [[ "$HAVE_JQ" -eq 1 ]]; then
     case "$key" in
-      command | file_path | notebook_path) v="$(printf '%s' "$payload" | jq -r ".tool_input.$key // empty" 2>/dev/null)" ;;
-      *) v="$(printf '%s' "$payload" | jq -r ".$key // empty" 2>/dev/null)" ;;
+      command | file_path | notebook_path) v="$(printf '%s' "$payload" | jq -r ".tool_input.$key // empty" 2>/dev/null; printf .)" ;;
+      *) v="$(printf '%s' "$payload" | jq -r ".$key // empty" 2>/dev/null; printf .)" ;;
     esac
+    # $(...) は末尾の改行を削る。末尾に目印（.）を付けて取り出し、目印と jq が足す最後の
+    # 改行 1 つだけを落とす（末尾が改行のパスを、値のまま判定するため）。
+    v="${v%.}"
+    v="${v%$'\n'}"
+    JSON_VAL="$v"
     printf '%s' "$v"
     return 0
   fi
-  v="$(printf '%s\n' "$payload" | sed -nE "s/.*\"$key\"[[:space:]]*:[[:space:]]*\"(([^\"\\\\]|\\\\.)*)\".*/\\1/p" | sed -n 1p)"
+  v="$(printf '%s\n' "$payload" | sed -nE "s/.*\"$key\"[[:space:]]*:[[:space:]]*\"(([^\"\\\\]|\\\\.)*)\".*/\\1/p" | sed -n 1p; printf .)"
+  v="${v%.}"
+  v="${v%$'\n'}"
   v="${v//\\\\/$'\x01'}"
   v="${v//\\\"/\"}"
   v="${v//\\n/$'\n'}"
-  v="${v//\\t/ }"
+  v="${v//\\u000a/$'\n'}"
+  v="${v//\\u000A/$'\n'}"
+  # タブは空白にせず、値のまま持つ（パスのタブを判定できるように）。
+  v="${v//\\t/$'\t'}"
+  v="${v//\\u0009/$'\t'}"
   v="${v//$'\x01'/\\}"
+  JSON_VAL="$v"
   printf '%s' "$v"
 }
 
@@ -8099,7 +8145,8 @@ run_ledger() {
   if [[ "$LEDGER_OUT" == *$'\n'* ]]; then
     LEDGER_DETAIL="${LEDGER_OUT#*$'\n'}"
   fi
-  if [[ "$LEDGER_VERDICT" == "LEDGER_SKIP" ]]; then
+  # 台帳が危険なパスを理由に通したとき（reason: unsafe-path）は、台帳自身の警告で足りる。
+  if [[ "$LEDGER_VERDICT" == "LEDGER_SKIP" && "$LEDGER_DETAIL" != "reason: unsafe-path"* ]]; then
     add_warn "[session-coord] 台帳を読み書きできませんでした。台帳を確かめずに通します。"
   fi
   return 0
@@ -8190,27 +8237,34 @@ HIT_GIT_DIRS=""   # 改行区切り。作業ツリーのパス
 HIT_ISSUES=""     # 空白区切り。issue 番号
 HIT_BRANCHES=""   # 改行区切り。「番号 TAB リポジトリのディレクトリ TAB ブランチ名」（ブランチの作成から読んだ issue）
 
+# 結果は TOP_RESULT へ入れる（$(...) で返すと、末尾の改行が削られるため）。取り出すときも
+# 末尾に目印（.）を付け、目印と git が足す最後の改行 1 つだけを落とす。
 toplevel_of() { # 基準ディレクトリ 相対ディレクトリ
   local base="$1" rel="$2" top=""
-  top="$( (cd "$base" 2>/dev/null && { [[ -z "$rel" ]] || cd "$rel" 2>/dev/null; } && git rev-parse --show-toplevel 2>/dev/null) || true)"
+  top="$( (cd "$base" 2>/dev/null && { [[ -z "$rel" ]] || cd "$rel" 2>/dev/null; } && git rev-parse --show-toplevel 2>/dev/null) || true; printf .)"
+  top="${top%.}"
+  top="${top%$'\n'}"
   [[ -n "$top" ]] || top="$base"
-  printf '%s' "$top"
+  TOP_RESULT="$top"
 }
 
 # 基準ディレクトリと相対ディレクトリから作業ツリーのルートを求めて TOP_RESULT へ入れる。
 # どちらかがタブ・改行を含むとき（解決する前の値で判定する）は、警告を足して 1 を返し、
 # TOP_RESULT を空にする。呼び出し側は、その作業ツリーを登録の対象にしない。
-# 結果を $(...) で返さないのは、警告（WARNS）が部分シェルで失われるため。
+# 結果を $(...) で返さないのは、警告（WARNS）が部分シェルで失われ、末尾の改行も削られるため。
+# 解決した後の値（シンボリックリンクの先など）も判定する。
 TOP_RESULT=""
 resolve_top() { # 基準ディレクトリ 相対ディレクトリ
+  local bad=0
   TOP_RESULT=""
   if path_is_unsafe "$1" || path_is_unsafe "$2"; then
-    add_warn "[session-coord] タブか改行を含むパスは、台帳の対象にしません。そのパスの登録は行わず通します。"
-    return 1
+    bad=1
+  else
+    toplevel_of "$1" "$2"
+    ! path_is_unsafe "$TOP_RESULT" || bad=1
   fi
-  TOP_RESULT="$(toplevel_of "$1" "$2")"
-  if path_is_unsafe "$TOP_RESULT"; then
-    add_warn "[session-coord] タブか改行を含むパスは、台帳の対象にしません。そのパスの登録は行わず通します。"
+  if [[ $bad -eq 1 ]]; then
+    add_warn "$UNSAFE_WARN"
     TOP_RESULT=""
     return 1
   fi
@@ -8245,7 +8299,7 @@ issue_from_branch() { # ブランチ名 ブランチを作るリポジトリの�
     # 壊れていないここで見分けるのは、区切ったあとに読み取りの振る舞いから逆算すると、末尾の
     # タブ（連続するタブは 1 つの区切りとして読まれる）などで見分けられないため。
     ! path_is_unsafe "$2$b" || return 0
-    [[ -n "$2" && -n "$b" ]] || return 0
+    [[ -n "$2" ]] || return 0
     HIT_BRANCHES="${HIT_BRANCHES:+$HIT_BRANCHES$'\n'}$n"$'\t'"$2"$'\t'"$b"
   fi
 }
@@ -8361,9 +8415,16 @@ classify_git() { # k（git の位置）
 CUR_DIR=""
 
 classify_clause() {
-  local clause="$1" k=0 n w base
-  # -d '' で改行を区切りにせず、語に含まれる改行を保つ（here-string だと 1 行目で切れる）。
-  IFS="$US" read -r -d '' -a W < <(printf '%s' "$clause") || true
+  local clause="$1" k=0 n w base oifs
+  # 語に含まれる改行を保つため、read -a（1 行目で切れる）ではなく IFS で分割する。fork しない。
+  # 語の * などを展開しないよう、pathname 展開は止める。
+  oifs="$IFS"
+  set -f
+  IFS="$US"
+  # shellcheck disable=SC2206  # 意図した分割（IFS=US・展開は止めてある）
+  W=($clause)
+  IFS="$oifs"
+  set +f
   n=${#W[@]}
   while [[ $k -lt $n ]]; do
     w="${W[$k]}"
@@ -8660,8 +8721,8 @@ pre_edit() {
   path="$fpath"
   [[ -n "$path" ]] || return 0
   dir="$(dirname "$path")"
-  if path_is_unsafe "$path" || path_is_unsafe "$dir"; then
-    add_warn "[session-coord] タブか改行を含むパスは、台帳の対象にしません。文書の確認をせず通します。"
+  if path_is_unsafe "$path"; then
+    add_warn "$UNSAFE_WARN"
     return 0
   fi
   refresh_ledger "$dir"
@@ -8683,31 +8744,24 @@ fi
 event="$(json_get hook_event_name)"
 tool="$(json_get tool_name)"
 cmd="$(json_get command)"
-fpath="$(json_get file_path)"
-[[ -n "$fpath" ]] || fpath="$(json_get notebook_path)"
-cwd="$(json_get cwd)"
+json_get file_path >/dev/null
+fpath="$JSON_VAL"
+if [[ -z "$fpath" ]]; then
+  json_get notebook_path >/dev/null
+  fpath="$JSON_VAL"
+fi
+json_get cwd >/dev/null
+cwd="$JSON_VAL"
 tuid="$(json_get tool_use_id)"
-# フックの作業ディレクトリがタブ・改行を含むときは、何も登録せずに通す。json_get は $(...) で
-# 末尾の改行を削るため、値ではなくペイロードの生の文字列で見分ける。
-cwd_is_unsafe() {
-  local raw
-  if [[ "$HAVE_JQ" -eq 1 ]]; then
-    printf '%s' "$payload" | jq -e '(.cwd // "") | test("[\t\n]")' >/dev/null 2>&1
-    return $?
-  fi
-  raw="$(printf '%s\n' "$payload" | sed -nE 's/.*"cwd"[[:space:]]*:[[:space:]]*"(([^"\\]|\\.)*)".*/\1/p' | sed -n 1p)"
-  raw="${raw//\\\\/}"
-  case "$raw" in
-    *'\n'* | *'\t'* | *'\u000a'* | *'\u0009'* | *'\u000A'*) return 0 ;;
-  esac
-  return 1
-}
+# フックの作業ディレクトリがタブ・改行を含むときは、登録する経路（PreToolUse）では何も登録せずに
+# 通す。解放の経路（PostToolUse など）は、安全なディレクトリで登録した分を解放し続けるため止めない。
+# json_get は末尾の改行を保つので、値のまま判定できる。
 CWD_UNSAFE=0
-if cwd_is_unsafe || path_is_unsafe "$cwd"; then CWD_UNSAFE=1; fi
+! path_is_unsafe "$cwd" || CWD_UNSAFE=1
 if [[ -z "$cwd" || ! -d "$cwd" ]]; then cwd="$(pwd)"; fi
 
-if [[ "$CWD_UNSAFE" -eq 1 ]]; then
-  add_warn "[session-coord] 作業ディレクトリがタブか改行を含むため、台帳の対象にしません。何も登録せず通します。"
+if [[ "$CWD_UNSAFE" -eq 1 && "$event" == "PreToolUse" ]]; then
+  add_warn "$UNSAFE_WARN"
   emit "" "" "" "" "$WARNS"
   exit 0
 fi

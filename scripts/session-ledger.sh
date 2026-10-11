@@ -40,7 +40,9 @@
 #     7 列（識別子なし）の古い台帳ファイルも読める（識別子は - として扱う）。
 #   release の kind が * なら全部、target が * ならその種類すべてを解放する。
 #   作業ツリーか対象のパス（doc・git）がタブ・改行を含むときは、書式を壊すので書き込まず、
-#   警告を出して LEDGER_SKIP で通す（claim / release / check。終了コード 0）。
+#   警告を出して LEDGER_SKIP で通す（claim / release / check。終了コード 0。2 行目に
+#   `reason: unsafe-path` を出す）。ただし release は登録を減らす側なので、作業ツリーが危険な
+#   パスでも解放する（作業ツリーの欄には - を書く）。対象のパスが危険なときだけ SKIP にする。
 #
 # セッションの識別子と持ち主の PID:
 #   SESSION_LEDGER_ID があればそれを使う（英数字と ._- 以外は _ になる）。無ければ
@@ -244,11 +246,6 @@ resolve_dir() {
   LEDGER_DIR="$common/session-ledger"
 }
 
-TOPLEVEL="$(git rev-parse --show-toplevel 2>/dev/null || true)"
-[ -n "$TOPLEVEL" ] || TOPLEVEL="$(pwd)"
-# シンボリックリンクをたどった実体のパスに揃える（同じ作業ツリーが別の表記で現れても一致させる）。
-TOPLEVEL="$(cd -P "$TOPLEVEL" 2>/dev/null && pwd -P || printf '%s' "$TOPLEVEL")"
-
 # パスがタブか改行を含むか。台帳はタブ区切りの 1 行 1 件なので、含むパスは欄をずらす。
 path_is_unsafe() { # パス
   case "$1" in
@@ -257,15 +254,32 @@ path_is_unsafe() { # パス
   return 1
 }
 
-# 作業ツリーか対象のパスがタブ・改行を含むときは、台帳へ書かずに通す（fail-open）。
+# 作業ツリーのルート。$(...) は末尾の改行を削るので、末尾に目印（.）を付けて取り出し、
+# 目印と git が足す最後の改行 1 つだけを落とす（末尾が改行のパスを見分けるため）。
+TOPLEVEL="$(git rev-parse --show-toplevel 2>/dev/null; printf .)"
+TOPLEVEL="${TOPLEVEL%.}"
+TOPLEVEL="${TOPLEVEL%$'\n'}"
+[ -n "$TOPLEVEL" ] || TOPLEVEL="$PWD"
+WT_UNSAFE=0
+! path_is_unsafe "$PWD" || WT_UNSAFE=1
+! path_is_unsafe "$TOPLEVEL" || WT_UNSAFE=1
+# シンボリックリンクをたどった実体のパスに揃える（同じ作業ツリーが別の表記で現れても一致させる）。
+# 実体のパスも、末尾の改行を保って取り出して判定する。
+_real="$(cd -P "$TOPLEVEL" 2>/dev/null && pwd -P; printf .)"
+_real="${_real%.}"
+_real="${_real%$'\n'}"
+[ -z "$_real" ] || TOPLEVEL="$_real"
+unset _real
+! path_is_unsafe "$TOPLEVEL" || WT_UNSAFE=1
+# 台帳へ書く作業ツリーの欄。危険な値は書式を壊すので、安全な値（-）にする。
+WT_FIELD="$TOPLEVEL"
+[ "$WT_UNSAFE" -eq 0 ] || WT_FIELD="-"
+
+# 対象のパス（doc・git）がタブ・改行を含むときは、台帳へ書かずに通す（fail-open）。
 # 判定は正規化の前の値で行う（normalize_target と $(...) は末尾の改行を削る）。
-# 作業ツリーは $PWD（生の値）と TOPLEVEL の両方を見る。対象のパスを持つ種類は doc と git。
-# 戻り値 0 = 台帳の対象にできない（警告を出した）。
-skip_unsafe_path() { # kind target
-  if path_is_unsafe "$PWD" || path_is_unsafe "$TOPLEVEL"; then
-    warn "作業ツリーのパスがタブか改行を含みます。台帳の対象にせず通します。"
-    return 0
-  fi
+# 戻り値 0 = 台帳の対象にできない（警告を出した）。解放（release）は登録を減らす側なので、
+# 対象のパスだけを見る（作業ツリーが危険でも解放できる）。
+skip_unsafe_target() { # kind target
   case "$1" in
     doc | git)
       if path_is_unsafe "$2"; then
@@ -275,6 +289,22 @@ skip_unsafe_path() { # kind target
       ;;
   esac
   return 1
+}
+
+# claim / check 用。作業ツリーのパスも見る。
+skip_unsafe_path() { # kind target
+  if [ "$WT_UNSAFE" -eq 1 ]; then
+    warn "作業ツリーのパスがタブか改行を含みます。台帳の対象にせず通します。"
+    return 0
+  fi
+  skip_unsafe_target "$1" "$2"
+}
+
+# 危険なパスで書かずに通すときの出力。2 行目の理由の印で、フックは台帳が読めなかった
+# 場合の汎用の警告を重ねない。
+echo_skip_unsafe() {
+  echo "LEDGER_SKIP"
+  echo "reason: unsafe-path"
 }
 
 # 台帳の置き場所を使える状態にする。失敗したら呼び出し側が警告して通す。
@@ -512,7 +542,7 @@ set_call_id() { # 値
 }
 
 append_record() { # op kind target
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$(date +%s)" "$1" "$2" "$3" "$SELF_PID" "$TOPLEVEL" "$SELF_KEY" "$CALL_ID" \
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$(date +%s)" "$1" "$2" "$3" "$SELF_PID" "$WT_FIELD" "$SELF_KEY" "$CALL_ID" \
     >>"$LEDGER_DIR/$SELF_ID.tsv" 2>/dev/null
 }
 
@@ -522,7 +552,7 @@ cmd_check() {
   local kind="${1:-}" target
   valid_kind "$kind" || { usage; return 2; }
   if skip_unsafe_path "$kind" "${2:-}"; then
-    echo "LEDGER_SKIP"
+    echo_skip_unsafe
     return 0
   fi
   target="$(normalize_target "$kind" "${2:-}")"
@@ -547,7 +577,7 @@ cmd_claim() {
   kind="${1:-}"
   valid_kind "$kind" || { usage; return 2; }
   if skip_unsafe_path "$kind" "${2:-}"; then
-    echo "LEDGER_SKIP"
+    echo_skip_unsafe
     return 0
   fi
   target="$(normalize_target "$kind" "${2:-}")"
@@ -588,8 +618,8 @@ cmd_release() {
   if [ "$kind" != "*" ]; then
     valid_kind "$kind" || { usage; return 2; }
   fi
-  if skip_unsafe_path "$kind" "$target"; then
-    echo "LEDGER_SKIP"
+  if skip_unsafe_target "$kind" "$target"; then
+    echo_skip_unsafe
     return 0
   fi
   if [ "$kind" != "*" ]; then
@@ -616,7 +646,6 @@ cmd_release() {
 cmd_refresh() {
   local rows min
   owner_unknown && return 0
-  skip_unsafe_path "" "" && return 0
   min="${SESSION_LEDGER_REFRESH_MIN:-300}"
   case "$min" in '' | *[!0-9]*) min=300 ;; esac
   ensure_dir || return 0

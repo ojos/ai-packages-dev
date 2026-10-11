@@ -718,7 +718,13 @@ assert_eq "$(first_line)" "LEDGER_DENY" "判定"
 # claim / release / check に渡された作業ツリー・対象のパスがこれに当たるときは、書き込まずに
 # LEDGER_SKIP で通す（警告を出し、終了コード 0）。末尾がタブ・改行のパスは、$(...) や読み取りで
 # 末尾が削られてから判定すると見分けられないため、別々に確かめる。
-# （run は標準エラーを先に含めるので、LEDGER_SKIP は出力の最後の行で見る）
+# （run は標準エラーも含めるので、LEDGER_SKIP は行として探す。2 行目に理由の印が付く）
+ledger_skipped() {
+  case $'\n'"$OUT"$'\n' in
+    *$'\nLEDGER_SKIP\nreason: unsafe-path\n'*) return 0 ;;
+  esac
+  return 1
+}
 check_unsafe_ledger() { # ラベル パス
   local label="$1" p="$2" bad="" sub k
   rm -rf "$DIR"
@@ -728,15 +734,15 @@ check_unsafe_ledger() { # ラベル パス
   for sub in "claim git" "claim doc" "check git" "check doc" "release git" "release doc"; do
     # shellcheck disable=SC2086
     run s-a "$repo" $sub "$p"
-    [[ "$OUT" == *$'\n'LEDGER_SKIP || "$OUT" == LEDGER_SKIP ]] && [[ "$RC" -eq 0 ]] || bad="$bad | $sub の判定: rc=$RC out=$OUT"
+    ledger_skipped && [[ "$RC" -eq 0 ]] || bad="$bad | $sub の判定: rc=$RC out=$OUT"
     case "$OUT" in *WARN*) ;; *) bad="$bad | $sub の警告が無い" ;; esac
   done
   [[ ! -e "$DIR/s-a.tsv" ]] || bad="$bad | 対象のパスで台帳に書き込まれた"
   # 作業ツリーのパス（その作業ツリーの中から呼ぶ）
-  for k in "claim git" "claim merge" "check merge" "release merge"; do
+  for k in "claim git" "claim merge" "check merge"; do
     # shellcheck disable=SC2086
     run s-a "$p" $k
-    [[ "$OUT" == *$'\n'LEDGER_SKIP || "$OUT" == LEDGER_SKIP ]] && [[ "$RC" -eq 0 ]] || bad="$bad | 作業ツリーで $k の判定: rc=$RC out=$OUT"
+    ledger_skipped && [[ "$RC" -eq 0 ]] || bad="$bad | 作業ツリーで $k の判定: rc=$RC out=$OUT"
   done
   [[ ! -e "$DIR/s-a.tsv" && ! -e "$p/.git/session-ledger/s-a.tsv" ]] || bad="$bad | 作業ツリーのパスで台帳に書き込まれた"
   # 対照: 安全なパスは従来どおり登録できる
@@ -746,7 +752,38 @@ check_unsafe_ledger() { # ラベル パス
   if [[ -z "$bad" ]]; then pass; else fail "$label:$bad"; fi
 }
 
+# release は登録を減らす側なので、作業ツリーが危険なパスでも自分の登録を解放する。
+# 作業ツリーの欄には危険な値を書かず、- を書く。
+check_release_from_unsafe_dir() { # ラベル サブディレクトリ名
+  local label="$1" p="$repo/$2" bad="" k
+  rm -rf "$DIR"
+  mkdir -p "$p"
+  for k in issue merge gate; do
+    if [[ "$k" == "issue" ]]; then run s-a "$repo" claim issue 77; else run s-a "$repo" claim "$k"; fi
+  done
+  run s-b "$repo" check issue 77
+  [[ "$(first_line)" == "LEDGER_WARN" ]] || bad="$bad | 前提の登録が見えない: $OUT"
+  run s-a "$p" release
+  [[ "$RC" -eq 0 ]] || bad="$bad | release の終了コード: $RC"
+  for k in "issue 77" "merge" "gate"; do
+    # shellcheck disable=SC2086
+    run s-b "$repo" check $k
+    [[ "$(first_line)" == "LEDGER_OK" ]] || bad="$bad | $k が解放されない: $OUT"
+  done
+  if [[ -f "$DIR/s-a.tsv" ]] && awk -F'\t' '$2 == "release" && NF == 8 && $6 == "-" { f = 1 } END { exit !f }' "$DIR/s-a.tsv"; then :; else bad="$bad | 解放の行の作業ツリーの欄が - でない"; fi
+  rm -rf "$DIR" "$p"
+  if [[ -z "$bad" ]]; then pass; else fail "$label:$bad"; fi
+}
+
 ubase="$(dirname "$repo")"
+it "(#528) 危険なパス（タブ）の作業ツリーからでも、release は自分の登録を解放する"
+check_release_from_unsafe_dir "タブ" "sub"$'\t'"dir"
+it "(#528) 危険なパス（末尾のタブ）の作業ツリーからでも、release は解放する"
+check_release_from_unsafe_dir "末尾のタブ" "sub"$'\t'
+it "(#528) 危険なパス（改行）の作業ツリーからでも、release は解放する"
+check_release_from_unsafe_dir "改行" "sub"$'\n'"dir"
+it "(#528) 危険なパス（末尾の改行）の作業ツリーからでも、release は解放する"
+check_release_from_unsafe_dir "末尾の改行" "sub"$'\n'
 it "(#528) パスにタブを含むとき、台帳へ書き込まずに LEDGER_SKIP で通す"
 check_unsafe_ledger "タブ" "$ubase/re"$'\t'"po"
 it "(#528) パスの末尾がタブのときも、台帳へ書き込まずに通す"
