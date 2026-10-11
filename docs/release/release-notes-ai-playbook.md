@@ -6,10 +6,10 @@
 >
 > 同じ理由で、issue 参照は `ojos/ai-packages-dev#NNN` の形で書いてください。裸の `#NNN` は GitHub のオートリンクが**配布先リポジトリの issue** として解決するため、配布後は存在しない issue や無関係な issue を指します。
 
-## Unreleased
+## v0.9.1
 
 ### Summary
-- **`/land` スキルの雛形（`templates/claude-skill-land.md`）の「CI の完了を待つ」が、遅れて作られる実行を見落とさないようにした**（ojos/ai-packages-dev#513。取り込み元: ojos/career-log の修正）。従来は「30 秒あけて 2 回同じ一覧なら抜ける」だけだったため、先に作られた実行（例: identity-guard）が完了したあとに、別のワークフロー（例: 受け入れ検証）の実行の作成が 30 秒を超えて遅れると、それを見ないまま `RUNS_GREEN` になった。動くはずのワークフローを求め、そのすべてに実行が付くまで抜けない。
+- **`/land` スキルの雛形（`templates/claude-skill-land.md`）の「CI の完了を待つ」が、遅れて作られる実行を見落とさないようにした**（ojos/ai-packages-dev#513。利用側のプロジェクトからの報告による）。従来は「30 秒あけて 2 回同じ一覧なら抜ける」だけだったため、先に作られた実行（例: identity-guard）が完了したあとに、別のワークフロー（例: 受け入れ検証）の実行の作成が 30 秒を超えて遅れると、それを見ないまま `RUNS_GREEN` になった。動くはずのワークフローを求め、そのすべてに実行が付くまで抜けない。
   - **方針は「確実に動くと言えるワークフローだけを数え、迷うものは数えない」。** 数えなかったワークフローは、従来どおり「実行が付いていれば判定に入る」扱いなので、最悪でも従来の動きに戻るだけ。動かないものを数えると、実行が付かないまま 60 分待って `RUNS_MISSING` で止まるため、そちらには倒さない。
   - **PR の head と base の両方で「動く」と判定したものだけを数える。** GitHub は PR の実行を、head と base を合わせたマージ用の参照から作るため。その PR で新しく足したワークフローは数えない。
   - **数えないもの:** `pull_request` の下に `types` 以外の子があるもの（`paths`・`paths-ignore`・`branches`・`branches-ignore` など）、`types` に `opened`・`synchronize`・`reopened` の 3 つが揃っていないもの、`pull_request` 以外の契機（`pull_request_target`・`workflow_run` など）、Actions で無効にしてあるもの（`actions/workflows` の `state`）。
@@ -18,10 +18,10 @@
   - 実行の `path` が空（null）の実行がある回は、「実行が付いていない」の判定をしない（照合できないため、その回は従来の動きに戻す）。
   - PR の head と base の取得は、リモート名（`origin`）を決め打ちせず、PR 自身の URL から取得元を求める。base は `baseRefOid` を SHA で取る。
   - パイプの後ろに `grep -q` を置かない。判定に使う関数は目印（`# >>> land:...`）で囲み、テストが雛形から取り出して実行する。
-- 追加のみで後方互換。雛形の種類は 17 種のまま。
+- 判定の出力が増え、動くはずのワークフローに実行が付くまで待つため、従来なら `RUNS_GREEN` で通った PR でも、待ちが延びたり（最大 60 分）、`RUNS_MISSING` / `EXPECTED_UNKNOWN` で止まったりすることがある。出力を読んで分岐している箇所は追随が要る（下の移行）。雛形の種類は 17 種のまま。
 
 ### 移行
-- 雛形から写した `.claude/skills/land/SKILL.md` に手を入れていなければ、規範の更新で置き換わる（DCB で規範を配置している場合は `bootstrap.sh --upgrade --playbook-version <この版>`）。手を入れている場合は、2「CI の完了を待つ」（`# >>> land:...` の目印で囲んだ関数を含む）を取り込み直す。
+- 雛形から写した `.claude/skills/land/SKILL.md` に手を入れていなければ、規範の更新で置き換わる（DCB で規範を配置している場合は `bootstrap.sh --upgrade --playbook-version v0.9.1`）。手を入れている場合は、2「CI の完了を待つ」（`# >>> land:...` の目印で囲んだ関数を含む）を取り込み直す。
 - 判定の出力に `RUNS_MISSING` と `EXPECTED_UNKNOWN` が増えた。出力を読んで分岐している箇所があれば追随させる。
 - 待ちには、Actions の読み取り権限で `actions/workflows`（無効にしたワークフローの判定）を読む。fine-grained PAT なら Actions: Read があれば足りる（既存の `actions/runs` と同じ権限）。
 
