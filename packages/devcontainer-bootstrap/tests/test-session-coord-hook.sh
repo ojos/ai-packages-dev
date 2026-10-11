@@ -724,7 +724,7 @@ check_pathless_in_unsafe_cwd "末尾の改行" "sub"$'\n'
 # 登録した台帳へ行う。印には、登録した cwd を符号化して控える（#528）。登録した台帳を失うと、
 # merge の登録が失効まで残り、他のセッションの merge を拒否し続ける。
 check_cd_away_release() { # ラベル 危険なサブディレクトリ名
-  local label="$1" p="$repo/$2" bad="" id other="$base_dir/other_${unsafe_n}_$$" rows cmd
+  local label="$1" p="$repo/$2" bad="" id other rows cmd
   unsafe_n=$((unsafe_n + 1))
   other="$base_dir/other_${unsafe_n}"
   mkdir -p "$p" "$other"
@@ -748,11 +748,11 @@ check_cd_away_release() { # ラベル 危険なサブディレクトリ名
   rows="$(grep -c "$(printf '\trelease\t')" "$DIR/s-b.tsv" 2>/dev/null)"
   [[ "$rows" == "1" ]] || bad="$bad | 同じ cwd での解放の行が $rows 件（1 件のはず）"
   reset_ledger
-  # cwd 自身が危険な作業ツリー（印に控えるパスが危険）でも、解放の行き先を失わない
+  # cd しない呼び出しで、PostToolUse の cwd だけが別のリポジトリになっても、解放の行き先を失わない
   id="toolu_c${unsafe_n}c"
   pre_bash s-b "$p" 'gh pr merge 5' "$id"
   post_bash s-b "$other" 'gh pr merge 5' "$id"
-  [[ "$(ledger s-a "$repo" check merge | sed -n 1p)" == "LEDGER_OK" ]] || bad="$bad | gate/merge の解放先を失った"
+  [[ "$(ledger s-a "$repo" check merge | sed -n 1p)" == "LEDGER_OK" ]] || bad="$bad | merge の解放先を失った"
   reset_ledger
   rm -rf "$p" "$other"
   if [[ -z "$bad" ]]; then pass; else fail "$label:$bad"; fi
