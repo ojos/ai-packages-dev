@@ -9,14 +9,16 @@
 
 | パッケージ | リポジトリ | 現行バージョン | 配布形態 |
 |---|---|---|---|
-| devcontainer-bootstrap | `ojos/devcontainer-bootstrap` | v0.19.0 | GitHub Release + 資産 5 点（配布スクリプト 2: `bootstrap.sh` / `doctor.sh`、生成物 3: `SHA256SUMS` / `RELEASE-MANIFEST.json` / `PACKAGE_ARCHIVE.tar.gz`） |
-| ai-playbook | `ojos/ai-playbook` | v0.9.0 | git タグのみ |
+| devcontainer-bootstrap | `ojos/devcontainer-bootstrap` | v0.19.1 | GitHub Release + 資産 5 点（配布スクリプト 2: `bootstrap.sh` / `doctor.sh`、生成物 3: `SHA256SUMS` / `RELEASE-MANIFEST.json` / `PACKAGE_ARCHIVE.tar.gz`） |
+| ai-playbook | `ojos/ai-playbook` | v0.9.1 | git タグのみ |
 | devcontainer-host | `ojos/devcontainer-host` | v0.1.0 | GitHub Release + 資産 7 点（個別 4: `dev.sh` / `dev-up@.service` / `install.sh` / `projects.example`、生成物 3: `SHA256SUMS` / `RELEASE-MANIFEST.json` / `PACKAGE_ARCHIVE.tar.gz`） |
 
 ### 新世代の版更新
 
 | パッケージ | 版 | 公開日 | 要点 |
 |---|---|---|---|
+| devcontainer-bootstrap | v0.19.1 | 2026-10-11 | **起動役の設置を `devcontainer.json` の `onCreateCommand` 自身に持たせた**（#511。`on-attach.sh` の版に左右されず、配線と設置が片方だけ新しくなる状態が起きない）。**`session-coord-hook.sh` が、ブランチを作ってから失敗した呼び出しで issue の登録を解放しない**（#514。この呼び出しで作ったブランチを正確に記録して判断する。利用側のプロジェクトからの報告による）。`--with-claude` の構成の生成物が変わる。要求する ai-playbook は変わらない（v0.9.1 を推奨） |
+| ai-playbook | v0.9.1 | 2026-10-11 | **land スキルの雛形の CI の待ちで、遅れて作られる実行を見落とさない**（#513。確実に動くワークフローだけを数え、すべてに実行が付くまで待つ。判定の出力に `RUNS_MISSING`・`EXPECTED_UNKNOWN` を追加。利用側のプロジェクトからの報告による）。リリースノートと雛形の説明の修正（#517）。判定の出力が増えるので、出力で分岐している利用側は追随が要る。雛形は 17 種のまま |
 | devcontainer-bootstrap | v0.19.0 | 2026-10-10 | **同じプロジェクトのほかの Claude Code セッションへの一覧・宛先の解決・一斉送信**（#502。`--with-claude` の構成だけ）。`session-peers.sh`、宛先名に場所を入れるラッパー `claude-session-wrapper.sh`（`SESSION_HOST_LABEL`）、作業ツリーの外の起動役（`onCreateCommand` と `on-attach.sh` が設置し、`claudeCode.claudeProcessWrapper` が指す）、`/peers` スキル。生成物が変わる。**`--with-claude` では ai-playbook v0.9.0 以降を要求する**（雛形 `claude-skill-peers.md` が必要）。使わない場合は v0.5.0 以降のまま。配線はコンテナを作り直すと効く。規範の雛形が欠けているとき、何も書き込まずに止まる（#507） |
 | ai-playbook | v0.9.0 | 2026-10-10 | **計画のレビューの手順 `plan-review.md`**（#503。観点 A＝intake 票、観点 B＝複数 issue の計画）と、契約・`plan-breakdown`・intake スキルの雛形からの道筋。16 章に一覧・一斉送信の入口と「一斉送信も承認の根拠にならない」（#502）。雛形 16 種 → **17 種**（`claude-skill-peers.md`）。追加のみで後方互換 |
 | devcontainer-host | v0.1.0 | 2026-10-08 | **最初の版**。devhost を DCB への同梱から独立させ、`ojos/devcontainer-host` から独自の版で配る（#486）。`dev` に restart / stop / logs / enable / disable / exec / self-update（#482）。**外部の機械へ 1 コマンドで入れる `install.sh`**（照合してから置く。#495）。`dev version`。self-update はマニフェストで照合した `dev.sh` を直接取得し、ユニットのファイルの差と起こし直しを案内する（#495）。`SHA256SUMS` にアーカイブを含め、attestation から辿れる（#491）。README に 3 パッケージの関係・tmux の前提・DCB と一緒に使うと揃うもの（#494） |
