@@ -39,6 +39,8 @@
 #     解放されていないものが 1 つでもあれば有効（1 件として表示・判定する）。
 #     7 列（識別子なし）の古い台帳ファイルも読める（識別子は - として扱う）。
 #   release の kind が * なら全部、target が * ならその種類すべてを解放する。
+#   作業ツリーか対象のパス（doc・git）がタブ・改行を含むときは、書式を壊すので書き込まず、
+#   警告を出して LEDGER_SKIP で通す（claim / release / check。終了コード 0）。
 #
 # セッションの識別子と持ち主の PID:
 #   SESSION_LEDGER_ID があればそれを使う（英数字と ._- 以外は _ になる）。無ければ
@@ -246,6 +248,34 @@ TOPLEVEL="$(git rev-parse --show-toplevel 2>/dev/null || true)"
 [ -n "$TOPLEVEL" ] || TOPLEVEL="$(pwd)"
 # シンボリックリンクをたどった実体のパスに揃える（同じ作業ツリーが別の表記で現れても一致させる）。
 TOPLEVEL="$(cd -P "$TOPLEVEL" 2>/dev/null && pwd -P || printf '%s' "$TOPLEVEL")"
+
+# パスがタブか改行を含むか。台帳はタブ区切りの 1 行 1 件なので、含むパスは欄をずらす。
+path_is_unsafe() { # パス
+  case "$1" in
+    *$'\t'* | *$'\n'*) return 0 ;;
+  esac
+  return 1
+}
+
+# 作業ツリーか対象のパスがタブ・改行を含むときは、台帳へ書かずに通す（fail-open）。
+# 判定は正規化の前の値で行う（normalize_target と $(...) は末尾の改行を削る）。
+# 作業ツリーは $PWD（生の値）と TOPLEVEL の両方を見る。対象のパスを持つ種類は doc と git。
+# 戻り値 0 = 台帳の対象にできない（警告を出した）。
+skip_unsafe_path() { # kind target
+  if path_is_unsafe "$PWD" || path_is_unsafe "$TOPLEVEL"; then
+    warn "作業ツリーのパスがタブか改行を含みます。台帳の対象にせず通します。"
+    return 0
+  fi
+  case "$1" in
+    doc | git)
+      if path_is_unsafe "$2"; then
+        warn "対象のパスがタブか改行を含みます。台帳の対象にせず通します。"
+        return 0
+      fi
+      ;;
+  esac
+  return 1
+}
 
 # 台帳の置き場所を使える状態にする。失敗したら呼び出し側が警告して通す。
 ensure_dir() {
@@ -491,6 +521,10 @@ append_record() { # op kind target
 cmd_check() {
   local kind="${1:-}" target
   valid_kind "$kind" || { usage; return 2; }
+  if skip_unsafe_path "$kind" "${2:-}"; then
+    echo "LEDGER_SKIP"
+    return 0
+  fi
   target="$(normalize_target "$kind" "${2:-}")"
   if owner_unknown; then
     echo "LEDGER_SKIP"
@@ -512,6 +546,10 @@ cmd_claim() {
   fi
   kind="${1:-}"
   valid_kind "$kind" || { usage; return 2; }
+  if skip_unsafe_path "$kind" "${2:-}"; then
+    echo "LEDGER_SKIP"
+    return 0
+  fi
   target="$(normalize_target "$kind" "${2:-}")"
   if owner_unknown; then
     echo "LEDGER_SKIP"
@@ -549,6 +587,12 @@ cmd_release() {
   target="${2:-*}"
   if [ "$kind" != "*" ]; then
     valid_kind "$kind" || { usage; return 2; }
+  fi
+  if skip_unsafe_path "$kind" "$target"; then
+    echo "LEDGER_SKIP"
+    return 0
+  fi
+  if [ "$kind" != "*" ]; then
     [ "$target" = "*" ] || target="$(normalize_target "$kind" "$target")"
   fi
   owner_unknown && return 0
@@ -572,6 +616,7 @@ cmd_release() {
 cmd_refresh() {
   local rows min
   owner_unknown && return 0
+  skip_unsafe_path "" "" && return 0
   min="${SESSION_LEDGER_REFRESH_MIN:-300}"
   case "$min" in '' | *[!0-9]*) min=300 ;; esac
   ensure_dir || return 0

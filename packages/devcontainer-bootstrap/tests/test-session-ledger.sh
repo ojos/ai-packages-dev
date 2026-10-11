@@ -714,4 +714,46 @@ SESSION_LEDGER_TTL=500 run s-b "$repo" check git "$repo"
 rm -f "$DIR/s-x.tsv"
 assert_eq "$(first_line)" "LEDGER_DENY" "判定"
 
+# タブ・改行を含むパス（#528）。台帳はタブ区切りの 1 行 1 件なので、含むパスは欄をずらす。
+# claim / release / check に渡された作業ツリー・対象のパスがこれに当たるときは、書き込まずに
+# LEDGER_SKIP で通す（警告を出し、終了コード 0）。末尾がタブ・改行のパスは、$(...) や読み取りで
+# 末尾が削られてから判定すると見分けられないため、別々に確かめる。
+# （run は標準エラーを先に含めるので、LEDGER_SKIP は出力の最後の行で見る）
+check_unsafe_ledger() { # ラベル パス
+  local label="$1" p="$2" bad="" sub k
+  rm -rf "$DIR"
+  mkdir -p "$p"
+  git -C "$p" init -q . >/dev/null 2>&1
+  # 対象のパス
+  for sub in "claim git" "claim doc" "check git" "check doc" "release git" "release doc"; do
+    # shellcheck disable=SC2086
+    run s-a "$repo" $sub "$p"
+    [[ "$OUT" == *$'\n'LEDGER_SKIP || "$OUT" == LEDGER_SKIP ]] && [[ "$RC" -eq 0 ]] || bad="$bad | $sub の判定: rc=$RC out=$OUT"
+    case "$OUT" in *WARN*) ;; *) bad="$bad | $sub の警告が無い" ;; esac
+  done
+  [[ ! -e "$DIR/s-a.tsv" ]] || bad="$bad | 対象のパスで台帳に書き込まれた"
+  # 作業ツリーのパス（その作業ツリーの中から呼ぶ）
+  for k in "claim git" "claim merge" "check merge" "release merge"; do
+    # shellcheck disable=SC2086
+    run s-a "$p" $k
+    [[ "$OUT" == *$'\n'LEDGER_SKIP || "$OUT" == LEDGER_SKIP ]] && [[ "$RC" -eq 0 ]] || bad="$bad | 作業ツリーで $k の判定: rc=$RC out=$OUT"
+  done
+  [[ ! -e "$DIR/s-a.tsv" && ! -e "$p/.git/session-ledger/s-a.tsv" ]] || bad="$bad | 作業ツリーのパスで台帳に書き込まれた"
+  # 対照: 安全なパスは従来どおり登録できる
+  run s-a "$repo" claim git "$repo"
+  [[ "$RC" -eq 0 && "$(first_line)" != "LEDGER_SKIP" && -e "$DIR/s-a.tsv" ]] || bad="$bad | 対照の登録: $OUT"
+  rm -rf "$DIR"
+  if [[ -z "$bad" ]]; then pass; else fail "$label:$bad"; fi
+}
+
+ubase="$(dirname "$repo")"
+it "(#528) パスにタブを含むとき、台帳へ書き込まずに LEDGER_SKIP で通す"
+check_unsafe_ledger "タブ" "$ubase/re"$'\t'"po"
+it "(#528) パスの末尾がタブのときも、台帳へ書き込まずに通す"
+check_unsafe_ledger "末尾のタブ" "$ubase/repo"$'\t'
+it "(#528) パスに改行を含むとき、台帳へ書き込まずに通す"
+check_unsafe_ledger "改行" "$ubase/re"$'\n'"po"
+it "(#528) パスの末尾が改行のときも、台帳へ書き込まずに通す"
+check_unsafe_ledger "末尾の改行" "$ubase/repo"$'\n'
+
 exit_with_result

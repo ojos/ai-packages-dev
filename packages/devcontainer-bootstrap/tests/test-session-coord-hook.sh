@@ -527,16 +527,74 @@ gone="$(ledger s-a "$repo" check issue 39 | sed -n 1p)"
 assert_eq "$gone" "LEDGER_OK" "前から HEAD が指しているブランチ"
 reset_ledger
 
-it "(#514) ディレクトリにタブを含むときは、番号だけの印で記録し、失敗時に解放する"
-repo6="$(dirname "$repo")/re"$'\t'"po6"
-mkdir -p "$repo6"
-git -C "$repo6" init -q . >/dev/null 2>&1
-pre_bash s-b "$repo" "git -C \"$repo6\" checkout -b 40-x && false" toolu_g8
-git -C "$repo6" symbolic-ref HEAD refs/heads/40-x >/dev/null 2>&1
-fail_bash s-b "$repo" "git -C \"$repo6\" checkout -b 40-x && false" toolu_g8
-gone="$(ledger s-a "$repo" check issue 40 | sed -n 1p)"
-assert_eq "$gone" "LEDGER_OK" "タブを含むディレクトリ"
-reset_ledger
+# タブ・改行を含むパス（#528）。台帳はタブ区切り、登録の対象と解放の一覧は改行区切りなので、
+# 含むパスは 1 つの値として持てない。入口（フックの作業ディレクトリ・cd 先・git -C 先・作る
+# ブランチの控え）で除き、警告して通す。末尾がタブ・改行のパスは、読み取りや $(...) で
+# 末尾が削られてから判定すると見分けられないため、別々に確かめる。
+count_claims() { # セッション。台帳に残った claim の行数（種類を問わない）
+  if [[ -f "$DIR/$1.tsv" ]]; then grep -c "$(printf '\tclaim\t')" "$DIR/$1.tsv"; else echo 0; fi
+}
+unsafe_n=60
+check_unsafe_path() { # ラベル パス
+  local label="$1" p="$2" bad="" id n mark
+  unsafe_n=$((unsafe_n + 1))
+  n="$unsafe_n"
+  mkdir -p "$p"
+  git -C "$p" init -q . >/dev/null 2>&1
+  # git -C 先
+  id="toolu_u${n}a"
+  pre_bash s-b "$repo" "git -C \"$p\" fetch" "$id"
+  [[ "$HRC" -eq 0 && "$(decision)" == "none" ]] || bad="$bad | -C 先の判定: $HOUT"
+  [[ "$(count_claims s-b)" == "0" ]] || bad="$bad | -C 先で登録が残った: $(count_claims s-b)"
+  [[ "$(sysmsg)" == *"タブか改行"* ]] || bad="$bad | -C 先の警告が無い: $HOUT"
+  post_bash s-b "$repo" "git -C \"$p\" fetch" "$id"
+  reset_ledger
+  # 重ねた -C 先
+  id="toolu_u${n}b"
+  pre_bash s-b "$repo" "git -C \"${p%/*}\" -C \"${p##*/}\" fetch" "$id"
+  [[ "$(count_claims s-b)" == "0" ]] || bad="$bad | 重ねた -C 先で登録が残った: $(count_claims s-b)"
+  post_bash s-b "$repo" "git -C \"${p%/*}\" -C \"${p##*/}\" fetch" "$id"
+  reset_ledger
+  # cd 先
+  id="toolu_u${n}c"
+  pre_bash s-b "$repo" "cd \"$p\" && git fetch" "$id"
+  [[ "$HRC" -eq 0 && "$(decision)" == "none" ]] || bad="$bad | cd 先の判定: $HOUT"
+  [[ "$(count_claims s-b)" == "0" ]] || bad="$bad | cd 先で登録が残った: $(count_claims s-b)"
+  post_bash s-b "$repo" "cd \"$p\" && git fetch" "$id"
+  reset_ledger
+  # フックの作業ディレクトリ（何も登録せず通す）
+  id="toolu_u${n}d"
+  pre_bash s-b "$p" 'git fetch && gh pr merge 9' "$id"
+  [[ "$HRC" -eq 0 && "$(decision)" == "none" ]] || bad="$bad | 作業ディレクトリの判定: $HOUT"
+  [[ "$(count_claims s-b)" == "0" ]] || bad="$bad | 作業ディレクトリで登録が残った: $(count_claims s-b)"
+  [[ "$(sysmsg)" == *"タブか改行"* ]] || bad="$bad | 作業ディレクトリの警告が無い: $HOUT"
+  reset_ledger
+  # 作るブランチの控え（印に壊れたパスを書かず、失敗時は issue を解放する）
+  id="toolu_u${n}e"
+  pre_bash s-b "$repo" "git -C \"$p\" checkout -b ${n}-x && false" "$id"
+  mark="$(cat "${TMPDIR:-/tmp}/session-coord-$id" 2>/dev/null)"
+  case "$mark" in
+    *$'\t'*) bad="$bad | 印にタブ区切りの欄がある: $mark" ;;
+    '' | "$n") ;;
+    *) bad="$bad | 印の中身: $mark" ;;
+  esac
+  [[ "$(count_claims s-b)" == "1" ]] || bad="$bad | ブランチの作成で issue 以外が登録された: $(count_claims s-b)"
+  git -C "$p" symbolic-ref HEAD "refs/heads/${n}-x" >/dev/null 2>&1
+  fail_bash s-b "$repo" "git -C \"$p\" checkout -b ${n}-x && false" "$id"
+  [[ "$(ledger s-a "$repo" check issue "$n" | sed -n 1p)" == "LEDGER_OK" ]] || bad="$bad | 失敗後も issue が残った"
+  reset_ledger
+  if [[ -z "$bad" ]]; then pass; else fail "$label:$bad"; fi
+}
+
+base_dir="$(dirname "$repo")"
+it "(#528) パスにタブを含むとき、台帳に誤った登録が残らず、印に壊れたパスを書かない"
+check_unsafe_path "タブ" "$base_dir/re"$'\t'"po6"
+it "(#528) パスの末尾がタブのときも、台帳に誤った登録が残らない"
+check_unsafe_path "末尾のタブ" "$base_dir/repo8"$'\t'
+it "(#528) パスに改行を含むとき、台帳に誤った登録が残らない"
+check_unsafe_path "改行" "$base_dir/re"$'\n'"po9"
+it "(#528) パスの末尾が改行のときも、台帳に誤った登録が残らない"
+check_unsafe_path "末尾の改行" "$base_dir/repo10"$'\n'
 
 it "(#514) 番号だけの古い書式の印は、従来どおり失敗時に解放する"
 pre_bash s-b "$repo" 'git checkout -b feat/33-x' toolu_g5
