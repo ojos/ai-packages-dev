@@ -527,15 +527,298 @@ gone="$(ledger s-a "$repo" check issue 39 | sed -n 1p)"
 assert_eq "$gone" "LEDGER_OK" "前から HEAD が指しているブランチ"
 reset_ledger
 
-it "(#514) ディレクトリにタブを含むときは、番号だけの印で記録し、失敗時に解放する"
-repo6="$(dirname "$repo")/re"$'\t'"po6"
-mkdir -p "$repo6"
-git -C "$repo6" init -q . >/dev/null 2>&1
-pre_bash s-b "$repo" "git -C \"$repo6\" checkout -b 40-x && false" toolu_g8
-git -C "$repo6" symbolic-ref HEAD refs/heads/40-x >/dev/null 2>&1
-fail_bash s-b "$repo" "git -C \"$repo6\" checkout -b 40-x && false" toolu_g8
-gone="$(ledger s-a "$repo" check issue 40 | sed -n 1p)"
-assert_eq "$gone" "LEDGER_OK" "タブを含むディレクトリ"
+# タブ・改行を含むパス（#528）。台帳はタブ区切り、登録の対象と解放の一覧は改行区切りなので、
+# 含むパスは 1 つの値として持てない。入口（フックの作業ディレクトリ・cd 先・git -C 先・作る
+# ブランチの控え）で除き、警告して通す。末尾がタブ・改行のパスは、読み取りや $(...) で
+# 末尾が削られてから判定すると見分けられないため、別々に確かめる。
+count_claims() { # セッション。台帳に残った claim の行数（種類を問わない）
+  if [[ -f "$DIR/$1.tsv" ]]; then grep -c "$(printf '\tclaim\t')" "$DIR/$1.tsv"; else echo 0; fi
+}
+unsafe_n=60
+check_unsafe_path() { # ラベル パス
+  local label="$1" p="$2" bad="" id n mark
+  unsafe_n=$((unsafe_n + 1))
+  n="$unsafe_n"
+  mkdir -p "$p"
+  git -C "$p" init -q . >/dev/null 2>&1
+  # git -C 先
+  id="toolu_u${n}a"
+  pre_bash s-b "$repo" "git -C \"$p\" fetch" "$id"
+  [[ "$HRC" -eq 0 && "$(decision)" == "none" ]] || bad="$bad | -C 先の判定: $HOUT"
+  [[ "$(count_claims s-b)" == "0" ]] || bad="$bad | -C 先で登録が残った: $(count_claims s-b)"
+  [[ "$(sysmsg)" == *"タブか改行"* ]] || bad="$bad | -C 先の警告が無い: $HOUT"
+  post_bash s-b "$repo" "git -C \"$p\" fetch" "$id"
+  reset_ledger
+  # 重ねた -C 先
+  id="toolu_u${n}b"
+  pre_bash s-b "$repo" "git -C \"${p%/*}\" -C \"${p##*/}\" fetch" "$id"
+  [[ "$(count_claims s-b)" == "0" ]] || bad="$bad | 重ねた -C 先で登録が残った: $(count_claims s-b)"
+  post_bash s-b "$repo" "git -C \"${p%/*}\" -C \"${p##*/}\" fetch" "$id"
+  reset_ledger
+  # cd 先
+  id="toolu_u${n}c"
+  pre_bash s-b "$repo" "cd \"$p\" && git fetch" "$id"
+  [[ "$HRC" -eq 0 && "$(decision)" == "none" ]] || bad="$bad | cd 先の判定: $HOUT"
+  [[ "$(count_claims s-b)" == "0" ]] || bad="$bad | cd 先で登録が残った: $(count_claims s-b)"
+  post_bash s-b "$repo" "cd \"$p\" && git fetch" "$id"
+  reset_ledger
+  # フックの作業ディレクトリ自身が危険な作業ツリーのとき、その作業ツリーは登録しない
+  id="toolu_u${n}d"
+  pre_bash s-b "$p" 'git fetch' "$id"
+  [[ "$HRC" -eq 0 && "$(decision)" == "none" ]] || bad="$bad | 作業ディレクトリの判定: $HOUT"
+  [[ "$(count_claims s-b)" == "0" ]] || bad="$bad | 作業ディレクトリで登録が残った: $(count_claims s-b)"
+  [[ "$(sysmsg)" == *"タブか改行"* ]] || bad="$bad | 作業ディレクトリの警告が無い: $HOUT"
+  reset_ledger
+  # 作るブランチの控え（印に壊れたパスを書かず、失敗時は issue を解放する）
+  id="toolu_u${n}e"
+  pre_bash s-b "$repo" "git -C \"$p\" checkout -b ${n}-x && false" "$id"
+  mark="$(cat "${TMPDIR:-/tmp}/session-coord-$id" 2>/dev/null)"
+  case "$mark" in
+    *$'\t'*) bad="$bad | 印にタブ区切りの欄がある: $mark" ;;
+    '' | "$n") ;;
+    *) bad="$bad | 印の中身: $mark" ;;
+  esac
+  [[ "$(count_claims s-b)" == "1" ]] || bad="$bad | ブランチの作成で issue 以外が登録された: $(count_claims s-b)"
+  git -C "$p" symbolic-ref HEAD "refs/heads/${n}-x" >/dev/null 2>&1
+  fail_bash s-b "$repo" "git -C \"$p\" checkout -b ${n}-x && false" "$id"
+  [[ "$(ledger s-a "$repo" check issue "$n" | sed -n 1p)" == "LEDGER_OK" ]] || bad="$bad | 失敗後も issue が残った"
+  reset_ledger
+  if [[ -z "$bad" ]]; then pass; else fail "$label:$bad"; fi
+}
+
+base_dir="$(dirname "$repo")"
+it "(#528) パスにタブを含むとき、台帳に誤った登録が残らず、印に壊れたパスを書かない"
+check_unsafe_path "タブ" "$base_dir/re"$'\t'"po6"
+it "(#528) パスの末尾がタブのときも、台帳に誤った登録が残らない"
+check_unsafe_path "末尾のタブ" "$base_dir/repo8"$'\t'
+it "(#528) パスに改行を含むとき、台帳に誤った登録が残らない"
+check_unsafe_path "改行" "$base_dir/re"$'\n'"po9"
+it "(#528) パスの末尾が改行のときも、台帳に誤った登録が残らない"
+check_unsafe_path "末尾の改行" "$base_dir/repo10"$'\n'
+
+# 解放の経路は、cwd が危険なパスでも続ける（#528）。安全な cwd で登録した分を、危険な cwd の
+# PostToolUse / PostToolUseFailure / SessionEnd が解放しないと、失効するまで他のセッションを
+# 止め続ける。早期終了は登録する経路（PreToolUse）に限る。危険な cwd は repo の下の
+# サブディレクトリ（同じ台帳を使う）にする。
+check_release_from_unsafe_cwd() { # ラベル サブディレクトリ名
+  local label="$1" p="$repo/$2" bad="" id ev
+  unsafe_n=$((unsafe_n + 1))
+  mkdir -p "$p"
+  for ev in post fail end; do
+    reset_ledger
+    id="toolu_r${unsafe_n}${ev}"
+    pre_bash s-b "$repo" "git fetch && gh pr merge 5 && git checkout -b ${unsafe_n}-r" "$id"
+    [[ -f "${TMPDIR:-/tmp}/session-coord-${id}.dirs" ]] || bad="$bad | $ev: 登録の印が無い"
+    case "$ev" in
+      post) post_bash s-b "$p" "git fetch && gh pr merge 5 && git checkout -b ${unsafe_n}-r" "$id" ;;
+      fail) fail_bash s-b "$p" "git fetch && gh pr merge 5 && git checkout -b ${unsafe_n}-r" "$id" ;;
+      end) hook_raw s-b "$(pl_event SessionEnd "$p")" ;;
+    esac
+    [[ "$(ledger s-a "$repo" check merge | sed -n 1p)" == "LEDGER_OK" ]] || bad="$bad | $ev: merge の登録が残った"
+    [[ "$(ledger s-a "$repo" check git "$repo" | sed -n 1p)" == "LEDGER_OK" ]] || bad="$bad | $ev: git の登録が残った"
+    # issue は SessionEnd で解放される（成功した呼び出しでは SessionEnd まで持つ仕様）。
+    if [[ "$ev" == "end" ]]; then
+      [[ "$(ledger s-a "$repo" check issue "$unsafe_n" | sed -n 1p)" == "LEDGER_OK" ]] || bad="$bad | end: issue の登録が残った"
+    fi
+    [[ "$ev" == "end" || ! -f "${TMPDIR:-/tmp}/session-coord-${id}.dirs" ]] || bad="$bad | $ev: 印が残った"
+    rm -f "${TMPDIR:-/tmp}/session-coord-${id}.dirs" "${TMPDIR:-/tmp}/session-coord-${id}"
+  done
+  reset_ledger
+  rm -rf "$p"
+  if [[ -z "$bad" ]]; then pass; else fail "$label:$bad"; fi
+}
+it "(#528) cwd がタブを含むパスでも、PostToolUse / PostToolUseFailure / SessionEnd は登録を解放する"
+check_release_from_unsafe_cwd "タブ" "sub"$'\t'"dir"
+it "(#528) cwd の末尾がタブのパスでも、登録を解放する"
+check_release_from_unsafe_cwd "末尾のタブ" "sub"$'\t'
+it "(#528) cwd が改行を含むパスでも、登録を解放する"
+check_release_from_unsafe_cwd "改行" "sub"$'\n'"dir"
+it "(#528) cwd の末尾が改行のパスでも、登録を解放する"
+check_release_from_unsafe_cwd "末尾の改行" "sub"$'\n'
+
+it "(#528) Edit の file_path がタブを含むとき、別のパスの check doc は走らない"
+ledger s-a "$repo" claim doc "docs/a b" >/dev/null
+pre_edit s-b "$repo" "$repo/docs/a"$'\t'"b"
+assert_quiet_pass "タブを含む file_path"
+reset_ledger
+
+it "(#528) Edit の file_path の末尾が改行のとき、末尾が削られた別のパスの check doc は走らない"
+ledger s-a "$repo" claim doc docs/nl.md >/dev/null
+pre_edit s-b "$repo" "$repo/docs/nl.md"$'\n'
+assert_quiet_pass "末尾が改行の file_path"
+pre_edit s-b "$repo" "$repo/docs/nl.md"
+if [[ "$(context)" == *"kind=doc"* ]]; then pass; else fail "対照: 安全なパスの警告が出ない: $HOUT"; fi
+reset_ledger
+
+it "(#528) シンボリックリンクの先が末尾が改行のパスでも、解決した後の値を判定して登録しない"
+real_nl="$base_dir/real_nl"$'\n'
+mkdir -p "$real_nl"
+git -C "$real_nl" init -q . >/dev/null 2>&1
+ln -sfn "$real_nl" "$base_dir/lnk_nl"
+pre_bash s-b "$repo" "git -C \"$base_dir/lnk_nl\" fetch" toolu_l1
+if [[ "$HRC" -eq 0 && "$(decision)" == "none" && "$(count_claims s-b)" == "0" ]]; then pass; else fail "claims=$(count_claims s-b) out=$HOUT"; fi
+reset_ledger
+
+it "(#528) 改行を含むクォートの語より後ろの語も、コマンドの判定の対象になる（旧版は 1 行目で切れていた）"
+pre_bash s-b "$repo" 'MSG="a
+b" gh pr merge 5' toolu_m1
+if has_claim s-b merge; then pass; else fail "merge が登録されない: $HOUT"; fi
+post_bash s-b "$repo" 'MSG="a
+b" gh pr merge 5' toolu_m1
+reset_ledger
+
+# 守るのは「危険なパスを台帳の欄に書かない」ことだけで、cwd が危険だからといって何もしない形には
+# しない（#528）。パスを持たない種類（merge・gate）は、cwd が危険でも確かめて登録し、拒否も効かせる。
+# 危険な cwd は repo の下のサブディレクトリ（同じ台帳を使う）にする。
+check_pathless_in_unsafe_cwd() { # ラベル サブディレクトリ名
+  local label="$1" p="$repo/$2" bad="" id nxd
+  unsafe_n=$((unsafe_n + 1))
+  mkdir -p "$p"
+  reset_ledger
+  # 相手が merge / gate を持っているとき、危険な cwd からの merge / gate は拒否される
+  ledger s-a "$repo" claim merge >/dev/null
+  pre_bash s-b "$p" 'gh pr merge 5' "toolu_p${unsafe_n}a"
+  [[ "$(decision)" == "deny" ]] || bad="$bad | merge が拒否されない: $HOUT"
+  reset_ledger
+  ledger s-a "$repo" claim gate >/dev/null
+  pre_bash s-b "$p" 'bash scripts/verify.sh' "toolu_p${unsafe_n}b"
+  [[ "$(decision)" == "deny" ]] || bad="$bad | gate が拒否されない: $HOUT"
+  reset_ledger
+  # 相手がいなければ登録し、登録は他のセッションを止め、解放後は止めない。欄に危険な値は無い
+  id="toolu_p${unsafe_n}c"
+  pre_bash s-b "$p" 'gh pr merge 5' "$id"
+  [[ "$(decision)" == "none" ]] || bad="$bad | 単独の merge が通らない: $HOUT"
+  [[ "$(ledger s-a "$repo" check merge | sed -n 1p)" == "LEDGER_DENY" ]] || bad="$bad | merge が登録されない"
+  post_bash s-b "$p" 'gh pr merge 5' "$id"
+  [[ "$(ledger s-a "$repo" check merge | sed -n 1p)" == "LEDGER_OK" ]] || bad="$bad | merge が解放されない"
+  reset_ledger
+  # 安全なリポジトリの中の危険なサブディレクトリでの git 操作は、リポジトリを登録する
+  pre_bash s-b "$p" 'git fetch' "toolu_p${unsafe_n}d"
+  [[ "$(ledger s-a "$repo" check git "$repo" | sed -n 1p)" == "LEDGER_DENY" ]] || bad="$bad | サブディレクトリの git 操作が登録されない: $HOUT"
+  post_bash s-b "$p" 'git fetch' "toolu_p${unsafe_n}d"
+  reset_ledger
+  # 絶対パスの git -C は、基準（cd 先）が危険でも、その先だけで判定する
+  nxd="$base_dir/nx${unsafe_n}"$'\t'"x"
+  pre_bash s-b "$repo" "cd \"$nxd\" && git -C \"$repo\" fetch" "toolu_p${unsafe_n}e"
+  [[ "$(ledger s-a "$repo" check git "$repo" | sed -n 1p)" == "LEDGER_DENY" ]] || bad="$bad | 絶対パスの -C 先が登録されない: $HOUT"
+  post_bash s-b "$repo" "cd \"$nxd\" && git -C \"$repo\" fetch" "toolu_p${unsafe_n}e"
+  reset_ledger
+  # 安全な絶対パスの file_path は、cwd が危険でも確かめる
+  ledger s-a "$repo" claim doc docs/x.md >/dev/null
+  pre_edit s-b "$p" "$repo/docs/x.md"
+  [[ "$(context)" == *"kind=doc"* ]] || bad="$bad | 文書の確認が飛ばされた: $HOUT"
+  reset_ledger
+  rm -rf "$p"
+  if [[ -z "$bad" ]]; then pass; else fail "$label:$bad"; fi
+}
+it "(#528) cwd がタブを含むパスでも、パスを持たない種類は確かめて拒否し、パスを持つ処理は安全な値で続ける"
+check_pathless_in_unsafe_cwd "タブ" "sub"$'\t'"dir"
+it "(#528) cwd の末尾がタブのパスでも、同じ"
+check_pathless_in_unsafe_cwd "末尾のタブ" "sub"$'\t'
+it "(#528) cwd が改行を含むパスでも、同じ"
+check_pathless_in_unsafe_cwd "改行" "sub"$'\n'"dir"
+it "(#528) cwd の末尾が改行のパスでも、同じ"
+check_pathless_in_unsafe_cwd "末尾の改行" "sub"$'\n'
+
+# 危険な cwd で登録した merge / gate の解放は、PostToolUse の cwd が変わっても（コマンドの cd）、
+# 登録した台帳へ行う。印には、登録した cwd を符号化して控える（#528）。登録した台帳を失うと、
+# merge の登録が失効まで残り、他のセッションの merge を拒否し続ける。
+check_cd_away_release() { # ラベル 危険なサブディレクトリ名
+  local label="$1" p="$repo/$2" bad="" id other rows cmd
+  unsafe_n=$((unsafe_n + 1))
+  other="$base_dir/other_${unsafe_n}"
+  mkdir -p "$p" "$other"
+  git -C "$other" init -q . >/dev/null 2>&1
+  cmd="cd \"$other\" && gh pr merge 5"
+  # 危険なサブディレクトリの cwd（安全なリポジトリの中）から cd して merge する
+  reset_ledger
+  id="toolu_c${unsafe_n}a"
+  pre_bash s-b "$p" "$cmd" "$id"
+  [[ "$(decision)" == "none" ]] || bad="$bad | merge が通らない: $HOUT"
+  [[ "$(ledger s-a "$repo" check merge | sed -n 1p)" == "LEDGER_DENY" ]] || bad="$bad | merge が登録されない"
+  post_bash s-b "$other" "$cmd" "$id"
+  [[ "$(ledger s-a "$repo" check merge | sed -n 1p)" == "LEDGER_OK" ]] || bad="$bad | cd した先の PostToolUse で、元の台帳の merge が解放されない"
+  rows="$(grep -c "$(printf '\trelease\t')" "$DIR/s-b.tsv" 2>/dev/null)"
+  [[ "$rows" == "1" ]] || bad="$bad | 解放の行が $rows 件（1 件のはず）"
+  reset_ledger
+  # cd せずに同じ cwd で解放するときも、解放の行は 1 件
+  id="toolu_c${unsafe_n}b"
+  pre_bash s-b "$p" 'gh pr merge 5' "$id"
+  post_bash s-b "$p" 'gh pr merge 5' "$id"
+  rows="$(grep -c "$(printf '\trelease\t')" "$DIR/s-b.tsv" 2>/dev/null)"
+  [[ "$rows" == "1" ]] || bad="$bad | 同じ cwd での解放の行が $rows 件（1 件のはず）"
+  reset_ledger
+  # cd しない呼び出しで、PostToolUse の cwd だけが別のリポジトリになっても、解放の行き先を失わない
+  id="toolu_c${unsafe_n}c"
+  pre_bash s-b "$p" 'gh pr merge 5' "$id"
+  post_bash s-b "$other" 'gh pr merge 5' "$id"
+  [[ "$(ledger s-a "$repo" check merge | sed -n 1p)" == "LEDGER_OK" ]] || bad="$bad | merge の解放先を失った"
+  reset_ledger
+  rm -rf "$p" "$other"
+  if [[ -z "$bad" ]]; then pass; else fail "$label:$bad"; fi
+}
+check_cd_away_unsafe_root() { # ラベル 危険な作業ツリーのパス（それ自身がリポジトリ）
+  local label="$1" p="$2" bad="" id other cmd
+  unsafe_n=$((unsafe_n + 1))
+  other="$base_dir/other_${unsafe_n}"
+  mkdir -p "$p" "$other"
+  git -C "$p" init -q . >/dev/null 2>&1
+  git -C "$other" init -q . >/dev/null 2>&1
+  cmd="cd \"$other\" && gh pr merge 5"
+  id="toolu_c${unsafe_n}d"
+  pre_bash s-b "$p" "$cmd" "$id"
+  [[ "$(decision)" == "none" ]] || bad="$bad | merge が通らない: $HOUT"
+  [[ "$(ledger s-a "$p" check merge | sed -n 1p)" == "LEDGER_DENY" ]] || bad="$bad | 危険な作業ツリーで merge が登録されない"
+  post_bash s-b "$other" "$cmd" "$id"
+  [[ "$(ledger s-a "$p" check merge | sed -n 1p)" == "LEDGER_OK" ]] || bad="$bad | 危険な作業ツリーの merge が解放されない"
+  rm -f "${TMPDIR:-/tmp}/session-coord-${id}.dirs"
+  rm -rf "$p" "$other"
+  if [[ -z "$bad" ]]; then pass; else fail "$label:$bad"; fi
+}
+it "(#528) 危険なサブディレクトリ（タブ）の cwd から cd して merge しても、PostToolUse の cwd が変わっても元の台帳を解放し、解放の行は重複しない"
+check_cd_away_release "タブ" "sub"$'\t'"dir"
+it "(#528) 同じ（末尾の改行）"
+check_cd_away_release "末尾の改行" "sub"$'\n'
+it "(#528) 同じ（改行）"
+check_cd_away_release "改行" "sub"$'\n'"dir"
+it "(#528) 危険な作業ツリーそのものから cd して merge しても、解放の行き先を失わない（タブ・改行）"
+check_cd_away_unsafe_root "タブ" "$base_dir/ur"$'\t'"x"
+it "(#528) 同じ（末尾の改行）"
+check_cd_away_unsafe_root "末尾の改行" "$base_dir/ur"$'\n'
+
+# 存在しない危険な -C 先は、安全な基準へ置き換えて、基準のリポジトリの git 操作として登録しない（#528）。
+check_missing_unsafe_dash_c() { # ラベル 存在しない危険なパス
+  local label="$1" nx="$2" bad="" id
+  unsafe_n=$((unsafe_n + 1))
+  id="toolu_m${unsafe_n}"
+  reset_ledger
+  pre_bash s-b "$repo" "git -C \"$nx\" fetch" "$id"
+  [[ "$HRC" -eq 0 && "$(decision)" == "none" ]] || bad="$bad | 判定: $HOUT"
+  [[ "$(count_claims s-b)" == "0" ]] || bad="$bad | 基準の git 操作として登録された: $(count_claims s-b)"
+  [[ "$(sysmsg)" == *"タブか改行"* ]] || bad="$bad | 警告が無い: $HOUT"
+  post_bash s-b "$repo" "git -C \"$nx\" fetch" "$id"
+  reset_ledger
+  if [[ -z "$bad" ]]; then pass; else fail "$label:$bad"; fi
+}
+it "(#528) 存在しない危険な -C 先（タブ）は、基準の git 操作として登録しない"
+check_missing_unsafe_dash_c "タブ" "$base_dir/none"$'\t'"x"
+it "(#528) 存在しない危険な -C 先（改行）は、基準の git 操作として登録しない"
+check_missing_unsafe_dash_c "改行" "$base_dir/none"$'\n'"x"
+it "(#528) 存在しない危険な -C 先（末尾の改行）は、基準の git 操作として登録しない"
+check_missing_unsafe_dash_c "末尾の改行" "$base_dir/none"$'\n'
+
+it "(#528) 危険な作業ツリーでブランチを作っても、同じ警告は 1 行だけ出る"
+unsafe_n=$((unsafe_n + 1))
+wl="$base_dir/wl"$'\t'"x"
+mkdir -p "$wl"
+git -C "$wl" init -q . >/dev/null 2>&1
+pre_bash s-b "$repo" "git -C \"$wl\" checkout -b ${unsafe_n}-x" "toolu_w${unsafe_n}"
+wn="$(printf '%s\n' "$(sysmsg)" | command grep -c "タブか改行")"
+fail_bash s-b "$repo" "git -C \"$wl\" checkout -b ${unsafe_n}-x" "toolu_w${unsafe_n}"
+pre_bash s-b "$wl" "git checkout -b ${unsafe_n}-y" "toolu_w${unsafe_n}b"
+wn2="$(printf '%s\n' "$(sysmsg)" | command grep -c "タブか改行")"
+fail_bash s-b "$wl" "git checkout -b ${unsafe_n}-y" "toolu_w${unsafe_n}b"
+if [[ "$wn" == "1" && "$wn2" == "1" ]]; then pass; else fail "-C 先=$wn cwd=$wn2"; fi
 reset_ledger
 
 it "(#514) 番号だけの古い書式の印は、従来どおり失敗時に解放する"
@@ -950,5 +1233,21 @@ w2="$(context)"
 if [[ "$w1" == *"kind=doc"* && "$w2" == *"session=s-a"* ]]; then pass; else fail "edit=$w1 start=$w2"; fi
 ledger s-a "$repo" release >/dev/null
 reset_ledger
+
+it "(#528) jq が無くても、タブを含むパスは台帳の対象にしない（file_path・git -C 先・cwd）"
+ledger s-a "$repo" claim doc "docs/a b" >/dev/null
+nojq_hook s-b "$(pl_edit "$repo" "$repo/docs/a"$'\t'"b")"
+assert_quiet_pass "jq なし・タブを含む file_path"
+reset_ledger
+nj_dir="$base_dir/nj"$'\t'"dir"
+mkdir -p "$nj_dir"
+git -C "$nj_dir" init -q . >/dev/null 2>&1
+nojq_hook s-b "$(pl_bash PreToolUse "$repo" "git -C \"$nj_dir\" fetch" toolu_nj1)"
+c1="$(count_claims s-b)"
+reset_ledger
+nojq_hook s-b "$(pl_bash PreToolUse "$nj_dir" 'git fetch' toolu_nj2)"
+c2="$(count_claims s-b)"
+reset_ledger
+if [[ "$c1" == "0" && "$c2" == "0" ]]; then pass; else fail "-C 先の登録=$c1 cwd の登録=$c2"; fi
 
 exit_with_result
