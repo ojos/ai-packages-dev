@@ -79,8 +79,9 @@
 #
 # タブか改行を含むパス（フックの作業ディレクトリ・cd 先・git -C 先・作るブランチの控え）は、
 # 台帳・印の書式（タブ区切り・改行区切り）を壊すので、解決する前の値で判定して台帳の対象に
-# せず、警告して通す。フックの作業ディレクトリが該当するときは、登録する経路（PreToolUse）で
-# 何も登録しない。解放の経路（PostToolUse など）は、安全な作業ディレクトリで登録した分を解放し続ける。
+# せず、警告して通す。守るのは「危険な値を台帳の欄に書かない」ことだけで、フックの作業
+# ディレクトリが危険でも何もしない形にはしない。パスを持たない種類（merge・gate・issue）は
+# 従来どおり確かめて登録し、拒否も効かせる。解放の経路も続ける。
 #
 # 台帳そのものの読み書きに失敗したとき（台帳が見つからない・置き場所を作れない・出力が読めない）
 # は、警告（systemMessage）を出して通す。台帳の不具合で、すべての操作を止めない。
@@ -350,7 +351,12 @@ HIT_BRANCHES=""   # 改行区切り。「番号 TAB リポジトリのディレ�
 # 末尾に目印（.）を付け、目印と git が足す最後の改行 1 つだけを落とす。
 toplevel_of() { # 基準ディレクトリ 相対ディレクトリ
   local base="$1" rel="$2" top=""
-  top="$( (cd "$base" 2>/dev/null && { [[ -z "$rel" ]] || cd "$rel" 2>/dev/null; } && git rev-parse --show-toplevel 2>/dev/null) || true; printf .)"
+  if [[ "$rel" == /* ]]; then
+    # 絶対パスの -C は基準ディレクトリに依存しない（基準が危険でも、この結果だけで判定する）。
+    top="$( (cd "$rel" 2>/dev/null && git rev-parse --show-toplevel 2>/dev/null) || true; printf .)"
+  else
+    top="$( (cd "$base" 2>/dev/null && { [[ -z "$rel" ]] || cd "$rel" 2>/dev/null; } && git rev-parse --show-toplevel 2>/dev/null) || true; printf .)"
+  fi
   top="${top%.}"
   top="${top%$'\n'}"
   [[ -n "$top" ]] || top="$base"
@@ -358,21 +364,17 @@ toplevel_of() { # 基準ディレクトリ 相対ディレクトリ
 }
 
 # 基準ディレクトリと相対ディレクトリから作業ツリーのルートを求めて TOP_RESULT へ入れる。
-# どちらかがタブ・改行を含むとき（解決する前の値で判定する）は、警告を足して 1 を返し、
-# TOP_RESULT を空にする。呼び出し側は、その作業ツリーを登録の対象にしない。
-# 結果を $(...) で返さないのは、警告（WARNS）が部分シェルで失われ、末尾の改行も削られるため。
-# 解決した後の値（シンボリックリンクの先など）も判定する。
+# 判定は、台帳の欄へ書く値（解決した作業ツリーのルート）で行う。基準や相対のディレクトリが
+# 危険でも、解決した先が安全なら登録の対象にする（安全なリポジトリの中の危険なサブディレクトリ
+# にいるだけでは止めない）。解決した先が危険なとき（解決できず基準へ戻った場合、シンボリック
+# リンクの先を含む）は、警告を足して 1 を返し、TOP_RESULT を空にする。呼び出し側は、その作業ツリー
+# を登録の対象にしない。結果を $(...) で返さないのは、警告（WARNS）が部分シェルで失われ、
+# 末尾の改行も削られるため。
 TOP_RESULT=""
 resolve_top() { # 基準ディレクトリ 相対ディレクトリ
-  local bad=0
   TOP_RESULT=""
-  if path_is_unsafe "$1" || path_is_unsafe "$2"; then
-    bad=1
-  else
-    toplevel_of "$1" "$2"
-    ! path_is_unsafe "$TOP_RESULT" || bad=1
-  fi
-  if [[ $bad -eq 1 ]]; then
+  toplevel_of "$1" "$2"
+  if path_is_unsafe "$TOP_RESULT"; then
     add_warn "$UNSAFE_WARN"
     TOP_RESULT=""
     return 1
@@ -646,14 +648,14 @@ pre_bash() {
     run_ledger "$cwd" claim ${call_opt[@]+"${call_opt[@]}"} merge
     case "$LEDGER_VERDICT" in
       LEDGER_DENY) denies="${denies:+$denies$'\n'}$(deny_text 'マージ・リリース' "$LEDGER_DETAIL")" ;;
-      LEDGER_OK | LEDGER_WARN) claimed_merge=1; call_dirs="${call_dirs:+$call_dirs$'\n'}$cwd" ;;
+      LEDGER_OK | LEDGER_WARN) claimed_merge=1; [[ $CWD_UNSAFE -eq 1 ]] || call_dirs="${call_dirs:+$call_dirs$'\n'}$cwd" ;;
     esac
   fi
   if [[ $HIT_GATE -eq 1 ]]; then
     run_ledger "$cwd" claim ${call_opt[@]+"${call_opt[@]}"} gate
     case "$LEDGER_VERDICT" in
       LEDGER_DENY) denies="${denies:+$denies$'\n'}$(deny_text '重いゲート（verify / loop-gate）の起動' "$LEDGER_DETAIL")" ;;
-      LEDGER_OK | LEDGER_WARN) claimed_gate=1; call_dirs="${call_dirs:+$call_dirs$'\n'}$cwd" ;;
+      LEDGER_OK | LEDGER_WARN) claimed_gate=1; [[ $CWD_UNSAFE -eq 1 ]] || call_dirs="${call_dirs:+$call_dirs$'\n'}$cwd" ;;
     esac
   fi
   if [[ -n "$HIT_GIT_DIRS" ]]; then
@@ -673,6 +675,8 @@ EOF
     # tool_use_id があれば、その識別子の登録だけを外す（同じセッションの先行する登録は残す）。
     if [[ -n "$tuid" ]]; then
       release_call_dirs "$call_dirs"
+      # 危険な cwd で登録した分は印に控えていないので、cwd の台帳から解放する。
+      [[ $CWD_UNSAFE -eq 0 || ( $claimed_merge -eq 0 && $claimed_gate -eq 0 ) ]] || run_ledger "$cwd" release --call "$tuid"
     else
       [[ $claimed_merge -eq 0 ]] || run_ledger "$cwd" release merge
       [[ $claimed_gate -eq 0 ]] || run_ledger "$cwd" release gate
@@ -811,6 +815,10 @@ post_bash() {
     elif [[ $HIT_MERGE -eq 1 || $HIT_GATE -eq 1 || -n "$HIT_GIT_DIRS" ]]; then
       run_ledger "$cwd" release --call "$tuid"
     fi
+    # 危険な cwd で登録した merge / gate は印に控えていないので、cwd の台帳から解放する。
+    if [[ $CWD_UNSAFE -eq 1 && -n "$mark" && ( $HIT_MERGE -eq 1 || $HIT_GATE -eq 1 ) ]]; then
+      run_ledger "$cwd" release --call "$tuid"
+    fi
     return 0
   fi
   [[ $HIT_MERGE -eq 1 ]] && run_ledger "$cwd" release merge
@@ -862,18 +870,13 @@ fi
 json_get cwd >/dev/null
 cwd="$JSON_VAL"
 tuid="$(json_get tool_use_id)"
-# フックの作業ディレクトリがタブ・改行を含むときは、登録する経路（PreToolUse）では何も登録せずに
-# 通す。解放の経路（PostToolUse など）は、安全なディレクトリで登録した分を解放し続けるため止めない。
-# json_get は末尾の改行を保つので、値のまま判定できる。
+# フックの作業ディレクトリがタブ・改行を含むときも、フックは止まらない。台帳の欄へ書けないのは
+# 危険な値そのものなので、パスを持たない種類（merge・gate・issue）は従来どおり確かめて登録し、
+# 拒否も効かせる（台帳が作業ツリーの欄に - を書く）。パスを持つ処理（git の作業ツリー・文書）は、
+# 解決した値が危険なときだけ個別に飛ばす。json_get は末尾の改行を保つので、値のまま判定できる。
 CWD_UNSAFE=0
 ! path_is_unsafe "$cwd" || CWD_UNSAFE=1
 if [[ -z "$cwd" || ! -d "$cwd" ]]; then cwd="$(pwd)"; fi
-
-if [[ "$CWD_UNSAFE" -eq 1 && "$event" == "PreToolUse" ]]; then
-  add_warn "$UNSAFE_WARN"
-  emit "" "" "" "" "$WARNS"
-  exit 0
-fi
 
 case "$event" in
   SessionStart) on_session_start ;;

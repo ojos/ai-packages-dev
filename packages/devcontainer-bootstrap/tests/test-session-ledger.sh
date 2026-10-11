@@ -739,7 +739,7 @@ check_unsafe_ledger() { # ラベル パス
   done
   [[ ! -e "$DIR/s-a.tsv" ]] || bad="$bad | 対象のパスで台帳に書き込まれた"
   # 作業ツリーのパス（その作業ツリーの中から呼ぶ）
-  for k in "claim git" "claim merge" "check merge"; do
+  for k in "claim git"; do
     # shellcheck disable=SC2086
     run s-a "$p" $k
     ledger_skipped && [[ "$RC" -eq 0 ]] || bad="$bad | 作業ツリーで $k の判定: rc=$RC out=$OUT"
@@ -753,7 +753,8 @@ check_unsafe_ledger() { # ラベル パス
 }
 
 # release は登録を減らす側なので、作業ツリーが危険なパスでも自分の登録を解放する。
-# 作業ツリーの欄には危険な値を書かず、- を書く。
+# 作業ツリーの欄には、実際に書く値（安全なリポジトリのルート）を書く。サブディレクトリが危険
+# なだけでは止めない。
 check_release_from_unsafe_dir() { # ラベル サブディレクトリ名
   local label="$1" p="$repo/$2" bad="" k
   rm -rf "$DIR"
@@ -770,12 +771,60 @@ check_release_from_unsafe_dir() { # ラベル サブディレクトリ名
     run s-b "$repo" check $k
     [[ "$(first_line)" == "LEDGER_OK" ]] || bad="$bad | $k が解放されない: $OUT"
   done
-  if [[ -f "$DIR/s-a.tsv" ]] && awk -F'\t' '$2 == "release" && NF == 8 && $6 == "-" { f = 1 } END { exit !f }' "$DIR/s-a.tsv"; then :; else bad="$bad | 解放の行の作業ツリーの欄が - でない"; fi
+  if [[ -f "$DIR/s-a.tsv" ]] && awk -F'\t' -v wt="$repo" '$2 == "release" && NF == 8 && $6 == wt { f = 1 } END { exit !f }' "$DIR/s-a.tsv"; then :; else bad="$bad | 解放の行の作業ツリーの欄が、安全なリポジトリのルートでない"; fi
   rm -rf "$DIR" "$p"
   if [[ -z "$bad" ]]; then pass; else fail "$label:$bad"; fi
 }
 
 ubase="$(dirname "$repo")"
+# パスを持たない種類（merge・gate・issue）は、作業ツリーが危険でも通常どおり登録・照合し、
+# 作業ツリーの欄には - を書く。守るのは、危険な値を欄に書かないことだけ（#528）。
+check_pathless_in_unsafe_wt() { # ラベル パス
+  local label="$1" p="$2" bad="" k f
+  rm -rf "$DIR"
+  mkdir -p "$p"
+  git -C "$p" init -q . >/dev/null 2>&1
+  f="$p/.git/session-ledger/s-a.tsv"
+  for k in merge gate; do
+    run s-a "$p" claim "$k"
+    [[ "$RC" -eq 0 && "$(first_line)" == "LEDGER_OK" ]] || bad="$bad | $k の登録: $OUT"
+    run s-b "$p" check "$k"
+    [[ "$(first_line)" == "LEDGER_DENY" ]] || bad="$bad | $k が相手を止めない: $OUT"
+  done
+  run s-a "$p" claim issue 88
+  run s-b "$p" check issue 88
+  [[ "$(first_line)" == "LEDGER_WARN" ]] || bad="$bad | issue が見えない: $OUT"
+  if [[ -f "$f" ]] && awk -F'\t' '$2 == "claim" && NF == 8 && $6 == "-" { n++ } END { exit !(n == 3) }' "$f"; then :; else bad="$bad | 作業ツリーの欄が - でない"; fi
+  rm -rf "$p"
+  if [[ -z "$bad" ]]; then pass; else fail "$label:$bad"; fi
+}
+
+# 実体のパスの再検査（シンボリックリンクの先が危険）、release * の対象、安全なリポジトリの
+# 中の危険なサブディレクトリ。
+check_unsafe_misc() { # ラベル 危険なリポジトリのパス
+  local label="$1" p="$2" bad="" k lnk="$ubase/lnk_$$" sub="$repo/sub"$'\t'"dir"
+  rm -rf "$DIR"
+  mkdir -p "$p" "$sub"
+  git -C "$p" init -q . >/dev/null 2>&1
+  ln -sfn "$p" "$lnk"
+  for k in "claim git $lnk" "claim doc $lnk/f.txt" "check git $lnk"; do
+    # shellcheck disable=SC2086
+    run s-a "$repo" $k
+    ledger_skipped || bad="$bad | リンク先の実体が危険な $k が通った: $OUT"
+  done
+  [[ ! -e "$DIR/s-a.tsv" ]] || bad="$bad | リンク先の実体で台帳に書き込まれた"
+  run s-a "$repo" release '*' "$p"
+  ledger_skipped || bad="$bad | release * の危険な対象が通った: $OUT"
+  run s-a "$repo" release '*' "$repo/ok"
+  ! ledger_skipped || bad="$bad | release * の安全な対象まで飛ばした: $OUT"
+  # 安全なリポジトリの中の危険なサブディレクトリでは、止めない
+  run s-a "$sub" claim git
+  if ledger_skipped || [[ "$OUT" != *"target=$repo"* ]]; then bad="$bad | 危険なサブディレクトリで止まった: $OUT"; fi
+  rm -f "$lnk"
+  rm -rf "$DIR" "$p" "$sub"
+  if [[ -z "$bad" ]]; then pass; else fail "$label:$bad"; fi
+}
+
 it "(#528) 危険なパス（タブ）の作業ツリーからでも、release は自分の登録を解放する"
 check_release_from_unsafe_dir "タブ" "sub"$'\t'"dir"
 it "(#528) 危険なパス（末尾のタブ）の作業ツリーからでも、release は解放する"
@@ -792,5 +841,16 @@ it "(#528) パスに改行を含むとき、台帳へ書き込まずに通す"
 check_unsafe_ledger "改行" "$ubase/re"$'\n'"po"
 it "(#528) パスの末尾が改行のときも、台帳へ書き込まずに通す"
 check_unsafe_ledger "末尾の改行" "$ubase/repo"$'\n'
+
+it "(#528) 作業ツリーがタブを含むパスでも、パスを持たない種類は通常どおり登録・照合する（欄は -）"
+check_pathless_in_unsafe_wt "タブ" "$ubase/pw"$'\t'"x"
+it "(#528) 作業ツリーが改行を含むパスでも、同じ"
+check_pathless_in_unsafe_wt "改行" "$ubase/pw"$'\n'"x"
+it "(#528) 作業ツリーの末尾が改行のパスでも、同じ"
+check_pathless_in_unsafe_wt "末尾の改行" "$ubase/pw"$'\n'
+it "(#528) 実体のパス・release * の対象・危険なサブディレクトリ（タブ）"
+check_unsafe_misc "タブ" "$ubase/mi"$'\t'"x"
+it "(#528) 実体のパス・release * の対象・危険なサブディレクトリ（末尾の改行）"
+check_unsafe_misc "末尾の改行" "$ubase/mi"$'\n'
 
 exit_with_result

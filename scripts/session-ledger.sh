@@ -39,10 +39,11 @@
 #     解放されていないものが 1 つでもあれば有効（1 件として表示・判定する）。
 #     7 列（識別子なし）の古い台帳ファイルも読める（識別子は - として扱う）。
 #   release の kind が * なら全部、target が * ならその種類すべてを解放する。
-#   作業ツリーか対象のパス（doc・git）がタブ・改行を含むときは、書式を壊すので書き込まず、
-#   警告を出して LEDGER_SKIP で通す（claim / release / check。終了コード 0。2 行目に
-#   `reason: unsafe-path` を出す）。ただし release は登録を減らす側なので、作業ツリーが危険な
-#   パスでも解放する（作業ツリーの欄には - を書く）。対象のパスが危険なときだけ SKIP にする。
+#   書式を壊す値（タブ・改行を含むパス）を台帳の欄に書かない。対象の欄へ来るパス（git の
+#   作業ツリー・doc の文書・release の * 指定の対象）が危険なときは、書き込まず警告を出して
+#   LEDGER_SKIP で通す（終了コード 0。2 行目に `reason: unsafe-path`）。検査は正規化の前後
+#   （シンボリックリンクをたどった実体のパスを含む）で行う。パスを持たない種類（merge・gate・
+#   issue）と release は、作業ツリーが危険なパスでも通常どおり扱い、作業ツリーの欄には - を書く。
 #
 # セッションの識別子と持ち主の PID:
 #   SESSION_LEDGER_ID があればそれを使う（英数字と ._- 以外は _ になる）。無ければ
@@ -261,7 +262,6 @@ TOPLEVEL="${TOPLEVEL%.}"
 TOPLEVEL="${TOPLEVEL%$'\n'}"
 [ -n "$TOPLEVEL" ] || TOPLEVEL="$PWD"
 WT_UNSAFE=0
-! path_is_unsafe "$PWD" || WT_UNSAFE=1
 ! path_is_unsafe "$TOPLEVEL" || WT_UNSAFE=1
 # シンボリックリンクをたどった実体のパスに揃える（同じ作業ツリーが別の表記で現れても一致させる）。
 # 実体のパスも、末尾の改行を保って取り出して判定する。
@@ -271,7 +271,8 @@ _real="${_real%$'\n'}"
 [ -z "$_real" ] || TOPLEVEL="$_real"
 unset _real
 ! path_is_unsafe "$TOPLEVEL" || WT_UNSAFE=1
-# 台帳へ書く作業ツリーの欄。危険な値は書式を壊すので、安全な値（-）にする。
+# 台帳へ書く作業ツリーの欄。危険な値は書式を壊すので、安全な値（-）にする。判定は、欄へ書く
+# 値（TOPLEVEL）で行う。安全なリポジトリの中の危険なサブディレクトリにいるだけでは止めない。
 WT_FIELD="$TOPLEVEL"
 [ "$WT_UNSAFE" -eq 0 ] || WT_FIELD="-"
 
@@ -291,13 +292,19 @@ skip_unsafe_target() { # kind target
   return 1
 }
 
-# claim / check 用。作業ツリーのパスも見る。
-skip_unsafe_path() { # kind target
-  if [ "$WT_UNSAFE" -eq 1 ]; then
-    warn "作業ツリーのパスがタブか改行を含みます。台帳の対象にせず通します。"
-    return 0
-  fi
-  skip_unsafe_target "$1" "$2"
+# 対象を検査し、正規化して NORM_TARGET へ入れる。戻り値 1 = 台帳の対象にできない（警告を出した）。
+# 危険な値が「対象」の欄へ来るのは、git（作業ツリーのパス）と doc（文書のパス）だけ。それ以外
+# の種類（merge・gate・issue）は、作業ツリーが危険でも、作業ツリーの欄に - を書いて通常どおり扱う。
+# 検査は正規化の前の値と、正規化のあとの値（シンボリックリンクをたどった実体のパス）の両方で行う。
+# 取り出しは末尾に目印を付け、末尾の改行を削らない。
+NORM_TARGET=""
+prepare_target() { # kind target
+  NORM_TARGET=""
+  if skip_unsafe_target "$1" "$2"; then return 1; fi
+  NORM_TARGET="$(normalize_target "$1" "$2"; printf .)"
+  NORM_TARGET="${NORM_TARGET%.}"
+  if skip_unsafe_target "$1" "$NORM_TARGET"; then return 1; fi
+  return 0
 }
 
 # 危険なパスで書かずに通すときの出力。2 行目の理由の印で、フックは台帳が読めなかった
@@ -347,7 +354,10 @@ normalize_path() {
     d="${d%/*}"
     [ -n "$d" ] || d="/"
   done
-  real="$(cd -P "$d" 2>/dev/null && pwd -P)" || real="$d"
+  real="$(cd -P "$d" 2>/dev/null && pwd -P; printf .)"
+  real="${real%.}"
+  real="${real%$'\n'}"
+  [ -n "$real" ] || real="$d"
   abs="${real%/}$rest"
   [ -n "$abs" ] || abs="/"
   if [ "$abs" = "/" ]; then trail=""; fi
@@ -364,21 +374,25 @@ normalize_target() { # kind target
       ;;
     doc)
       if [ -n "$t" ]; then
-        t="$(normalize_path "$t")"
+        t="$(normalize_path "$t"; printf .)"; t="${t%.}"
         case "$t" in
           "$TOPLEVEL"/*) t="${t#"$TOPLEVEL"/}" ;;
         esac
       fi
       ;;
     git)
-      if [ -n "$t" ]; then t="$(normalize_path "$t")"; else t="$TOPLEVEL"; fi
+      if [ -n "$t" ]; then t="$(normalize_path "$t"; printf .)"; t="${t%.}"; else t="$TOPLEVEL"; fi
       t="${t%/}"
       # 作業ツリーの下の階層を渡されても、その作業ツリーのルートへ揃える（cd した先や
       # git -C の先がサブディレクトリでも、同じ作業ツリーの登録と照合できるように）。
       if [ -d "$t" ]; then
-        top="$(git -C "$t" rev-parse --show-toplevel 2>/dev/null)" || top=""
+        top="$(git -C "$t" rev-parse --show-toplevel 2>/dev/null; printf .)"
+        top="${top%.}"
+        top="${top%$'\n'}"
         if [ -n "$top" ]; then
-          top="$(cd -P "$top" 2>/dev/null && pwd -P)" || top=""
+          top="$(cd -P "$top" 2>/dev/null && pwd -P; printf .)"
+          top="${top%.}"
+          top="${top%$'\n'}"
           [ -n "$top" ] && t="$top"
         fi
       fi
@@ -551,11 +565,11 @@ append_record() { # op kind target
 cmd_check() {
   local kind="${1:-}" target
   valid_kind "$kind" || { usage; return 2; }
-  if skip_unsafe_path "$kind" "${2:-}"; then
+  if ! prepare_target "$kind" "${2:-}"; then
     echo_skip_unsafe
     return 0
   fi
-  target="$(normalize_target "$kind" "${2:-}")"
+  target="$NORM_TARGET"
   if owner_unknown; then
     echo "LEDGER_SKIP"
     return 0
@@ -576,11 +590,11 @@ cmd_claim() {
   fi
   kind="${1:-}"
   valid_kind "$kind" || { usage; return 2; }
-  if skip_unsafe_path "$kind" "${2:-}"; then
+  if ! prepare_target "$kind" "${2:-}"; then
     echo_skip_unsafe
     return 0
   fi
-  target="$(normalize_target "$kind" "${2:-}")"
+  target="$NORM_TARGET"
   if owner_unknown; then
     echo "LEDGER_SKIP"
     return 0
@@ -618,12 +632,19 @@ cmd_release() {
   if [ "$kind" != "*" ]; then
     valid_kind "$kind" || { usage; return 2; }
   fi
-  if skip_unsafe_target "$kind" "$target"; then
-    echo_skip_unsafe
-    return 0
-  fi
-  if [ "$kind" != "*" ]; then
-    [ "$target" = "*" ] || target="$(normalize_target "$kind" "$target")"
+  if [ "$kind" = "*" ]; then
+    # 対象は照合に使われず、そのまま行へ書かれるので、危険な値は書かない。
+    if [ "$target" != "*" ] && path_is_unsafe "$target"; then
+      warn "対象のパスがタブか改行を含みます。台帳の対象にせず通します。"
+      echo_skip_unsafe
+      return 0
+    fi
+  elif [ "$target" != "*" ]; then
+    if ! prepare_target "$kind" "$target"; then
+      echo_skip_unsafe
+      return 0
+    fi
+    target="$NORM_TARGET"
   fi
   owner_unknown && return 0
   if ! ensure_dir; then

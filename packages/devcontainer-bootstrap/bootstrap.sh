@@ -7218,10 +7218,11 @@ TMPL
 #     解放されていないものが 1 つでもあれば有効（1 件として表示・判定する）。
 #     7 列（識別子なし）の古い台帳ファイルも読める（識別子は - として扱う）。
 #   release の kind が * なら全部、target が * ならその種類すべてを解放する。
-#   作業ツリーか対象のパス（doc・git）がタブ・改行を含むときは、書式を壊すので書き込まず、
-#   警告を出して LEDGER_SKIP で通す（claim / release / check。終了コード 0。2 行目に
-#   `reason: unsafe-path` を出す）。ただし release は登録を減らす側なので、作業ツリーが危険な
-#   パスでも解放する（作業ツリーの欄には - を書く）。対象のパスが危険なときだけ SKIP にする。
+#   書式を壊す値（タブ・改行を含むパス）を台帳の欄に書かない。対象の欄へ来るパス（git の
+#   作業ツリー・doc の文書・release の * 指定の対象）が危険なときは、書き込まず警告を出して
+#   LEDGER_SKIP で通す（終了コード 0。2 行目に `reason: unsafe-path`）。検査は正規化の前後
+#   （シンボリックリンクをたどった実体のパスを含む）で行う。パスを持たない種類（merge・gate・
+#   issue）と release は、作業ツリーが危険なパスでも通常どおり扱い、作業ツリーの欄には - を書く。
 #
 # セッションの識別子と持ち主の PID:
 #   SESSION_LEDGER_ID があればそれを使う（英数字と ._- 以外は _ になる）。無ければ
@@ -7440,7 +7441,6 @@ TOPLEVEL="${TOPLEVEL%.}"
 TOPLEVEL="${TOPLEVEL%$'\n'}"
 [ -n "$TOPLEVEL" ] || TOPLEVEL="$PWD"
 WT_UNSAFE=0
-! path_is_unsafe "$PWD" || WT_UNSAFE=1
 ! path_is_unsafe "$TOPLEVEL" || WT_UNSAFE=1
 # シンボリックリンクをたどった実体のパスに揃える（同じ作業ツリーが別の表記で現れても一致させる）。
 # 実体のパスも、末尾の改行を保って取り出して判定する。
@@ -7450,7 +7450,8 @@ _real="${_real%$'\n'}"
 [ -z "$_real" ] || TOPLEVEL="$_real"
 unset _real
 ! path_is_unsafe "$TOPLEVEL" || WT_UNSAFE=1
-# 台帳へ書く作業ツリーの欄。危険な値は書式を壊すので、安全な値（-）にする。
+# 台帳へ書く作業ツリーの欄。危険な値は書式を壊すので、安全な値（-）にする。判定は、欄へ書く
+# 値（TOPLEVEL）で行う。安全なリポジトリの中の危険なサブディレクトリにいるだけでは止めない。
 WT_FIELD="$TOPLEVEL"
 [ "$WT_UNSAFE" -eq 0 ] || WT_FIELD="-"
 
@@ -7470,13 +7471,19 @@ skip_unsafe_target() { # kind target
   return 1
 }
 
-# claim / check 用。作業ツリーのパスも見る。
-skip_unsafe_path() { # kind target
-  if [ "$WT_UNSAFE" -eq 1 ]; then
-    warn "作業ツリーのパスがタブか改行を含みます。台帳の対象にせず通します。"
-    return 0
-  fi
-  skip_unsafe_target "$1" "$2"
+# 対象を検査し、正規化して NORM_TARGET へ入れる。戻り値 1 = 台帳の対象にできない（警告を出した）。
+# 危険な値が「対象」の欄へ来るのは、git（作業ツリーのパス）と doc（文書のパス）だけ。それ以外
+# の種類（merge・gate・issue）は、作業ツリーが危険でも、作業ツリーの欄に - を書いて通常どおり扱う。
+# 検査は正規化の前の値と、正規化のあとの値（シンボリックリンクをたどった実体のパス）の両方で行う。
+# 取り出しは末尾に目印を付け、末尾の改行を削らない。
+NORM_TARGET=""
+prepare_target() { # kind target
+  NORM_TARGET=""
+  if skip_unsafe_target "$1" "$2"; then return 1; fi
+  NORM_TARGET="$(normalize_target "$1" "$2"; printf .)"
+  NORM_TARGET="${NORM_TARGET%.}"
+  if skip_unsafe_target "$1" "$NORM_TARGET"; then return 1; fi
+  return 0
 }
 
 # 危険なパスで書かずに通すときの出力。2 行目の理由の印で、フックは台帳が読めなかった
@@ -7526,7 +7533,10 @@ normalize_path() {
     d="${d%/*}"
     [ -n "$d" ] || d="/"
   done
-  real="$(cd -P "$d" 2>/dev/null && pwd -P)" || real="$d"
+  real="$(cd -P "$d" 2>/dev/null && pwd -P; printf .)"
+  real="${real%.}"
+  real="${real%$'\n'}"
+  [ -n "$real" ] || real="$d"
   abs="${real%/}$rest"
   [ -n "$abs" ] || abs="/"
   if [ "$abs" = "/" ]; then trail=""; fi
@@ -7543,21 +7553,25 @@ normalize_target() { # kind target
       ;;
     doc)
       if [ -n "$t" ]; then
-        t="$(normalize_path "$t")"
+        t="$(normalize_path "$t"; printf .)"; t="${t%.}"
         case "$t" in
           "$TOPLEVEL"/*) t="${t#"$TOPLEVEL"/}" ;;
         esac
       fi
       ;;
     git)
-      if [ -n "$t" ]; then t="$(normalize_path "$t")"; else t="$TOPLEVEL"; fi
+      if [ -n "$t" ]; then t="$(normalize_path "$t"; printf .)"; t="${t%.}"; else t="$TOPLEVEL"; fi
       t="${t%/}"
       # 作業ツリーの下の階層を渡されても、その作業ツリーのルートへ揃える（cd した先や
       # git -C の先がサブディレクトリでも、同じ作業ツリーの登録と照合できるように）。
       if [ -d "$t" ]; then
-        top="$(git -C "$t" rev-parse --show-toplevel 2>/dev/null)" || top=""
+        top="$(git -C "$t" rev-parse --show-toplevel 2>/dev/null; printf .)"
+        top="${top%.}"
+        top="${top%$'\n'}"
         if [ -n "$top" ]; then
-          top="$(cd -P "$top" 2>/dev/null && pwd -P)" || top=""
+          top="$(cd -P "$top" 2>/dev/null && pwd -P; printf .)"
+          top="${top%.}"
+          top="${top%$'\n'}"
           [ -n "$top" ] && t="$top"
         fi
       fi
@@ -7730,11 +7744,11 @@ append_record() { # op kind target
 cmd_check() {
   local kind="${1:-}" target
   valid_kind "$kind" || { usage; return 2; }
-  if skip_unsafe_path "$kind" "${2:-}"; then
+  if ! prepare_target "$kind" "${2:-}"; then
     echo_skip_unsafe
     return 0
   fi
-  target="$(normalize_target "$kind" "${2:-}")"
+  target="$NORM_TARGET"
   if owner_unknown; then
     echo "LEDGER_SKIP"
     return 0
@@ -7755,11 +7769,11 @@ cmd_claim() {
   fi
   kind="${1:-}"
   valid_kind "$kind" || { usage; return 2; }
-  if skip_unsafe_path "$kind" "${2:-}"; then
+  if ! prepare_target "$kind" "${2:-}"; then
     echo_skip_unsafe
     return 0
   fi
-  target="$(normalize_target "$kind" "${2:-}")"
+  target="$NORM_TARGET"
   if owner_unknown; then
     echo "LEDGER_SKIP"
     return 0
@@ -7797,12 +7811,19 @@ cmd_release() {
   if [ "$kind" != "*" ]; then
     valid_kind "$kind" || { usage; return 2; }
   fi
-  if skip_unsafe_target "$kind" "$target"; then
-    echo_skip_unsafe
-    return 0
-  fi
-  if [ "$kind" != "*" ]; then
-    [ "$target" = "*" ] || target="$(normalize_target "$kind" "$target")"
+  if [ "$kind" = "*" ]; then
+    # 対象は照合に使われず、そのまま行へ書かれるので、危険な値は書かない。
+    if [ "$target" != "*" ] && path_is_unsafe "$target"; then
+      warn "対象のパスがタブか改行を含みます。台帳の対象にせず通します。"
+      echo_skip_unsafe
+      return 0
+    fi
+  elif [ "$target" != "*" ]; then
+    if ! prepare_target "$kind" "$target"; then
+      echo_skip_unsafe
+      return 0
+    fi
+    target="$NORM_TARGET"
   fi
   owner_unknown && return 0
   if ! ensure_dir; then
@@ -7970,8 +7991,9 @@ TMPL
 #
 # タブか改行を含むパス（フックの作業ディレクトリ・cd 先・git -C 先・作るブランチの控え）は、
 # 台帳・印の書式（タブ区切り・改行区切り）を壊すので、解決する前の値で判定して台帳の対象に
-# せず、警告して通す。フックの作業ディレクトリが該当するときは、登録する経路（PreToolUse）で
-# 何も登録しない。解放の経路（PostToolUse など）は、安全な作業ディレクトリで登録した分を解放し続ける。
+# せず、警告して通す。守るのは「危険な値を台帳の欄に書かない」ことだけで、フックの作業
+# ディレクトリが危険でも何もしない形にはしない。パスを持たない種類（merge・gate・issue）は
+# 従来どおり確かめて登録し、拒否も効かせる。解放の経路も続ける。
 #
 # 台帳そのものの読み書きに失敗したとき（台帳が見つからない・置き場所を作れない・出力が読めない）
 # は、警告（systemMessage）を出して通す。台帳の不具合で、すべての操作を止めない。
@@ -8241,7 +8263,12 @@ HIT_BRANCHES=""   # 改行区切り。「番号 TAB リポジトリのディレ�
 # 末尾に目印（.）を付け、目印と git が足す最後の改行 1 つだけを落とす。
 toplevel_of() { # 基準ディレクトリ 相対ディレクトリ
   local base="$1" rel="$2" top=""
-  top="$( (cd "$base" 2>/dev/null && { [[ -z "$rel" ]] || cd "$rel" 2>/dev/null; } && git rev-parse --show-toplevel 2>/dev/null) || true; printf .)"
+  if [[ "$rel" == /* ]]; then
+    # 絶対パスの -C は基準ディレクトリに依存しない（基準が危険でも、この結果だけで判定する）。
+    top="$( (cd "$rel" 2>/dev/null && git rev-parse --show-toplevel 2>/dev/null) || true; printf .)"
+  else
+    top="$( (cd "$base" 2>/dev/null && { [[ -z "$rel" ]] || cd "$rel" 2>/dev/null; } && git rev-parse --show-toplevel 2>/dev/null) || true; printf .)"
+  fi
   top="${top%.}"
   top="${top%$'\n'}"
   [[ -n "$top" ]] || top="$base"
@@ -8249,21 +8276,17 @@ toplevel_of() { # 基準ディレクトリ 相対ディレクトリ
 }
 
 # 基準ディレクトリと相対ディレクトリから作業ツリーのルートを求めて TOP_RESULT へ入れる。
-# どちらかがタブ・改行を含むとき（解決する前の値で判定する）は、警告を足して 1 を返し、
-# TOP_RESULT を空にする。呼び出し側は、その作業ツリーを登録の対象にしない。
-# 結果を $(...) で返さないのは、警告（WARNS）が部分シェルで失われ、末尾の改行も削られるため。
-# 解決した後の値（シンボリックリンクの先など）も判定する。
+# 判定は、台帳の欄へ書く値（解決した作業ツリーのルート）で行う。基準や相対のディレクトリが
+# 危険でも、解決した先が安全なら登録の対象にする（安全なリポジトリの中の危険なサブディレクトリ
+# にいるだけでは止めない）。解決した先が危険なとき（解決できず基準へ戻った場合、シンボリック
+# リンクの先を含む）は、警告を足して 1 を返し、TOP_RESULT を空にする。呼び出し側は、その作業ツリー
+# を登録の対象にしない。結果を $(...) で返さないのは、警告（WARNS）が部分シェルで失われ、
+# 末尾の改行も削られるため。
 TOP_RESULT=""
 resolve_top() { # 基準ディレクトリ 相対ディレクトリ
-  local bad=0
   TOP_RESULT=""
-  if path_is_unsafe "$1" || path_is_unsafe "$2"; then
-    bad=1
-  else
-    toplevel_of "$1" "$2"
-    ! path_is_unsafe "$TOP_RESULT" || bad=1
-  fi
-  if [[ $bad -eq 1 ]]; then
+  toplevel_of "$1" "$2"
+  if path_is_unsafe "$TOP_RESULT"; then
     add_warn "$UNSAFE_WARN"
     TOP_RESULT=""
     return 1
@@ -8537,14 +8560,14 @@ pre_bash() {
     run_ledger "$cwd" claim ${call_opt[@]+"${call_opt[@]}"} merge
     case "$LEDGER_VERDICT" in
       LEDGER_DENY) denies="${denies:+$denies$'\n'}$(deny_text 'マージ・リリース' "$LEDGER_DETAIL")" ;;
-      LEDGER_OK | LEDGER_WARN) claimed_merge=1; call_dirs="${call_dirs:+$call_dirs$'\n'}$cwd" ;;
+      LEDGER_OK | LEDGER_WARN) claimed_merge=1; [[ $CWD_UNSAFE -eq 1 ]] || call_dirs="${call_dirs:+$call_dirs$'\n'}$cwd" ;;
     esac
   fi
   if [[ $HIT_GATE -eq 1 ]]; then
     run_ledger "$cwd" claim ${call_opt[@]+"${call_opt[@]}"} gate
     case "$LEDGER_VERDICT" in
       LEDGER_DENY) denies="${denies:+$denies$'\n'}$(deny_text '重いゲート（verify / loop-gate）の起動' "$LEDGER_DETAIL")" ;;
-      LEDGER_OK | LEDGER_WARN) claimed_gate=1; call_dirs="${call_dirs:+$call_dirs$'\n'}$cwd" ;;
+      LEDGER_OK | LEDGER_WARN) claimed_gate=1; [[ $CWD_UNSAFE -eq 1 ]] || call_dirs="${call_dirs:+$call_dirs$'\n'}$cwd" ;;
     esac
   fi
   if [[ -n "$HIT_GIT_DIRS" ]]; then
@@ -8564,6 +8587,8 @@ EOF
     # tool_use_id があれば、その識別子の登録だけを外す（同じセッションの先行する登録は残す）。
     if [[ -n "$tuid" ]]; then
       release_call_dirs "$call_dirs"
+      # 危険な cwd で登録した分は印に控えていないので、cwd の台帳から解放する。
+      [[ $CWD_UNSAFE -eq 0 || ( $claimed_merge -eq 0 && $claimed_gate -eq 0 ) ]] || run_ledger "$cwd" release --call "$tuid"
     else
       [[ $claimed_merge -eq 0 ]] || run_ledger "$cwd" release merge
       [[ $claimed_gate -eq 0 ]] || run_ledger "$cwd" release gate
@@ -8702,6 +8727,10 @@ post_bash() {
     elif [[ $HIT_MERGE -eq 1 || $HIT_GATE -eq 1 || -n "$HIT_GIT_DIRS" ]]; then
       run_ledger "$cwd" release --call "$tuid"
     fi
+    # 危険な cwd で登録した merge / gate は印に控えていないので、cwd の台帳から解放する。
+    if [[ $CWD_UNSAFE -eq 1 && -n "$mark" && ( $HIT_MERGE -eq 1 || $HIT_GATE -eq 1 ) ]]; then
+      run_ledger "$cwd" release --call "$tuid"
+    fi
     return 0
   fi
   [[ $HIT_MERGE -eq 1 ]] && run_ledger "$cwd" release merge
@@ -8753,18 +8782,13 @@ fi
 json_get cwd >/dev/null
 cwd="$JSON_VAL"
 tuid="$(json_get tool_use_id)"
-# フックの作業ディレクトリがタブ・改行を含むときは、登録する経路（PreToolUse）では何も登録せずに
-# 通す。解放の経路（PostToolUse など）は、安全なディレクトリで登録した分を解放し続けるため止めない。
-# json_get は末尾の改行を保つので、値のまま判定できる。
+# フックの作業ディレクトリがタブ・改行を含むときも、フックは止まらない。台帳の欄へ書けないのは
+# 危険な値そのものなので、パスを持たない種類（merge・gate・issue）は従来どおり確かめて登録し、
+# 拒否も効かせる（台帳が作業ツリーの欄に - を書く）。パスを持つ処理（git の作業ツリー・文書）は、
+# 解決した値が危険なときだけ個別に飛ばす。json_get は末尾の改行を保つので、値のまま判定できる。
 CWD_UNSAFE=0
 ! path_is_unsafe "$cwd" || CWD_UNSAFE=1
 if [[ -z "$cwd" || ! -d "$cwd" ]]; then cwd="$(pwd)"; fi
-
-if [[ "$CWD_UNSAFE" -eq 1 && "$event" == "PreToolUse" ]]; then
-  add_warn "$UNSAFE_WARN"
-  emit "" "" "" "" "$WARNS"
-  exit 0
-fi
 
 case "$event" in
   SessionStart) on_session_start ;;
