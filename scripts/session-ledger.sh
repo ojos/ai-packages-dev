@@ -332,7 +332,13 @@ normalize_path() {
   case "$p" in */) trail="/" ;; esac
   case "$p" in
     /*) abs="$p" ;;
-    *) abs="$(pwd -P)/$p" ;;
+    *)
+      # $(...) は末尾の改行を削る。末尾に目印を付けて取り出し、作業ディレクトリが末尾が改行の
+      # パスのとき、別の安全なパスとして登録しない。
+      abs="$(pwd -P; printf .)"
+      abs="${abs%.}"
+      abs="${abs%$'\n'}/$p"
+      ;;
   esac
   out=""
   set -f

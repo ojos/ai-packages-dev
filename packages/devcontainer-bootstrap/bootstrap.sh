@@ -7511,7 +7511,13 @@ normalize_path() {
   case "$p" in */) trail="/" ;; esac
   case "$p" in
     /*) abs="$p" ;;
-    *) abs="$(pwd -P)/$p" ;;
+    *)
+      # $(...) は末尾の改行を削る。末尾に目印を付けて取り出し、作業ディレクトリが末尾が改行の
+      # パスのとき、別の安全なパスとして登録しない。
+      abs="$(pwd -P; printf .)"
+      abs="${abs%.}"
+      abs="${abs%$'\n'}/$p"
+      ;;
   esac
   out=""
   set -f
@@ -8267,7 +8273,12 @@ toplevel_of() { # 基準ディレクトリ 相対ディレクトリ
   top="$( ( { [[ "$rel" == /* ]] || cd "$base"; } 2>/dev/null && { [[ -z "$rel" ]] || cd "$rel"; } 2>/dev/null && git rev-parse --show-toplevel 2>/dev/null) || true; printf .)"
   top="${top%.}"
   top="${top%$'\n'}"
-  [[ -n "$top" ]] || top="$base"
+  if [[ -z "$top" ]]; then
+    # 解決できなかったときは基準へ戻すが、危険な -C 先そのものを、安全な基準へ置き換えない
+    # （存在しない危険な -C 先を、基準のリポジトリの git 操作として登録しないため）。
+    top="$base"
+    ! path_is_unsafe "$rel" || top="$rel"
+  fi
   TOP_RESULT="$top"
 }
 

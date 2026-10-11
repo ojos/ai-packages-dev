@@ -853,4 +853,30 @@ check_unsafe_misc "タブ" "$ubase/mi"$'\t'"x"
 it "(#528) 実体のパス・release * の対象・危険なサブディレクトリ（末尾の改行）"
 check_unsafe_misc "末尾の改行" "$ubase/mi"$'\n'
 
+# 作業ディレクトリが末尾が改行のパスのとき、相対パスを別の安全なパスへ正規化して登録しない（#528）。
+check_relative_in_unsafe_cwd() { # ラベル 危険な作業ツリー（それ自身がリポジトリ）のパス
+  local label="$1" p="$2" bad="" k
+  rm -rf "$DIR"
+  mkdir -p "$p"
+  git -C "$p" init -q . >/dev/null 2>&1
+  for k in "claim git ." "check git ."; do
+    # shellcheck disable=SC2086
+    run s-a "$p" $k
+    ledger_skipped || bad="$bad | $k が通った: $OUT"
+  done
+  # 文書は作業ツリーからの相対パスで持つので、foo のまま登録される（絶対パスの別の場所にならない）
+  run s-a "$p" claim doc foo
+  case "$OUT" in
+    *"target=foo"*) ;;
+    *) bad="$bad | claim doc foo の対象が相対パスでない: $OUT" ;;
+  esac
+  if [[ -e "$p/.git/session-ledger/s-a.tsv" ]] && awk -F'\t' '$4 ~ /^\// { f = 1 } END { exit !f }' "$p/.git/session-ledger/s-a.tsv"; then bad="$bad | 絶対パスの別の場所が登録された"; fi
+  rm -rf "$p"
+  if [[ -z "$bad" ]]; then pass; else fail "$label:$bad"; fi
+}
+it "(#528) 末尾が改行の作業ディレクトリから相対パスで claim doc / claim git しても、別の安全なパスで登録しない"
+check_relative_in_unsafe_cwd "末尾の改行" "$ubase/rel"$'\n'
+it "(#528) 改行を含む作業ディレクトリから相対パスで claim しても、同じ"
+check_relative_in_unsafe_cwd "改行" "$ubase/rel"$'\n'"x"
+
 exit_with_result

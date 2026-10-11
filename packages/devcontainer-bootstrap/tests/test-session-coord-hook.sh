@@ -786,6 +786,41 @@ check_cd_away_unsafe_root "タブ" "$base_dir/ur"$'\t'"x"
 it "(#528) 同じ（末尾の改行）"
 check_cd_away_unsafe_root "末尾の改行" "$base_dir/ur"$'\n'
 
+# 存在しない危険な -C 先は、安全な基準へ置き換えて、基準のリポジトリの git 操作として登録しない（#528）。
+check_missing_unsafe_dash_c() { # ラベル 存在しない危険なパス
+  local label="$1" nx="$2" bad="" id
+  unsafe_n=$((unsafe_n + 1))
+  id="toolu_m${unsafe_n}"
+  reset_ledger
+  pre_bash s-b "$repo" "git -C \"$nx\" fetch" "$id"
+  [[ "$HRC" -eq 0 && "$(decision)" == "none" ]] || bad="$bad | 判定: $HOUT"
+  [[ "$(count_claims s-b)" == "0" ]] || bad="$bad | 基準の git 操作として登録された: $(count_claims s-b)"
+  [[ "$(sysmsg)" == *"タブか改行"* ]] || bad="$bad | 警告が無い: $HOUT"
+  post_bash s-b "$repo" "git -C \"$nx\" fetch" "$id"
+  reset_ledger
+  if [[ -z "$bad" ]]; then pass; else fail "$label:$bad"; fi
+}
+it "(#528) 存在しない危険な -C 先（タブ）は、基準の git 操作として登録しない"
+check_missing_unsafe_dash_c "タブ" "$base_dir/none"$'\t'"x"
+it "(#528) 存在しない危険な -C 先（改行）は、基準の git 操作として登録しない"
+check_missing_unsafe_dash_c "改行" "$base_dir/none"$'\n'"x"
+it "(#528) 存在しない危険な -C 先（末尾の改行）は、基準の git 操作として登録しない"
+check_missing_unsafe_dash_c "末尾の改行" "$base_dir/none"$'\n'
+
+it "(#528) 危険な作業ツリーでブランチを作っても、同じ警告は 1 行だけ出る"
+unsafe_n=$((unsafe_n + 1))
+wl="$base_dir/wl"$'\t'"x"
+mkdir -p "$wl"
+git -C "$wl" init -q . >/dev/null 2>&1
+pre_bash s-b "$repo" "git -C \"$wl\" checkout -b ${unsafe_n}-x" "toolu_w${unsafe_n}"
+wn="$(printf '%s\n' "$(sysmsg)" | command grep -c "タブか改行")"
+fail_bash s-b "$repo" "git -C \"$wl\" checkout -b ${unsafe_n}-x" "toolu_w${unsafe_n}"
+pre_bash s-b "$wl" "git checkout -b ${unsafe_n}-y" "toolu_w${unsafe_n}b"
+wn2="$(printf '%s\n' "$(sysmsg)" | command grep -c "タブか改行")"
+fail_bash s-b "$wl" "git checkout -b ${unsafe_n}-y" "toolu_w${unsafe_n}b"
+if [[ "$wn" == "1" && "$wn2" == "1" ]]; then pass; else fail "-C 先=$wn cwd=$wn2"; fi
+reset_ledger
+
 it "(#514) 番号だけの古い書式の印は、従来どおり失敗時に解放する"
 pre_bash s-b "$repo" 'git checkout -b feat/33-x' toolu_g5
 printf '33\n' >"${TMPDIR:-/tmp}/session-coord-toolu_g5"
