@@ -351,12 +351,8 @@ HIT_BRANCHES=""   # 改行区切り。「番号 TAB リポジトリのディレ�
 # 末尾に目印（.）を付け、目印と git が足す最後の改行 1 つだけを落とす。
 toplevel_of() { # 基準ディレクトリ 相対ディレクトリ
   local base="$1" rel="$2" top=""
-  if [[ "$rel" == /* ]]; then
-    # 絶対パスの -C は基準ディレクトリに依存しない（基準が危険でも、この結果だけで判定する）。
-    top="$( (cd "$rel" 2>/dev/null && git rev-parse --show-toplevel 2>/dev/null) || true; printf .)"
-  else
-    top="$( (cd "$base" 2>/dev/null && { [[ -z "$rel" ]] || cd "$rel" 2>/dev/null; } && git rev-parse --show-toplevel 2>/dev/null) || true; printf .)"
-  fi
+  # 絶対パスの -C は基準ディレクトリに依存しない（基準へ移らず、この結果だけで判定する）。
+  top="$( ( { [[ "$rel" == /* ]] || cd "$base"; } 2>/dev/null && { [[ -z "$rel" ]] || cd "$rel"; } 2>/dev/null && git rev-parse --show-toplevel 2>/dev/null) || true; printf .)"
   top="${top%.}"
   top="${top%$'\n'}"
   [[ -n "$top" ]] || top="$base"
@@ -648,14 +644,14 @@ pre_bash() {
     run_ledger "$cwd" claim ${call_opt[@]+"${call_opt[@]}"} merge
     case "$LEDGER_VERDICT" in
       LEDGER_DENY) denies="${denies:+$denies$'\n'}$(deny_text 'マージ・リリース' "$LEDGER_DETAIL")" ;;
-      LEDGER_OK | LEDGER_WARN) claimed_merge=1; [[ $CWD_UNSAFE -eq 1 ]] || call_dirs="${call_dirs:+$call_dirs$'\n'}$cwd" ;;
+      LEDGER_OK | LEDGER_WARN) claimed_merge=1; add_call_dir "$cwd" ;;
     esac
   fi
   if [[ $HIT_GATE -eq 1 ]]; then
     run_ledger "$cwd" claim ${call_opt[@]+"${call_opt[@]}"} gate
     case "$LEDGER_VERDICT" in
       LEDGER_DENY) denies="${denies:+$denies$'\n'}$(deny_text '重いゲート（verify / loop-gate）の起動' "$LEDGER_DETAIL")" ;;
-      LEDGER_OK | LEDGER_WARN) claimed_gate=1; [[ $CWD_UNSAFE -eq 1 ]] || call_dirs="${call_dirs:+$call_dirs$'\n'}$cwd" ;;
+      LEDGER_OK | LEDGER_WARN) claimed_gate=1; add_call_dir "$cwd" ;;
     esac
   fi
   if [[ -n "$HIT_GIT_DIRS" ]]; then
@@ -664,7 +660,7 @@ pre_bash() {
       run_ledger "$d" claim ${call_opt[@]+"${call_opt[@]}"} git "$d"
       case "$LEDGER_VERDICT" in
         LEDGER_DENY) denies="${denies:+$denies$'\n'}$(deny_text "作業ツリー（$d）での git 操作" "$LEDGER_DETAIL")" ;;
-        LEDGER_OK | LEDGER_WARN) claimed_dirs="${claimed_dirs:+$claimed_dirs$'\n'}$d"; call_dirs="${call_dirs:+$call_dirs$'\n'}$d" ;;
+        LEDGER_OK | LEDGER_WARN) claimed_dirs="${claimed_dirs:+$claimed_dirs$'\n'}$d"; add_call_dir "$d" ;;
       esac
     done <<EOF
 $HIT_GIT_DIRS
@@ -675,8 +671,6 @@ EOF
     # tool_use_id があれば、その識別子の登録だけを外す（同じセッションの先行する登録は残す）。
     if [[ -n "$tuid" ]]; then
       release_call_dirs "$call_dirs"
-      # 危険な cwd で登録した分は印に控えていないので、cwd の台帳から解放する。
-      [[ $CWD_UNSAFE -eq 0 || ( $claimed_merge -eq 0 && $claimed_gate -eq 0 ) ]] || run_ledger "$cwd" release --call "$tuid"
     else
       [[ $claimed_merge -eq 0 ]] || run_ledger "$cwd" release merge
       [[ $claimed_gate -eq 0 ]] || run_ledger "$cwd" release gate
@@ -736,13 +730,38 @@ write_dirs_mark() {
   f="$(issue_mark_path .dirs)" || return 0
   printf '%s\n' "$1" >"$f" 2>/dev/null || true
 }
+# 控える作業ディレクトリは、改行区切りの一覧に入れるため符号化して持つ（% → %25、タブ → %09、
+# 改行 → %0A）。cwd がタブ・改行を含んでいても、解放の行き先（その cwd の台帳）を、後の
+# PostToolUse の cwd が変わっていても失わないため。台帳の欄へ書くわけではない（フックの
+# 一時ファイルの中だけの表現）。復号の結果は DEC_RESULT へ入れる（末尾の改行を保つため）。
+enc_dir() { # ディレクトリ。符号化した値を標準出力へ
+  local s="$1"
+  s="${s//%/%25}"
+  s="${s//$'\t'/%09}"
+  s="${s//$'\n'/%0A}"
+  printf '%s' "$s"
+}
+DEC_RESULT=""
+dec_dir() { # 符号化した値
+  local s="$1"
+  s="${s//%0A/$'\n'}"
+  s="${s//%09/$'\t'}"
+  s="${s//%25/%}"
+  DEC_RESULT="$s"
+}
+# 呼び出し元の call_dirs（符号化した値の改行区切り）に、ディレクトリを足す。
+add_call_dir() { # ディレクトリ
+  call_dirs="${call_dirs:+$call_dirs$'\n'}$(enc_dir "$1")"
+}
 # 一覧のすべての台帳から、この呼び出しの識別子の登録を解放する（重複は 1 回）。
-release_call_dirs() { # 改行区切りの作業ディレクトリ
-  local d seen=""
-  while IFS= read -r d; do
-    [[ -n "$d" ]] || continue
-    case $'\n'"$seen"$'\n' in *$'\n'"$d"$'\n'*) continue ;; esac
-    seen="${seen:+$seen$'\n'}$d"
+release_call_dirs() { # 改行区切り・符号化した作業ディレクトリ
+  local e d seen=""
+  while IFS= read -r e; do
+    [[ -n "$e" ]] || continue
+    case $'\n'"$seen"$'\n' in *$'\n'"$e"$'\n'*) continue ;; esac
+    seen="${seen:+$seen$'\n'}$e"
+    dec_dir "$e"
+    d="$DEC_RESULT"
     run_ledger "$d" release --call "$tuid"
   done <<EOF
 $1
@@ -815,10 +834,6 @@ post_bash() {
     elif [[ $HIT_MERGE -eq 1 || $HIT_GATE -eq 1 || -n "$HIT_GIT_DIRS" ]]; then
       run_ledger "$cwd" release --call "$tuid"
     fi
-    # 危険な cwd で登録した merge / gate は印に控えていないので、cwd の台帳から解放する。
-    if [[ $CWD_UNSAFE -eq 1 && -n "$mark" && ( $HIT_MERGE -eq 1 || $HIT_GATE -eq 1 ) ]]; then
-      run_ledger "$cwd" release --call "$tuid"
-    fi
     return 0
   fi
   [[ $HIT_MERGE -eq 1 ]] && run_ledger "$cwd" release merge
@@ -872,10 +887,9 @@ cwd="$JSON_VAL"
 tuid="$(json_get tool_use_id)"
 # フックの作業ディレクトリがタブ・改行を含むときも、フックは止まらない。台帳の欄へ書けないのは
 # 危険な値そのものなので、パスを持たない種類（merge・gate・issue）は従来どおり確かめて登録し、
-# 拒否も効かせる（台帳が作業ツリーの欄に - を書く）。パスを持つ処理（git の作業ツリー・文書）は、
-# 解決した値が危険なときだけ個別に飛ばす。json_get は末尾の改行を保つので、値のまま判定できる。
-CWD_UNSAFE=0
-! path_is_unsafe "$cwd" || CWD_UNSAFE=1
+# 拒否も効かせる（台帳が作業ツリーの欄に - を書く）。登録した台帳の控え（印）は符号化して持ち、
+# 解放はその cwd の台帳へ行う。パスを持つ処理（git の作業ツリー・文書）は、解決した値が危険な
+# ときだけ個別に飛ばす。json_get は末尾の改行を保つので、値のまま判定できる。
 if [[ -z "$cwd" || ! -d "$cwd" ]]; then cwd="$(pwd)"; fi
 
 case "$event" in
