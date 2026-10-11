@@ -123,7 +123,7 @@ ASF は 2026-07 に退役しました。
 |---|---|
 | devcontainer-bootstrap | ojos/devcontainer-bootstrap で v0.19.1 まで公開済み |
 | devcontainer-host | ojos/devcontainer-host で v0.1.0 まで公開済み |
-| ai-playbook | ojos/ai-playbook で v0.9.1 まで公開済み |
+| ai-playbook | ojos/ai-playbook で v0.9.2 まで公開済み |
 
 リリース実行手順は [docs/release/RELEASE_EXECUTION_RUNBOOK.md](docs/release/RELEASE_EXECUTION_RUNBOOK.md) を参照する。
 
@@ -131,7 +131,7 @@ ASF は 2026-07 に退役しました。
 
 - `devcontainer-bootstrap`: `ojos/devcontainer-bootstrap` で `v0.19.1` まで公開済み
 - `devcontainer-host`: `ojos/devcontainer-host` で `v0.1.0` まで公開済み
-- `ai-playbook`: `ojos/ai-playbook` で `v0.9.1` まで公開済み
+- `ai-playbook`: `ojos/ai-playbook` で `v0.9.2` まで公開済み
 <!-- RELEASE_STATUS:END -->
 
 ---
