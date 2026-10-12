@@ -153,21 +153,38 @@ else
   pass
 fi
 
-it "確認側は要求側と別の契機（定期実行）を持つ"
+it "確認側は要求側と別の契機（手動実行）を持ち、定期実行（schedule）は持たない"
 # 同じ契機を見る 2 本目では塞げない。届いていないのはイベントそのものだからである。
-if grep -Eq '^[[:space:]]*schedule:' "$wf" && grep -q 'cron:' "$wf"; then
-  pass
+# 別の契機は workflow_dispatch で、/land がマージの直前に既定ブランチで起こす。
+# 定期実行は PR が無いあいだも走り、private リポジトリの課金枠を減らし続けるため置かない（#545）。
+if grep -Eq '^[[:space:]]*schedule:' "$wf" || grep -Eq '^[[:space:]]*-?[[:space:]]*cron:' "$wf"; then
+  fail "schedule / cron が残っている"
+elif ! grep -Eq '^[[:space:]]*workflow_dispatch:' "$wf"; then
+  fail "workflow_dispatch の契機が無い"
 else
-  fail "schedule / cron の契機が無い"
+  pass
 fi
 
-it "schedule 契機は、起動した PR だけでなく open な PR を全件判定し直す"
-# schedule が「起動した 1 本だけ」を見る構造だと、この機構が信頼できる根拠
+it "生成した出力のワークフロー（review-gate / second-opinion-gate）に schedule が無い"
+# 生成した出力を見る。雛形が正しくても、配置の途中で別の版が混ざれば利用側に定期実行が残る。
+sched_bad=""
+for g in review-gate.yml second-opinion-gate.yml; do
+  gf="$out/.github/workflows/$g"
+  if [[ ! -f "$gf" ]]; then
+    sched_bad="$sched_bad $g(未生成)"
+  elif grep -Eq '^[[:space:]]*schedule:' "$gf" || grep -Eq '^[[:space:]]*-[[:space:]]*cron:' "$gf"; then
+    sched_bad="$sched_bad $g(schedule あり)"
+  fi
+done
+if [[ -z "$sched_bad" ]]; then pass; else fail "$sched_bad"; fi
+
+it "手動実行（掃き寄せ）は、起動した PR だけでなく open な PR を全件判定し直す"
+# 手動実行が「起動した 1 本だけ」を見る構造だと、この機構が信頼できる根拠
 # （規範 review-workflow.md「この機構が保証すること／しないこと」）が崩れる。
-# pull_request 契機で捏造された status を上書きできるのは、schedule が
+# pull_request 契機で捏造された status を上書きできるのは、手動実行が
 # 「既定ブランチの版で、開いている PR を全件、見落としなく判定し直す」ときだけ
-# である。1 本しか見ない、または件数で打ち切る構造では、捏造された緑が次の
-# schedule でも上書きされない PR が残りうる。
+# である。1 本しか見ない、または件数で打ち切る構造では、捏造された緑が /land の
+# マージ直前の再判定でも上書きされない PR が残りうる。
 #
 # 「全件」を件数上限の欠如として検査する: open な PR 一覧を取得する**その同じ
 # 行**が `gh api --paginate ... pulls?state=open` の形であることを見る
@@ -192,7 +209,7 @@ if grep -qE -- '--paginate.*pulls\?state=open' <<< "$executable_lines" \
    && ! grep -qF 'gh pr list --limit' <<< "$executable_lines"; then
   pass
 else
-  fail "schedule 側が open な PR を全件（打ち切りなしで）判定し直す構造になっていない"
+  fail "手動実行（掃き寄せ）側が open な PR を全件（打ち切りなしで）判定し直す構造になっていない"
 fi
 
 it "確認側は PR 更新の契機も持つ（synchronize / reopened / ready_for_review）"
@@ -465,58 +482,41 @@ else
   pass
 fi
 
-# ── 文書が書く再判定の間隔と cron の一致 ──────────────────────────────────────
+# ── 定期実行（schedule）が雛形にも文書にも残っていない ────────────────────────
 #
-# 規範 review-workflow.md「この機構が保証すること／しないこと: run: ブロック
-# そのものの書き換え」は、「捏造された status は次の schedule で上書きされる」
-# 「ただし上書きまで最大 20 分は捏造された緑が見える」という、schedule の間隔に
-# 依存した記述を持つ。この間隔は review-gate.yml の cron が決めており、文書は
-# それを書き写した数値である。片方だけを変えると、記述と実装が黙ってずれる
-# ——このテストはそれを機械で照合する。
+# 定期実行は置かない（#545）。PR が 1 本も無いあいだも走り続け、private リポジトリでは
+# Actions の課金枠を減らし続けるため。定期実行が担っていた役目は、/land のマージ直前の
+# 再判定（既定ブランチでの workflow_dispatch）と、second-opinion-record.sh post が
+# 投稿の直後に起こす手動実行で置き換えた。
 #
-# ここに置く理由: この照合は .ai-playbook 配布物の内部（雛形のコメントと規範
-# 文書）だけで完結し、bootstrap.sh の生成結果や tests/test-workflow-mirror.sh が
-# 見ている「開発リポジトリの写しとの一致」とは対象が異なる。tests/ 配下の
-# 各テストは repo 内の写し（.github/workflows/ 等）と .ai-playbook の一致を見る
-# 役割で揃っており、そこへ足すと「雛形と写しの一致」と「雛形と文書の一致」という
-# 別種の照合が 1 ファイルへ混ざる。本ファイル（test-review-gate.sh）は既に
-# $TPL/review-gate.yml（雛形そのもの）を対象に構造を検査しているため、同じ
-# 雛形を対象にする以上の照合はここへ集める方が、落ちたときに直す先が
-# 「review-gate.yml 周りの雛形」で一貫する。
-#
-# 照合の方法: 文書と雛形の双方から `cron: '*/N * * * *'` の形をそのまま抜き出し、
-# 文字列として比較する。分の数値だけを Japanese の「N 分ごと」表現から抜き出す
-# より、cron の記法そのものを文書に引用させて突き合わせるほうが、表現の揺れ
-# （「20 分ごと」「20分間隔」等）に頼らず機械的に一致を強制できる。
-#
-# **雛形側は、実際の `on.schedule` の YAML sequence entry（`- cron: '...'` の形で
-# 行頭からその形に始まる行）だけを対象にする。** 雛形はコメント中でも同じ cron 値を
-# 引用しており（信頼境界の説明）、その部分文字列も無条件に拾うと、`on.schedule` の
-# `- cron:` 行そのものを消してもコメント側の言及が残っているだけで一致してしまい、
-# schedule が消えたことを検出できない。行頭アンカー（`^[[:space:]]*- cron: `）で
-# 実際の定義行だけに絞ってから値を取り出す。
-#
-# 文書側（review-workflow.md）は Markdown の地の文への引用であり、YAML の
-# sequence entry という構造を持たない。そのため文書側は従来どおり、値の部分文字列
-# が現れる行であれば拾う（＝コメント相当の扱いで構わない、という判断は指摘のとおり）。
-it "文書（review-workflow.md）が書く schedule の cron と、雛形（review-gate.yml）の cron が一致する"
-DOC_CRON="$(grep -oE "cron: '\*/[0-9]+ \* \* \* \*'" "$PLAYBOOK_SRC/review-workflow.md" | sort -u)"
-TPL_CRON="$(grep -E "^[[:space:]]*- cron: '\*/[0-9]+ \* \* \* \*'" "$TPL/review-gate.yml" \
-  | grep -oE "cron: '\*/[0-9]+ \* \* \* \*'" | sort -u)"
-doc_count="$(printf '%s\n' "$DOC_CRON" | grep -c .)"
-tpl_count="$(printf '%s\n' "$TPL_CRON" | grep -c .)"
-if [[ "$doc_count" -eq 0 ]]; then
-  fail "review-workflow.md に cron: '*/N * * * *' の形の記述が無い（文書が具体的な間隔を引用していない）"
-elif [[ "$tpl_count" -eq 0 ]]; then
-  fail "$TPL/review-gate.yml に cron: '*/N * * * *' の形の記述が無い"
-elif [[ "$doc_count" -ne 1 ]]; then
-  fail "review-workflow.md に cron 表記が複数の異なる値で現れる（1 つに揃っていない）: $(printf '%s' "$DOC_CRON" | tr '\n' ' ')"
-elif [[ "$tpl_count" -ne 1 ]]; then
-  fail "$TPL/review-gate.yml に cron 表記が複数ある（on: の cron と一致しているか確認）: $(printf '%s' "$TPL_CRON" | tr '\n' ' ')"
-elif [[ "$DOC_CRON" == "$TPL_CRON" ]]; then
+# 以前はここで「文書が書く cron の値と雛形の cron の一致」を照合していた。定期実行が
+# 無くなったので、照合の向きを反転し、`cron: '*/N * * * *'` の形の記述が雛形にも文書にも
+# 残っていないことを見る。文書だけが古い間隔を書き残す状態を塞ぐ。
+
+for tpl_file in review-gate.yml second-opinion-gate.yml; do
+  it "雛形（$tpl_file）に on.schedule が無く、workflow_dispatch がある"
+  if grep -Eq '^[[:space:]]*schedule:' "$TPL/$tpl_file"; then
+    fail "$tpl_file に schedule: が残っている"
+  elif grep -Eq "^[[:space:]]*-[[:space:]]*cron:" "$TPL/$tpl_file"; then
+    fail "$tpl_file に - cron: が残っている"
+  elif ! grep -Eq '^[[:space:]]*workflow_dispatch:' "$TPL/$tpl_file"; then
+    fail "$tpl_file に workflow_dispatch が無い"
+  else
+    pass
+  fi
+done
+
+it "文書と雛形に cron: '*/N * * * *' の形の記述が残っていない"
+cron_hits="$(grep -rnE "cron: '\*/" \
+  "$PLAYBOOK_SRC/review-workflow.md" "$PLAYBOOK_SRC/README.md" \
+  "$TPL/review-gate.yml" "$TPL/second-opinion-gate.yml" "$TPL/claude-skill-land.md" \
+  "$REPO_ROOT/packages/devcontainer-bootstrap/README.md" "$REPO_ROOT/.github/copilot-instructions.md" \
+  "$REPO_ROOT/.claude/skills/land/SKILL.md" \
+  2>/dev/null || true)"
+if [[ -z "$cron_hits" ]]; then
   pass
 else
-  fail "文書と雛形で cron の値がずれている（文書: ${DOC_CRON} / 雛形: ${TPL_CRON}）"
+  fail "cron の記述が残っている: $(printf '%s' "$cron_hits" | head -3 | tr '\n' ' ')"
 fi
 
 # ── YAML として妥当である ─────────────────────────────────────────────────────

@@ -460,7 +460,7 @@ AI エージェントの反復（実装 → 検証 → 修正 → …）を、**
   - 既定ブランチの追跡枝を解決できない環境では汚染を判定できないため、**従来どおり上流を使います**（判定不能を汚染扱いにすると、分岐点も取れないまま範囲を失うため）。
 - `loop-gate.sh` は source ガードを持ち、`source`（`.`）で読み込んだだけではゲート本体を実行せず、範囲解決の関数だけを提供します。範囲の決め方を単体で検証できるようにするためで、ルートへの `cd` もゲート本体側に置いてあり、読み込んだ側の作業ディレクトリを動かしません。
 - これらは純粋な機構であり、規範（受け入れ検証の機械ゲート化・収束規則・verify ランナー契約）は ai-playbook の `loop-workflow.md` が正本です。規範を配置した場合（`--with-playbook` / `--playbook-version` / `--playbook-from`）は、第二意見の `second-opinion-review.sh` も配置され、`loop-gate.sh` が自動で直列化します。
-- 上の 3 本は**手元から起動する入口**で、実行するかどうかは人に委ねられています。**回し忘れれば何も起きません。** `verify.sh` は `verify.yml` が CI で再実行して回し忘れを塞ぎますが（下記「受け入れ検証の CI ワークフロー」参照）、**第二意見は手元でしか走らないため、CI が再実行して確かめることができません。** そのため回したことの記録と、記録が無いことを別の契機（PR 更新・定期実行）から検出する確認側を、規範を配置したときにあわせて配置します。
+- 上の 3 本は**手元から起動する入口**で、実行するかどうかは人に委ねられています。**回し忘れれば何も起きません。** `verify.sh` は `verify.yml` が CI で再実行して回し忘れを塞ぎますが（下記「受け入れ検証の CI ワークフロー」参照）、**第二意見は手元でしか走らないため、CI が再実行して確かめることができません。** そのため回したことの記録と、記録が無いことを別の契機（PR 更新・手動実行）から検出する確認側を、規範を配置したときにあわせて配置します。定期実行は置きません（PR が無いあいだも走り続け、private リポジトリの Actions の課金枠を減らし続けるため）。`second-opinion-record.sh post` が投稿の直後に確認側を既定ブランチで手動実行し、`/land` がマージの直前に再判定します。
   - `loop-gate.sh` は第二意見の出力を捕まえ、`scripts/second-opinion-record.sh save` へ渡します。レビュー対象が無い（`REVIEW_NO_TARGET`）、または明示的にスキップした（`LOOP_GATE_REVIEW_CMD=''`）場合は記録しません——回していないものを「回した」と記録すると、確認側が偽の緑を出すためです。
   - 記録は `git rev-parse --git-path second-opinion` が返す worktree ごとのパスへ置き、レビューした対象（ステージ済み差分のツリー、またはコミット範囲の終端）を HEAD と突き合わせてから PR へ投稿します（`scripts/second-opinion-record.sh post`）。中身が変わっていれば投稿しません。
   - `.github/workflows/second-opinion-gate.yml` が、投稿された記録の head SHA がいまの head と一致するかを確認します。要求はしません（第二意見を回すかどうかは利用者側の判断のままです）。Dependabot のように回す著者が最初からいない PR は、`scripts/second-opinion-gate-exempt.sh` の判定で対象外にします。
@@ -681,9 +681,11 @@ gh の OAuth App には「ユーザー × アプリ × scope あたり 10 トー
   | PR の作成・コメント・マージ | Pull requests: Read and write |
   | issue の起票・コメント | Issues: Read and write |
   | `.github/workflows/` を含む push | Workflows: Read and write |
-  | CI の実行の確認（`gh run list` / `actions/runs`） | Actions: Read |
+  | CI の実行の確認（`gh run list` / `actions/runs`）、ゲートの手動実行（`gh workflow run`。`second-opinion-record.sh post` と `/land` のマージ直前の再判定） | Actions: Read and write |
   | commit status（`second-opinion-gate` など）の確認 | Commit statuses: Read |
   | （必須・自動付与） | Metadata: Read |
+
+  **手動実行の権限（Actions: Read and write）は、GitHub の公式ドキュメント（「Permissions required for fine-grained personal access tokens」の Actions の節。`POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches` は write）に基づく記載で、実測ではありません。** 初回の発行時に `gh workflow run <ワークフロー> --ref <既定ブランチ>` が通るか確かめてください。
 
   **Checks は fine-grained PAT では選べません。** そのため、**非公開リポジトリでは** `commits/<sha>/check-runs` と `gh pr checks` が 403 になります（公開リポジトリでは読めます）。`/land` の雛形はこの 2 つを使わず、Actions と Commit statuses の権限だけで CI を待ちます。プロジェクト側でスクリプトを足すときも、この 2 つに頼らないでください。
 - **`GH_TOKEN` が空の環境は従来どおり**保存済み認証で動きます（`GITHUB_TOKEN` も未設定である場合。下記）。PAT を持たない利用者を壊しません。
@@ -1109,7 +1111,7 @@ squash 本文の組み立て方（PR の説明文だけを使うか、各コミ�
 
 要求側は、フォークからの PR をスキップします。既定の `GITHUB_TOKEN` で要求できない構成では、リポジトリ Secrets に `COPILOT_REVIEW_TOKEN`（`pull-requests` 書き込み権限を持つ PAT）を設定すると自動で切り替わります。**要求は間欠的に空レスポンスで失敗することがあり**、同じジョブの中で 5→10→20 秒の指数バックオフにより計 4 回まで再試行します（再試行はこの 1 ジョブの中で閉じており、別のイベントから要求し直す形にはしません。「1 回だけ要求する」の対象は要求が別の契機から重ねて出ることです）。再試行を尽くしても失敗した場合は、切り分け手順を `::error::` で出力して実行を落とします（握り潰してスキップにはしません。リモート最終ゲートが実行されていないのに緑を出すと、偽の緑と通過の区別が付かなくなるためです）。
 
-確認側を別に置くのは、**要求側の契機が届かないことがある**ためです。届かなければ要求側は起動せず、エラーも出ず、他のチェックは緑なので、最終ゲートだけが黙って抜けます。同じ契機を見る 2 本目では塞げないため、確認側は `opened` / `synchronize` / `reopened` / `ready_for_review` に加えて**20 分ごとの定期実行**を張ります。判定は head SHA への commit status（`review-gate`）として出します。定期実行から見た PR にはジョブの成否が紐づかず、status でなければ PR 上に何も現れないためです。`opened` の契機だけは、要求が届くまで 120 秒待ってから判定します（要求側と同時に走るため）。
+確認側を別に置くのは、**要求側の契機が届かないことがある**ためです。届かなければ要求側は起動せず、エラーも出ず、他のチェックは緑なので、最終ゲートだけが黙って抜けます。同じ契機を見る 2 本目では塞げないため、確認側は `opened` / `synchronize` / `reopened` / `ready_for_review` に加えて**手動実行（`workflow_dispatch`）**を持ち、`/land` がマージの直前に既定ブランチで起こして再判定します（定期実行は置きません。PR が無いあいだも走り続け、private リポジトリの課金枠を減らし続けるため）。判定は head SHA への commit status（`review-gate`）として出します。手動実行から見た PR にはジョブの成否が紐づかず、status でなければ PR 上に何も現れないためです。`opened` の契機だけは、要求が届くまで 120 秒待ってから判定します（要求側と同時に走るため）。
 
 **「要求されたか」と「読まれたか」は別です。** GitHub は 1 ファイルの差分が大きすぎると、レビュー対象の差分（`patch`）を API から落とします。この状態でも Copilot は要求どおりレビューを投稿しますが、中身は「1 行も読めなかった」という定型文だけになり、要求も投稿も記録として残るため、「要求されたか」しか見ない判定は緑を出し続けます。確認側はこれを塞ぐため、変更ファイルに読める差分があるか（原因そのもの）と、投稿されたレビューが定型文だけでないか（最後の砦）の 2 段で見ます。この判定は `review-gate.yml` へ埋め込まず `scripts/review-usable.sh` へ切り出してあります。確認側は `actions/checkout@v7` で**既定ブランチ**（PR の変更ブランチではありません）からこのスクリプトを取得してから呼び出します。PR 側から取得すると、PR の投稿者がスクリプトを書き換えるだけでゲートを常に緑にできてしまうためです。
 

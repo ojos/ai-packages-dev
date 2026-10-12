@@ -6,6 +6,20 @@
 >
 > 同じ理由で、issue 参照は `ojos/ai-packages-dev#NNN` の形で書いてください。裸の `#NNN` は GitHub のオートリンクが**配布先リポジトリの issue** として解決するため、配布後は存在しない issue や無関係な issue を指します。
 
+## Unreleased
+
+### Summary
+- **この版が要求する ai-playbook は、定期実行をなくした版（ojos/ai-packages-dev#545 を含む版）。** 配置する規範の雛形（`review-gate.yml` / `second-opinion-gate.yml`）から `on.schedule` がなくなる。
+- **`--with-copilot-review` と規範の配置で生成されるゲートのワークフローが、20 分ごとの定期実行を持たなくなった**（ojos/ai-packages-dev#545）。定期実行は PR が 1 本も無いあいだも走り続けるため、private リポジトリでは Actions の課金枠を減らし続ける。利用側の実測では、7 日間に 438 回走り、Actions の実行全体の約 72% を占めた。
+  - 代わりに、`scripts/second-opinion-record.sh post` が投稿の直後に確認側を既定ブランチで手動実行（`workflow_dispatch`）し、`/land` がマージの直前に再判定する。
+  - 手動実行には、トークンの Actions の書き込み権限（fine-grained PAT なら Actions: Read and write）が要る。README の PAT の権限の表に足した。GitHub の公式ドキュメントに基づく記載で、実測ではない。
+  - 生成した出力に `schedule` が無いことを、`tests/test-review-gate.sh` が確かめる。
+
+### 移行
+- **`bootstrap.sh --upgrade` で追従する。** 雛形から写したワークフローに手を入れていなければ置き換わる（ORIGIN の hash が一致するもの）。置き換わると、利用側の定期実行が止まる。
+- 手を入れたワークフローは置き換わらない。`on:` の `schedule:` と `cron:` を手で外す。
+- `post` を打つトークンに Actions の書き込み権限が無いと、`post` は記録を投稿したあとで非 0 になる。手で起こすコマンドが出力される。
+
 ## v0.19.2
 
 ### Summary

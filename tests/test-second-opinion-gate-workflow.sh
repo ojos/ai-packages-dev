@@ -11,7 +11,7 @@
 #           記録するだけ
 #   sleep … 何もしない（猶予の 300 秒を待たない）
 #
-# 回すのは pull_request の経路と、掃き寄せ（schedule）の経路である。掃き寄せは同じ judge を
+# 回すのは pull_request の経路と、掃き寄せ（workflow_dispatch）の経路である。掃き寄せは同じ judge を
 # 呼ぶので、ここで見るのは「判定するか、見送るか」の分かれ目（push の時刻の採り方）だけ。
 
 set -uo pipefail
@@ -26,6 +26,19 @@ if [[ -f "$WORKFLOW" ]]; then
   pass
 else
   fail "見つからない: $WORKFLOW"
+fi
+
+# 定期実行（schedule）は置かない（#545）。PR が無いあいだも課金枠を減らし続けるため。
+# 手動実行（workflow_dispatch）が、記録の投稿の直後と /land のマージ直前に起こされる。
+it "on.schedule を持たず、workflow_dispatch を持つ"
+if grep -Eq '^[[:space:]]*schedule:' "$WORKFLOW"; then
+  fail "schedule が残っている"
+elif grep -Eq '^[[:space:]]*cron:' "$WORKFLOW"; then
+  fail "cron が残っている"
+elif ! grep -Eq '^[[:space:]]*workflow_dispatch:' "$WORKFLOW"; then
+  fail "workflow_dispatch が無い"
+else
+  pass
 fi
 
 command -v jq >/dev/null 2>&1 || { echo "error: jq がありません" >&2; exit 1; }
@@ -187,11 +200,12 @@ else
   fail "want=failure got=$(echo "$got" | tr '\n' ' ')"
 fi
 
-# ── 掃き寄せ（schedule）──────────────────────────────────────────────────────
-# sweep_case <名前> <期待する status> <check-run の開始時刻（無しは空）> <PR の更新時刻>
-# 記録は付けない。判定されれば failure、見送られれば none になる。
+# ── 掃き寄せ（workflow_dispatch）──────────────────────────────────────────────────────
+# sweep_case <名前> <期待する status> <check-run の開始時刻（無しは空）> <PR の更新時刻> [記録]
+# 記録は既定では付けない（判定されれば failure、見送られれば none）。5 番目に yes を渡すと、
+# PR の作者自身の記録を付ける。unreadable を渡すと、コメントを読めない状態にする。
 sweep_case() {
-  local name="$1" want="$2" started="$3" updated="$4" fx="$WORK/fx" got
+  local name="$1" want="$2" started="$3" updated="$4" recorded="${5:-no}" fx="$WORK/fx" got
   rm -rf "$fx"; mkdir -p "$fx"
   printf '[{"number":1,"draft":false,"updated_at":"%s","head":{"sha":"%s","repo":{"full_name":"o/r"}}}]' \
     "$updated" "$SHA" > "$fx/pulls.json"
@@ -202,8 +216,14 @@ sweep_case() {
   fi
   printf '{"user":{"login":"someone"},"draft":false,"head":{"sha":"%s"}}' "$SHA" > "$fx/pr.json"
   printf '[%s]' "$(commit someone someone false)" > "$fx/commits.json"
-  printf '[{"body":"関係ないコメント"}]' > "$fx/comments.json"
-  ( cd "$REPO_ROOT" && PATH="$WORK/bin:$PATH" FIXTURES="$fx" GH_TOKEN=x REPO=o/r EVENT=schedule \
+  if [[ "$recorded" == yes ]]; then
+    printf '[%s]' "$(record_comment someone OWNER)" > "$fx/comments.json"
+  elif [[ "$recorded" == unreadable ]]; then
+    :  # comments.json を置かない＝偽の gh が失敗し、記録の有無を確かめられない
+  else
+    printf '[{"body":"関係ないコメント"}]' > "$fx/comments.json"
+  fi
+  ( cd "$REPO_ROOT" && PATH="$WORK/bin:$PATH" FIXTURES="$fx" GH_TOKEN=x REPO=o/r EVENT=workflow_dispatch \
       PR_NUMBER= TRIGGER_SHA= RUN_URL=u bash "$WORK/run.sh" ) >/dev/null 2>&1 || true
   got="$(cat "$fx/statuses" 2>/dev/null || echo none)"
   it "$name"
@@ -221,5 +241,11 @@ sweep_case "掃き寄せ: check-run が猶予より前に始まっていれば�
 # 掃き寄せが永久に判定しない（PR #365 の Copilot の指摘）。
 sweep_case "掃き寄せ: check-run が無くても、PR の更新が猶予より前なら判定する" failure "" "$OLD_TIME"
 sweep_case "掃き寄せ: check-run が無く、PR の更新が直近なら見送る" none "" "$NOW_TIME"
+# 記録を投稿した直後に post が起こす手動実行は、push から猶予の中で走る。記録が在れば
+# 待たずに緑を付ける（見送ると、投稿しても緑にならない。#545）。
+sweep_case "掃き寄せ: push が直近でも、記録が在れば success" success "$NOW_TIME" "$NOW_TIME" yes
+sweep_case "掃き寄せ: push が直近で、記録が無ければ見送る" none "$NOW_TIME" "$NOW_TIME"
+# 確かめられなかったときは見送りに混ぜない。status は付けず（none）、実行は落とす。
+sweep_case "掃き寄せ: push が直近で、記録を確かめられなければ status を付けない" none "$NOW_TIME" "$NOW_TIME" unreadable
 
 exit_with_result

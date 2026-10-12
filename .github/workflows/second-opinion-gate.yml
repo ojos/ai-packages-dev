@@ -42,22 +42,34 @@ name: second-opinion-gate
 # **要求と確認を別の機構に分ける**（規範の「確認側は要求しません」）。ここが回し始めると、
 # 手元で回したものと CI で回したもののどちらが push を通したのか読めなくなる。
 #
-# ## 3 つの契機
+# ## 2 つの契機（定期実行は持たない）
 #
 #   1. pull_request（opened / synchronize 等） … 通常はここで片が付く
-#   2. schedule                                … 1 が届かなかった PR を拾う
-#   3. workflow_dispatch                       … 詰まったときに手で流す・受け入れ確認
+#   2. workflow_dispatch                       … 1 が届かなかった PR を拾う・記録の投稿のあとに
+#                                                判定を付ける・マージの直前に再判定する
 #
 # `pull_request` の `opened` が届かないことがある（ある利用プロジェクトの実運用では、
 # 連続する 2 日間に開いた 6 本のうち 2 本で起動しなかった）。**同じ契機を見る 2 本目では
-# 塞げない**ので、別の契機を張る。
+# 塞げない**ので、別の契機を使う。
 #
-# ## schedule と workflow_dispatch は既定ブランチのものしか動かない
+# **定期実行（`schedule`）は置かない。** PR が 1 本も無いあいだも走り続けるため、
+# private リポジトリでは Actions の課金枠を減らし続ける（利用側の実測で、7 日間に 438 回、
+# 実行全体の約 72%）。代わりに、手動実行を次の 2 か所が起こす。
 #
-# **この 2 つは `main` にあるワークフローだけが起動する**（GitHub の仕様）。したがって
+#   - `scripts/second-opinion-record.sh post` が、記録を投稿した直後に起こす
+#   - `/land` がマージの直前に起こし、終わりを待って head の status を確かめる
+#
+# 手動実行は、open な PR を全件、既定ブランチの版の判定で判定し直す（下記の掃き寄せ）。
+#
+# ## workflow_dispatch は既定ブランチのものしか動かない
+#
+# **`main` にあるワークフローだけが起動する**（GitHub の仕様）。したがって
 # **このワークフローを足す・変える PR の上では、`pull_request` の契機だけが効く。**
 # 掃き寄せと手動起動の実挙動は、マージされてからでなければ確かめられない。**受け入れ確認を
-# 組むときは、そこを見込むこと**——PR 上で「掃き寄せが動かない」のは不具合ではない。
+# 組むときは、そこを見込むこと**——PR 上で「手動起動が動かない」のは不具合ではない。
+#
+# **`/land` を通さないマージ（画面から直接など）は、再判定を通らない。** ただし
+# このゲートは required check ではないので、もともとマージを止めてはいない。
 #
 # ## required check にはしない
 #
@@ -73,10 +85,7 @@ name: second-opinion-gate
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
-  schedule:
-    # 20 分ごと。pull_request が届かなかった PR を拾うための掃き寄せで、
-    # 通常経路の速さはこれに依存しない（review-gate.yml と同じ間隔にそろえる）。
-    - cron: '*/20 * * * *'
+  # 定期実行は置かない（冒頭「2 つの契機」）。手動実行は、open な PR を全件判定し直す。
   workflow_dispatch:
 
 permissions:
@@ -86,7 +95,7 @@ permissions:
   issues: read
   # commit status を書く。これが判定の出力先である。
   statuses: write
-  # 掃き寄せで、push の時刻として check-run の開始時刻を読む。public リポジトリでは
+  # 掃き寄せ（手動実行）で、push の時刻として check-run の開始時刻を読む。public リポジトリでは
   # 宣言が無くても読めるが、private では宣言しないと 403 になり、掃き寄せが毎回落ちる。
   checks: read
 
@@ -300,8 +309,8 @@ jobs:
               *)
                 # **status を付けない。** 確かめられなかったときに赤を出すと、
                 # GitHub の一時的な不調が「記録が無い」として残る。実行だけを落とし、
-                # 判定は次の契機（20 分後の掃き寄せ）へ持ち越す。
-                echo "::error::PR #${pr}: 記録の有無を確かめられませんでした（GitHub API から読めない）。status は付けていません。次の定期実行で再判定します。"
+                # 判定は次の契機（手動実行）へ持ち越す。
+                echo "::error::PR #${pr}: 記録の有無を確かめられませんでした（GitHub API から読めない）。status は付けていません。手動実行（workflow_dispatch）で再判定してください。"
                 return 1
                 ;;
             esac
@@ -336,7 +345,7 @@ jobs:
             # ではないので **PR の checks 欄に何も現れないまま「判定した」ことになる。**
             #
             # **どちらも採らない。譲る。** 新しい push には、それ自身の実行が同じ猶予を
-            # 置いてから判定する。届かなければ掃き寄せが拾う（そちらも head の時刻で待つ）。
+            # 置いてから判定する。届かなければ手動実行の掃き寄せが拾う（そちらも head の時刻で待つ）。
             # **判定しないことを失敗にもしない**——赤でも緑でもなく、この実行の担当が
             # 終わっただけである。
             current="$(gh api "repos/${REPO}/pulls/${PR_NUMBER}" --jq .head.sha)"
@@ -375,11 +384,11 @@ jobs:
               # `started_at` が null で、jq の型順（null < string）により **sort の先頭が必ず
               # null になる。** `// empty` がそれを空にするので、**実行済みの check-run が
               # あっても「まだ無い」と読んで、その PR を永久に判定しなくなる。** PR 1 本に
-              # つき 1 回の追加の呼び出しになるが、掃き寄せは 20 分ごとで open な PR は数本
+              # つき 1 回の追加の呼び出しになるが、掃き寄せ（手動実行）で見る open な PR は数本
               # なので、費用は問題にならない。
               # 読めなかったら**判定しない**（確かめられないことを「記録が無い」に混ぜない）。
               if ! pushed_at="$(gh api "repos/${REPO}/commits/${sha}/check-runs" --jq '[.check_runs[].started_at | select(. != null)] | sort | .[0] // empty' 2>/dev/null)"; then
-                echo "::error::PR #${pr}: head（${sha:0:7}）の check-run を読めませんでした。判定を次の定期実行へ持ち越します。"
+                echo "::error::PR #${pr}: head（${sha:0:7}）の check-run を読めませんでした。判定を次の手動実行へ持ち越します。"
                 failed=1
                 continue
               fi
@@ -397,8 +406,30 @@ jobs:
                 pushed_at="$updated_at"
               fi
               age=$(( now - $(date -u -d "$pushed_at" +%s) ))
+              # **猶予の中でも、緑になる PR は判定する。** 猶予は「投稿前の PR に早すぎる赤を
+              # 付けない」ためのもので、記録が在る（または記録を求めない）なら待つ理由が無い。
+              # 記録を投稿した直後に second-opinion-record.sh post がこの手動実行を起こすので、
+              # ここで見送ると投稿しても緑にならない（#545）。判定は judge に任せ、経路を
+              # 1 本に保つ。記録が無いときだけ見送る。**確かめられなかったときは見送りに
+              # 混ぜない**——実行を落として、投稿した人に緑が付かなかったことを知らせる。
               if [ "$age" -lt "$GRACE_SEC" ]; then
-                echo "PR #${pr}: push から ${age} 秒なので、掃き寄せでは判定しません（記録の投稿を ${GRACE_SEC} 秒待ちます）"
+                rc=0
+                if ! is_exempt "$pr"; then
+                  has_record "$pr" "$sha" || rc=$?
+                fi
+                case "$rc" in
+                  0)
+                    echo "PR #${pr}: push から ${age} 秒ですが、緑になる PR なので判定します"
+                    judge "$pr" "$sha" || failed=1
+                    ;;
+                  1)
+                    echo "PR #${pr}: push から ${age} 秒なので、掃き寄せでは判定しません（記録の投稿を ${GRACE_SEC} 秒待ちます）"
+                    ;;
+                  *)
+                    echo "::error::PR #${pr}: 記録の有無を確かめられませんでした（GitHub API から読めない）。status は付けていません。手動実行で再判定してください。"
+                    failed=1
+                    ;;
+                esac
                 continue
               fi
               echo "PR #${pr} を判定します（push から ${age} 秒）"

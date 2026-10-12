@@ -128,11 +128,13 @@ gh CLI の認証はコンテナ内で行い、その状態を named volume に�
   | PR の作成・コメント | Pull requests: Read and write |
   | issue の起票・コメント | Issues: Read and write |
   | `.github/workflows/` を含む push | Workflows: Read and write |
-  | `gh run list` 等の CI 状態確認 | Actions: Read |
+  | `gh run list` 等の CI 状態確認、`second-opinion-gate` の手動実行（`gh workflow run`。`second-opinion-record.sh post` と `/land` の再判定） | Actions: Read and write |
   | `second-opinion-gate` の commit status 確認 | Commit statuses: Read |
   | （必須・自動付与） | Metadata: Read |
 
   **Checks は fine-grained PAT では選べません。** 非公開リポジトリでは `commits/<sha>/check-runs` と `gh pr checks` が 403 になるため、CI の確認は上の Actions と Commit statuses で行います（`/land` の雛形もそうしています）。例の表は `packages/devcontainer-bootstrap/README.md`「資格情報の扱い」にもあります。
+
+  **手動実行の権限（Actions: Read and write）は、GitHub の公式ドキュメント（「Permissions required for fine-grained personal access tokens」の Actions の節。`POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches` は write）に基づく記載で、実測ではありません。** 初回の発行時に `gh workflow run second-opinion-gate.yml --ref <既定ブランチ>` が通るか確かめ、不足・過剰があればこの表を実測で置き換えてください。権限が足りないと `second-opinion-record.sh post` は、記録の投稿後に手動実行できなかったとして非 0 で終わり、手で起こすコマンドを示します。
 
 - **`GH_TOKEN` を設定しているあいだ `gh auth login` を実行しません。** gh 2.96.0 で実測したところ、値が設定されているあいだ gh はログインを拒否します（`--with-token` / `--web` のいずれでも `The value of the GH_TOKEN environment variable is being used for authentication.` で終了し、通信もしません）。危ないのはその先で、拒否メッセージ（`first clear the value from the environment`）に従って値を空にしてログインすると上限枠を 1 つ消費し、上限に達していれば他環境のトークンが 1 本失効します。この拒否は制約ではなく安全装置として扱います。
 - **`GITHUB_TOKEN` を恒久的に設定しません。** gh は `GH_TOKEN` → `GITHUB_TOKEN` の順に環境変数を読み、**空文字だけを読み飛ばします**。したがって `GH_TOKEN` を空にすることは `GITHUB_TOKEN` に対する盾になりません。gh 2.96.0 での実測: `GITHUB_TOKEN=" " gh api user` は `Bad credentials`、`GITHUB_TOKEN=" " GH_TOKEN="" gh api user` も `Bad credentials`（一方 `GITHUB_TOKEN="" gh api user` と `GH_TOKEN= gh api user` はどちらも保存済み認証で成功）。**手元のシェル・rc・`.env` のいずれにも `GITHUB_TOKEN` を置きません。**
