@@ -96,7 +96,7 @@ devhost は、`devcontainer.json` を持つプロジェクトなら DCB の生�
 マニフェストと `install.sh` を取得し、`install.sh` のハッシュをマニフェストと照合して、通ったときだけ実行します。
 
 ```bash
-TAG=v0.1.0   # devcontainer-host の最新安定リリース
+TAG=v0.2.0   # devcontainer-host の最新安定リリース
 BASE="https://github.com/ojos/devcontainer-host/releases/download/${TAG}"
 
 curl -fsSL "${BASE}/RELEASE-MANIFEST.json" -o RELEASE-MANIFEST.json
@@ -138,11 +138,11 @@ jq -r '.checksums["install.sh"] + "  install.sh"' RELEASE-MANIFEST.json | $sha25
 devhost は、独自の版を持つ公開リポジトリ `ojos/devcontainer-host` のリリースで配られます
 （以前は devcontainer-bootstrap（DCB）のリリースに同梱していましたが、同梱は外しました）。
 各リリースには `RELEASE-MANIFEST.json`・`SHA256SUMS`・`PACKAGE_ARCHIVE.tar.gz`（このリポジトリのツリー一式）に加えて、
-`dev.sh`・`dev-up@.service`・`install.sh`・`projects.example` が個別の資産として付きます。`RELEASE-MANIFEST.json` の `checksums` が
-`PACKAGE_ARCHIVE.tar.gz` / `SHA256SUMS` / `dev.sh` / `dev-up@.service` / `install.sh` / `projects.example` のハッシュを持つので、取得したものを照合してから使います。
+`dev.sh`・`dev-up@.service`・`dev-runner@.service`・`runner.Dockerfile`・`install.sh`・`projects.example`・`runners.example` が個別の資産として付きます（ランナーの 3 つは v0.2.0 から）。`RELEASE-MANIFEST.json` の `checksums` が
+`PACKAGE_ARCHIVE.tar.gz` / `SHA256SUMS` と、個別の資産 7 つのハッシュを持つので、取得したものを照合してから使います。
 
 ```bash
-TAG=v0.1.0   # devcontainer-host の最新安定リリース
+TAG=v0.2.0   # devcontainer-host の最新安定リリース
 BASE="https://github.com/ojos/devcontainer-host/releases/download/${TAG}"
 
 curl -sSL "${BASE}/RELEASE-MANIFEST.json" -o RELEASE-MANIFEST.json
@@ -171,7 +171,7 @@ jq -r '.checksums["dev.sh"] + "  dev.sh"' RELEASE-MANIFEST.json | $sha256c -c - 
 ```
 
 リリースの `SHA256SUMS` には、GitHub Actions が発行した artifact attestation（SLSA provenance）が付いています
-（任意の検証。[GitHub CLI](https://cli.github.com/) が要ります）。`SHA256SUMS` は `dev.sh`・`dev-up@.service`・`install.sh`・`projects.example`・`PACKAGE_ARCHIVE.tar.gz` のハッシュを持ちます。
+（任意の検証。[GitHub CLI](https://cli.github.com/) が要ります）。`SHA256SUMS` は `dev.sh`・`dev-up@.service`・`dev-runner@.service`・`runner.Dockerfile`・`install.sh`・`projects.example`・`runners.example`・`PACKAGE_ARCHIVE.tar.gz` のハッシュを持ちます（ランナーの 3 つは v0.2.0 から）。
 **attestation が保証するのは `SHA256SUMS` 自身だけです。** 取得したファイルまで辿るには、attestation の検証に続けて `SHA256SUMS` と取得物を照合します（`RELEASE-MANIFEST.json` だけの照合では、マニフェストごと差し替えられた場合を検出できません）。
 **成功しても何も表示されません。判定は終了コードで行ってください**（0 = 成功、非 0 = 失敗）。
 
@@ -182,7 +182,7 @@ if gh attestation verify SHA256SUMS --owner "$OWNER"; then echo "attestation: ok
 
 # 検証済みの SHA256SUMS と、取得したものだけを照合する（取得していないファイルは飛ばす。
 # 全行を渡すと、取得していない dev.sh などが無いことで落ちる）
-for f in PACKAGE_ARCHIVE.tar.gz dev.sh dev-up@.service install.sh projects.example; do
+for f in PACKAGE_ARCHIVE.tar.gz dev.sh dev-up@.service dev-runner@.service runner.Dockerfile install.sh projects.example runners.example; do
   [ -f "$f" ] || continue
   awk -v f="$f" '$2 == f' SHA256SUMS | $sha256c -c - || { echo "$f: 照合に失敗しました" >&2; exit 1; }
 done
@@ -225,7 +225,7 @@ cp devhost/projects.example ~/.config/dev/projects   # 名前と絶対パスを�
 **リンクではなく写しで置きます。** リンクにすると、そのリポジトリのブランチを切り替えただけで
 外部の機械の道具が黙って変わるためです。道具を更新するには、同じ `install` をもう一度打つか、
 `dev self-update` を使います。`dev self-update` は上の「devhost を入手する」と同じ照合（マニフェストの
-ハッシュの照合）を通してから、`dev.sh` だけを置き換えます（既定は最新、`--version v0.1.0` で固定）。
+ハッシュの照合）を通してから、`dev.sh` だけを置き換えます（既定は最新、`--version v0.2.0` で固定）。
 置き換え先が devhost の `dev.sh` だと確かめられないとき（リンク、別の道具など）は、何も置き換えずに止まります。
 ユニットのファイルと `projects` は書き換えません。更新のあとに、置いてあるユニットのファイルを同じリリースの
 `dev-up@.service` と比べ、違えば `install.sh` の再実行（または「ユニットを入れる」の `install` の打ち直し）を案内します。
@@ -270,7 +270,7 @@ fork などの外部の PR が、その機械で任意のコードを走らせ�
 # 1. install.sh で入れる（「install.sh で入れる」）。runner.Dockerfile・dev-runner@.service・runners の雛形が置かれる
 # 2. 設定を書く（名前 組織 [labels=a,b] [docker=yes|no] [pat_file=絶対パス]）
 $EDITOR ~/.config/dev/runners
-# 3. PAT を、権限 600 の別のファイルへ置く（既定は ~/.config/dev/runner-pat。値を runners に書かない）
+# 3. PAT を、group / other に権限の無い別のファイルへ置く（既定は ~/.config/dev/runner-pat。値を runners に書かない）
 install -m 600 /dev/null ~/.config/dev/runner-pat && $EDITOR ~/.config/dev/runner-pat
 # 4. イメージを作る（外部の機械の上でビルドする）
 dev runner build

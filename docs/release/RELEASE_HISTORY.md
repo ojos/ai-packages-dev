@@ -9,14 +9,17 @@
 
 | パッケージ | リポジトリ | 現行バージョン | 配布形態 |
 |---|---|---|---|
-| devcontainer-bootstrap | `ojos/devcontainer-bootstrap` | v0.19.2 | GitHub Release + 資産 5 点（配布スクリプト 2: `bootstrap.sh` / `doctor.sh`、生成物 3: `SHA256SUMS` / `RELEASE-MANIFEST.json` / `PACKAGE_ARCHIVE.tar.gz`） |
-| ai-playbook | `ojos/ai-playbook` | v0.9.2 | git タグのみ |
-| devcontainer-host | `ojos/devcontainer-host` | v0.1.0 | GitHub Release + 資産 7 点（個別 4: `dev.sh` / `dev-up@.service` / `install.sh` / `projects.example`、生成物 3: `SHA256SUMS` / `RELEASE-MANIFEST.json` / `PACKAGE_ARCHIVE.tar.gz`） |
+| devcontainer-bootstrap | `ojos/devcontainer-bootstrap` | v0.20.0 | GitHub Release + 資産 5 点（配布スクリプト 2: `bootstrap.sh` / `doctor.sh`、生成物 3: `SHA256SUMS` / `RELEASE-MANIFEST.json` / `PACKAGE_ARCHIVE.tar.gz`） |
+| ai-playbook | `ojos/ai-playbook` | v0.10.0 | git タグのみ |
+| devcontainer-host | `ojos/devcontainer-host` | v0.2.0 | GitHub Release + 資産 10 点（個別 7: `dev.sh` / `dev-up@.service` / `dev-runner@.service` / `runner.Dockerfile` / `install.sh` / `projects.example` / `runners.example`、生成物 3: `SHA256SUMS` / `RELEASE-MANIFEST.json` / `PACKAGE_ARCHIVE.tar.gz`） |
 
 ### 新世代の版更新
 
 | パッケージ | 版 | 公開日 | 要点 |
 |---|---|---|---|
+| devcontainer-host | v0.2.0 | 2026-10-12 | **外部の機械で GitHub Actions の自前のランナーを、ジョブごとに使い捨てのコンテナとして常駐させる**（#547）。`dev runner build` / `dev runner run`、ユニット `dev-runner@.service`、`runner.Dockerfile`、設定 `runners`。PAT は group / other に権限の無いファイルに置き、引数・環境変数・ログに出さない。恒久的な失敗では再起動しない。Docker のソケットは設定したときだけ渡す。資産 7 点 → **10 点**。ランナーを使う機械では `install.sh` を再実行する |
+| devcontainer-bootstrap | v0.20.0 | 2026-10-12 | **生成するワークフロー 5 本の実行先を、リポジトリ変数 `ACTIONS_RUNS_ON` で切り替えられるようにした**（#546。未設定なら `ubuntu-latest`）。**ゲートのワークフローが 20 分ごとの定期実行を持たなくなった**（#545。private リポジトリで Actions の課金枠を減らし続けていた）。README に自前のランナーの注意と要る道具の一覧、PAT の権限に Actions の書き込みを足した。**この版は ai-playbook v0.10.0 以降を要求する**。`--upgrade --playbook-version v0.10.0` で追従する |
+| ai-playbook | v0.10.0 | 2026-10-12 | **ゲートの雛形から定期実行をなくし、`/land` のマージ直前の再判定と、記録の投稿のあとの手動実行で置き換えた**（#545）。**雛形のワークフローの `runs-on` を変数 `ACTIONS_RUNS_ON` で切り替えられるようにした**（#546）。`review-workflow.md` を追随。`second-opinion-record.sh post` と `/land` の再判定には Actions の書き込み権限が要る。雛形は 17 種のまま。`/land` を写している利用側は更新が要る |
 | devcontainer-bootstrap | v0.19.2 | 2026-10-11 | **タブや改行を含むパスを、台帳の欄に書かないようにした**（#528。`session-ledger.sh` と `session-coord-hook.sh`）。改行を含む `git -C` 先などで、存在しない 2 つのディレクトリへ登録・解放し、本物の登録が失効まで残って他のセッションを止め続ける状態を塞いだ。マージ・重いゲート・issue の登録と拒否は、作業ディレクトリが危険なパスでも効く。生成物の `scripts/session-ledger.sh` と（`--with-claude` の構成で）`scripts/session-coord-hook.sh` が変わる。台帳の書式は変わらない。要求する ai-playbook は変わらない（v0.9.2 を推奨） |
 | ai-playbook | v0.9.2 | 2026-10-11 | **land スキルの雛形を、引数を付けて起動しても誤動作しないようにした**（#523。Claude Code がスキルの本文の「`$` の直後に数字」を引数に置き換えるため、v0.9.1 の CI の待ちが `/land N` で誤動作していた。awk の欄とシェルの引数を置き換えに一致しない形で書き、検査を足した。利用側のプロジェクトからの報告による）。**中身を変えたら、その決定を説明している文章も見直す**（#521）。v0.9.1 の land スキルを使っている利用側は更新が要る。雛形は 17 種のまま |
 | devcontainer-bootstrap | v0.19.1 | 2026-10-11 | **起動役の設置を `devcontainer.json` の `onCreateCommand` 自身に持たせた**（#511。`on-attach.sh` の版に左右されず、配線と設置が片方だけ新しくなる状態が起きない）。**`session-coord-hook.sh` が、ブランチを作ってから失敗した呼び出しで issue の登録を解放しない**（#514。この呼び出しで作ったブランチを正確に記録して判断する。利用側のプロジェクトからの報告による）。`--with-claude` の構成の生成物が変わる。要求する ai-playbook は変わらない（v0.9.1 を推奨） |
