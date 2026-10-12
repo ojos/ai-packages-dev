@@ -62,6 +62,9 @@ make_release() {
   cp "$HOST_DIR/dev-up@.service" "$dir/dev-up@.service"
   [[ -z "$extra" ]] || printf '# %s\n' "$extra" >> "$dir/dev-up@.service"
   cp "$HOST_DIR/projects.example" "$dir/projects.example"
+  cp "$HOST_DIR/dev-runner@.service" "$dir/dev-runner@.service"
+  cp "$HOST_DIR/runner.Dockerfile" "$dir/runner.Dockerfile"
+  cp "$HOST_DIR/runners.example" "$dir/runners.example"
   write_manifest "$dir" "$ver"
 }
 
@@ -70,7 +73,8 @@ write_manifest() {
   local dir="$1" ver="$2"
   jq -n --arg v "$ver" \
     --arg d "$(sha_of "$dir/dev.sh")" --arg u "$(sha_of "$dir/dev-up@.service")" --arg p "$(sha_of "$dir/projects.example")" \
-    '{package: "devcontainer-host", version: $v, checksums: {"dev.sh": $d, "dev-up@.service": $u, "projects.example": $p}}' \
+    --arg ru "$(sha_of "$dir/dev-runner@.service")" --arg rd "$(sha_of "$dir/runner.Dockerfile")" --arg rx "$(sha_of "$dir/runners.example")" \
+    '{package: "devcontainer-host", version: $v, checksums: {"dev.sh": $d, "dev-up@.service": $u, "projects.example": $p, "dev-runner@.service": $ru, "runner.Dockerfile": $rd, "runners.example": $rx}}' \
     > "$dir/RELEASE-MANIFEST.json"
 }
 
@@ -108,6 +112,9 @@ files_in_home() { find "$H" -type f | wc -l | tr -d ' '; }
 BIN() { echo "$H/.local/bin/dev"; }
 UNIT() { echo "$H/.config/systemd/user/dev-up@.service"; }
 PROJ() { echo "$H/.config/dev/projects"; }
+RUNIT() { echo "$H/.config/systemd/user/dev-runner@.service"; }
+RDF() { echo "$H/.config/dev/runner.Dockerfile"; }
+RCONF() { echo "$H/.config/dev/runners"; }
 
 # ── 1. 新規の導入 ─────────────────────────────────────────────────────────────
 
@@ -123,6 +130,13 @@ if [[ -f "$(BIN)" && ! -L "$(BIN)" && -x "$(BIN)" ]] && cmp -s "$REL1/dev.sh" "$
 it "新規の導入で、ユニットがリリースの dev-up@.service と同じ内容で置かれる"
 if cmp -s "$REL1/dev-up@.service" "$(UNIT)"; then pass; else fail "ユニットが置かれていない、または内容が違う"; fi
 
+it "新規の導入で、ランナーのユニット・Dockerfile がリリースと同じ内容で置かれ、runners が runners.example から作られる"
+if cmp -s "$REL1/dev-runner@.service" "$(RUNIT)" && cmp -s "$REL1/runner.Dockerfile" "$(RDF)" && cmp -s "$REL1/runners.example" "$(RCONF)"; then
+  pass
+else
+  fail "ランナーのファイルが置かれていない、または内容が違う: $(find "$H" -type f | tr '\n' ' ')"
+fi
+
 it "新規の導入で、projects が projects.example から作られる"
 if cmp -s "$REL1/projects.example" "$(PROJ)"; then pass; else fail "projects が作られていない、または内容が違う"; fi
 
@@ -134,6 +148,9 @@ if grep -q "releases/latest/download/RELEASE-MANIFEST.json " "$LOG" \
    && grep -q "releases/download/v0.1.0/dev.sh " "$LOG" \
    && grep -q "releases/download/v0.1.0/dev-up@.service " "$LOG" \
    && grep -q "releases/download/v0.1.0/projects.example " "$LOG" \
+   && grep -q "releases/download/v0.1.0/dev-runner@.service " "$LOG" \
+   && grep -q "releases/download/v0.1.0/runner.Dockerfile " "$LOG" \
+   && grep -q "releases/download/v0.1.0/runners.example " "$LOG" \
    && ! grep -q "latest/download/dev.sh" "$LOG" \
    && ! grep -q "PACKAGE_ARCHIVE" "$LOG"; then
   pass
@@ -158,6 +175,11 @@ it "既存の projects は上書きしない（再実行しても、書き換え
 printf 'alpha /home/me/alpha\n' > "$(PROJ)"
 run_install "$REL1"
 if [[ $RC -eq 0 && "$(cat "$(PROJ)")" == "alpha /home/me/alpha" ]]; then pass; else fail "終了コード $RC、projects: $(cat "$(PROJ)")"; fi
+
+it "既存の runners は上書きしない（再実行しても、書き換えた内容のまま）"
+printf 'r1 my-org\n' > "$(RCONF)"
+run_install "$REL1"
+if [[ $RC -eq 0 && "$(cat "$(RCONF)")" == "r1 my-org" ]]; then pass; else fail "終了コード $RC、runners: $(cat "$(RCONF)")"; fi
 
 it "同じ版の再実行は冪等（dev・ユニットは同じ内容のまま、すでにこの版と案内する）"
 if [[ $RC -eq 0 ]] && cmp -s "$REL1/dev.sh" "$(BIN)" && cmp -s "$REL1/dev-up@.service" "$(UNIT)" \
@@ -206,6 +228,17 @@ it "何も更新しない再実行では、起こし直しの案内は出さな�
 run_install "$REL3" --version v0.1.1
 if [[ $RC -eq 0 ]] && ! grep -q '起こし直す' "$OUT"; then pass; else fail "出ている: $(cat "$OUT")"; fi
 
+it "利用者が編集したランナーの Dockerfile は、配布の版で上書きされる（版は --build-arg で渡すので、編集させない）。--dry-run では「更新しました」を出さず、何も変えない"
+new_home
+run_install "$REL1"
+printf 'ARG RUNNER_VERSION=0.0.1\n' >> "$(RDF)"
+before="$(cat "$(RDF)")"
+run_install "$REL1" --dry-run
+dry_ok=0
+if [[ $RC -eq 0 && "$(cat "$(RDF)")" == "$before" ]] && ! grep -q '更新しました' "$OUT" && grep -q '実行すると、ランナーの Dockerfile を更新します' "$OUT"; then dry_ok=1; fi
+run_install "$REL1"
+if [[ $dry_ok -eq 1 && $RC -eq 0 ]] && cmp -s "$REL1/runner.Dockerfile" "$(RDF)" && grep -q 'ランナーの Dockerfile を更新しました' "$OUT"; then pass; else fail "dry-run の確認=$dry_ok、終了コード $RC: $(cat "$OUT")"; fi
+
 it "新規の導入では、起こし直しの案内は出さない"
 new_home
 run_install "$REL1"
@@ -222,7 +255,7 @@ tampered() {
   echo "$dir"
 }
 
-for asset in dev.sh dev-up@.service projects.example; do
+for asset in dev.sh dev-up@.service projects.example dev-runner@.service runner.Dockerfile runners.example; do
   it "$asset のハッシュがマニフェストと食い違えば、何も置かずに非 0 で止まる"
   new_home
   bad="$(tampered "hash-$asset" "$asset" "改ざん")"
@@ -257,7 +290,7 @@ new_home
 bad="$WORK/tampered-shape"
 rm -rf "$bad"
 mkdir -p "$bad"
-cp "$REL1/dev-up@.service" "$REL1/projects.example" "$bad/"
+cp "$REL1/dev-up@.service" "$REL1/projects.example" "$REL1/dev-runner@.service" "$REL1/runner.Dockerfile" "$REL1/runners.example" "$bad/"
 printf '#!/usr/bin/env bash\n# 別の道具\necho hi\n' > "$bad/dev.sh"
 write_manifest "$bad" "0.1.0"
 run_install "$bad"
@@ -268,7 +301,7 @@ new_home
 bad="$WORK/tampered-syntax"
 rm -rf "$bad"
 mkdir -p "$bad"
-cp "$REL1/dev-up@.service" "$REL1/projects.example" "$bad/"
+cp "$REL1/dev-up@.service" "$REL1/projects.example" "$REL1/dev-runner@.service" "$REL1/runner.Dockerfile" "$REL1/runners.example" "$bad/"
 printf '#!/usr/bin/env bash\n# dev — 構文の誤り\nif then fi (\n' > "$bad/dev.sh"
 write_manifest "$bad" "0.1.0"
 run_install "$bad"
@@ -283,6 +316,26 @@ printf '[Service]\nExecStart=/bin/true\n' > "$bad/dev-up@.service"
 write_manifest "$bad" "0.1.0"
 run_install "$bad"
 if [[ $RC -ne 0 && "$(files_in_home)" == "0" ]]; then pass; else fail "終了コード $RC、置かれたファイル: $(find "$H" -type f | tr '\n' ' ')"; fi
+
+it "ハッシュが合っていても、ランナーのユニットが devhost のものでなければ、何も置かずに非 0 で止まる"
+new_home
+bad="$WORK/tampered-runner-unit"
+rm -rf "$bad"
+cp -R "$REL1" "$bad"
+printf '[Service]\nExecStart=/bin/true\n' > "$bad/dev-runner@.service"
+write_manifest "$bad" "0.1.0"
+run_install "$bad"
+if [[ $RC -ne 0 && "$(files_in_home)" == "0" ]] && grep -q 'dev-runner@.service が devhost のユニットだと確かめられません' "$ERR"; then pass; else fail "終了コード $RC、置かれたファイル: $(find "$H" -type f | tr '\n' ' ')"; fi
+
+it "ハッシュが合っていても、runner.Dockerfile が公式のランナーのイメージを使っていなければ、何も置かずに非 0 で止まる"
+new_home
+bad="$WORK/tampered-runner-df"
+rm -rf "$bad"
+cp -R "$REL1" "$bad"
+printf 'FROM ubuntu:24.04\n' > "$bad/runner.Dockerfile"
+write_manifest "$bad" "0.1.0"
+run_install "$bad"
+if [[ $RC -ne 0 && "$(files_in_home)" == "0" ]] && grep -q 'runner.Dockerfile が devhost のランナーの Dockerfile だと確かめられません' "$ERR"; then pass; else fail "終了コード $RC、置かれたファイル: $(find "$H" -type f | tr '\n' ' ')"; fi
 
 it "--version で指定した版とマニフェストの版が違えば、何も置かずに非 0 で止まる"
 new_home

@@ -6,14 +6,17 @@ devcontainer を起こし、入る**ための道具一式です。どのプロ�
 
 | ファイル | 置き場所（外部の機械 / 端末） | 役割 |
 |---|---|---|
-| `dev.sh` | `~/.local/bin/dev`（外部の機械） | 入口の道具。`ls` / `up` / `attach` / `supervise` / `rebuild` / `doctor` / `restart` / `stop` / `logs` / `enable` / `disable` / `exec` / `self-update` / `version` / `help` |
+| `dev.sh` | `~/.local/bin/dev`（外部の機械） | 入口の道具。`ls` / `up` / `attach` / `supervise` / `rebuild` / `doctor` / `runner` / `restart` / `stop` / `logs` / `enable` / `disable` / `exec` / `self-update` / `version` / `help` |
 | `dev-up@.service` | `~/.config/systemd/user/`（外部の機械） | 起動時と、コンテナが止まったときに起こし直すユニット |
 | `projects.example` | `~/.config/dev/projects`（外部の機械） | 設定ファイルの雛形（名前 → パス） |
+| `dev-runner@.service` | `~/.config/systemd/user/`（外部の機械） | 自前のランナーを使い捨てのコンテナで常駐させるユニット（「自前のランナー」） |
+| `runner.Dockerfile` | `~/.config/dev/runner.Dockerfile`（外部の機械） | ランナーのイメージ（公式のイメージに道具を足す）。`dev runner build` が作る |
+| `runners.example` | `~/.config/dev/runners`（外部の機械） | ランナーの設定ファイルの雛形（名前 → 組織・ラベル・Docker を渡すか） |
 | `ssh_config.plain.example` | 端末の `~/.ssh/config` | ssh の入口の断片（経路: 素の SSH） |
 | `ssh_config.cloudflared.example` | 端末の `~/.ssh/config` | ssh の入口の断片（経路: Cloudflare Access） |
 | `ssh_config.tailscale.example` | 端末の `~/.ssh/config` | ssh の入口の断片（経路: Tailscale） |
 | `termux/shortcut.example` | スマホの `~/.shortcuts/` | Termux:Widget のボタン 1 つ分 |
-| `install.sh` | （置かない。導入・更新のときに実行する） | 取得・照合して dev とユニットを置くインストーラー（「外部の機械への導入」） |
+| `install.sh` | （置かない。導入・更新のときに実行する） | 取得・照合して dev・ユニット・ランナーのファイルを置くインストーラー（「外部の機械への導入」） |
 | `selftest.sh` | （置かない） | 偽の道具で回す自己試験 |
 
 ## 3 パッケージの関係
@@ -109,19 +112,20 @@ jq -r '.checksums["install.sh"] + "  install.sh"' RELEASE-MANIFEST.json | $sha25
 `bash install.sh --dry-run` は、何も書かずに計画だけを出します（取得と照合は行います）。`--version` を省くと最新を入れます。
 `install.sh` がすることは次のとおりです。
 
-1. 同じ版の `RELEASE-MANIFEST.json`・`dev.sh`・`dev-up@.service`・`projects.example` を取得し、マニフェストの `checksums` と照合します。
+1. 同じ版の `RELEASE-MANIFEST.json`・`dev.sh`・`dev-up@.service`・`dev-runner@.service`・`runner.Dockerfile`・`projects.example`・`runners.example` を取得し、マニフェストの `checksums` と照合します。
    **1 つでも食い違えば、何も置かずに非 0 で止まります。** `dev.sh` は devhost の `dev.sh` の形か（1 行目が bash の shebang、2 行目が `# dev — ` で始まる）と構文も確かめます。
 2. `dev` を `~/.local/bin/dev` へ**写しで**置きます。置き換え先がリンク・ディレクトリ・git で追跡されているファイル・devhost の `dev.sh` でないファイルなら、
    `dev self-update` と同じく置き換えずに止まります。
-3. `dev-up@.service` を `~/.config/systemd/user/` へ置き、`systemctl --user daemon-reload` を呼びます。
-4. `~/.config/dev/projects` が無ければ `projects.example` から作ります。**あれば決して上書きしません。**
+3. `dev-up@.service` と `dev-runner@.service` を `~/.config/systemd/user/` へ置き、`systemctl --user daemon-reload` を呼びます。
+   `runner.Dockerfile` は `~/.config/dev/runner.Dockerfile` へ置きます（イメージは自動では作りません。「自前のランナー」）。
+4. `~/.config/dev/projects` と `~/.config/dev/runners` が無ければ、それぞれ `projects.example` / `runners.example` から作ります。**あれば決して上書きしません。**
 5. devcontainer CLI・docker・systemd の有無を確かめ、足りないものを案内します。**自動では入れません。**
    `loginctl enable-linger` と、プロジェクトごとの `systemctl --user enable --now dev-up@<名前>.service` も、案内だけです
    （`sudo` が要る・どのプロジェクトを常駐させるかは利用者が決めるため）。
 
-再実行しても壊れません（冪等）。新しい版なら、`dev` とユニットのファイルを更新します。
+再実行しても壊れません（冪等）。新しい版なら、`dev`・ユニット・`runner.Dockerfile` を更新します。
 すでに動いているユニットは、起こし直すまで古い `dev` のまま動くので、`dev restart <名前>` などで起こし直します。
-`dev self-update` は `dev` だけを更新し、ユニットのファイルが古いときは `install.sh` の再実行を案内します
+`dev self-update` は `dev` だけを更新し、ユニットや `runner.Dockerfile` が古いときは `install.sh` の再実行を案内します
 （「dev を置く」と `dev self-update` の説明を参照）。
 
 この取得の手順は、マニフェストと `install.sh` を同じ取得元から取ります。取得元ごと差し替えられた場合まで防ぐには、
@@ -244,6 +248,60 @@ journalctl --user -u dev-up@<名前>.service -n 20
   なので、外部の機械を再起動するか `sudo systemctl restart user@$(id -u).service` で起こし直します。
 - 起動の直後に Docker のデーモンが遅れても、`up` が失敗して 30 秒後にやり直します（回数の上限なし）。
 
+## 自前のランナー
+
+SSH で届く外部の機械（Linux + systemd + Docker）で、**GitHub Actions の自前のランナーを、ジョブごとに使い捨てのコンテナとして
+常駐**させます。private リポジトリの CI を、GitHub がホストするランナーの課金枠を使わずに回すためです。
+組織名・ラベルなどの固有の値は外部の機械の設定ファイル（`runners`）に置き、配布物には書きません。
+
+**仕組み。** ユニット `dev-runner@<名前>.service` が `dev runner run <名前>` を起こします。1 回の起動で、(1) PAT で組織の
+登録用のトークンを取得し、(2) `--ephemeral` のランナーを `--rm` のコンテナで動かし、(3) ジョブが 1 つ終わってコンテナが止まったら抜けます。
+`Restart=always` が新しいコンテナで起こし直すので、ジョブごとにまっさらな環境になります。並列数は、`runners` に行を足して
+（名前を変えて）インスタンスを複数有効にすることで増やします。ユニットを止める（`systemctl --user stop`・`disable --now`）と、
+`dev` がコンテナを止めて、登録中のランナーを組織から外します（使い捨てのランナーが、登録だけ残る状態を作りません）。
+
+**外部からの PR を受けるリポジトリでは使わないでください。** 自前のランナーはジョブのコードを外部の機械で実行します。
+fork などの外部の PR が、その機械で任意のコードを走らせられるようになります（使い捨てのコンテナでも、ホストのネットワーク・
+渡したソケットには届きます）。信頼できる人だけが PR を出せる private リポジトリ・組織に限って使います。
+
+### 導入の手順
+
+```bash
+# 1. install.sh で入れる（「install.sh で入れる」）。runner.Dockerfile・dev-runner@.service・runners の雛形が置かれる
+# 2. 設定を書く（名前 組織 [labels=a,b] [docker=yes|no] [pat_file=絶対パス]）
+$EDITOR ~/.config/dev/runners
+# 3. PAT を、権限 600 の別のファイルへ置く（既定は ~/.config/dev/runner-pat。値を runners に書かない）
+install -m 600 /dev/null ~/.config/dev/runner-pat && $EDITOR ~/.config/dev/runner-pat
+# 4. イメージを作る（外部の機械の上でビルドする）
+dev runner build
+# 5. 点検して、有効にする
+dev doctor --runner <名前>
+systemctl --user enable --now dev-runner@<名前>.service
+journalctl --user -u dev-runner@<名前>.service -n 20
+```
+
+- **PAT は fine-grained で、組織の「Self-hosted runners: Read and write」だけ**を持たせます。リポジトリの権限は要りません。
+  有効期限を設け、期限が切れたら再発行してファイルを差し替えます。
+- **PAT は、group / other に権限があるファイル（644 など）では読みません。** `dev runner run` は拒んで 78 で終わります（`dev doctor --runner` も FAIL にします）。600 や 400 は通ります。
+  設定の誤り・PAT の権限・イメージが無い・API が 401 / 403 / 404 を返す(PAT の失効・権限不足・組織名の誤り)、という直らない失敗(終了コード 2 と 78)では、ユニットは起こし直しません(`RestartPreventExitStatus`)。journal の理由を直してから `start` し直します。一時的な失敗（API の 429・5xx、通信の失敗など）は起こし直します。
+- **同じ名前のランナーは 2 本同時に動きません。** 名前ごとのロック(`flock`)で 2 本目を拒み、動いているジョブのコンテナを消しません(終了コード 75)。
+- **PAT は引数にも環境変数にもログにも出しません。** PAT で API を呼ぶ `curl` へは、設定を標準入力で渡します（`ps` に見えません）。
+  コンテナへ渡すのは、登録用のトークン（1 時間で切れる）だけです。値は引数に書かず、環境変数として渡します。
+- **Docker のソケットは、既定では渡しません。** `runners` で `docker=yes` にしたランナーにだけ、ホストの Docker のソケット
+  （`/var/run/docker.sock`）とそのグループを渡します。**渡すと、ジョブがホストの Docker を自由に操作できるようになります**
+  （任意のコンテナを特権で起こせるので、実質ホストの root と同じです）。ジョブがイメージのビルドなどに Docker を必要とする
+  リポジトリだけのために、別の名前（別のラベル）のランナーとして用意してください。
+- **イメージ。** 公式のランナーのイメージ（`ghcr.io/actions/actions-runner`）に、配るワークフローが使う道具（git・gh・jq・shellcheck など）を
+  足したものです（`runner.Dockerfile`）。**公式のイメージの版は固定しています**（`ARG RUNNER_VERSION`）。コンテナが使い捨てなので
+  ランナーの自動更新は効かず、古すぎる版は GitHub が受け付けなくなります。版を上げるのは手で行います。**`runner.Dockerfile` は編集しません**
+  (`install.sh` が配布の版で上書きします)。`runners` に `runner_version=X.Y.Z` の行を書くか、環境変数 `DEV_RUNNER_VERSION` を付けて
+  `dev runner build` をやり直し(`--build-arg` で渡します。未指定なら Dockerfile の既定値)、ユニットを起こし直します。公式のイメージは docker の CLI と buildx を
+  最初から持つので、`runner.Dockerfile` は足しません。入れる道具の一覧は、devcontainer-bootstrap の README の「配るワークフローの実行先（ACTIONS_RUNS_ON）」の一覧が前提です
+  （配るワークフローが自前のランナーに要る bash・git・gh・GNU coreutils 相当・sed・grep）。jq・shellcheck・curl・unzip・gawk は、
+  利用側の `acceptance.sh` が使うことが多いので、配るワークフローには要らないが入れてあります。
+- **更新。** 新しい版へは `install.sh` を再実行します（`runner.Dockerfile` が変わったら、`dev runner build` でイメージを作り直します）。
+  `dev self-update` はユニットや `runner.Dockerfile` を書き換えず、古いときに案内だけを出します。
+
 ## VS Code の窓を閉じたときの停止（stopCompose）
 
 devcontainer.json が `shutdownAction: stopCompose` のプロジェクトでは、外部の機械に繋いだ VS Code の窓を
@@ -293,6 +351,8 @@ compose のサービスに `restart: always` があると、`dev disable` で止
 | `dev supervise <名前>` | 起こして止まるまで待つ（ユニットから使う） |
 | `dev rebuild <名前> [--pull]` | コンテナを作り直す |
 | `dev doctor <名前>` | 「動いているのに入れない」を見分ける |
+| `dev doctor --runner <名前>` | 自前のランナーの点検（イメージ・PAT ファイルの権限・ユニット） |
+| `dev runner build` / `dev runner run <名前>` | ランナーのイメージを作る / 使い捨てのランナーのコンテナを起こして止まるまで待つ（ユニットから使う） |
 | `dev restart <名前>` | 作り直さずに再起動する |
 | `dev stop <名前>` | 意図して止める（ユニットを先に止める。戻すのは `dev enable`） |
 | `dev logs <名前> [-n <行数>]` | ユニットのログの末尾（既定 50 行） |
@@ -408,6 +468,7 @@ dev doctor — 「コンテナは動いているのに入れない」を見分�
 
 使い方:
   dev doctor <名前>
+  dev doctor --runner <名前>
 
 出す項目: コンテナの有無と状態 / exec が実際に通るか / cgroup の pids.current と pids.max /
 pids の上限に当たった回数 / ゾンビの数 / memory.events の oom_kill / ユニットの状態 / ユニットのログの末尾。
@@ -425,6 +486,45 @@ TERM を送っても止まらないときは、さらに 5 秒（DEV_EXEC_KILL_G
 
 終了コード: 0 = 問題なし / 1 = FAIL がある / 2 = 使い方か設定ファイルの誤り / 3 = WARN だけ
 失敗したとき: FAIL なら dev rebuild <名前> で作り直す。WARN だけなら原因を調べてから判断する。
+
+--runner は自前のランナー（dev runner、設定ファイル runners の名前）の点検。プロジェクトの設定ファイルは読まない。
+  FAIL  ランナーのイメージが無い / PAT ファイルが無い・group / other に権限がある・読めない /
+        docker=yes なのに Docker のソケットが無い
+  WARN  ユニット dev-runner@<名前> が active でも activating でもない
+  （docker=yes の設定は、危険を知らせる INFO を出す。PAT の値は出さない）
+```
+
+### dev runner
+
+```text
+dev runner — GitHub Actions の自前のランナーを、使い捨てのコンテナで動かす。
+
+使い方:
+  dev runner build
+  dev runner run <名前>
+
+build: ランナーのイメージ（公式のランナーのイメージに道具を足した runner.Dockerfile）を作る。
+  Dockerfile は標準入力から渡す（ビルドの文脈を作らない）。Dockerfile は編集しない。公式のランナーの版を上げるときは、
+  環境変数 DEV_RUNNER_VERSION か、設定ファイルの `runner_version=X.Y.Z` の行で指定する（--build-arg で渡す。未指定なら Dockerfile の既定値）。
+run: ユニット dev-runner@<名前>.service の ExecStart。1 回の起動で次をする。
+  0. 同じ名前のランナーがすでに動いていれば（ロックが取れなければ）、何も消さずに 75 で終わる
+  1. 設定ファイル runners の PAT のファイルを調べる（group / other に権限があれば、読まずに拒んで 78 で終わる）
+  2. PAT で組織の登録用のトークンを取得する（PAT は引数にも環境変数にも出さない）
+  3. --ephemeral のランナーを --rm のコンテナで起こす。コンテナへ渡すのは登録用のトークンだけ
+  4. ジョブが 1 つ終わってコンテナが止まったら抜ける（ユニットが新しいコンテナで起こし直す）
+  コンテナを起こしたあと、正常に終わらなかったとき（止めたとき（ユニットの停止・TERM・INT・HUP）や失敗したとき）だけ、
+  コンテナを止め、登録中のランナーを組織から外す（正常に終わったときは、GitHub 側で外れている）。
+  Docker のソケットは、設定ファイルで docker=yes にしたランナーにだけ渡す（既定は渡さない。
+  渡すと、ジョブがホストの Docker を自由に操作できる）。
+設定ファイル: runners（既定は ~/.config/dev/runners（XDG_CONFIG_HOME があればその下）。環境変数 DEV_RUNNERS_FILE で差し替える。書式は runners.example）。
+  1 行 1 ランナーで「名前 組織 [labels=a,b] [docker=yes|no] [pat_file=絶対パス]」。
+  `runner_version=X.Y.Z` だけの行は、イメージに使う公式のランナーの版（共通の設定）。
+点検は dev doctor --runner <名前>。curl と jq が要る。
+
+終了コード: 0 = ジョブを終えて止まった（build は作れた） / 1 = 一時的な失敗（API の 429・5xx や通信の失敗、コンテナの失敗など。ユニットは起こし直す） /
+            2 = 使い方か設定ファイルの誤り / 75 = 同じ名前がすでに動いている / 78 = イメージが無い・PAT の権限が緩い・Docker のソケットが無い・API が 401 / 403 / 404（PAT の失効・権限不足・組織名の誤り）
+            （2 と 78 は、ユニットが起こし直さない）
+失敗したとき: dev doctor --runner <名前> で原因を見分ける。
 ```
 
 ### dev restart
@@ -563,13 +663,14 @@ dev self-update — dev 自身を、devcontainer-host の公開リリースの�
   3. マニフェストの checksums に記録された dev.sh の SHA-256 を読み、同じリリースの dev.sh を取得して照合する
   4. 取得した dev.sh が 1 と同じ形（bash の shebang と「# dev — 」）であることと、構文を確かめる
   5. 同じディレクトリの一時ファイルへ写し、mv で置き換える
-  6. 置いてあるユニットのファイル（~/.config/systemd/user/dev-up@.service）を、同じリリースのマニフェストの
-     checksums の dev-up@.service と比べる。違えば、install.sh を再実行してユニットを更新するよう案内する
-     （ユニットのファイルを置いていない、マニフェストにハッシュが無いときは何も言わない）
+  6. 置いてあるユニットのファイル（~/.config/systemd/user/dev-up@.service と dev-runner@.service）と、ランナーの
+     Dockerfile（~/.config/dev/runner.Dockerfile）を、同じリリースのマニフェストの checksums の同名の資産と比べる。
+     違えば、install.sh を再実行して更新するよう案内する
+     （ファイルを置いていない、マニフェストにハッシュが無いときは何も言わない）
   7. 置き換えたあと、動いているユニットは起こし直すまで古い dev のまま動き続けることを案内する
      （dev restart <名前>、または systemctl --user restart dev-up@<名前>.service）
 どれか 1 つでも外れたら（1〜5）、何も置き換えずに 1 で止まる。手動の入手（README の「devhost を入手する」）と
-同じ照合。dev.sh だけを置き換える。**ユニットのファイルや設定ファイルは書き換えない**（6 は差の案内だけで、
+同じ照合。dev.sh だけを置き換える。**ユニット・Dockerfile・設定ファイルは書き換えない**（6 は差の案内だけで、
 更新は install.sh の再実行に任せる）。
 curl と jq と、sha256sum または shasum が要る。
 
@@ -601,7 +702,7 @@ dev help — サブコマンドの説明を出す。
 
 使い方:
   dev help                  使い方の一覧
-  dev help <サブコマンド>    ls / up / attach / supervise / rebuild / doctor /
+  dev help <サブコマンド>    ls / up / attach / supervise / rebuild / doctor / runner /
                             restart / stop / logs / enable / disable / exec / self-update / version の説明
 
 終了コード: 0 = 成功 / 2 = 知らないサブコマンド
@@ -693,7 +794,9 @@ bash devhost/selftest.sh   # DEVHOST_SELFTEST_PASS
 ```
 
 偽の devcontainer / docker / tmux / systemctl / git / ps / journalctl / curl を PATH に置き、組み立てるコマンド・
-未登録の名前の拒否・設定ファイルの誤り・`rebuild` / `restart` / `stop` / `exec` / `doctor` / `self-update` の振る舞い・ユニットの要の行を見ます。
+未登録の名前の拒否・設定ファイルの誤り・`rebuild` / `restart` / `stop` / `exec` / `doctor` / `self-update` / `runner` の振る舞い・ユニットの要の行を見ます。
+`runner` では、PAT が引数・コンテナの環境変数・出力に現れないこと、権限が緩い PAT ファイルの拒否、Docker のソケットを渡す条件、
+止めたときに登録を外す API を呼ぶことを、偽の `docker` / `curl`（GitHub の API には出ません）で確かめます。
 加えて、上の「コマンドの説明」の各ブロックが `dev help` の出力と一致すること、載せたサブコマンドの集合が
 `dev` の受け付ける集合と一致することを照合します（説明の 1 行を書き換えた複製では落ちることも確かめます）。偽物を本物に合わせたところは `selftest.sh` の冒頭にあります。
 `dev doctor` が読む /proc と cgroup の根は、環境変数 `DEV_PROC_ROOT` / `DEV_CGROUP_ROOT` で差し替えられます
