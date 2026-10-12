@@ -109,7 +109,7 @@ jobs:
   # commit status の context は別なので判定は混ざらないが、**人が読む一覧で区別できないのは、
   # 気づけないことと同じ側にある。**
   record:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.ACTIONS_RUNS_ON || 'ubuntu-latest' }}
     # フォークからの PR は対象外にする。記録の投稿には PR への書き込みが要り、
     # フォークからの push ではそれができない。**要求されないものを「無い」と落とすと、
     # 恒常的に赤いだけの状態になる**（review-gate.yml と同じ扱い）。

@@ -28,7 +28,7 @@ permissions:
 
 jobs:
   request-copilot-review:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.ACTIONS_RUNS_ON || 'ubuntu-latest' }}
     # フォークからの PR は書き込みトークンを持たないためスキップする。
     if: github.event.pull_request.head.repo.full_name == github.repository
     steps:

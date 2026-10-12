@@ -117,7 +117,7 @@ concurrency:
 
 jobs:
   check:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.ACTIONS_RUNS_ON || 'ubuntu-latest' }}
     # フォークからの PR は copilot-review.yml が対象外にしている。要求されない
     # ものを「要求されていない」と落とすと、恒常的に赤いだけの状態になる。
     if: >-
