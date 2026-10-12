@@ -34,6 +34,12 @@
 #   （コンテナの状態は 1 行 1 つで「パス<TAB>ID<TAB>状態<TAB>compose のプロジェクト（任意）」）
 # - curl: `-fsSL <URL> -o <出力先>` だけ。リリースの取得先（devcontainer-host の latest/download か download/v*）以外の URL は落とす
 #   （ネットワークには出ない。URL の末尾のファイル名で、試験が用意したファイルを写す。-f の失敗は 22）
+# - docker（ランナー用）: `image inspect <イメージ>`（FAKE_IMAGE_MISSING=1 で無い）、`build -t <名前> -`（標準入力を $FAKE_STATE/build-stdin へ写す）、
+#   `rm -f <名前>`、`run ...`（**環境変数の一覧を $FAKE_STATE/run-env へ書く**。FAKE_RUN_SIGNAL=TERM で親へ TERM を送って 143 で抜ける
+#   ＝ユニットを止められた状況。FAKE_RUN_EXIT で抜ける終了コードを変える）。他の形は落とす
+# - curl（API）: `-sSL -K - -X <メソッド> -H ... -w <書式> <URL>` の形だけ。**標準入力の設定を $FAKE_STATE/curl-config へ書き**
+#   （PAT が引数でなく標準入力で渡ることを見る）、FAKE_PAT_EXPECT を含まなければ 401 相当（22）で落とす。
+#   組織の登録用トークン（POST）・ランナーの一覧（GET、page 付き。FAKE_REGISTERED_NAME のランナーを 1 つ返す。FAKE_PAGES=2 なら 1 ページ目は 100 件の別のランナーで、自分は 2 ページ目）・登録の削除（DELETE）だけ
 # - /proc と cgroup は偽の木（$WORK/proc と $WORK/cg）を DEV_PROC_ROOT / DEV_CGROUP_ROOT で渡す。
 #   cgroup v2 の形に合わせる（/proc/<PID>/cgroup は `0::/パス` の 1 行、pids.current / pids.max は
 #   数か `max`、pids.events は `max N`、memory.events は 1 行 1 キー）
@@ -64,7 +70,7 @@ TOOLBIN="$WORK/toolbin"
 mkdir -p "$FAKEBIN" "$TOOLBIN" "$WORK/home"
 
 # dev.sh と偽物が使う道具だけを置く。本物の docker などが入った環境でも PATH から見えない。
-for t in sed tail head cat rm mkdir grep tr env awk sleep mktemp; do  # bsd-ok: mktemp は呼び出しではなく、偽の PATH へ写す道具の名前の一覧
+for t in sed tail head cat rm mkdir grep tr env awk sleep mktemp stat flock; do  # bsd-ok: mktemp は呼び出しではなく、偽の PATH へ写す道具の名前の一覧
   p="$(command -v "$t")" || { echo "[devhost-selftest] $t が見つかりません" >&2; exit 1; }
   ln -s "$p" "$TOOLBIN/$t"
 done
@@ -234,6 +240,12 @@ case "$sub" in
     fi
     ;;
   wait)
+    if [[ "${1:-}" == dev-runner-* ]]; then
+      # 前回のコンテナの終了待ち。FAKE_WAIT_FAIL=1 は接続障害など(失敗で抜ける)。FAKE_WAIT_SIGNAL は待っている最中に親へ送る信号。
+      if [[ -n "${FAKE_WAIT_SIGNAL:-}" ]]; then kill -s "$FAKE_WAIT_SIGNAL" "$PPID"; exit 143; fi
+      [[ "${FAKE_WAIT_FAIL:-0}" != "1" ]] || { echo "error during connect: daemon unreachable" >&2; exit 1; }
+      exit 0
+    fi
     [[ $# -eq 1 ]] || { echo "fake docker: wait の引数は 1 つだけを想定しています" >&2; exit 2; }
     if ! grep -qF "	$1	" "$STATE_FILE"; then
       echo "Error response from daemon: No such container: $1" >&2
@@ -267,6 +279,36 @@ case "$sub" in
       mv "$STATE_FILE.new" "$STATE_FILE"
       echo "$cid"
     done
+    ;;
+  image)
+    [[ $# -eq 2 && "$1" == "inspect" ]] || { echo "fake docker: 想定外の image の引数: $*" >&2; exit 2; }
+    [[ "${FAKE_IMAGE_MISSING:-0}" != "1" ]] || { echo "Error: No such image: $2" >&2; exit 1; }
+    [[ "${FAKE_IMAGE_MISSING:-0}" != "daemon" ]] || { echo "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?" >&2; exit 1; }
+    ;;
+  build)
+    if [[ "${1:-}" == "--build-arg" ]]; then shift 2; fi
+    [[ $# -eq 3 && "$1" == "-t" && "$3" == "-" ]] || { echo "fake docker: 想定外の build の引数: $*" >&2; exit 2; }
+    cat >"$FAKE_STATE/build-stdin"
+    ;;
+  container)
+    [[ $# -eq 4 && "$1" == "inspect" && "$2" == "--format" ]] || { echo "fake docker: 想定外の container の引数: $*" >&2; exit 2; }
+    # FAKE_PREV: 前回のコンテナの状態(running / exited)。無ければコンテナ無し(本物は 1 で抜ける)。
+    [[ -n "${FAKE_PREV:-}" ]] || { echo "Error: No such container: $4" >&2; exit 1; }
+    echo "$FAKE_PREV"
+    ;;
+  rm)
+    [[ $# -eq 2 && "$1" == "-f" ]] || { echo "fake docker: 想定外の rm の引数: $*" >&2; exit 2; }
+    ;;
+  run)
+    [[ "$1" == "--rm" && "$2" == "--name" ]] || { echo "fake docker: 想定外の run の引数: $*" >&2; exit 2; }
+    # 試験の道具自身の変数（FAKE_*。期待する PAT を含む）は除く。docker のコンテナに渡る環境の側だけを見る。
+    env | grep -v '^FAKE_' >"$FAKE_STATE/run-env" || true
+    if [[ -n "${FAKE_RUN_SIGNAL:-}" ]]; then
+      # コンテナの実行中に、ユニットが止められる状況（systemd が TERM を送る）。docker run は止まって 143 で抜ける。
+      kill -s "$FAKE_RUN_SIGNAL" "$PPID"
+      exit 143
+    fi
+    exit "${FAKE_RUN_EXIT:-0}"
     ;;
   *) echo "fake docker: この試験が想定していないサブコマンドです: $sub" >&2; exit 2 ;;
 esac
@@ -431,6 +473,49 @@ set -euo pipefail
 EOF
 cat >>"$FAKEBIN/curl" <<'EOF'
 log_call curl "$@"
+if [[ "${2:-}" == "-K" ]]; then
+  # API。設定（PAT のヘッダ）は標準入力から来る。本物の `-w '\n%{http_code}'` に合わせ、本文の後に HTTP ステータスを出す
+  # （-f を付けないので、HTTP エラーでも curl 自身は 0 で抜ける）。
+  [[ $# -ge 10 && "$1" == "-sSL" && "$3" == "-" && "$4" == "-X" && "${*: -3:1}" == "-w" ]] || { echo "fake curl: 想定外の API の呼び出し: $*" >&2; exit 2; }
+  method="$5"
+  url="${*: -1}"
+  cat >>"$FAKE_STATE/curl-config"
+  # curl の子プロセスの環境(PAT が環境変数に現れないことを見る)。試験の道具自身の変数(FAKE_*)は除く。
+  env | grep -v '^FAKE_' >>"$FAKE_STATE/curl-env" || true
+  body="" code=200
+  if [[ "${FAKE_API_NETFAIL:-}" == "1" ]]; then
+    echo "curl: (6) Could not resolve host: api.github.com" >&2
+    exit 6
+  fi
+  if ! grep -qF "Bearer ${FAKE_PAT_EXPECT:-?}\"" "$FAKE_STATE/curl-config"; then
+    body='{"message":"Bad credentials"}' code=401
+  else
+    case "$method $url" in
+      "POST https://api.github.com/orgs/"*"/actions/runners/registration-token")
+        if [[ "${FAKE_API_FAIL:-}" == "token" ]]; then
+          body='{"message":"error"}' code="${FAKE_API_CODE:-403}"
+        else
+          body='{"token":"REGTOKEN123","expires_at":"2099-01-01T00:00:00Z"}'
+        fi
+        ;;
+      "GET https://api.github.com/orgs/"*"/actions/runners?per_page=100&page="*)
+        page="${url##*page=}"
+        if [[ "${FAKE_PAGES:-1}" == "2" && "$page" == "1" ]]; then
+          # 1 ページ目は 100 件で埋まり、自分のランナーは 2 ページ目にいる。
+          body="$(jq -nc '{total_count: 101, runners: [range(100) | {id: (1000 + .), name: "filler-\(.)"}]}')"
+        elif [[ -n "${FAKE_REGISTERED_NAME:-}" ]]; then
+          body="$(printf '{"total_count":2,"runners":[{"id":11,"name":"other-host-r1"},{"id":77,"name":"%s"}]}' "$FAKE_REGISTERED_NAME")"
+        else
+          body='{"total_count":0,"runners":[]}'
+        fi
+        ;;
+      "DELETE https://api.github.com/orgs/"*"/actions/runners/77") code=204 ;;
+      *) echo "fake curl: 想定外の API: $method $url" >&2; exit 2 ;;
+    esac
+  fi
+  printf '%s\n%s' "$body" "$code"
+  exit 0
+fi
 [[ $# -eq 4 && "$1" == "-fsSL" && "$3" == "-o" ]] || { echo "fake curl: 想定外の呼び出し: $*" >&2; exit 2; }
 case "$2" in
   https://github.com/ojos/devcontainer-host/releases/latest/download/* | https://github.com/ojos/devcontainer-host/releases/download/v*/*) ;;
@@ -1500,7 +1585,7 @@ sed 's/^DEV_VERSION=".*"$/DEV_VERSION="v7.8.9"/' "$DEV" >"$STAMPED"
 if [[ "$("$BASH_BIN" "$STAMPED" --version)" != "dev v7.8.9" ]]; then ng "version: 書き換えた版を出していません"; fi
 
 # ── 6d. help ──────────────────────────────────────────────────────────────────
-for sub in ls up attach supervise rebuild doctor restart stop logs enable disable exec self-update version help; do
+for sub in ls up attach supervise rebuild doctor runner restart stop logs enable disable exec self-update version help; do
   run 0 "help $sub" -- -- help "$sub"
   expect_no_calls
   expect_out_line "^dev $sub — "
@@ -1561,7 +1646,7 @@ n=$((n + 1))
 if ! readme_check "$README"; then ng "README が dev help と一致しません"; fi
 # dev が実際に受け付けるサブコマンドの確認: 一覧の各名前を引数なしで呼ぶと、使い方の誤り（2）で
 # 「使い方: dev <名前>」と返る（知らないサブコマンドなら一覧の usage が出る）。help だけは 0。
-for sub in ls up attach supervise rebuild doctor restart stop logs enable disable exec; do
+for sub in ls up attach supervise rebuild doctor runner restart stop logs enable disable exec; do
   if [[ "$sub" == "ls" ]]; then
     run 2 "$sub は引数を受け付けない（使い方の誤り）" -- -- "$sub" x
   else
@@ -1583,6 +1668,255 @@ if readme_check "$M" >/dev/null 2>&1; then ng "README へ dev に無いサブコ
 # 検査が元の README では通ること（変異のたびに通らなくなっただけ、を除く）。
 readme_check "$README" >/dev/null 2>&1 || ng "README の照合が、変異の後で通らなくなりました"
 
+# ── 6f. runner（自前のランナー）──────────────────────────────────────────────
+# 偽の docker / curl で、登録用トークンの取得・--ephemeral かつ --rm のコンテナ・PAT を出さないこと・
+# 権限の拒否・Docker のソケットの扱い・止めたときの登録の削除を見る。実機の API には出ない。
+PATV="github_pat_TESTSECRET0123456789"
+RCONF="$WORK/conf/runners"
+printf '%s\n' "$PATV" >"$WORK/conf/runner-pat"
+chmod 600 "$WORK/conf/runner-pat"
+cp "$WORK/conf/runner-pat" "$WORK/conf/pat-loose"
+chmod 644 "$WORK/conf/pat-loose"
+cp "$WORK/conf/runner-pat" "$WORK/conf/pat-ro"
+chmod 400 "$WORK/conf/pat-ro"
+: >"$WORK/docker.sock"
+cat >"$RCONF" <<EOF
+# 試験のランナー
+r1  my-org  labels=devhost,x   # 行末のコメント
+r2  my-org  docker=yes
+r3  my-org  pat_file=$WORK/conf/pat-loose
+r4  my-org  pat_file=$WORK/conf/pat-ro
+r5  my-org  docker=yes
+EOF
+mkdir -p "$WORK/lock"
+log_has() { grep -qE -- "$1" "$LOG" || { ng "$CUR: 呼び出しの記録に /$1/ がありません"; sed 's/^/    /' "$LOG" >&2; }; }
+log_lacks() { if grep -qE -- "$1" "$LOG"; then ng "$CUR: 呼び出しの記録に /$1/ があってはなりません"; fi; }
+# PAT の値が、どこにも出ていないこと（呼び出しの記録＝引数、docker へ渡った環境、標準出力・標準エラー）。
+no_pat_leak() {
+  local f
+  for f in "$LOG" "$OUT" "$ERR" "$STATE/run-env" "$STATE/curl-env"; do
+    if [[ -f "$f" ]] && grep -qF -- "TESTSECRET" "$f"; then ng "$CUR: PAT の値が $f に出ています"; fi
+  done
+}
+# rrun <期待する終了コード> <名前> [VAR=値 ...] -- dev の引数 ...
+rrun() {
+  local want="$1" rname="$2" ev=()
+  shift 2
+  while [[ $# -gt 0 && "$1" != "--" ]]; do ev+=("$1"); shift; done
+  [[ $# -gt 0 ]] && shift
+  reset_state
+  run "$want" "$rname" -- DEV_RUNNERS_FILE="$RCONF" DEV_RUNNER_HOSTNAME=h DEV_RUNNER_DOCKER_SOCK="$WORK/docker.sock" DEV_RUNNER_LOCK_DIR="$WORK/lock" \
+    FAKE_PAT_EXPECT="$PATV" ${ev[@]+"${ev[@]}"} -- "$@"
+}
+
+rrun 0 "runner run: 登録用のトークンを取り、--ephemeral のランナーを --rm のコンテナで起こす" -- runner run r1
+log_has '^curl \[-sSL\] \[-K\] \[-\] \[-X\] \[POST\] .*\[https://api.github.com/orgs/my-org/actions/runners/registration-token\]$'
+log_has '^docker \[run\] \[--rm\] \[--name\] \[dev-runner-r1\] \[-e\] \[RUNNER_TOKEN\] \[dev-runner:local\] \[bash\] \[-c\]'
+log_has '\-\-ephemeral'
+log_has '\[runner\] \[https://github.com/my-org\] \[h-r1\] \[devhost,x\]$'
+grep -q '^RUNNER_TOKEN=REGTOKEN123$' "$STATE/run-env" || ng "$CUR: docker へ登録用のトークンが環境変数で渡っていません"
+grep -qF "Bearer $PATV" "$STATE/curl-config" || ng "$CUR: PAT が curl の標準入力の設定で渡っていません"
+no_pat_leak
+log_lacks 'REGTOKEN123'
+log_lacks 'docker.sock'
+log_lacks '\-\-group-add'
+log_lacks '\[DELETE\]'
+# ジョブが正常に終わったときは、GitHub 側で外れているので、後始末(停止と一覧・削除の API)を呼ばない。
+log_lacks '^docker \[stop\]'
+log_lacks '\[GET\]'
+
+rrun 0 "runner run: 親の環境で RUNNER_PAT が export されていても、PAT は curl / docker の環境に現れない" RUNNER_PAT=placeholder -- runner run r1
+no_pat_leak
+for f in "$STATE/run-env" "$STATE/curl-env"; do
+  if grep -q '^RUNNER_PAT=' "$f"; then ng "$CUR: $f に RUNNER_PAT が環境変数として渡っています"; fi
+done
+[[ -s "$STATE/curl-env" && -s "$STATE/run-env" ]] || ng "$CUR: 環境の記録が空です(検査が働いていません)"
+
+rrun 0 "runner run: 動いている前回のコンテナがあれば、殺さずに終わるまで待ってから起動する" FAKE_PREV=running -- runner run r1
+log_has '^docker \[wait\] \[dev-runner-r1\]$'
+log_has '^docker \[run\]'
+log_lacks '^docker \[stop\]'
+w="$(grep -n '^docker \[wait\]' "$LOG" | sed -n 1p | cut -d: -f1)"
+r="$(grep -n '^docker \[rm\]' "$LOG" | sed -n 1p | cut -d: -f1)"
+u="$(grep -n '^docker \[run\]' "$LOG" | sed -n 1p | cut -d: -f1)"
+if [[ -z "$w" || -z "$r" || -z "$u" ]] || ! (( w < r && r < u )); then ng "$CUR: 待つ → 片づける → 起動、の順になっていません(wait=$w rm=$r run=$u)"; fi
+
+rrun 143 "runner run: 前回のコンテナを待っているあいだに止められたら、前回のコンテナを止めて登録を外す" FAKE_PREV=running FAKE_WAIT_SIGNAL=TERM FAKE_REGISTERED_NAME=h-r1 -- runner run r1
+log_has '^docker \[stop\] \[dev-runner-r1\]$'
+log_has '\[DELETE\] .*runners/77\]$'
+log_lacks '^docker \[run\]'
+
+rrun 1 "runner run: 前回のコンテナの docker wait が失敗したら、rm も stop もせずに一時的な失敗(1)で抜ける" FAKE_PREV=running FAKE_WAIT_FAIL=1 -- runner run r1
+log_lacks '^docker \[(rm|stop|run)\]'
+log_lacks '\[DELETE\]'
+expect_err "終了を待てませんでした"
+
+rrun 0 "runner run: 止まっている前回のコンテナは待たずに消して起動する" FAKE_PREV=exited -- runner run r1
+log_has '^docker \[rm\] \[-f\] \[dev-runner-r1\]$'
+log_lacks '^docker \[wait\]'
+log_has '^docker \[run\]'
+
+rrun 0 "runner run: 前回のコンテナが無ければ、rm も wait も呼ばない" -- runner run r1
+log_lacks '^docker \[(rm|wait)\]'
+
+rrun 0 "runner run: docker=yes のときだけ、ソケットをグループ付きで渡す" -- runner run r2
+log_has '^docker \[run\] \[--rm\] \[--name\] \[dev-runner-r2\] \[-e\] \[RUNNER_TOKEN\] \[-v\] \[.*/docker.sock:/var/run/docker.sock\] \[--group-add\] \[[0-9]+\] \[dev-runner:local\]'
+no_pat_leak
+
+# ロックの置き場所(c)。
+LK="$WORK/lk-open"
+mkdir -p "$LK"
+chmod 777 "$LK"
+rrun 78 "runner run: ロックの置き場所に group / other の書き込み権限があれば拒む(78)" DEV_RUNNER_LOCK_DIR="$LK" -- runner run r1
+expect_err "書き込み権限があります"
+log_lacks '^docker \[run\]'
+LK="$WORK/lk-link"
+mkdir -p "$LK"
+chmod 700 "$LK"
+printf 'victim\n' >"$WORK/victim"
+ln -s "$WORK/victim" "$LK/dev-runner-r1.lock"
+rrun 78 "runner run: ロックのファイルがリンクなら辿らずに拒む(78。リンク先を切り詰めない)" DEV_RUNNER_LOCK_DIR="$LK" -- runner run r1
+expect_err "リンクです"
+[[ "$(cat "$WORK/victim")" == "victim" ]] || ng "$CUR: リンク先が書き換わっています"
+log_lacks '^docker \[run\]'
+rrun 0 "runner run: 既定の置き場所(XDG_RUNTIME_DIR が無ければ XDG_CACHE_HOME の下)を、権限 700 で作る" DEV_RUNNER_LOCK_DIR= XDG_CACHE_HOME="$WORK/xdgcache" -- runner run r1
+if [[ "$(stat -c %a "$WORK/xdgcache/dev" 2>/dev/null)" != "700" ]]; then ng "$CUR: ロックのディレクトリが権限 700 で作られていません"; fi  # bsd-ok: 試験は Linux で回す
+[[ -f "$WORK/xdgcache/dev/dev-runner-r1.lock" ]] || ng "$CUR: ロックのファイルが既定の置き場所にありません"
+rrun 78 "runner run: PAT ファイルの group / other に権限があれば、読まずに拒む（直らない失敗の 78）" -- runner run r3
+expect_err "権限が緩すぎます（644"
+log_lacks '^curl '
+log_lacks '^docker \[run\]'
+no_pat_leak
+
+rrun 0 "runner run: 権限 400 の PAT ファイルは通す（group / other のビットが無ければよい）" -- runner run r4
+log_has '^docker \[run\]'
+no_pat_leak
+
+rrun 78 "runner run: イメージが無ければ拒む（直らない失敗の 78）" FAKE_IMAGE_MISSING=1 -- runner run r1
+expect_err "ランナーのイメージがありません"
+log_lacks '^curl '
+log_lacks '^docker \[run\]'
+
+rrun 1 "runner run: Docker のデーモンに届かないときは、一時的な失敗（1。ユニットが起こし直す）" FAKE_IMAGE_MISSING=daemon -- runner run r1
+expect_err "docker に問い合わせられません"
+log_lacks '^docker \[run\]'
+
+rm -f "$WORK/docker.sock"
+rrun 78 "runner run: docker=yes なのにソケットが無ければ拒む（78）" -- runner run r5
+expect_err "Docker のソケットがありません"
+log_lacks '^docker \[run\]'
+: >"$WORK/docker.sock"
+
+for code in 401 403 404; do
+  rrun 78 "runner run: 登録用のトークンが HTTP $code なら、直らない失敗(78。ユニットは起こし直さない)" FAKE_API_FAIL=token FAKE_API_CODE=$code -- runner run r1
+  expect_err "Self-hosted runners: Read and write"
+  expect_err "HTTP $code"
+  log_lacks '^docker \[run\]'
+  no_pat_leak
+done
+for code in 429 500 503; do
+  rrun 1 "runner run: 登録用のトークンが HTTP $code なら、一時的な失敗(1。ユニットが起こし直す)" FAKE_API_FAIL=token FAKE_API_CODE=$code -- runner run r1
+  expect_err "登録用のトークンを取得できませんでした"
+  log_lacks '^docker \[run\]'
+  no_pat_leak
+done
+rrun 1 "runner run: 通信の失敗は一時的な失敗(1)" FAKE_API_NETFAIL=1 -- runner run r1
+log_lacks '^docker \[run\]'
+rrun 78 "runner run: PAT が違えば(API が 401)、直らない失敗(78)" FAKE_PAT_EXPECT=github_pat_OTHER -- runner run r1
+log_lacks '^docker \[run\]'
+no_pat_leak
+
+rrun 1 "runner run: コンテナが失敗して止まれば 1（ユニットが起こし直す）。正常でないので後始末をする" FAKE_RUN_EXIT=3 FAKE_REGISTERED_NAME=h-r1 -- runner run r1
+expect_err "終了コード 3"
+log_has '^docker \[stop\] \[dev-runner-r1\]$'
+log_has '\[DELETE\]'
+
+# 同じ名前がすでに動いている(ロックを別のファイル記述子で持つ)ときは、何も消さずに 75 で拒む。
+exec 8>"$WORK/lock/dev-runner-r1.lock"
+flock -n 8 || ng "試験の準備: ロックを取れません"
+rrun 75 "runner run: 同じ名前がすでに動いていれば、何も消さずに拒む" -- runner run r1
+expect_err "すでに動いています"
+log_lacks '^docker \[(rm|stop|run)\]'
+log_lacks '^curl '
+exec 8>&-
+rrun 0 "runner run: 別の名前のロックは邪魔しない" -- runner run r2
+log_has '^docker \[run\]'
+
+rrun 143 "runner run: 止められたら、コンテナを止めて組織から登録を外す（自分の名前のランナーだけ）" FAKE_RUN_SIGNAL=TERM FAKE_REGISTERED_NAME=h-r1 -- runner run r1
+log_has '^docker \[stop\] \[dev-runner-r1\]$'
+log_has '^curl \[-sSL\] \[-K\] \[-\] \[-X\] \[GET\] .*actions/runners\?per_page=100&page=1\]$'
+log_has '^curl \[-sSL\] \[-K\] \[-\] \[-X\] \[DELETE\] .*\[https://api.github.com/orgs/my-org/actions/runners/77\]$'
+log_lacks 'runners/11\]'
+expect_out_line '組織から登録を外しました: h-r1'
+no_pat_leak
+
+rrun 143 "runner run: 一覧が複数ページでも、2 ページ目の自分のランナーを外す" FAKE_RUN_SIGNAL=TERM FAKE_REGISTERED_NAME=h-r1 FAKE_PAGES=2 -- runner run r1
+log_has 'per_page=100&page=1\]$'
+log_has 'per_page=100&page=2\]$'
+log_has '\[DELETE\] .*runners/77\]$'
+
+rrun 143 "runner run: 止められたとき、登録が無ければ削除は呼ばない" FAKE_RUN_SIGNAL=TERM -- runner run r1
+log_lacks '\[DELETE\]'
+
+rrun 2 "runner run: 未登録の名前" -- runner run nope
+expect_err "登録されていないランナーです: nope"
+expect_no_calls
+rrun 2 "runner: 引数なし" -- runner
+expect_err "使い方: dev runner"
+expect_no_calls
+rrun 2 "runner: 知らないサブコマンド" -- runner bogus
+expect_no_calls
+rrun 2 "runner run: 名前が無い" -- runner run
+expect_no_calls
+T="$WORK/conf/runners.bad"
+printf 'x my-org bogus=1\n' >"$T"
+run 2 "runners: 知らないキーは設定の誤り" -- DEV_RUNNERS_FILE="$T" -- runner run x
+expect_err "知らないキーです"
+printf 'x my-org docker=maybe\n' >"$T"
+run 2 "runners: docker は yes か no" -- DEV_RUNNERS_FILE="$T" -- runner run x
+expect_err "docker は yes か no です"
+printf 'x my-org\nx my-org\n' >"$T"
+run 2 "runners: 名前の重複" -- DEV_RUNNERS_FILE="$T" -- runner run x
+expect_err "名前が重複しています"
+run 2 "runners: 設定ファイルが無い" -- DEV_RUNNERS_FILE="$WORK/conf/none" -- runner run x
+expect_err "設定ファイルがありません"
+expect_no_calls
+
+cp "$HERE/runner.Dockerfile" "$WORK/conf/runner.Dockerfile"
+rrun 0 "runner build: Dockerfile を標準入力で渡す（ビルドの文脈を作らない）" DEV_RUNNER_DOCKERFILE="$WORK/conf/runner.Dockerfile" -- runner build
+expect_calls 'docker [build] [-t] [dev-runner:local] [-]'
+cmp -s "$WORK/conf/runner.Dockerfile" "$STATE/build-stdin" || ng "$CUR: Dockerfile が標準入力で渡っていません"
+rrun 0 "runner build: 環境変数の版を --build-arg で渡す（Dockerfile は編集しない）" DEV_RUNNER_DOCKERFILE="$WORK/conf/runner.Dockerfile" DEV_RUNNER_VERSION=2.999.0 -- runner build
+expect_calls 'docker [build] [--build-arg] [RUNNER_VERSION=2.999.0] [-t] [dev-runner:local] [-]'
+printf 'runner_version=2.888.1\nz my-org\n' >"$T"
+run 0 "runner build: 設定ファイルの runner_version を --build-arg で渡す" -- DEV_RUNNERS_FILE="$T" DEV_RUNNER_DOCKERFILE="$WORK/conf/runner.Dockerfile" -- runner build
+expect_calls 'docker [build] [--build-arg] [RUNNER_VERSION=2.888.1] [-t] [dev-runner:local] [-]'
+printf 'runner_version=latest\nz my-org\n' >"$T"
+run 2 "runner build: runner_version が X.Y.Z でなければ拒む" -- DEV_RUNNERS_FILE="$T" DEV_RUNNER_DOCKERFILE="$WORK/conf/runner.Dockerfile" -- runner build
+expect_no_calls
+rrun 1 "runner build: Dockerfile が無ければ拒む" DEV_RUNNER_DOCKERFILE="$WORK/conf/none.Dockerfile" -- runner build
+expect_no_calls
+
+rrun 0 "doctor --runner: 問題なし" FAKE_ACTIVE_UNITS=dev-runner@r1.service -- doctor --runner r1
+expect_out_line '\[OK  \] イメージ dev-runner:local があります'
+expect_out_line '\[OK  \] PAT ファイル .*（権限 600）'
+expect_out_line '\[OK  \] ユニット dev-runner@r1.service: active'
+expect_out_line '判定: OK'
+rrun 1 "doctor --runner: PAT の権限が緩ければ FAIL" -- doctor --runner r3
+expect_out_line '\[FAIL\] PAT ファイルの権限が緩すぎます（644'
+rrun 3 "doctor --runner: 権限 400 の PAT は FAIL にしない（ユニットが止まっている WARN だけ）" -- doctor --runner r4
+expect_out_line '\[OK  \] PAT ファイル .*（権限 400）'
+no_pat_leak
+rrun 1 "doctor --runner: イメージが無ければ FAIL" FAKE_IMAGE_MISSING=1 -- doctor --runner r1
+expect_out_line '\[FAIL\] イメージ dev-runner:local がありません'
+rrun 3 "doctor --runner: ユニットが止まっていれば WARN。docker=yes は INFO で知らせる" -- doctor --runner r2
+expect_out_line '\[INFO\] docker=yes: ジョブがホストの Docker を自由に操作できます'
+expect_out_line '\[WARN\] ユニット dev-runner@r2.service: inactive'
+rrun 2 "doctor --runner: 名前が無い" -- doctor --runner
+expect_no_calls
+rrun 2 "doctor --runner: 未登録の名前" -- doctor --runner nope
+expect_err "登録されていないランナーです: nope"
+
 # ── 7. 使い方 ─────────────────────────────────────────────────────────────────
 run 2 "引数なし" -- --
 expect_no_calls
@@ -1601,6 +1935,25 @@ unit_has 'Restart=always' "止まった理由を問わず起こし直す"
 unit_has 'StartLimitIntervalSec=0' "起動の直後に Docker が遅れても諦めない"
 unit_has 'WantedBy=default.target' "ユーザーのマネージャの起動（linger で起動時）に付く"
 if grep -qE '^[^#]*%I' "$UNIT"; then ng "ユニットが %I を使っています（名前の - が / に化ける）"; fi
+
+# ランナーのユニット（dev-runner@.service）。同じく要の行を綴りで見る。
+UNIT="${DEV_RUNNER_UNIT:-$HERE/dev-runner@.service}"
+CUR="ランナーのユニット"
+unit_has 'ExecStart=%h/.local/bin/dev runner run %i' "ジョブを 1 つ受けて終わる口。%I は - を / へ戻すので使わない"
+unit_has 'Restart=always' "コンテナが止まったら（ジョブごとに）新しいコンテナで起こし直す"
+unit_has 'StartLimitIntervalSec=0' "起動の直後に Docker が遅れても諦めない"
+unit_has 'WantedBy=default.target' "ユーザーのマネージャの起動（linger で起動時）に付く"
+if grep -qE '^[^#]*%I' "$UNIT"; then ng "ランナーのユニットが %I を使っています（名前の - が / に化ける）"; fi
+unit_has 'SuccessExitStatus=143' "止めたときの 143 を成功として扱う"
+unit_has 'RestartPreventExitStatus=2 78' "設定の誤り・PAT の権限・イメージ無しは起こし直さない"
+grep -qE '^TimeoutStopSec=[0-9]+' "$UNIT" || ng "ランナーのユニットに TimeoutStopSec がありません（止めるときに登録を外す時間）"
+# Dockerfile: 公式のランナーのイメージを、版を固定して使う（latest は使わない）。
+DF="${DEV_RUNNER_DF:-$HERE/runner.Dockerfile}"
+CUR="ランナーの Dockerfile"
+grep -qE '^FROM ghcr\.io/actions/actions-runner:\$\{RUNNER_VERSION\}$' "$DF" || ng "Dockerfile が公式のランナーのイメージを ARG の版で使っていません"
+grep -qE '^ARG RUNNER_VERSION=[0-9]+\.[0-9]+\.[0-9]+$' "$DF" || ng "Dockerfile のランナーの版が固定されていません（ARG RUNNER_VERSION=X.Y.Z）"
+if grep -qF 'download.docker.com' "$DF"; then ng "Dockerfile が Docker のリポジトリを足しています（公式のイメージが docker の CLI と buildx を持つ）"; fi
+if grep -qE '^(COPY|ADD) ' "$DF"; then ng "Dockerfile が COPY / ADD を使っています（ビルドの文脈は渡さない）"; fi
 
 if [[ "$fail" -ne 0 ]]; then
   echo "DEVHOST_SELFTEST_FAIL" >&2

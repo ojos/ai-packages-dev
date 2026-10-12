@@ -12,6 +12,9 @@
 #   dev supervise <名前>        起こして止まるまで待つ（systemd のユニットから使う）
 #   dev rebuild <名前> [--pull] コンテナを作り直す（ユニットを止めて、作り直して、起こし直す）
 #   dev doctor <名前>           「動いているのに入れない」を見分ける（exec・pids・ゾンビ・OOM・ユニット）
+#   dev doctor --runner <名前>  自前のランナーの点検（イメージ・PAT ファイルの権限・ユニット）
+#   dev runner build            自前のランナーのイメージを作る
+#   dev runner run <名前>       使い捨てのランナーのコンテナを起こして、止まるまで待つ（ユニットから使う）
 #   dev restart <名前>          作り直さずに再起動する（ユニットを止めて、docker restart して、起こし直す。compose なら全体）
 #   dev stop <名前>             意図して止める（ユニットを先に止めてから、コンテナを止める。compose なら全体）
 #   dev logs <名前> [-n <行数>]  ユニットのログの末尾（既定 50 行）
@@ -81,6 +84,9 @@ usage() {
   dev supervise <名前>      （systemd のユニット dev-up@.service から使う）
   dev rebuild <名前> [--pull]
   dev doctor <名前>
+  dev doctor --runner <名前>
+  dev runner build
+  dev runner run <名前>     （systemd のユニット dev-runner@.service から使う）
   dev restart <名前>
   dev stop <名前>
   dev logs <名前> [-n <行数>]
@@ -615,6 +621,512 @@ cmd_exec() {
   dc_exec "$@"
 }
 
+# ── runner（GitHub Actions の自前のランナー）──────────────────────────────────
+# 設定ファイル runners の 1 行は「名前 組織 [キー=値 ...]」（書式は runners.example）。
+# 読んだ結果は projects と同じく並びの配列に置く。
+R_NAMES=()
+R_ORGS=()
+R_LABELS=()
+R_DOCKER=()
+R_PAT=()
+# ランナーのイメージに使う公式のランナーの版（設定ファイルの runner_version=X.Y.Z）。空なら Dockerfile の既定値。
+R_VERSION=""
+# 設定の誤りなど、起こし直しても直らない失敗の終了コード（EX_CONFIG）。ユニットの RestartPreventExitStatus が見る。
+EXIT_PERMANENT=78
+
+runners_file() {
+  if [[ -n "${DEV_RUNNERS_FILE:-}" ]]; then
+    printf '%s\n' "$DEV_RUNNERS_FILE"
+  else
+    printf '%s\n' "${XDG_CONFIG_HOME:-$HOME/.config}/dev/runners"
+  fi
+}
+
+# ランナーのイメージの名前と、そのビルドに使う Dockerfile の置き場所。
+runner_image() { printf '%s\n' "${DEV_RUNNER_IMAGE:-dev-runner:local}"; }
+runner_dockerfile() {
+  if [[ -n "${DEV_RUNNER_DOCKERFILE:-}" ]]; then
+    printf '%s\n' "$DEV_RUNNER_DOCKERFILE"
+  else
+    printf '%s\n' "${XDG_CONFIG_HOME:-$HOME/.config}/dev/runner.Dockerfile"
+  fi
+}
+# ジョブへ渡すホストの Docker のソケット（docker=yes のときだけ使う）。
+runner_docker_sock() { printf '%s\n' "${DEV_RUNNER_DOCKER_SOCK:-/var/run/docker.sock}"; }
+# GitHub 上のランナーの名前。別の機械が同じ設定の名前を使っていても取り違えないよう、ホスト名を前に付ける
+# （止めたときに外す相手を、この名前の完全一致で選ぶ）。
+runner_github_name() { printf '%s-%s\n' "${DEV_RUNNER_HOSTNAME:-${HOSTNAME:-host}}" "$1"; }
+
+load_runners() {
+  local file lineno=0 line name org kv key val i labels dock pat
+  file="$(runners_file)"
+  if [[ ! -f "$file" ]]; then
+    usage_error "設定ファイルがありません: $file
+[$PROG] 雛形（runners.example）を写して、名前と組織を 1 行ずつ書いてください。"
+  fi
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    lineno=$((lineno + 1))
+    line="${line%$'\r'}"
+    line="${line%%#*}"
+    set -f
+    # shellcheck disable=SC2086
+    set -- $line
+    set +f
+    [[ $# -gt 0 ]] || continue
+    if [[ $# -eq 1 && "$1" == runner_version=* ]]; then
+      R_VERSION="${1#runner_version=}"
+      [[ "$R_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || usage_error "$file:$lineno: runner_version は X.Y.Z の形です: $R_VERSION"
+      continue
+    fi
+    if [[ $# -lt 2 ]]; then
+      usage_error "$file:$lineno: 「名前 組織」の 2 つが要ります: $line"
+    fi
+    name="$1" org="$2"
+    shift 2
+    if [[ ! "$name" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]]; then
+      usage_error "$file:$lineno: 名前に使えるのは英数字と _ . - だけです（systemd のインスタンス名にもなるため）: $name"
+    fi
+    if [[ ! "$org" =~ ^[A-Za-z0-9][A-Za-z0-9-]*$ ]]; then
+      usage_error "$file:$lineno: 組織名に使えるのは英数字と - だけです: $org"
+    fi
+    for ((i = 0; i < ${#R_NAMES[@]}; i++)); do
+      [[ "${R_NAMES[$i]}" == "$name" ]] && usage_error "$file:$lineno: 名前が重複しています: $name"
+    done
+    labels="" dock="no"
+    pat="$(dirname "$file")/runner-pat"
+    for kv in "$@"; do
+      if [[ "$kv" != *=* ]]; then
+        usage_error "$file:$lineno: 3 つ目以降は キー=値 で書きます: $kv"
+      fi
+      key="${kv%%=*}" val="${kv#*=}"
+      [[ -n "$val" ]] || usage_error "$file:$lineno: 値が空です: $kv"
+      case "$key" in
+        labels)
+          [[ "$val" =~ ^[A-Za-z0-9_.-]+(,[A-Za-z0-9_.-]+)*$ ]] || usage_error "$file:$lineno: labels はカンマ区切りの英数字と _ . - です: $val"
+          labels="$val"
+          ;;
+        docker)
+          case "$val" in
+            yes | no) dock="$val" ;;
+            *) usage_error "$file:$lineno: docker は yes か no です: $val" ;;
+          esac
+          ;;
+        pat_file)
+          [[ "$val" == /* ]] || usage_error "$file:$lineno: pat_file は絶対パスで書きます（~ や \$HOME は展開しません）: $val"
+          pat="$val"
+          ;;
+        *) usage_error "$file:$lineno: 知らないキーです（labels / docker / pat_file）: $key" ;;
+      esac
+    done
+    R_NAMES+=("$name")
+    R_ORGS+=("$org")
+    R_LABELS+=("$labels")
+    R_DOCKER+=("$dock")
+    R_PAT+=("$pat")
+  done <"$file"
+  if [[ ${#R_NAMES[@]} -eq 0 ]]; then
+    usage_error "設定ファイルにランナーが 1 つもありません: $file"
+  fi
+}
+
+RIDX=-1
+find_runner() {
+  local name="$1" i
+  for ((i = 0; i < ${#R_NAMES[@]}; i++)); do
+    if [[ "${R_NAMES[$i]}" == "$name" ]]; then
+      RIDX=$i
+      return 0
+    fi
+  done
+  usage_error "登録されていないランナーです: $name（登録済み: ${R_NAMES[*]}）"
+}
+
+# 起こし直しても直らない失敗（設定・PAT の権限・イメージ無し）。専用の終了コードで抜け、ユニットが再起動しない。
+die_permanent() { echo "[$PROG] $*" >&2; exit "$EXIT_PERMANENT"; }
+
+# ファイルの権限（8 進。例: 600）を出す。GNU の stat と BSD の stat の両方を試す。
+file_mode_of() {
+  local m
+  m="$(stat -L -c %a "$1" 2>/dev/null)" || m="$(stat -L -f %Lp "$1" 2>/dev/null)" || return 1
+  printf '%s\n' "$m"
+}
+
+file_uid_of() {
+  local u
+  u="$(stat -L -c %u "$1" 2>/dev/null)" || u="$(stat -L -f %u "$1" 2>/dev/null)" || return 1
+  printf '%s\n' "$u"
+}
+
+file_gid_of() {
+  local g
+  g="$(stat -L -c %g "$1" 2>/dev/null)" || g="$(stat -L -f %g "$1" 2>/dev/null)" || return 1
+  printf '%s\n' "$g"
+}
+
+# PAT ファイルを使ってよいか。だめなら理由を標準出力へ出して 1 を返す。**値は決して出さない。**
+# group / other に権限があれば拒む（他のユーザーが読めるファイルに PAT を置かせないため）。
+runner_pat_problem() {
+  local f="$1" mode
+  if [[ ! -f "$f" ]]; then
+    echo "PAT ファイルがありません（通常のファイルではありません）: $f"
+    return 1
+  fi
+  mode="$(file_mode_of "$f")" || {
+    echo "PAT ファイルの権限を読めません: $f"
+    return 1
+  }
+  # group / other に権限があれば拒む（400 のような、より厳しい権限は許す）。
+  if [[ ! "$mode" =~ ^[0-7]+$ ]] || (( (8#$mode & 8#077) != 0 )); then
+    echo "PAT ファイルの権限が緩すぎます（$mode。group / other に権限があります）: $f（chmod 600 で直してください）"
+    return 1
+  fi
+  if [[ ! -r "$f" ]]; then
+    echo "PAT ファイルを読めません: $f"
+    return 1
+  fi
+  return 0
+}
+
+# PAT の値。標準の環境には出さない（export しない）。
+# 親の環境で RUNNER_PAT が export されていると、再代入しても export 属性が残り、ファイルから読んだ PAT が
+# curl / docker の子プロセスの環境に出る。unset で属性ごと消してから、export していない変数として持つ。
+unset RUNNER_PAT
+RUNNER_PAT=""
+
+# PAT ファイルを読む。空白と改行を取り除き、PAT の形（英数字と _）でなければ拒む
+# （curl の設定へ書くとき、引用符や改行が混ざって別の設定として読まれるのを防ぐ）。
+runner_pat_load() {
+  local f="$1" v
+  v="$(tr -d '[:space:]' <"$f")" || return 1
+  if [[ -z "$v" ]]; then
+    echo "PAT ファイルが空です: $f" >&2
+    return 1
+  fi
+  if [[ ! "$v" =~ ^[A-Za-z0-9_]+$ ]]; then
+    echo "PAT ファイルの中身が PAT の形ではありません（英数字と _ だけのはずです）: $f" >&2
+    return 1
+  fi
+  RUNNER_PAT="$v"
+}
+
+# GitHub の API を呼ぶ。応答を標準出力へ出す。
+# **PAT はコマンドラインの引数に出さない**（ps で見えるため）。curl の設定を標準入力から渡す
+# （printf は bash の組み込みなので、引数としても外部のプロセスには現れない）。
+# 使い方: runner_api <メソッド> <パス>
+# HTTP ステータスは curl の -w で読む(-f は使わない)。戻り値: 0 = 成功(2xx。本文を出す) /
+# 10 = 直らない失敗(401・403・404: PAT の失効・権限不足・組織名の誤り) / 11 = 一時的な失敗(429・5xx・通信の失敗など)。
+runner_api() {
+  local method="$1" path="$2" out code
+  out="$(printf 'header = "Authorization: Bearer %s"\n' "$RUNNER_PAT" |
+    curl -sSL -K - -X "$method" \
+      -H 'Accept: application/vnd.github+json' \
+      -H 'X-GitHub-Api-Version: 2022-11-28' \
+      -w '\n%{http_code}' \
+      "${DEV_GITHUB_API:-https://api.github.com}$path")" || return 11
+  code="${out##*$'\n'}"
+  case "$code" in
+    2??)
+      printf '%s\n' "${out%$'\n'*}"
+      return 0
+      ;;
+    401 | 403 | 404)
+      echo "[$PROG] GitHub の API が HTTP $code を返しました: $method $path" >&2
+      return 10
+      ;;
+    *)
+      echo "[$PROG] GitHub の API が HTTP $code を返しました: $method $path" >&2
+      return 11
+      ;;
+  esac
+}
+
+cmd_runner() {
+  local sub="${1:-}"
+  [[ $# -ge 1 ]] || usage_error "使い方: dev runner build | dev runner run <名前>"
+  shift
+  case "$sub" in
+    build) cmd_runner_build "$@" ;;
+    run) cmd_runner_run "$@" ;;
+    *) usage_error "知らない runner のサブコマンドです: $sub（build / run）" ;;
+  esac
+}
+
+# 設定ファイルの runner_version だけを読む（build はランナーの行が 0 件でも通す）。
+load_runners_version() {
+  local line
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line%$'\r'}"
+    line="${line%%#*}"
+    set -f
+    # shellcheck disable=SC2086
+    set -- $line
+    set +f
+    if [[ $# -eq 1 && "$1" == runner_version=* ]]; then
+      R_VERSION="${1#runner_version=}"
+    fi
+  done <"$(runners_file)"
+}
+
+# ランナーのイメージを作る。Dockerfile は標準入力から渡す（ビルドの文脈を作らない。設定ディレクトリの
+# PAT のファイルが、ビルドの文脈としてデーモンへ送られることがないように）。
+cmd_runner_build() {
+  [[ $# -eq 0 ]] || usage_error "使い方: dev runner build"
+  need docker "Docker Engine を入れてください。"
+  local df img
+  df="$(runner_dockerfile)"
+  [[ -f "$df" ]] || die "Dockerfile がありません: $df（install.sh が置きます。README.md の「自前のランナー」）"
+  img="$(runner_image)"
+  # 公式のランナーの版。環境変数 > 設定ファイルの runner_version > Dockerfile の既定値。Dockerfile は編集させない。
+  local ver="${DEV_RUNNER_VERSION:-}" bargs=()
+  if [[ -z "$ver" && -f "$(runners_file)" ]]; then
+    load_runners_version
+    ver="$R_VERSION"
+  fi
+  if [[ -n "$ver" ]]; then
+    [[ "$ver" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || usage_error "ランナーの版は X.Y.Z の形です: $ver"
+    bargs=(--build-arg "RUNNER_VERSION=$ver")
+  fi
+  echo "[$PROG] ランナーのイメージを作ります: $img（$df${ver:+、ランナーの版 $ver}）"
+  docker build ${bargs[@]+"${bargs[@]}"} -t "$img" - <"$df" || die "ランナーのイメージを作れませんでした: $img"
+}
+
+# 後始末が要るか。コンテナを起こしたあと、正常に終わらなかったとき（失敗・TERM / INT / HUP）だけ 1 にする。
+# ephemeral のジョブが正常に終わったときは、GitHub 側でランナーが外れているので何もしない。
+RUNNER_NEED_CLEANUP=0
+RUNNER_CLEANED=0
+RUNNER_CNAME=""
+RUNNER_CHILD=""
+RUNNER_ORG=""
+RUNNER_GHNAME=""
+runner_cleanup() {
+  [[ "$RUNNER_CLEANED" -eq 0 ]] || return 0
+  RUNNER_CLEANED=1
+  trap - EXIT INT TERM HUP
+  [[ "$RUNNER_NEED_CLEANUP" -eq 1 && -n "$RUNNER_CNAME" ]] || return 0
+  # 動いているコンテナがあれば止める（--rm なので、止まれば消える）。もう無ければ何もしない。
+  docker stop "$RUNNER_CNAME" >/dev/null 2>&1 || true
+  if [[ -n "$RUNNER_CHILD" ]]; then wait "$RUNNER_CHILD" 2>/dev/null || true; fi
+  runner_deregister
+}
+
+# 組織に登録されているランナーのうち、この名前のものを外す。無ければ何もしない。失敗は警告にとどめる。
+# 一覧は全ページを読む（1 ページ 100 件。件数が満たないページで終わる）。
+runner_deregister() {
+  local list rids="" page=1 n id
+  [[ -n "$RUNNER_PAT" && -n "$RUNNER_ORG" ]] || return 0
+  while [[ "$page" -le 100 ]]; do
+    if ! list="$(runner_api GET "/orgs/$RUNNER_ORG/actions/runners?per_page=100&page=$page")"; then
+      echo "[$PROG] 警告: 組織のランナーの一覧を取得できませんでした。登録が残っていれば、GitHub の設定から外してください: $RUNNER_GHNAME" >&2
+      break
+    fi
+    rids="$rids $(printf '%s\n' "$list" | jq -r --arg n "$RUNNER_GHNAME" '.runners[]? | select(.name == $n) | .id')" || true
+    n="$(printf '%s\n' "$list" | jq -r '.runners | length')" || n=0
+    [[ "$n" =~ ^[0-9]+$ && "$n" -ge 100 ]] || break
+    page=$((page + 1))
+  done
+  for id in $rids; do
+    if runner_api DELETE "/orgs/$RUNNER_ORG/actions/runners/$id" >/dev/null; then
+      echo "[$PROG] 組織から登録を外しました: $RUNNER_GHNAME"
+    else
+      echo "[$PROG] 警告: 組織からランナーを外せませんでした（ジョブの実行中は外せません）。GitHub の設定から外してください: $RUNNER_GHNAME" >&2
+    fi
+  done
+}
+
+# 同じ名前のランナーを 2 本同時に動かさないためのロック。2 本目が `docker rm -f` や後始末の `docker stop` で
+# 動いているジョブのコンテナを殺し、`--replace` で登録を奪うのを防ぐ。ロックはプロセスの終了で外れる
+# (dev だけが強制終了されたときの、動き続けるコンテナは、起動時に前回のコンテナを待って扱う)。
+# 取れなければ、何も消さずに 75（一時的な失敗。ユニットは起こし直す）で抜ける。
+runner_lock() {
+  local dir lockf owner mode
+  # 置き場所は、自分だけが書けるディレクトリにする(予測できる名前を、共有の /tmp に置かない)。
+  # 環境変数 DEV_RUNNER_LOCK_DIR で変えられる。
+  dir="${DEV_RUNNER_LOCK_DIR:-${XDG_RUNTIME_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/dev}}"
+  if [[ ! -e "$dir" ]]; then
+    # 権限 700 が付くのは最も深いディレクトリだけ(親は既定の権限)。それで足りる。
+    # shellcheck disable=SC2174
+    mkdir -p -m 700 "$dir" || die_permanent "$1: ロックのディレクトリを作れません: $dir"
+  fi
+  [[ -d "$dir" ]] || die_permanent "$1: ロックの置き場所がディレクトリではありません: $dir"
+  owner="$(file_uid_of "$dir")" || die_permanent "$1: ロックのディレクトリの所有者を読めません: $dir"
+  mode="$(file_mode_of "$dir")" || die_permanent "$1: ロックのディレクトリの権限を読めません: $dir"
+  [[ "$owner" == "$UID" ]] || die_permanent "$1: ロックのディレクトリの所有者が自分ではありません: $dir"
+  if [[ ! "$mode" =~ ^[0-7]+$ ]] || (( (8#$mode & 8#022) != 0 )); then
+    die_permanent "$1: ロックのディレクトリに group / other の書き込み権限があります($mode): $dir(自分だけが書ける場所にしてください)"
+  fi
+  lockf="$dir/dev-runner-$1.lock"
+  # リンクを辿らない: 既存のものがリンクや通常のファイルでなければ拒む。切り詰めない形(>>)で開く。
+  if [[ -L "$lockf" ]]; then
+    die_permanent "$1: ロックのファイルがリンクです(辿りません): $lockf"
+  fi
+  if [[ -e "$lockf" && ! -f "$lockf" ]]; then
+    die_permanent "$1: ロックのファイルが通常のファイルではありません: $lockf"
+  fi
+  need flock "flock（util-linux）が要ります。"
+  exec 9>>"$lockf" || die "$1: ロックのファイルを開けません: $lockf"
+  if ! flock -n 9; then
+    echo "[$PROG] $1: 同じ名前のランナーがすでに動いています（ロック $lockf）。何も消さずに終わります。" >&2
+    exit 75
+  fi
+}
+
+# systemd のユニット（dev-runner@.service）の ExecStart。1 回の起動で、ジョブを 1 つ受けて終わる。
+# (1) PAT で登録用のトークンを取り、(2) --ephemeral のランナーを --rm のコンテナで動かし、
+# (3) コンテナが止まったら抜ける。起こし直しはユニット（Restart=always）が行う。
+# 設定の誤り・PAT の権限・イメージが無い、という直らない失敗は 78 で抜ける（ユニットは起こし直さない）。
+cmd_runner_run() {
+  [[ $# -eq 1 ]] || usage_error "使い方: dev runner run <名前>"
+  load_runners
+  find_runner "$1"
+  local name="$1" org="${R_ORGS[$RIDX]}" labels="${R_LABELS[$RIDX]}" dock="${R_DOCKER[$RIDX]}" patf="${R_PAT[$RIDX]}"
+  need docker "Docker Engine を入れてください。"
+  need curl "curl を入れてください。"
+  need jq "jq を入れてください。"
+  # ロックを最初に取る（これより前に、動いているコンテナへ触る処理を置かない）。
+  runner_lock "$name"
+  local img why iout
+  img="$(runner_image)"
+  if ! iout="$(docker image inspect "$img" 2>&1)"; then
+    # 「イメージが無い」と「デーモンに届かない」は分ける。後者は一時的なので起こし直す。
+    case "$iout" in
+      *"No such image"*) die_permanent "$name: ランナーのイメージがありません: $img（dev runner build で作ります）" ;;
+      *) die "$name: docker に問い合わせられません（デーモンが起きていないかもしれません）: $iout" ;;
+    esac
+  fi
+  # PAT は、group / other に権限があれば読む前に拒む。
+  why="$(runner_pat_problem "$patf")" || die_permanent "$name: $why"
+  runner_pat_load "$patf" || die_permanent "$name: PAT ファイルを読めませんでした"
+
+  local sock="" gid="" args
+  if [[ "$dock" == "yes" ]]; then
+    sock="$(runner_docker_sock)"
+    [[ -e "$sock" ]] || die_permanent "$name: docker=yes ですが、Docker のソケットがありません: $sock"
+    gid="$(file_gid_of "$sock")" || die_permanent "$name: Docker のソケットのグループを読めません: $sock"
+  fi
+
+  RUNNER_CNAME="dev-runner-$name"
+  RUNNER_ORG="$org"
+  RUNNER_GHNAME="$(runner_github_name "$name")"
+  trap runner_cleanup EXIT
+  trap 'exit 143' TERM
+  trap 'exit 130' INT
+  trap 'exit 129' HUP
+
+  # 前回のコンテナの扱い。ロックが示すのは dev のプロセスの生存だけで、dev が強制終了(SIGKILL など)されても
+  # コンテナは動き続けうる。動いていれば(実行中のジョブがある)、終わるまで待ってから起動する。殺さない。
+  # 止まっている残り(--rm が働かなかったもの)だけを消す。待っている間の TERM は、前回のコンテナを止めて登録を外してから抜ける。wait が失敗したら何も消さない。
+  local prev=""
+  prev="$(docker container inspect --format '{{.State.Status}}' "$RUNNER_CNAME" 2>/dev/null)" || prev=""
+  case "$prev" in
+    "") ;;
+    running | restarting | paused)
+      echo "[$PROG] $name: 前回のコンテナ $RUNNER_CNAME がまだ動いています。ジョブが終わるまで待ちます(殺しません)。"
+      # 待っているあいだに止められた(TERM / INT / HUP)ら、前回のコンテナを止めて登録を外す(いまの起動と同じ後始末)。
+      # 止められたユニットのコンテナが、ジョブを受け続けないようにするため。
+      RUNNER_NEED_CLEANUP=1
+      docker wait "$RUNNER_CNAME" >/dev/null 2>&1 &
+      RUNNER_CHILD=$!
+      local wrc=0
+      wait "$RUNNER_CHILD" || wrc=$?
+      RUNNER_CHILD=""
+      if [[ "$wrc" -ne 0 ]]; then
+        # wait の失敗は「終わった」ではない(Docker への接続障害など)。コンテナではジョブが続いているかもしれないので、
+        # 何も消さず、止めもせずに、一時的な失敗(1)で抜ける。
+        RUNNER_NEED_CLEANUP=0
+        die "$name: 前回のコンテナ $RUNNER_CNAME の終了を待てませんでした(docker wait が失敗)。何も消していません。ユニットが起こし直します。"
+      fi
+      RUNNER_NEED_CLEANUP=0
+      docker rm -f "$RUNNER_CNAME" >/dev/null 2>&1 || true
+      ;;
+    *) docker rm -f "$RUNNER_CNAME" >/dev/null 2>&1 || true ;;
+  esac
+
+  local resp tok arc=0
+  resp="$(runner_api POST "/orgs/$org/actions/runners/registration-token")" || arc=$?
+  if [[ "$arc" -eq 10 ]]; then
+    # 401 / 403 / 404: 起こし直しても直らない。5 秒ごとに API を叩き続けないよう 78 で抜ける。
+    die_permanent "$name: 登録用のトークンを取得できませんでした(PAT の失効・権限不足、または組織名の誤り)。PAT の権限(組織の Self-hosted runners: Read and write)と組織名($org)を確かめてください。直してから systemctl --user start dev-runner@$name.service で起こし直します"
+  elif [[ "$arc" -ne 0 ]]; then
+    die "$name: 登録用のトークンを取得できませんでした(API の不調か通信の失敗です。ユニットが起こし直します)"
+  fi
+  tok="$(printf '%s\n' "$resp" | jq -r '.token // empty')" || tok=""
+  [[ -n "$tok" ]] || die "$name: 登録用のトークンが応答にありません"
+
+  # コンテナへ渡すのは登録用のトークン（1 時間で切れる）だけ。値は引数に書かず、名前だけを -e に渡す
+  # （docker が環境から読む）。PAT はこのプロセスの変数にあるだけで、export していない。
+  args=(run --rm --name "$RUNNER_CNAME" -e RUNNER_TOKEN)
+  if [[ "$dock" == "yes" ]]; then
+    args+=(-v "$sock:/var/run/docker.sock" --group-add "$gid")
+  fi
+  echo "[$PROG] $name: ランナー $RUNNER_GHNAME を起こします（組織 $org、docker=$dock）。ジョブを 1 つ受けたら終わります。"
+  # ここから先は、正常に終わらなければ後始末（コンテナの停止と登録の削除）をする。
+  RUNNER_NEED_CLEANUP=1
+  RUNNER_TOKEN="$tok" docker "${args[@]}" "$img" bash -c \
+    'set -euo pipefail
+./config.sh --unattended --ephemeral --disableupdate --replace --url "$1" --token "$RUNNER_TOKEN" --name "$2" ${3:+--labels "$3"}
+unset RUNNER_TOKEN
+exec ./run.sh' runner "https://github.com/$org" "$RUNNER_GHNAME" "$labels" &
+  RUNNER_CHILD=$!
+  tok=""
+  local rc=0
+  wait "$RUNNER_CHILD" || rc=$?
+  RUNNER_CHILD=""
+  if [[ "$rc" -ne 0 ]]; then
+    die "$name: ランナーのコンテナが失敗して止まりました（終了コード $rc）。ユニットが起こし直します。"
+  fi
+  RUNNER_NEED_CLEANUP=0
+  echo "[$PROG] $name: ジョブを終えてコンテナが止まりました。ユニットが新しいコンテナで起こし直します。"
+}
+
+# dev doctor --runner <名前>: ランナーの点検。1 つでも FAIL なら 1、WARN だけなら 3、無ければ 0。
+cmd_doctor_runner() {
+  [[ $# -eq 1 ]] || usage_error "使い方: dev doctor --runner <名前>"
+  load_runners
+  find_runner "$1"
+  need docker "Docker Engine を入れてください。"
+  local name="$1" dock="${R_DOCKER[$RIDX]}" patf="${R_PAT[$RIDX]}" unit="dev-runner@${1}.service" img why us sock
+  img="$(runner_image)"
+  echo "[$PROG] doctor: ランナー $name（組織 ${R_ORGS[$RIDX]}）"
+
+  if docker image inspect "$img" >/dev/null 2>&1; then
+    doc_line OK "イメージ $img があります"
+  else
+    doc_line FAIL "イメージ $img がありません（dev runner build で作る）"
+  fi
+
+  if why="$(runner_pat_problem "$patf")"; then
+    doc_line OK "PAT ファイル $patf（権限 $(file_mode_of "$patf")）"
+  else
+    doc_line FAIL "$why"
+  fi
+
+  if [[ "$dock" == "yes" ]]; then
+    sock="$(runner_docker_sock)"
+    if [[ -e "$sock" ]]; then
+      doc_line INFO "docker=yes: ジョブがホストの Docker を自由に操作できます（ソケット $sock を渡す設定）"
+    else
+      doc_line FAIL "docker=yes ですが、Docker のソケット $sock がありません"
+    fi
+  else
+    doc_line OK "Docker のソケットは渡しません（docker=no）"
+  fi
+
+  us="$(unit_state "$unit")"
+  case "$us" in
+    active | activating) doc_line OK "ユニット $unit: $us" ;;
+    *) doc_line WARN "ユニット $unit: $us（有効にしていないか、止まっています: systemctl --user enable --now $unit）" ;;
+  esac
+
+  if [[ "$DOC_FAIL" -gt 0 ]]; then
+    echo "[$PROG] 判定: FAIL（$DOC_FAIL 件）。"
+    exit 1
+  elif [[ "$DOC_WARN" -gt 0 ]]; then
+    echo "[$PROG] 判定: WARN（$DOC_WARN 件）。"
+    exit 3
+  fi
+  echo "[$PROG] 判定: OK"
+}
+
 # ── self-update ───────────────────────────────────────────────────────────────
 # devhost は公開リポジトリ ojos/devcontainer-host のリリースで配られる（README.md の「devhost を入手する」）。
 # 取得先はその公開リリース。既定は最新、--version で版を固定する。
@@ -686,26 +1198,34 @@ dev_target_refusal() {
 SU_TMP=""
 su_cleanup() { [[ -z "$SU_TMP" ]] || rm -rf "$SU_TMP"; }
 
-# 置いてあるユニットのファイルを、同じリリースの dev-up@.service と比べ、違えば install.sh の再実行を案内する。
-# **ユニットは書き換えない**（差の検出と案内だけ。書き換えは install.sh の再実行に任せる）。
-# 比べる相手は、マニフェストの checksums["dev-up@.service"]（照合済みの dev.sh と同じリリースのマニフェスト）。
-# ユニットを置いていない機械（手動で使う）、マニフェストにハッシュが無い版では何も言わない。
+# 置いてあるファイル（ユニット・ランナーの Dockerfile）を、同じリリースの同名の資産と比べ、違えば install.sh の再実行を案内する。
+# **書き換えない**（差の検出と案内だけ。書き換えは install.sh の再実行に任せる）。
+# 比べる相手は、マニフェストの checksums[<資産の名前>]（照合済みの dev.sh と同じリリースのマニフェスト）。
+# ファイルを置いていない機械（手動で使う、ランナーを使わない）、マニフェストにハッシュが無い版では何も言わない。
 # 案内が出せなくても self-update 自体は失敗させない（dev.sh の置き換えはもう済んでいる）。
-# 使い方: su_check_unit <マニフェスト> <リリースの版> <指定した版（--version を付けなかったときは空）>
-su_check_unit() {
-  local manifest="$1" ver="$2" pin="${3:-}" unit want got
-  unit="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/dev-up@.service"
-  [[ -f "$unit" ]] || return 0
-  want="$(jq -r '.checksums["dev-up@.service"] // empty' "$manifest" 2>/dev/null)" || return 0
+# 使い方: su_check_asset <マニフェスト> <リリースの版> <指定した版（--version を付けなかったときは空）> <資産の名前> <置いてあるパス> <呼び名> [<更新したあとの案内>]
+su_check_asset() {
+  local manifest="$1" ver="$2" pin="${3:-}" asset="$4" path="$5" label="$6" hint="${7:-}" want got
+  [[ -f "$path" ]] || return 0
+  want="$(jq -r --arg a "$asset" '.checksums[$a] // empty' "$manifest" 2>/dev/null)" || return 0
   [[ "$want" =~ ^[0-9a-f]{64}$ ]] || return 0
-  got="$(sha256_of "$unit")" || {
-    echo "[$PROG] 警告: $unit のハッシュを計算できないので、リリースのユニットとは比べていません。" >&2
+  got="$(sha256_of "$path")" || {
+    echo "[$PROG] 警告: $path のハッシュを計算できないので、リリースの${label}とは比べていません。" >&2
     return 0
   }
   if [[ "$got" != "$want" ]]; then
-    echo "[$PROG] 置いてあるユニット（$unit）が、リリース${ver:+（$ver）}の dev-up@.service と違います。"
-    echo "[$PROG]   install.sh を再実行してユニットを更新してください${pin:+（bash install.sh --version $pin）}（README.md の「install.sh で入れる」。self-update はユニットを書き換えません）。"
+    echo "[$PROG] 置いてある$label（$path）が、リリース${ver:+（$ver）}の $asset と違います。"
+    echo "[$PROG]   install.sh を再実行して${label}を更新してください${pin:+（bash install.sh --version $pin）}（README.md の「install.sh で入れる」。self-update は書き換えません）。${hint}"
   fi
+}
+
+# 置いてあるユニット・ランナーのファイルを、リリースのものと比べる（su_check_asset）。
+# 使い方: su_check_unit <マニフェスト> <リリースの版> <指定した版（--version を付けなかったときは空）>
+su_check_unit() {
+  local conf="${XDG_CONFIG_HOME:-$HOME/.config}"
+  su_check_asset "$1" "$2" "${3:-}" dev-up@.service "$conf/systemd/user/dev-up@.service" "ユニット"
+  su_check_asset "$1" "$2" "${3:-}" dev-runner@.service "$conf/systemd/user/dev-runner@.service" "ランナーのユニット"
+  su_check_asset "$1" "$2" "${3:-}" runner.Dockerfile "$(runner_dockerfile)" "ランナーの Dockerfile" "更新したら dev runner build でイメージを作り直してください。"
 }
 
 # dev 自身を、devcontainer-host の公開リリースの dev.sh へ置き換える。
@@ -839,6 +1359,11 @@ cgroup_path_of() {
 
 # 「動いているのに入れない」を見分ける。1 つでも FAIL なら 1、WARN だけなら 3、無ければ 0。
 cmd_doctor() {
+  if [[ "${1:-}" == "--runner" ]]; then
+    shift
+    cmd_doctor_runner "$@"
+    return
+  fi
   [[ $# -eq 1 ]] || usage_error "使い方: dev doctor <名前>"
   # GNU の timeout 0 は時間制限を無効にするので、0 や数でない値は受け付けない（返らなくなりうる）。
   if [[ -n "${DEV_EXEC_TIMEOUT:-}" ]] && { ! is_uint "$DEV_EXEC_TIMEOUT" || [[ "$DEV_EXEC_TIMEOUT" -lt 1 ]]; }; then
@@ -1160,6 +1685,7 @@ dev doctor — 「コンテナは動いているのに入れない」を見分�
 
 使い方:
   dev doctor <名前>
+  dev doctor --runner <名前>
 
 出す項目: コンテナの有無と状態 / exec が実際に通るか / cgroup の pids.current と pids.max /
 pids の上限に当たった回数 / ゾンビの数 / memory.events の oom_kill / ユニットの状態 / ユニットのログの末尾。
@@ -1177,6 +1703,45 @@ TERM を送っても止まらないときは、さらに 5 秒（DEV_EXEC_KILL_G
 
 終了コード: 0 = 問題なし / 1 = FAIL がある / 2 = 使い方か設定ファイルの誤り / 3 = WARN だけ
 失敗したとき: FAIL なら dev rebuild <名前> で作り直す。WARN だけなら原因を調べてから判断する。
+
+--runner は自前のランナー（dev runner、設定ファイル runners の名前）の点検。プロジェクトの設定ファイルは読まない。
+  FAIL  ランナーのイメージが無い / PAT ファイルが無い・group / other に権限がある・読めない /
+        docker=yes なのに Docker のソケットが無い
+  WARN  ユニット dev-runner@<名前> が active でも activating でもない
+  （docker=yes の設定は、危険を知らせる INFO を出す。PAT の値は出さない）
+EOF
+}
+
+help_runner() {
+  cat <<'EOF'
+dev runner — GitHub Actions の自前のランナーを、使い捨てのコンテナで動かす。
+
+使い方:
+  dev runner build
+  dev runner run <名前>
+
+build: ランナーのイメージ（公式のランナーのイメージに道具を足した runner.Dockerfile）を作る。
+  Dockerfile は標準入力から渡す（ビルドの文脈を作らない）。Dockerfile は編集しない。公式のランナーの版を上げるときは、
+  環境変数 DEV_RUNNER_VERSION か、設定ファイルの `runner_version=X.Y.Z` の行で指定する（--build-arg で渡す。未指定なら Dockerfile の既定値）。
+run: ユニット dev-runner@<名前>.service の ExecStart。1 回の起動で次をする。
+  0. 同じ名前のランナーがすでに動いていれば（ロックが取れなければ）、何も消さずに 75 で終わる
+  1. 設定ファイル runners の PAT のファイルを調べる（group / other に権限があれば、読まずに拒んで 78 で終わる）
+  2. PAT で組織の登録用のトークンを取得する（PAT は引数にも環境変数にも出さない）
+  3. --ephemeral のランナーを --rm のコンテナで起こす。コンテナへ渡すのは登録用のトークンだけ
+  4. ジョブが 1 つ終わってコンテナが止まったら抜ける（ユニットが新しいコンテナで起こし直す）
+  コンテナを起こしたあと、正常に終わらなかったとき（止めたとき（ユニットの停止・TERM・INT・HUP）や失敗したとき）だけ、
+  コンテナを止め、登録中のランナーを組織から外す（正常に終わったときは、GitHub 側で外れている）。
+  Docker のソケットは、設定ファイルで docker=yes にしたランナーにだけ渡す（既定は渡さない。
+  渡すと、ジョブがホストの Docker を自由に操作できる）。
+設定ファイル: runners（既定は ~/.config/dev/runners（XDG_CONFIG_HOME があればその下）。環境変数 DEV_RUNNERS_FILE で差し替える。書式は runners.example）。
+  1 行 1 ランナーで「名前 組織 [labels=a,b] [docker=yes|no] [pat_file=絶対パス]」。
+  `runner_version=X.Y.Z` だけの行は、イメージに使う公式のランナーの版（共通の設定）。
+点検は dev doctor --runner <名前>。curl と jq が要る。
+
+終了コード: 0 = ジョブを終えて止まった（build は作れた） / 1 = 一時的な失敗（API の 429・5xx や通信の失敗、コンテナの失敗など。ユニットは起こし直す） /
+            2 = 使い方か設定ファイルの誤り / 75 = 同じ名前がすでに動いている / 78 = イメージが無い・PAT の権限が緩い・Docker のソケットが無い・API が 401 / 403 / 404（PAT の失効・権限不足・組織名の誤り）
+            （2 と 78 は、ユニットが起こし直さない）
+失敗したとき: dev doctor --runner <名前> で原因を見分ける。
 EOF
 }
 
@@ -1315,13 +1880,14 @@ dev self-update — dev 自身を、devcontainer-host の公開リリースの�
   3. マニフェストの checksums に記録された dev.sh の SHA-256 を読み、同じリリースの dev.sh を取得して照合する
   4. 取得した dev.sh が 1 と同じ形（bash の shebang と「# dev — 」）であることと、構文を確かめる
   5. 同じディレクトリの一時ファイルへ写し、mv で置き換える
-  6. 置いてあるユニットのファイル（~/.config/systemd/user/dev-up@.service）を、同じリリースのマニフェストの
-     checksums の dev-up@.service と比べる。違えば、install.sh を再実行してユニットを更新するよう案内する
-     （ユニットのファイルを置いていない、マニフェストにハッシュが無いときは何も言わない）
+  6. 置いてあるユニットのファイル（~/.config/systemd/user/dev-up@.service と dev-runner@.service）と、ランナーの
+     Dockerfile（~/.config/dev/runner.Dockerfile）を、同じリリースのマニフェストの checksums の同名の資産と比べる。
+     違えば、install.sh を再実行して更新するよう案内する
+     （ファイルを置いていない、マニフェストにハッシュが無いときは何も言わない）
   7. 置き換えたあと、動いているユニットは起こし直すまで古い dev のまま動き続けることを案内する
      （dev restart <名前>、または systemctl --user restart dev-up@<名前>.service）
 どれか 1 つでも外れたら（1〜5）、何も置き換えずに 1 で止まる。手動の入手（README の「devhost を入手する」）と
-同じ照合。dev.sh だけを置き換える。**ユニットのファイルや設定ファイルは書き換えない**（6 は差の案内だけで、
+同じ照合。dev.sh だけを置き換える。**ユニット・Dockerfile・設定ファイルは書き換えない**（6 は差の案内だけで、
 更新は install.sh の再実行に任せる）。
 curl と jq と、sha256sum または shasum が要る。
 
@@ -1353,7 +1919,7 @@ dev help — サブコマンドの説明を出す。
 
 使い方:
   dev help                  使い方の一覧
-  dev help <サブコマンド>    ls / up / attach / supervise / rebuild / doctor /
+  dev help <サブコマンド>    ls / up / attach / supervise / rebuild / doctor / runner /
                             restart / stop / logs / enable / disable / exec / self-update / version の説明
 
 終了コード: 0 = 成功 / 2 = 知らないサブコマンド
@@ -1392,6 +1958,7 @@ main() {
     supervise) cmd_supervise "$@" ;;
     rebuild) cmd_rebuild "$@" ;;
     doctor) cmd_doctor "$@" ;;
+    runner) cmd_runner "$@" ;;
     restart) cmd_restart "$@" ;;
     stop) cmd_stop "$@" ;;
     logs) cmd_logs "$@" ;;

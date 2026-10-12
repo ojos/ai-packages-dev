@@ -1,0 +1,37 @@
+# dev-runner@<名前>.service — GitHub Actions の自前のランナーを、使い捨てのコンテナで 1 つ常駐させる。
+#
+# **ユーザーのユニットとして置く**（~/.config/systemd/user/。dev-up@.service と同じ作り）。
+# ログインしていない間も動かすには `loginctl enable-linger` が要る。導入の手順は README.md の「自前のランナー」。
+#
+# <名前> は dev runner の設定ファイル（runners）に書いた名前で、ここには何も書かない。
+# **%i を使い %I を使わない**（%I はインスタンス名の - を / へ戻すので、名前に - を含むと別の名前になる）。
+#
+# ExecStart の `dev runner run` は、登録用のトークンを取り、--ephemeral のランナーを --rm の
+# コンテナで動かし、ジョブが 1 つ終わってコンテナが止まったら抜ける。**抜けたら Restart=always が
+# 新しいコンテナで起こし直す**（ジョブごとに作り直す）。ユニットを止めると、dev が登録中のランナーを
+# 組織から外す（TimeoutStopSec の間に終わらせる）。並列数は、名前を変えたインスタンスを増やして上げる。
+
+[Unit]
+Description=GitHub Actions の自前のランナー（使い捨てのコンテナ）（%i）
+# 起動の直後は Docker のデーモンがまだ居ないことがある。そのときは失敗し、RestartSec の後にやり直す。
+# 回数の上限を設けないのは、デーモンの立ち上がりが遅い日に上限へ当たって諦めるのを避けるため。
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/dev runner run %i
+Restart=always
+# ジョブを 1 つ終えるたびに起こし直すので、待ちは短くする（dev-up@ の 30 秒だと、ジョブの間に 30 秒の空きができる）。
+# 短い待ちで一時的な失敗（API の不調）が続いても、直らない失敗は下の RestartPreventExitStatus で止まるので、
+# 無駄な再起動と API の消費は繰り返さない。
+RestartSec=5
+# dev runner run が、設定の誤り（2）、PAT の権限・イメージが無い・ソケットが無い（78）で抜けたときは、起こし直さない
+# （直さない限り同じ失敗を繰り返し、API を消費するため）。journal の理由を読んで直してから start し直す。
+RestartPreventExitStatus=2 78
+# ユニットを止めたとき、dev は TERM を受けて後始末をして 143 で抜ける。これは失敗ではない。
+SuccessExitStatus=143
+# 止めるときに、コンテナを止めて組織から登録を外す時間。
+TimeoutStopSec=60
+
+[Install]
+WantedBy=default.target

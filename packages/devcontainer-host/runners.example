@@ -1,0 +1,29 @@
+# dev runner の設定ファイルの雛形。外部の機械の ~/.config/dev/runners へ写して書き換える。
+#
+# 1 行 1 ランナー。空白区切りで「名前 組織 [キー=値 ...]」。# から行末はコメント。
+#
+#   名前   英数字と _ . - だけ（systemd のユニット dev-runner@<名前> の名前にもなる）
+#   組織   ランナーを登録する GitHub の組織名（英数字と - だけ）
+#
+# キー（省略できる。知らないキーは設定の誤りとして止まる）:
+#
+#   labels=<a,b>        ランナーに足すラベル（カンマ区切り。既定は足さない）
+#   docker=<yes|no>     ホストの Docker のソケットをジョブへ渡すか（既定 no）。
+#                       yes にすると、ジョブがホストの Docker を自由に操作できる（実質、ホストの root 相当）
+#   pat_file=<絶対パス> PAT を置いたファイル（既定は同じディレクトリの runner-pat）。
+#                       group / other に権限があると(644 など)、dev runner は起動を拒む。600 か 400 にする
+#
+# runner_version=<X.Y.Z>   (1 つだけの行) イメージに使う公式のランナーの版。dev runner build の --build-arg で渡す
+#                       (runner.Dockerfile は編集しない。環境変数 DEV_RUNNER_VERSION が優先)
+#
+# 並列数は、行を足して（名前を変えて）それぞれ dev-runner@<名前> を有効にすることで増やす。
+#
+# PAT は fine-grained で、組織の「Self-hosted runners: Read and write」だけを持たせる。
+# 値はこのファイルへ書かず、別のファイルへ置く:
+#   install -m 600 /dev/null ~/.config/dev/runner-pat   # そのあとエディタで値を 1 行書く
+#
+# 例（値は置き換える）:
+#
+# runner1   my-org   labels=devhost
+# runner2   my-org   labels=devhost
+# docker1   my-org   labels=devhost,docker   docker=yes
