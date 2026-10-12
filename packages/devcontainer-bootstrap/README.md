@@ -730,7 +730,7 @@ gh の OAuth App には「ユーザー × アプリ × scope あたり 10 トー
   | commit status（`second-opinion-gate` など）の確認 | Commit statuses: Read |
   | （必須・自動付与） | Metadata: Read |
 
-  **手動実行の権限（Actions: Read and write）は、GitHub の公式ドキュメント（「Permissions required for fine-grained personal access tokens」の Actions の節。`POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches` は write）に基づく記載で、実測ではありません。** 初回の発行時に `gh workflow run <ワークフロー> --ref <既定ブランチ>` が通るか確かめてください。
+  **手動実行の権限（Actions: Read and write）は、実測で確かめています**。この表の権限だけを持つ fine-grained PAT で、Actions を Read and write にすると `gh workflow run` が通り、Read-only に下げると `HTTP 403: Resource not accessible by personal access token` で拒否されました（実行の一覧などの読み取りは、どちらでも通ります）。GitHub の公式ドキュメント（「Permissions required for fine-grained personal access tokens」の Actions の節。`POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches` は write）とも一致します。権限が足りないと `second-opinion-record.sh post` は、記録の投稿後に手動実行できなかったとして非 0 で終わり、手で起こすコマンドを示します。
 
   **Checks は fine-grained PAT では選べません。** そのため、**非公開リポジトリでは** `commits/<sha>/check-runs` と `gh pr checks` が 403 になります（公開リポジトリでは読めます）。`/land` の雛形はこの 2 つを使わず、Actions と Commit statuses の権限だけで CI を待ちます。プロジェクト側でスクリプトを足すときも、この 2 つに頼らないでください。
 - **`GH_TOKEN` が空の環境は従来どおり**保存済み認証で動きます（`GITHUB_TOKEN` も未設定である場合。下記）。PAT を持たない利用者を壊しません。
