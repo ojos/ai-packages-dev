@@ -30,7 +30,16 @@ jobs:
           exit $fail
 
       - name: Install shellcheck
-        run: sudo apt-get update && sudo apt-get install -y shellcheck
+        # ubuntu-latest には shellcheck が最初から入っているので、あれば何もしない。
+        # 無いときだけ apt で入れる。apt のミラーに届かないと apt-get update が
+        # 止まり続けるので（#551。51 分止まった）、手順に時間の上限を付ける。
+        timeout-minutes: 5
+        run: |
+          if command -v shellcheck >/dev/null 2>&1; then
+            shellcheck --version | head -2
+          else
+            sudo apt-get update && sudo apt-get install -y shellcheck
+          fi
 
       - name: Shellcheck
         # -f gcc の理由は scripts/acceptance.sh の同じ呼び出しに置いたコメントを参照
