@@ -120,7 +120,7 @@ gh CLI の認証はコンテナ内で行い、その状態を named volume に�
 - **`GH_TOKEN` だけは `.env` へ書き写します。** gh の OAuth App には「ユーザー × アプリ × scope あたり 10 トークン」の上限があり、上限に達した状態でどこかの環境が認証すると GitHub が既存のトークンを 1 本破棄します（理由コード `max_for_app`）。溜まる単位は環境ではなく認証の回数で、`gh auth login` も `gh auth refresh` も自分の古い枠を返しません。失効に気づいた環境が再認証し、それがまた別の環境を失効させる連鎖になるため、運用ルールでは回避できません。PAT は OAuth App の認可ではないため、この枠の外にあります。
 - 名前は gh 自身が読む `GH_TOKEN` をそのまま使います。`GIT_IDENTITY_*` を別名にしているのと方針が逆に見えますが、理由が違います。git は自身が読む名前を環境へ置くと `user.useConfigOnly` の保護が無効になるため別名にします。gh には、環境変数を置くことで無効化される保護がありません。
 - **PAT の種別は fine-grained を使います。** `.env` へ置くトークンには有効期限が要るためです（classic は無期限を選べてしまいます）。期限切れ時は再発行して `.env` を差し替えます。値をコミット・issue・PR 説明・ログへ混入させません。
-- 必要な権限は、このリポジトリで現に行う操作から起こした次の対応とします。**これは実際に PAT を発行して確かめたものではありません。** 初回発行時に不足・過剰を確認し、この表を実測で置き換えてください。
+- 必要な権限は、このリポジトリで現に行う操作から起こした次の対応とします。**Actions の行（手動実行）だけは実測済みで（下記）、ほかの行は実際に PAT を発行して確かめたものではありません。** 発行時に不足・過剰を確認し、この表を実測で置き換えてください。
 
   | 行う操作 | fine-grained PAT の repository permission |
   |---|---|
@@ -134,7 +134,7 @@ gh CLI の認証はコンテナ内で行い、その状態を named volume に�
 
   **Checks は fine-grained PAT では選べません。** 非公開リポジトリでは `commits/<sha>/check-runs` と `gh pr checks` が 403 になるため、CI の確認は上の Actions と Commit statuses で行います（`/land` の雛形もそうしています）。例の表は `packages/devcontainer-bootstrap/README.md`「資格情報の扱い」にもあります。
 
-  **手動実行の権限（Actions: Read and write）は、GitHub の公式ドキュメント（「Permissions required for fine-grained personal access tokens」の Actions の節。`POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches` は write）に基づく記載で、実測ではありません。** 初回の発行時に `gh workflow run second-opinion-gate.yml --ref <既定ブランチ>` が通るか確かめ、不足・過剰があればこの表を実測で置き換えてください。権限が足りないと `second-opinion-record.sh post` は、記録の投稿後に手動実行できなかったとして非 0 で終わり、手で起こすコマンドを示します。
+  **手動実行の権限（Actions: Read and write）は、2026-10-12 に実測で確かめました**（ojos/ai-packages-dev#545）。この表の権限だけを持つ fine-grained PAT で、Actions を Read and write にすると `gh workflow run` が通り、Read-only に下げると `HTTP 403: Resource not accessible by personal access token` で拒否されました（実行の一覧などの読み取りは、どちらでも通ります）。GitHub の公式ドキュメント（「Permissions required for fine-grained personal access tokens」の Actions の節。`POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches` は write）とも一致します。権限が足りないと `second-opinion-record.sh post` は、記録の投稿後に手動実行できなかったとして非 0 で終わり、手で起こすコマンドを示します。
 
 - **`GH_TOKEN` を設定しているあいだ `gh auth login` を実行しません。** gh 2.96.0 で実測したところ、値が設定されているあいだ gh はログインを拒否します（`--with-token` / `--web` のいずれでも `The value of the GH_TOKEN environment variable is being used for authentication.` で終了し、通信もしません）。危ないのはその先で、拒否メッセージ（`first clear the value from the environment`）に従って値を空にしてログインすると上限枠を 1 つ消費し、上限に達していれば他環境のトークンが 1 本失効します。この拒否は制約ではなく安全装置として扱います。
 - **`GITHUB_TOKEN` を恒久的に設定しません。** gh は `GH_TOKEN` → `GITHUB_TOKEN` の順に環境変数を読み、**空文字だけを読み飛ばします**。したがって `GH_TOKEN` を空にすることは `GITHUB_TOKEN` に対する盾になりません。gh 2.96.0 での実測: `GITHUB_TOKEN=" " gh api user` は `Bad credentials`、`GITHUB_TOKEN=" " GH_TOKEN="" gh api user` も `Bad credentials`（一方 `GITHUB_TOKEN="" gh api user` と `GH_TOKEN= gh api user` はどちらも保存済み認証で成功）。**手元のシェル・rc・`.env` のいずれにも `GITHUB_TOKEN` を置きません。**
