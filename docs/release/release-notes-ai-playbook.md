@@ -6,7 +6,7 @@
 >
 > 同じ理由で、issue 参照は `ojos/ai-packages-dev#NNN` の形で書いてください。裸の `#NNN` は GitHub のオートリンクが**配布先リポジトリの issue** として解決するため、配布後は存在しない issue や無関係な issue を指します。
 
-## Unreleased
+## v0.10.0
 
 ### Summary
 - **ゲートのワークフロー（`second-opinion-gate.yml` / `review-gate.yml`）の雛形から、20 分ごとの定期実行（`schedule`）をなくした**（ojos/ai-packages-dev#545）。定期実行は PR が 1 本も無いあいだも走り続けるため、private リポジトリでは Actions の課金枠を減らし続ける。利用側の実測では、7 日間に 438 回（1 日 62〜65 回）走り、Actions の実行全体の約 72% を占めた。public / private で分けず、1 つの形にそろえる。
