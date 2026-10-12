@@ -981,7 +981,7 @@ permissions:
 
 jobs:
   verify-commit-identity:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.ACTIONS_RUNS_ON || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -1061,7 +1061,7 @@ concurrency:
 
 jobs:
   verify:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.ACTIONS_RUNS_ON || 'ubuntu-latest' }}
 
     # fork からの PR の扱い: この雛形はスキップしない。
     #

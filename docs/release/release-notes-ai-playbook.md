@@ -15,10 +15,11 @@
     - **記録の投稿のあとの手動実行。** `second-opinion-record.sh post` が、投稿の直後に `gh workflow run second-opinion-gate.yml --ref <既定ブランチ>` を起こす。起こせなかったときは、手で起こすコマンドを示して非 0 で終わる（記録の投稿は済んでいる）。
   - `review-workflow.md` を追随させた。「確認側は定期実行を張る」を「マージ直前に既定ブランチで再判定する」に置き換え、`/land` を使わない場合の手順と、`/land` を通さないマージ（画面から直接など）は再判定を通らないという限界を書いた（ただしゲートは required check ではなく、もともとマージを止めていない）。
   - 手動実行には、トークンの Actions の書き込み権限（fine-grained PAT なら Actions: Read and write）が要る。GitHub の公式ドキュメントに基づく記載で、実測ではない。
-- 雛形のワークフローから `on.schedule` を削るのみで、`workflow_dispatch` と、open な PR を全件判定し直す処理は変えていない。雛形の種類は 17 種のまま。
+- **雛形のワークフロー 3 本（`copilot-review.yml` / `review-gate.yml` / `second-opinion-gate.yml`）の実行先を、リポジトリ変数で切り替えられるようにした**（ojos/ai-packages-dev#546）。`runs-on` を `${{ vars.ACTIONS_RUNS_ON || 'ubuntu-latest' }}` にした。変数が未設定・空なら従来と同じ `ubuntu-latest` で動く。private リポジトリで GitHub のランナーの課金枠を避けたいときに、変数を設定して自前のランナーへ向ける（値はラベル 1 つ）。外部からの PR を受けるリポジトリでは自前のランナーを使わない（PR 側のコードがそのマシンで動くため）。自前のランナーに要る道具は devcontainer-bootstrap の README に一覧がある。
+- 雛形の変更は 2 つで、互いに独立している。ojos/ai-packages-dev#545 は `on.schedule` を削るのみで、`workflow_dispatch` と、open な PR を全件判定し直す処理は変えていない。ojos/ai-packages-dev#546 は `runs-on` を変数の形にするのみで、判定の処理は変えていない。雛形の種類は 17 種のまま。
 
 ### 移行
-- **雛形から写したワークフローに手を入れていなければ、規範の更新で置き換わる**（DCB で規範を配置している場合は `bootstrap.sh --upgrade` で追従する）。置き換わると、利用側の定期実行が止まる。
+- **雛形から写したワークフローに手を入れていなければ、規範の更新で置き換わる**（DCB で規範を配置している場合は `bootstrap.sh --upgrade` で追従する）。置き換わるのは、`on.schedule` の削除（ojos/ai-packages-dev#545）と `runs-on` の変数化（ojos/ai-packages-dev#546）の 2 点。置き換わると、利用側の定期実行が止まる。`runs-on` は変数 `ACTIONS_RUNS_ON` を設定しない限り `ubuntu-latest` のままで、挙動は変わらない。手を入れたワークフローは置き換わらないので、`schedule:` を手で外し、`runs-on:` を手で同じ形にする。
 - `/land` スキルを雛形から写している場合は、あわせて更新する（更新しないと、マージ直前の再判定が行われない）。
 - `post` を打つトークンには、Actions の書き込み権限が要る。無い場合、`post` は記録を投稿したあとで非 0 になり、手で起こすコマンドを示す。
 - 確認側の手動実行は、push から数分以内（猶予の中）の PR でも、記録が在れば緑を付ける。猶予の中で見送るのは、記録が無い（まだ投稿していない）PR だけである。

@@ -515,6 +515,51 @@ VERIFY_ACCEPTANCE=scripts/acceptance-remote.sh bash scripts/verify.sh
 
 > **この開発リポジトリ自身には `verify.yml` を置きません。** 既に `.github/workflows/ci.yml` が同じ役割を持ち、`scripts/acceptance.sh` がその 6 ジョブ + `identity-guard.yml` を完全ミラーしているため、`verify.yml` を置くと役割が重複し、`tests/test-ci-mirror.sh` のミラー対象が 2 本になります。**雛形を配りながら自分では使わない状態を、無自覚ではなく明示の判断として残します。**
 
+### 配るワークフローの実行先（`ACTIONS_RUNS_ON`）
+
+DCB が配置するワークフロー 5 本（`identity-guard.yml` / `verify.yml` / `second-opinion-gate.yml` / `copilot-review.yml` / `review-gate.yml`）は、実行先を次の形で書きます。
+
+```yaml
+runs-on: ${{ vars.ACTIONS_RUNS_ON || 'ubuntu-latest' }}
+```
+
+| 項目 | 内容 |
+|---|---|
+| 変数名 | `ACTIONS_RUNS_ON`（利用側リポジトリの Settings > Secrets and variables > Actions > Variables） |
+| 既定値 | 未設定または空文字なら `ubuntu-latest`。設定しなければ従来と同じ挙動です |
+| 値 | ラベル 1 つ（例: 自前のランナーに付けたラベル）。複数ラベルの配列は受け付けません。**値に空白を含めないでください** |
+| 使いどころ | private リポジトリで、GitHub のランナーが使う Actions の課金枠を避けたいとき。public リポジトリは何もしなくてかまいません |
+
+**空白だけの値や、末尾に空白のある値は、既定値へ落ちず、そのままラベルになります。** `||` が既定値へ落とすのは空文字のときだけだからです。そのラベルを持つランナーは存在しないので、ジョブは `queued` のまま進みません。変数を設定したのにジョブが始まらないときは、まず値の前後の空白を疑ってください。
+
+**5 本すべてを変数の形にするには、この変更を含む ai-playbook と組み合わせてください。** `identity-guard.yml` / `verify.yml` は `bootstrap.sh` が書きますが、残り 3 本は規範の雛形から写します。`--playbook-version` に古い版を指定すると、前者 2 本だけが変数の形になり、後者 3 本は `ubuntu-latest` のまま残ります。版の検査は機構では行いません。
+
+手でワークフローの `runs-on` を書き換えると、`.devcontainer/ORIGIN` の記録とずれて、`--upgrade` が手を入れたファイルとして扱います。変数で切り替えれば、ワークフローには手を入れずに済みます。
+
+> **自前のランナーでは、PR 側のコードがそのマシンで動きます。外部からの PR を受け付けるリポジトリでは、使わないでください。**
+>
+> 外部からの PR だけの話ではありません。同じリポジトリの PR では、`identity-guard.yml` / `verify.yml` / `review-gate.yml` / `second-opinion-gate.yml` の `pull_request` 契機は、**PR 側の版のワークフロー定義**で動きます。したがって、書き込み権限を持つ共同作業者なら誰でも、PR でワークフローの `run:` を書き換え、自前のランナーのマシンで任意のコードを動かせます（フォークからの PR は `copilot-review.yml` / `review-gate.yml` / `second-opinion-gate.yml` の対象外ですが、`identity-guard.yml` と `verify.yml` は動きます）。
+>
+> - ランナーは、使い捨てのコンテナで動かしてください（devhost が用意する自前のランナーを使えます）。実行のたびに捨てれば、書き換えられたコードが残す状態を次の実行へ持ち越しません。
+> - ホストの資格情報（ホームのトークン、SSH 鍵、Docker ソケットなど）やネットワーク（社内の別のサービス）に届く場所で、ランナーを動かさないでください。
+
+#### 自前のランナーに要る道具
+
+`ubuntu-latest` には最初から入っているが、最小の Linux には無いものです。5 本のワークフローと、そこから呼ばれる `scripts/*.sh`、`actions/checkout` が実際に使うコマンドから洗い出しました。ランナー本体（actions/runner）の導入に要るもの（.NET の実行時依存など）は、ランナーの導入手順の側の話なので含めません。
+
+| 道具 | 使う箇所 |
+|---|---|
+| bash | 全ワークフローの `run:`、全スクリプト（`#!/usr/bin/env bash`） |
+| git | `actions/checkout`（無いと REST 経由の取得に落ち、`.git` が無い木になる）、`scripts/verify-commit-identity.sh`（`git log` / `git rev-parse`）、`scripts/verify-commit-identity-selftest.sh`（`git init` / `git commit`）、`scripts/check-no-secrets.sh`（`git status` / `git ls-files`。`verify.yml` が `verify.sh` 経由で呼ぶ） |
+| gh（GitHub CLI） | `copilot-review.yml` / `review-gate.yml` / `second-opinion-gate.yml` の `run:`（`gh api`）。`--jq` は gh に内蔵されているので、jq は要りません |
+| GNU coreutils 相当 | `date -u -d`（`review-gate.yml` / `second-opinion-gate.yml` の掃き寄せ。GNU の `-d` を使う）、`base64 -d`（`review-gate.yml` の判定スクリプトのフォールバック取得）、`tr`（`copilot-review.yml` / `review-gate.yml` の `is_copilot`）、`mktemp`・`sort`・`comm`・`cp`・`rm`・`mkdir`・`sleep`・`dirname`・`cat`・`env`（`verify-commit-identity-selftest.sh` / `check-no-secrets.sh` / 各ワークフロー） |
+| sed・grep | `verify-commit-identity-selftest.sh`（`sed`）、`check-no-secrets.sh`（`sed` / `grep`） |
+
+- `curl` / `jq` / `python3` / `awk` は、この 5 本と呼ばれるスクリプトからは使いません。要りません。
+- Node.js は、`actions/checkout`（JavaScript のアクション）の実行にランナー自身の同梱版が使われるため、別に入れる必要はありません。
+- `verify.yml` が呼ぶ `scripts/acceptance.sh` は**プロジェクトが所有する**ので、その検査が使うもの（言語ランタイム・`npm` など。配布版の `acceptance.sh` は `package.json` があると `npm` を使います）は、この一覧に含みません。プロジェクトの実態に合わせて足してください。
+- `ubuntu-latest` 相当の GNU 版が入った Linux（Debian / Ubuntu 系）を前提にします。BusyBox の `date` は GNU の `-d` と同じ書式を受け付けない場合があります。
+
 ## 言語サポート
 対応ランタイム（任意の組み合わせ）:
 - `node`（Node.js / JavaScript / TypeScript）

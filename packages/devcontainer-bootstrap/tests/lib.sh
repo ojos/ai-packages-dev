@@ -82,6 +82,32 @@ assert_eq() {
   fi
 }
 
+# ワークフローの YAML 妥当性を検査する。
+# actionlint があれば通し、無ければ PyYAML、それも無ければ最低限の構造検査で代替する
+# （沈黙スキップはしない）。呼び出し側は `it` の直後に呼ぶ。
+assert_workflow_valid() {
+  local wf="$1" tab
+  if command -v actionlint >/dev/null 2>&1; then
+    if actionlint "$wf" >/dev/null 2>&1; then pass; else fail "actionlint 検査に失敗: $wf"; fi
+  elif python3 -c 'import yaml' >/dev/null 2>&1; then
+    if python3 -c 'import sys,yaml; yaml.safe_load(open(sys.argv[1]))' "$wf" >/dev/null 2>&1; then
+      pass
+    else
+      fail "PyYAML の safe_load に失敗: $wf"
+    fi
+  else
+    tab="$(printf '\t')"
+    if grep -Eq '^on:' "$wf" \
+       && grep -Eq '^jobs:' "$wf" \
+       && grep -Eq '^permissions:' "$wf" \
+       && ! grep -q "^${tab}" "$wf"; then
+      pass
+    else
+      fail "必須トップキー欠落またはタブインデント混入: $wf"
+    fi
+  fi
+}
+
 assert_file_exists() {
   if [[ -f "$1" ]]; then pass; else fail "file not found: $1"; fi
 }

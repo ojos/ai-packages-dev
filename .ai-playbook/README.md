@@ -245,6 +245,12 @@ chmod +x scripts/second-opinion-record.sh scripts/second-opinion-gate-exempt.sh
 
 **3 本で 1 組です。** `second-opinion-record.sh` が記録を作って PR へ投稿し、`second-opinion-gate.yml` がその記録を別の契機（PR 更新・手動実行）から確認します（規範「要求されたことを別の契機で確認する」）。定期実行は置きません（private リポジトリの Actions の課金枠を減らし続けるため）。`post` が投稿の直後に確認側を既定ブランチで手動実行し、`/land` がマージの直前に再判定します。手動実行には Actions の書き込み権限が要ります。要求はしません——第二意見を回すかどうかは利用者側の判断のままです（規範「確認側は要求しません」）。`second-opinion-gate-exempt.sh` は、回す著者が最初からいない PR（Dependabot 等）を記録の対象外にする判定本体です。
 
+雛形の `runs-on` は `${{ vars.ACTIONS_RUNS_ON || 'ubuntu-latest' }}` です。リポジトリ変数 `ACTIONS_RUNS_ON` を設定すると、実行先をその 1 ラベルへ切り替えられます（未設定・空文字なら `ubuntu-latest`）。これは `copilot-review.yml` / `review-gate.yml` も同じです。private リポジトリで GitHub のランナーの課金枠を避けたいときに使います。
+
+- **値に空白を含めないでください。** 空白だけの値や末尾に空白のある値は、既定値へ落ちずそのままラベルになり、ジョブは `queued` のまま進みません。
+- **自前のランナーでは、PR 側のコードがそのマシンで動きます。** 外部からの PR を受け付けるリポジトリでは使わないでください。同じリポジトリの PR でも、`pull_request` 契機は PR 側の版のワークフロー定義で動くため、書き込み権限を持つ共同作業者なら誰でも、`run:` を書き換えて任意のコードをそのマシンで動かせます。ランナーは使い捨てのコンテナで動かし、ホストの資格情報やネットワークに届く場所では動かさないでください。
+- **自前のランナーに要る道具**（`ubuntu-latest` には入っているが、最小の Linux には無いもの）: bash、git（`actions/checkout` も使う）、gh（`--jq` が内蔵なので jq は不要）、GNU coreutils 相当（`date -d` と `base64 -d` を使う）、sed、grep。詳しい根拠は devcontainer-bootstrap の README「配るワークフローの実行先」にあります。
+
 雛形は 1 つの実装例です。偽造（記録を作らずレビューを回したことにする）までは防げません——検出できるのは失念であって、迂回ではありません。`review-gate.yml` と同じく required check にはしません。
 
 ### 5. Claude Code 向けスキルを配線する（Claude Code を使う場合・任意）
