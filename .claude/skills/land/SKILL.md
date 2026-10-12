@@ -106,7 +106,7 @@ echo CHECKS_ATTACHED
   **数える形は、確実に読めるものに限ります（認める形を限る方式）。** YAML を完全には読まない（読む専用の道具を使わない）ため、すべての書き方を読もうとすると、読み違えて動かないものを数えます。読み違えて数えるより、数えずに従来どおりの動きに戻るほうが安全です（上の方針）。数えるのは、(1) `on: pull_request`、(2) `on: [a, pull_request, b]`（`{` と `:` を含まない 1 行のリスト）、(3) ブロックの形で、`on:` の直下の子にある `pull_request:`（値も子も無い）か `- pull_request`、の 3 つです。(3) で `pull_request:` の下に子があるときは、子が `types:` だけで、上の条件を満たすものに限ります。フローの形（`on: {pull_request: ...}`）、引用符付きのキー、アンカーやエイリアスなど、これに当てはまらない形はすべて数えません。`on:` の直下より深い位置にある `pull_request` という文字（`workflow_dispatch` の `inputs` の名前、`push` の `paths` の中身など）は見ません。`on:` のキー自体は、引用符付き（`"on":`）も読みます。YAML を読む専用の道具（`yq` など）は雛形が求める道具に含めないため、awk で読みます。求める元を作業ツリーでなく `$sha` と base の中身にするのは、ワークフローを増減する PR で、作業ツリーの一覧が食い違うためです。
 - **完了を 2 回続けて見るまで待ちます。** ワークフローごとに実行が作られる時刻はずれるため、先に作られた実行が完了した時点では、後の実行がまだ一覧に無いことがあります。30 秒あけて読んだ一覧が前の回と同じで、すべて完了していれば抜けます。上の「動くはずのワークフロー」に入らないものは、この間隔を超えて遅れると拾えません。
 - **ワークフローごとに、最新の実行 1 件だけを見ます。** `reopened` などで同じ SHA に実行が重なると、古い失敗が一覧に残るためです。一覧は全ページを読みます（`--paginate`）。
-- **commit status を出すワークフロー（`second-opinion-gate`、`review-gate`）は、実行の成否では判定しません。** 下の commit status で判定します。たとえば `second-opinion-gate` は、記録が無いうちに起動した実行が失敗のまま残り、記録を投稿したあとの緑は、別の契機（掃き寄せ）が付ける status として出ます。実行の成否で判定すると、投稿しても緑になりません。除くワークフローの名前（`gates`）は、プロジェクトの構成に合わせて直してください。
+- **commit status を出すワークフロー（`second-opinion-gate`、`review-gate`）は、実行の成否では判定しません。** 下の commit status で判定します。たとえば `second-opinion-gate` は、記録が無いうちに起動した実行が失敗のまま残り、記録を投稿したあとの緑は、`second-opinion-record.sh post` が起こす手動実行（`workflow_dispatch`）が付ける status として出ます（定期実行は置きません）。実行の成否で判定すると、投稿しても緑になりません。除くワークフローの名前（`gates`）は、プロジェクトの構成に合わせて直してください。
 
 **判定に使う関数（`workflow_runs_on_pr`・`expected_workflows`・`filter_active`・`missing_workflows`・`runs_verdict`）と、有効なワークフローを読む jq の式（`active_jq`）は、目印の行（`# >>> land:...` と `# <<< land:...`）で囲んでいます。** テストがこの部分だけを雛形から取り出し、仕込みのリポジトリや仕込みの一覧で実行して確かめるためです。目印の行を消さず、囲んだ部分が外側の変数に依存しない形を保ってください。
 
@@ -276,11 +276,11 @@ done
 printf '%s\n' "$st"
 ```
 
-ゲートの status が 30 分たっても付かない、または `pending` のままなら、最後に出した一覧をもとに止めて報告します（下の「`second-opinion-gate` の確認」と、置いている場合の失敗の形に従います）。
+ゲートの status が 30 分たっても付かない、または `pending` のままなら、最後に出した一覧をもとに止めて報告します（イベントの取りこぼしで判定されていないことがあります。定期実行は置かないため、報告の前に 8 の再判定の手動実行を一度起こして確かめてかまいません）（下の「`second-opinion-gate` の確認」と、置いている場合の失敗の形に従います）。
 
 **`second-opinion-gate` の確認（リモート最終ゲートの有無にかかわらず行います）**:
 
-- `second-opinion-gate` の status を、上の `commits/<sha>/status` で確認します。**`failure`**（説明文が `no second-opinion record for this head`）なら、push 後に記録を投稿していません。`bash scripts/second-opinion-record.sh post` を実行してから、もう一度、上の実行の完了の待ちと commit status の確認をやり直します。ローカルに記録が残っていない場合（別セッションが push した等）は、このブランチで第二意見を回し直す必要があるため、止めて報告します。
+- `second-opinion-gate` の status を、上の `commits/<sha>/status` で確認します。**`failure`**（説明文が `no second-opinion record for this head`）なら、push 後に記録を投稿していません。`bash scripts/second-opinion-record.sh post` を実行してから（`post` は投稿の直後に、確認側を既定ブランチで手動実行します。起こせなかったときは非 0 で終わり、手で起こすコマンドを示すので、その手順で起こします）、もう一度、上の実行の完了の待ちと commit status の確認をやり直します。ローカルに記録が残っていない場合（別セッションが push した等）は、このブランチで第二意見を回し直す必要があるため、止めて報告します。
 - status が付かない（確かめられなかった）場合は、「記録が無い」と同じに扱いません。しばらく待ってから読み直します。
 
 **ここから先は、このプロジェクトがリモート最終ゲートを置いているかどうかで分かれます（`.github/project-ai-rules.md`「リモート最終ゲート」）。**
@@ -368,6 +368,70 @@ CI が緑でも、Copilot の指摘が 0 件でも、読まずにマージしま
   - 直したあとに、新しい指摘（2 巡目）が出た。**扱いを決めるのは人間です。** 基準は `.ai-playbook/role-contracts/closer.md`「レビュー往復の打ち切り」に従います。このスキルの中では判定しません
 
 ### 8. マージする
+
+**最初に、マージの直前の再判定を行います。** 定期実行は置かないため、ゲート（`second-opinion-gate`、`review-gate` のうち配置されているもの）の判定は、ここで必ず既定ブランチの版で書き直します。イベントの取りこぼしで判定されないまま残った PR を拾い、PR 側のワークフローの書き換えで偽った成功を、既定ブランチの判定で上書きするためです（`.ai-playbook/review-workflow.md`「要求されたことを別の契機で確認する」と「この機構が保証すること／しないこと」）。手順は、(1) 既定ブランチを `--ref` に指定して手動実行を起こす、(2) 起こした実行の終わりを待つ、(3) head の commit status を確かめる、の 3 つです。**手動実行を起こすには Actions の書き込み権限が要ります。** 起こせなければ、止めて報告します（権限の表は `.github/project-ai-rules.md` か `packages/devcontainer-bootstrap/README.md`）。
+
+**判定は、実行の成否ではなく head の commit status で行います。** 手動実行は open な PR を全件判定するので、実行は他の PR の失敗で落ちることがあります。また、push の直後（猶予の内側）で記録がまだ無い PR は判定を見送るため、status が変わらないことがあります（記録が在れば猶予の中でも緑が付きます）。見送られたときは、猶予が過ぎてからやり直します。
+
+```bash
+# sha は 2 で最後に確かめたコミット。再判定するゲートは「既定ブランチにあるもの」で決める
+# （PR の作業ツリーで決めると、PR でゲートを消せば再判定を飛ばせ、ゲートを新設する PR は
+# 既定ブランチにまだ無いワークフローを起こそうとして止まる）
+ng=0
+base="$(gh repo view --json defaultBranchRef --jq .defaultBranchRef.name)" || base=""
+wfs="$([ -n "$base" ] && gh api "repos/{owner}/{repo}/contents/.github/workflows?ref=$base" --jq '.[].name')" || wfs=""
+[ -n "$base" ] && [ -n "$wfs" ] || { echo "REJUDGE_FAIL 既定ブランチ、またはそのワークフローの一覧を読めない"; ng=1; }
+for wf in second-opinion-gate.yml review-gate.yml; do
+  [ "$ng" -eq 0 ] || break
+  case " ${wfs//$'\n'/ } " in *" $wf "*) ;; *) continue ;; esac
+  ctx="${wf%.yml}"
+  # この head の実行（PR 側の版で動く）が終わっていなければ判定しない。動いている PR 側の
+  # 実行は、再判定の後で status を書き直せるため。件数で打ち切らず全ページを見る
+  busy="$(gh api --paginate "repos/{owner}/{repo}/actions/runs?head_sha=$sha&per_page=100" \
+    --jq ".workflow_runs[] | select((.path // \"\" | sub(\"@.*$\"; \"\")) == \".github/workflows/$wf\" and .status != \"completed\") | .id")" || busy="?"
+  if [ -n "$busy" ]; then echo "REJUDGE_BUSY $wf: この head の実行が終わっていない（または読めない）: $busy"; ng=1; continue; fi
+  # 起こす前の最新の手動実行の番号。読めなければ止める（0 で代えると古い実行を取り違える）
+  prev="$(gh run list --workflow "$wf" --event workflow_dispatch --limit 1 --json databaseId --jq '.[0].databaseId // 0')" || prev=""
+  if [ -z "$prev" ]; then echo "REJUDGE_FAIL $wf: 実行の一覧を読めない"; ng=1; continue; fi
+  # 起こした時刻（GitHub 側との時計のずれを見込んで 60 秒戻す）。これより後に作られた
+  # 手動実行が現れるまでは、「手動実行がすべて終わった」と判定しない
+  t0="$(date -u -d '-60 sec' +%Y-%m-%dT%H:%M:%SZ)"
+  if ! gh workflow run "$wf" --ref "$base"; then echo "REJUDGE_DISPATCH_FAILED $wf: 手で起こす: gh workflow run $wf --ref $base"; ng=1; continue; fi
+  # head の判定結果を書いた実行（status の target_url）が、起こしたあとに既定ブランチで
+  # 始まった手動実行で、終わっていることを確かめる。誰が起こした実行でも、既定ブランチの
+  # 版で動いた実行なら同じ判定ロジックなので、取り違えても判定の信頼性は変わらない。
+  # 30 秒 × 40 回 = 20 分。手動実行がすべて終わっても書き直されなければ、その時点で止める
+  verdict=""
+  for _ in $(seq 40); do
+    sleep 30
+    st="$(gh api "repos/{owner}/{repo}/commits/$sha/status" --jq ".statuses[] | select(.context == \"$ctx\") | \"\(.state) \(.target_url)\"")" || st=""
+    id="${st##*/actions/runs/}"
+    case "$id" in ''|*[!0-9]*) id=0 ;; esac
+    if [ "$id" -gt "$prev" ]; then
+      run="$(gh api "repos/{owner}/{repo}/actions/runs/$id" --jq '"\(.event) \(.head_branch) \(.status) \(.path // "" | sub("@.*$"; ""))"')" || run=""
+      if [ "$run" = "workflow_dispatch $base completed .github/workflows/$wf" ]; then verdict="${st%% *} run $id"; break; fi
+    fi
+    pending="$(gh run list --workflow "$wf" --event workflow_dispatch --limit 20 --json databaseId,status,createdAt \
+      --jq "[.[] | select(.databaseId > $prev)] | (any(.createdAt >= \"$t0\") and all(.status == \"completed\"))")" || pending=""
+    if [ "$pending" = true ]; then verdict="unchanged"; break; fi
+  done
+  case "$verdict" in
+    "success run "*) echo "REJUDGE_OK $wf: ${verdict#success }" ;;
+    "") echo "REJUDGE_FAIL $wf: 20 分待っても、起こした手動実行が判定結果を書かない"; ng=1 ;;
+    unchanged) echo "REJUDGE_FAIL $wf: 手動実行は終わったが、head の判定結果が書き直されていない（猶予の内側で見送られた可能性）: ${st:-なし}"; ng=1 ;;
+    *) echo "REJUDGE_FAIL $wf: 再判定の結果が success ではない: $verdict"; ng=1 ;;
+  esac
+done
+[ "$ng" -eq 0 ]
+```
+
+最後の行が 0 で終われば、再判定の結果は緑です。**0 以外なら、マージせずに止めます。** 出力の行で次のように扱います。
+
+- `REJUDGE_FAIL` で、判定結果が `failure` / `error` のとき: マージせずに止めて報告します。
+- `REJUDGE_BUSY`、または判定結果が書き直されていないとき: push の直後（猶予の内側）で見送られたか、PR 側の実行がまだ動いています。猶予（数分）が過ぎてから 1 回だけやり直し、それでも通らなければ止めて報告します。
+- `REJUDGE_DISPATCH_FAILED`、または 20 分待っても判定結果が書かれないとき: 止めて報告します（権限の不足が多い）。
+
+**判定結果は、起こしたあとに既定ブランチで始まり、終わった手動実行が書いたものだけを受け入れます。** status の `target_url` は書いた実行の URL なので、その実行が既定ブランチの手動実行（`workflow_dispatch`）で、起こす前の最新の番号より新しく、終わっていることを確かめてから、その `success` を緑とします。前からある `success`（PR 側の版の実行が偽って書いたものを含む）は、変わっていなければこの照合で落ちます。**この再判定を飛ばしません。** 飛ばすと、定期実行を置かない構成では、偽の成功や取りこぼしが残ったままマージされます。**`/land` を通さないマージ（画面から直接など）は、この再判定を通りません。**
 
 **先に、squash の本文に CI を飛ばす指示が入っていないか確かめます。** squash マージの本文の組み立て方（PR の説明文だけを使うか、各コミットのメッセージを連ねるか）はリポジトリの設定（`squash_merge_commit_message`）によって変わり、**この雛形はどちらの設定かを前提にしません。** PR 本文だけを検査し、コミット側の設定を前提にコミットメッセージ側を省くと、`PR_BODY` 設定のプロジェクトでの見落としを防げても `COMMIT_MESSAGES` 設定のプロジェクトでの見落としを防げず、逆も同様です。設定を読んでから検査対象を切り替える方法もありますが、判定を 2 経路に分けるほど、どちらかの経路だけが古くなる余地が増えます。**そのため、設定によらず両方（PR 本文と全コミットメッセージ）を検査します。** どちらの組み立て方であっても、いずれか 1 か所に CI を飛ばす指示があれば、**main 側の CI が起動しないことがあります。** GitHub は、メッセージの見出しでなく本文にあっても、この指示に従います。
 

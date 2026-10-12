@@ -13,7 +13,10 @@
 #   gh … 環境変数 GH_ME（認証しているアカウント）・GH_AUTHOR（PR の作者）と、
 #        FIXTURES の comments.json に --jq の式を本物の jq で当てて返す。
 #        **スクリプトに書いた jq の式もそのまま確かめる。** pr comment は投稿した
-#        ことを posted に記録するだけ
+#        ことを posted に、`workflow run` の引数を dispatched に記録するだけ
+#
+# 投稿の直後に、確認側を既定ブランチで手動実行する（定期実行は持たない）ことも確かめる。
+# 起こせなければ、手で起こすコマンドを示して非 0 で終わる。
 
 set -uo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
@@ -52,6 +55,16 @@ case "$1 ${2-}" in
     jq -r "$expr" "$FIXTURES/comments.json"
     ;;
   "pr comment") echo posted >> "$FIXTURES/posted" ;;
+  "repo view") [ "${GH_DEFAULT_BRANCH-main}" != "" ] || exit 1; echo "${GH_DEFAULT_BRANCH-main}" ;;
+  "api repos/"*)
+    # 確認側のワークフローが既定ブランチに在るか（contents）。GH_NO_GATE で 404 を返す
+    if [ -n "${GH_NO_GATE-}" ]; then echo "gh: Not Found (HTTP 404)" >&2; exit 1; fi
+    echo second-opinion-gate.yml
+    ;;
+  "workflow run")
+    [ -z "${GH_DISPATCH_FAIL-}" ] || exit 1
+    echo "$*" >> "$FIXTURES/dispatched"
+    ;;
   *) echo "gh stub: 知らない呼び出し: $*" >&2; exit 1 ;;
 esac
 STUB
@@ -73,26 +86,41 @@ comment() { printf '{"id":%s,"user":{"login":"%s"},"body":"<!-- second-opinion s
 # case_ <名前> <期待する終了（0 / 1）> <投稿されるか（yes / no）> <GH_ME> <GH_AUTHOR> <comments の JSON>
 case_() {
   local name="$1" want_rc="$2" want_posted="$3" me="$4" author="$5" comments="$6"
-  local fx="$WORK/fx" rc posted
+  local want_dispatch="${7-}"   # 期待する workflow run の引数（空なら起こされないこと）
+  local fx="$WORK/fx" rc posted dispatched
   rm -rf "$fx"; mkdir -p "$fx"
   printf '%s' "$comments" > "$fx/comments.json"
   ( cd "$REPO" && PATH="$WORK/bin:$PATH" FIXTURES="$fx" GH_ME="$me" GH_AUTHOR="$author" \
+      GH_DISPATCH_FAIL="${GH_DISPATCH_FAIL-}" GH_DEFAULT_BRANCH="${GH_DEFAULT_BRANCH-main}" GH_NO_GATE="${GH_NO_GATE-}" \
       bash "$SCRIPT" post ) >"$fx/out" 2>&1
   rc=$?
   posted=no; [ -f "$fx/posted" ] && posted=yes
+  dispatched=""; [ -f "$fx/dispatched" ] && dispatched="$(tr -d '\n' < "$fx/dispatched")"
   it "$name"
-  if [[ "$rc" == "$want_rc" && "$posted" == "$want_posted" ]]; then
+  if [[ "$rc" == "$want_rc" && "$posted" == "$want_posted" && "$dispatched" == "$want_dispatch" ]]; then
     pass
   else
-    fail "want rc=$want_rc posted=$want_posted / got rc=$rc posted=$posted: $(tr '\n' ' ' < "$fx/out")"
+    fail "want rc=$want_rc posted=$want_posted dispatched='$want_dispatch' / got rc=$rc posted=$posted dispatched='$dispatched': $(tr '\n' ' ' < "$fx/out")"
   fi
 }
 
-case_ "作者が post し、記録が無ければ投稿する" 0 yes alice alice '[]'
-case_ "作者の記録が既に在れば、二重に投稿せず成功する" 0 no alice alice "[$(comment 1 alice)]"
-case_ "作者以外（協力者）が書いた同じ印しか無ければ、作者の post は投稿する" 0 yes alice alice "[$(comment 1 helper)]"
-case_ "作者以外のアカウントで post すると、投稿せず失敗する" 1 no helper alice '[]'
+RUN="workflow run second-opinion-gate.yml --ref main"
+case_ "作者が post し、記録が無ければ投稿し、既定ブランチで確認側を手動実行する" 0 yes alice alice '[]' "$RUN"
+case_ "作者の記録が既に在れば、二重に投稿せず、確認側の手動実行だけ起こして成功する" 0 no alice alice "[$(comment 1 alice)]" "$RUN"
+case_ "作者以外（協力者）が書いた同じ印しか無ければ、作者の post は投稿する" 0 yes alice alice "[$(comment 1 helper)]" "$RUN"
+case_ "作者以外のアカウントで post すると、投稿せず、手動実行も起こさず失敗する" 1 no helper alice '[]'
 case_ "認証しているアカウントを読めなければ、投稿せず失敗する" 1 no "" alice '[]'
 case_ "PR の作者を読めなければ、投稿せず失敗する" 1 no alice "" '[]'
+
+# 既定ブランチは固定の名前ではなく、リポジトリから読んだ値を ref に渡す。
+GH_DEFAULT_BRANCH=trunk case_ "既定ブランチが main でなければ、その名前を ref に渡す" 0 yes alice alice '[]' "workflow run second-opinion-gate.yml --ref trunk"
+
+# 手動実行を起こせないときは、投稿は済んでいるが非 0 で終わり、手で起こすコマンドを示す。
+GH_DISPATCH_FAIL=1 case_ "確認側を手動実行できなければ、非 0 で終わる" 1 yes alice alice '[]'
+it "手動実行できなかったときの出力に、手で起こすコマンドが含まれる"
+if grep -q 'gh workflow run second-opinion-gate.yml --ref main' "$WORK/fx/out"; then pass; else fail "手で起こすコマンドが出力に無い: $(tr '\n' ' ' < "$WORK/fx/out")"; fi
+GH_DEFAULT_BRANCH= case_ "既定ブランチを読めなければ、非 0 で終わる" 1 yes alice alice '[]'
+# 確認側を初めて入れる PR では、既定ブランチにまだワークフローが無い。手動実行は起こさず成功する。
+GH_NO_GATE=1 case_ "確認側が既定ブランチに無ければ、手動実行を起こさずに成功する" 0 yes alice alice '[]'
 
 exit_with_result

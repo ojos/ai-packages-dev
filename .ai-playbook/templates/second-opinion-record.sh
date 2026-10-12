@@ -66,6 +66,14 @@
 #   失敗する。修正を push し直したら post もし直す。
 #   記録は head SHA に紐づくので、古い head への投稿では確認側を通らない。
 #
+#   **post は投稿の直後に、確認側（second-opinion-gate.yml）を既定ブランチで手動実行する**
+#   （`gh workflow run`）。コメントの投稿では PR の契機が起きないので、手動実行を
+#   起こさなければ判定結果（commit status）が緑に変わらない。定期実行は持たない。
+#   手動実行を起こせなかったときは、手で起こすコマンドを示して失敗する（記録の投稿は
+#   済んでいる）。確認側は push から数分以内の PR を猶予のため見送るが、記録が在れば
+#   猶予の中でも緑を付けるので、投稿の直後に起こしても判定される。起こすには Actions の
+#   書き込み権限が要る。
+#
 # 終了コード: 0 = 成功 / 1 = 失敗（理由を標準エラーへ）
 #
 # **GNU 拡張を使わない。** 利用側プロジェクトの端末実装は macOS / bash 3.2 相当を含み
@@ -255,6 +263,39 @@ cmd_verify() {
 }
 
 # ── post ─────────────────────────────────────────────────────────────────────
+
+# 確認側の手動実行を、既定ブランチで起こす。
+#
+# **ref は既定ブランチにする。** 判定ロジックを既定ブランチの版で動かすため
+# （PR 側のワークフローの書き換えが判定に届かない）。起こせなければ、手で起こす
+# コマンドを示して非 0 で終わる。記録の投稿は済んでいるので、それも伝える。
+dispatch_gate() {
+  local default_branch manual
+  default_branch="$(gh repo view --json defaultBranchRef --jq .defaultBranchRef.name 2>/dev/null || true)"
+  if [[ -z "$default_branch" ]]; then
+    manual="gh workflow run second-opinion-gate.yml --ref <既定ブランチ>"
+    fail "記録は投稿しましたが、既定ブランチを読めず、確認側を手動実行できませんでした。手で起こしてください: $manual"
+  fi
+  manual="gh workflow run second-opinion-gate.yml --ref $default_branch"
+  # **確認側がまだ既定ブランチに無いなら、起こさずに成功で終わる。** 確認側を初めて
+  # 入れる PR では、手動実行できるワークフローが既定ブランチにまだ無い。ここで失敗に
+  # すると、導入の PR が post で必ず止まる。その PR の判定は、PR を契機にした実行が担う。
+  # 404 以外の読めなさ（権限・通信）は、下の手動実行の失敗として扱う。
+  local probe
+  if ! probe="$(gh api "repos/{owner}/{repo}/contents/.github/workflows/second-opinion-gate.yml?ref=$default_branch" --jq .name 2>&1)"; then
+    case "$probe" in
+      *"HTTP 404"*)
+        printf '[second-opinion-record] 確認側（second-opinion-gate.yml）が既定ブランチ（%s）にまだ無いので、手動実行は起こしません。この PR の判定は、PR を契機にした実行が担います。\n' "$default_branch"
+        return 0
+        ;;
+    esac
+  fi
+  if ! gh workflow run second-opinion-gate.yml --ref "$default_branch" >/dev/null 2>&1; then
+    fail "記録は投稿しましたが、確認側を手動実行できませんでした（Actions の書き込み権限が無い、またはワークフローが既定ブランチに無い可能性）。手で起こしてください: $manual"
+  fi
+  printf '[second-opinion-record] 確認側を手動実行しました（ref=%s）。\n' "$default_branch"
+}
+
 cmd_post() {
   cmd_verify
 
@@ -287,6 +328,8 @@ cmd_post() {
     --jq '.[] | select((.user.login // "") == "'"$author"'" and (.body | contains("'"$marker"'"))) | .id' 2>/dev/null | head -1 || true)"
   if [[ -n "$existing" ]]; then
     printf '[second-opinion-record] この SHA の記録は既に投稿されています（comment %s）。\n' "$existing"
+    # 判定結果が緑になっていないことがあるので、確認側の手動実行は起こし直す。
+    dispatch_gate
     return 0
   fi
 
@@ -350,6 +393,7 @@ cmd_post() {
   gh pr comment "$pr" --body-file "$COMMENT_BODY" >/dev/null \
     || fail "PR #$pr へ投稿できませんでした。"
   printf '[second-opinion-record] PR #%s へ記録を投稿しました（%s）。\n' "$pr" "${VERIFIED_HEAD:0:12}"
+  dispatch_gate
 }
 
 case "${1-}" in

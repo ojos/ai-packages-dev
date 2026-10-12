@@ -243,7 +243,7 @@ cp .ai-playbook/templates/second-opinion-gate.yml .github/workflows/second-opini
 chmod +x scripts/second-opinion-record.sh scripts/second-opinion-gate-exempt.sh
 ```
 
-**3 本で 1 組です。** `second-opinion-record.sh` が記録を作って PR へ投稿し、`second-opinion-gate.yml` がその記録を別の契機（PR 更新・定期実行）から確認します（規範「要求されたことを別の契機で確認する」）。要求はしません——第二意見を回すかどうかは利用者側の判断のままです（規範「確認側は要求しません」）。`second-opinion-gate-exempt.sh` は、回す著者が最初からいない PR（Dependabot 等）を記録の対象外にする判定本体です。
+**3 本で 1 組です。** `second-opinion-record.sh` が記録を作って PR へ投稿し、`second-opinion-gate.yml` がその記録を別の契機（PR 更新・手動実行）から確認します（規範「要求されたことを別の契機で確認する」）。定期実行は置きません（private リポジトリの Actions の課金枠を減らし続けるため）。`post` が投稿の直後に確認側を既定ブランチで手動実行し、`/land` がマージの直前に再判定します。手動実行には Actions の書き込み権限が要ります。要求はしません——第二意見を回すかどうかは利用者側の判断のままです（規範「確認側は要求しません」）。`second-opinion-gate-exempt.sh` は、回す著者が最初からいない PR（Dependabot 等）を記録の対象外にする判定本体です。
 
 雛形は 1 つの実装例です。偽造（記録を作らずレビューを回したことにする）までは防げません——検出できるのは失念であって、迂回ではありません。`review-gate.yml` と同じく required check にはしません。
 
@@ -293,7 +293,7 @@ cp .ai-playbook/templates/check-review-usable.sh scripts/check-review-usable.sh
 chmod +x scripts/review-usable.sh scripts/check-review-usable.sh
 ```
 
-**4 本で 1 組です。** `copilot-review.yml` が要求し、`review-gate.yml` が要求されたこと、および要求・投稿されたレビューが実際に読まれたことを、別の契機（PR 更新・定期実行）から確認します（規範「要求されたことを別の契機で確認する」「要求された ≠ 読まれた」）。要求側の契機が届かないと最終ゲートが黙って抜けるため、確認側だけを省くと、この節で塞ごうとしている穴がそのまま残ります。確認側は要求しません。「読まれたか」の判定は `review-usable.sh` が持ち、`review-gate.yml` は一覧を集めて渡すだけです。`check-review-usable.sh` はその判定を表で確かめる自己検査で、GitHub 上でしか動かない `review-gate.yml` に判定を埋めないことで、手元と CI の両方から機械的に確かめられるようにしています。
+**4 本で 1 組です。** `copilot-review.yml` が要求し、`review-gate.yml` が要求されたこと、および要求・投稿されたレビューが実際に読まれたことを、別の契機（PR 更新・手動実行。マージの直前に `/land` が既定ブランチで再判定します）から確認します（定期実行は置きません）（規範「要求されたことを別の契機で確認する」「要求された ≠ 読まれた」）。要求側の契機が届かないと最終ゲートが黙って抜けるため、確認側だけを省くと、この節で塞ごうとしている穴がそのまま残ります。確認側は要求しません。「読まれたか」の判定は `review-usable.sh` が持ち、`review-gate.yml` は一覧を集めて渡すだけです。`check-review-usable.sh` はその判定を表で確かめる自己検査で、GitHub 上でしか動かない `review-gate.yml` に判定を埋めないことで、手元と CI の両方から機械的に確かめられるようにしています。
 
 雛形は 1 つの実装例です。規範が要求するのは「要求回数を 1 回に限定すること」と「別の契機で確認すること」で、同じ性質を満たせば別の手段でかまいません。前提条件（レビュー機構の有効化・トークン）は雛形の冒頭コメントに記載しています。`review-gate.yml` は required check にしません（理由は規範側）。
 
