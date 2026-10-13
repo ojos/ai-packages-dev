@@ -179,7 +179,7 @@ n_b="$(field NAME "$(run_wrapper_args "$P1" "$REPO" --resume="$SID")")"
 assert_eq "$n_a" "$n_b" "名前"
 
 it "大文字の識別子でも小文字の名前になり、同じ会話の小文字と同じ名前になる"
-n_up="$(field NAME "$(run_wrapper_args "$P1" "$REPO" --resume="${SID^^}")")"
+n_up="$(field NAME "$(run_wrapper_args "$P1" "$REPO" --resume="961EEC28-3C7E-4188-B64A-DD819D46DB23")")"
 assert_eq "$n_up" "lab-my-repo-961eec28" "名前"
 
 it "ラッパーの雛形と写しに、bash 4 以降の展開（小文字化・大文字化）が無い"
