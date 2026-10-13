@@ -74,7 +74,7 @@ TOOLBIN="$WORK/toolbin"
 mkdir -p "$FAKEBIN" "$TOOLBIN" "$WORK/home"
 
 # dev.sh と偽物が使う道具だけを置く。本物の docker などが入った環境でも PATH から見えない。
-for t in sed tail head cat rm mkdir grep tr env awk sleep mktemp stat flock; do  # bsd-ok: mktemp は呼び出しではなく、偽の PATH へ写す道具の名前の一覧
+for t in sed tail head cat rm mkdir grep tr env awk sleep mktemp stat flock tee; do  # bsd-ok: mktemp は呼び出しではなく、偽の PATH へ写す道具の名前の一覧
   p="$(command -v "$t")" || { echo "[devhost-selftest] $t が見つかりません" >&2; exit 1; }
   ln -s "$p" "$TOOLBIN/$t"
 done
@@ -326,6 +326,21 @@ case "$sub" in
       # コンテナの実行中に、ユニットが止められる状況（systemd が TERM を送る）。docker run は止まって 143 で抜ける。
       kill -s "$FAKE_RUN_SIGNAL" "$PPID"
       exit 143
+    fi
+    if [[ -n "${FAKE_CONFIG_MSG+x}" ]]; then
+      # コンテナの中の bash -c のスクリプトを、偽の config.sh（FAKE_CONFIG_MSG を出して FAKE_CONFIG_RC で終わる）で本当に走らせる。
+      ctr="$FAKE_STATE/ctr"
+      mkdir -p "$ctr"
+      printf '#!%s\necho "%s"\nexit %s\n' "$BASH" "$FAKE_CONFIG_MSG" "${FAKE_CONFIG_RC:-1}" >"$ctr/config.sh"
+      printf '#!%s\nexit 0\n' "$BASH" >"$ctr/run.sh"
+      chmod +x "$ctr/config.sh" "$ctr/run.sh"
+      while [[ $# -gt 0 && "$1" != "bash" ]]; do shift; done
+      shift 2
+      script="$1"
+      shift
+      cd "$ctr"
+      RUNNER_TOKEN=REGTOKEN123 "$BASH" -c "$script" "$@"
+      exit $?
     fi
     exit "${FAKE_RUN_EXIT:-0}"
     ;;
@@ -1913,8 +1928,19 @@ log_lacks '^docker \[run\]'
 rrun 1 "runner run: グループはあるが config.sh（コンテナ）が失敗したら 1（78 にしない。起こし直す）" FAKE_RUN_EXIT=1 FAKE_REGISTERED_NAME=h-g1 -- runner run g1
 expect_err "終了コード 1"
 log_has '^docker \[stop\] \[dev-runner-g1\]$'
-rrun 1 "runner run: コンテナの終了コードが 78 でも、group の有無によらず 1（コンテナ内で 78 を作らない）" FAKE_RUN_EXIT=78 -- runner run g1
+rrun 1 "runner run: group を書かない行は、コンテナの終了コードが 78 でも 1（78 にしない）" FAKE_RUN_EXIT=78 -- runner run r1
 expect_err "終了コード 78"
+# 事前確認は通ったが、登録の時点で config.sh がグループ不在で失敗する。偽の config.sh を実際に走らせる。
+GMSG='Could not find any self-hosted runner group named my-group.'
+rrun 78 "runner run: 確認は通ったが config.sh がグループ不在のメッセージで失敗したら 78" FAKE_CONFIG_MSG="$GMSG" FAKE_REGISTERED_NAME=h-g1 -- runner run g1
+expect_err "登録の時点で見つかりませんでした"
+log_has '^curl .*runner-groups'
+no_pat_leak
+rrun 1 "runner run: config.sh がそれ以外のメッセージで失敗したら 1" FAKE_CONFIG_MSG="Http response code: 503" -- runner run g1
+expect_err "終了コード 1"
+rrun 1 "runner run: group なしで同じメッセージが出ても 78 にしない（1）" FAKE_CONFIG_MSG="$GMSG" -- runner run r1
+expect_err "終了コード 1"
+rrun 0 "runner run: config.sh が成功すれば run.sh へ進んで 0" FAKE_CONFIG_MSG="ok" FAKE_CONFIG_RC=0 -- runner run g1
 rrun 0 "runner run: group を書かない行は、グループの一覧を引かない" -- runner run r1
 log_lacks 'runner-groups'
 T="$WORK/conf/runners-group"

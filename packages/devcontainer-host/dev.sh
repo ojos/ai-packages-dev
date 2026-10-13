@@ -1327,10 +1327,20 @@ cmd_runner_run() {
   # group があるときだけ、4 つ目の引数で --runnergroup を渡す。group を書かない行の引数は従来のまま。
   # 指定したグループが無いとき、config.sh は既定のグループへ落ちずに失敗する（actions/runner の ConfigurationManager が
   # 「Could not find any self-hosted runner group named ...」で止まる）ので、既定のグループへ黙って入らない。
-  # グループの有無は上で確かめ済み。コンテナの中の config.sh の失敗は、group の有無によらず終了コードをそのまま返す（1 になる）。
+  # グループの有無は上で確かめ済みだが、確認と登録のあいだにグループが消えることはある。そこで config.sh の出力を流しながら捕まえ、
+  # 非 0 で終わり、かつ group 指定があり、かつ出力に「Could not find any self-hosted runner group named」があるときだけ、コンテナを 78 で抜ける
+  # （照合する文言は actions/runner の src/Runner.Listener/Configuration/ConfigurationManager.cs の TaskAgentPoolNotFoundException
+  # `Could not find any self-hosted runner group named "<名前>".` から取った。大文字小文字は区別しない）。それ以外の失敗は終了コードをそのまま返す。
+  # 出力は config.sh のもので、RUNNER_TOKEN は含まれない。写しはコンテナ内の一時ファイルで、コンテナと一緒に消える。
   RUNNER_TOKEN="$tok" docker "${args[@]}" "$img" bash -c \
-    'set -euo pipefail
-./config.sh --unattended --ephemeral --disableupdate --replace --url "$1" --token "$RUNNER_TOKEN" --name "$2" ${3:+--labels "$3"} ${4:+--runnergroup "$4"}
+    'set -uo pipefail
+out="$(mktemp "${TMPDIR:-/tmp}/config.XXXXXX")"
+./config.sh --unattended --ephemeral --disableupdate --replace --url "$1" --token "$RUNNER_TOKEN" --name "$2" ${3:+--labels "$3"} ${4:+--runnergroup "$4"} 2>&1 | tee "$out"
+rc=${PIPESTATUS[0]}
+if [ "$rc" -ne 0 ]; then
+  if [ -n "${4:-}" ] && grep -qi "Could not find any self-hosted runner group named" "$out"; then exit 78; fi
+  exit "$rc"
+fi
 unset RUNNER_TOKEN
 exec ./run.sh' runner "https://github.com/$org" "$RUNNER_GHNAME" "$labels" ${grp:+"$grp"} &
   RUNNER_CHILD=$!
@@ -1338,6 +1348,9 @@ exec ./run.sh' runner "https://github.com/$org" "$RUNNER_GHNAME" "$labels" ${grp
   local rc=0
   wait "$RUNNER_CHILD" || rc=$?
   RUNNER_CHILD=""
+  if [[ "$rc" -eq 78 && -n "$grp" ]]; then
+    die_permanent "$name: ランナーグループ $grp が組織 $org にありません（登録の時点で見つかりませんでした）。既定のグループへは入りません。GitHub 側でグループを作るか、runners の group= を直してください。直してから systemctl --user start dev-runner@$name.service で起こし直します"
+  fi
   if [[ "$rc" -ne 0 ]]; then
     die "$name: ランナーのコンテナが失敗して止まりました（終了コード $rc）。ユニットが起こし直します。"
   fi
@@ -2048,7 +2061,7 @@ run: ユニット dev-runner@<名前>.service の ExecStart。1 回の起動で�
   1 行 1 ランナーで「名前 組織 [labels=a,b] [docker=yes|no] [lan=allow|deny] [group=名前] [pat_file=絶対パス]」。
   group=名前 は登録先のランナーグループ（英数字と . _ - だけ。書かなければ組織の既定のグループ）。ラベルは安全の境界にならない
   （組織のどのリポジトリでも runs-on に書ける）。使えるリポジトリを絞るのはグループで、グループの作成と対象の設定は GitHub 側で行う。
-  コンテナを起こす前にグループの一覧で有無を確かめ、無いとき（と一覧を読む権限が無いとき）は 78 で終わり、既定のグループへは入らない（API の一時的な失敗は 1）。
+  コンテナを起こす前にグループの一覧で有無を確かめ、無いとき（と一覧を読む権限が無いとき。登録の時点でグループが無かったときも）は 78 で終わり、既定のグループへは入らない（API の一時的な失敗は 1）。
   `runner_version=X.Y.Z` だけの行は、イメージに使う公式のランナーの版（共通の設定）。
 net: 出口の規則を入れる root の部分を標準出力へ出す（dev 自身は何も入れない。sudo で入れる手順は、このパッケージの README の自前のランナーの節）。
   script  規則を入れるスクリプト（/usr/local/sbin/dev-runner-net）。apply / unmark / clear / rules を持つ
