@@ -20,7 +20,7 @@ DC="$REPO_ROOT/.devcontainer/devcontainer.json"
 wf_version="$(sed -nE 's/^  TF_VERSION: *"?([0-9][0-9.]*)"? *$/\1/p' "$TF_WF")"
 # ci.yml の terraform_version は terraform ジョブにしか無い（他のジョブは terraform を使わない）。
 ci_versions="$(sed -nE 's/^ *terraform_version: *"?([0-9][0-9.]*)"? *$/\1/p' "$CI")"
-dc_version="$(jq -r '.features | to_entries[] | select(.key | startswith("ghcr.io/devcontainers/features/terraform:")) | .value.version' "$DC")"
+dc_version="$(jqc -r '.features | to_entries[] | select(.key | startswith("ghcr.io/devcontainers/features/terraform:")) | .value.version' "$DC")"
 
 it "terraform.yml から版を読める"
 if [[ -n "$wf_version" ]]; then pass; else fail "TF_VERSION が見つからない"; fi

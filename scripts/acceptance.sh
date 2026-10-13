@@ -91,7 +91,9 @@ bash scripts/check-shell-portability.sh
 # その値がホスト OS から静かに流れ込む。
 require_cmd jq "install jq to run this acceptance check."
 echo "[acceptance] (devcontainer) remoteEnv carries only LOCAL_WORKSPACE_FOLDER"
-keys="$(jq -r '.remoteEnv | keys | join(",")' .devcontainer/devcontainer.json)"
+# devcontainer.json は securityOpt の説明のコメントを持つ（JSONC）。jq はコメントを
+# 読めないので、文字列の中は残してコメントだけ除いてから渡す。
+keys="$(perl -0777 -pe 's{("(?:\\.|[^"\\])*")|//[^\n]*|/\*.*?\*/}{defined $1 ? $1 : ""}gse' .devcontainer/devcontainer.json | jq -r '.remoteEnv | keys | join(",")')"
 if [[ "$keys" != "LOCAL_WORKSPACE_FOLDER" ]]; then
   echo "[acceptance] remoteEnv must contain only LOCAL_WORKSPACE_FOLDER, got: $keys" >&2
   exit 1

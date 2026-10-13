@@ -25,13 +25,13 @@ it "ruby 選択で devcontainer.json に ruby feature が入る"
 out="$(new_workdir)/p"
 run_bootstrap "$out" --languages ruby >/dev/null 2>&1
 dc="$out/.devcontainer/devcontainer.json"
-if jq -e --arg f "$RUBY_FEATURE" '.features | has($f)' "$dc" >/dev/null; then pass; else fail "ruby feature が無い"; fi
+if jqc -e --arg f "$RUBY_FEATURE" '.features | has($f)' "$dc" >/dev/null; then pass; else fail "ruby feature が無い"; fi
 
 it "ruby 非選択（node のみ）では ruby feature も残留プレースホルダも無い"
 out="$(new_workdir)/p"
 run_bootstrap "$out" --languages node >/dev/null 2>&1
 dc="$out/.devcontainer/devcontainer.json"
-if jq -e --arg f "$RUBY_FEATURE" '.features | has($f)' "$dc" >/dev/null; then
+if jqc -e --arg f "$RUBY_FEATURE" '.features | has($f)' "$dc" >/dev/null; then
   fail "非選択なのに ruby feature がある"
 elif grep -q '__IF_RUNTIME_RUBY__' "$dc"; then
   fail "未置換プレースホルダ __IF_RUNTIME_RUBY__ が残っている"
@@ -42,13 +42,13 @@ fi
 it "生成された devcontainer.json は妥当な JSON（ruby 選択時）"
 out="$(new_workdir)/p"
 run_bootstrap "$out" --languages ruby,go,python >/dev/null 2>&1
-if jq -e . "$out/.devcontainer/devcontainer.json" >/dev/null 2>&1; then pass; else fail "JSON として不正"; fi
+if jqc -e . "$out/.devcontainer/devcontainer.json" >/dev/null 2>&1; then pass; else fail "JSON として不正"; fi
 
 it "ruby feature は options 無し（python の uv 同梱に巻き込まれない）"
 out="$(new_workdir)/p"
 run_bootstrap "$out" --languages ruby,python >/dev/null 2>&1
 dc="$out/.devcontainer/devcontainer.json"
-if jq -e --arg f "$RUBY_FEATURE" '.features[$f] == {}' "$dc" >/dev/null; then pass; else fail "ruby feature に余計な options がある: $(jq -c --arg f "$RUBY_FEATURE" '.features[$f]' "$dc")"; fi
+if jqc -e --arg f "$RUBY_FEATURE" '.features[$f] == {}' "$dc" >/dev/null; then pass; else fail "ruby feature に余計な options がある: $(jqc -c --arg f "$RUBY_FEATURE" '.features[$f]' "$dc")"; fi
 
 # ── post-rebuild-check の検査行 ───────────────────────────────────────────────
 
@@ -152,7 +152,7 @@ if grep -q '# template: Ruby' "$out/.gitignore"; then fail "非選択なのに R
 # ── VS Code language server 拡張の条件配線 ───────────────────────────────────
 
 ext_has() { # <devcontainer.json> <ext-id>
-  jq -e --arg e "$2" '.customizations.vscode.extensions | index($e)' "$1" >/dev/null
+  jqc -e --arg e "$2" '.customizations.vscode.extensions | index($e)' "$1" >/dev/null
 }
 
 it "ruby 選択で ruby-lsp 拡張が入る"
@@ -177,7 +177,7 @@ if ext_has "$dc" 'Shopify.ruby-lsp' && ext_has "$dc" 'rust-lang.rust-analyzer' \
    && ext_has "$dc" 'golang.go' && ext_has "$dc" 'ms-python.python'; then
   pass
 else
-  fail "拡張が揃っていない: $(jq -c '.customizations.vscode.extensions' "$dc")"
+  fail "拡張が揃っていない: $(jqc -c '.customizations.vscode.extensions' "$dc")"
 fi
 
 # ── doctor.sh の ruby 検出 ────────────────────────────────────────────────────

@@ -390,8 +390,16 @@ require_file "scripts/loop-gate.sh"
 # だと分かるのが verify を回した後になる。
 require_file "scripts/check-no-secrets.sh"
 
+# JSONC（コメント付きの JSON）から、コメント（// と /* */）を除いて標準出力へ出す。
+# 文字列リテラルの中の // や /* は残す（例: "https://example.com"）。--with-codex の
+# devcontainer.json は説明のコメントを持つ。doctor.sh は単体で取得されうるため、
+# この関数は他のファイルを参照せずここに持つ。GNU 拡張に頼らない（perl を使う）。
+jsonc_strip() {
+  perl -0777 -pe 's{("(?:\\.|[^"\\])*")|//[^\n]*|/\*.*?\*/}{defined $1 ? $1 : ""}gse' "$1"
+}
+
 if [[ -f "$TARGET_DIR/.devcontainer/devcontainer.json" ]]; then
-  if jq . "$TARGET_DIR/.devcontainer/devcontainer.json" >/dev/null 2>&1; then
+  if jsonc_strip "$TARGET_DIR/.devcontainer/devcontainer.json" 2>/dev/null | jq . >/dev/null 2>&1; then
     ok "devcontainer.json valid JSON"
   else
     ng "devcontainer.json invalid JSON"
@@ -408,8 +416,8 @@ if [[ -f "$TARGET_DIR/.devcontainer/devcontainer.json" ]]; then
   fi
 
   # compose 配線の検査。dockerComposeFile が無い旧 image ベース構成は検査しない（後方互換）。
-  compose_files="$(jq -r '.dockerComposeFile // empty | if type == "array" then .[] else . end' \
-    "$TARGET_DIR/.devcontainer/devcontainer.json" 2>/dev/null || true)"
+  compose_files="$(jsonc_strip "$TARGET_DIR/.devcontainer/devcontainer.json" 2>/dev/null \
+    | jq -r '.dockerComposeFile // empty | if type == "array" then .[] else . end' 2>/dev/null || true)"
   if [[ -n "$compose_files" ]]; then
     while IFS= read -r compose_file; do
       [[ -n "$compose_file" ]] || continue

@@ -20,7 +20,7 @@ echo "test-update-remote-user-uid"
 # devcontainer.json の updateRemoteUserUID が無効でないか。0 = 無効でない / 1 = false。
 uid_update_enabled() {
   local json="$1"
-  jq -e '(has("updateRemoteUserUID") | not) or .updateRemoteUserUID == true' "$json" >/dev/null
+  jqc -e '(has("updateRemoteUserUID") | not) or .updateRemoteUserUID == true' "$json" >/dev/null
 }
 
 it "素の生成物は updateRemoteUserUID を無効にしない"

@@ -21,15 +21,6 @@ services:
     # 上限に達する。そうなると docker exec（エディタの接続）もコンテナ内のセッションも
     # 止まる。消さないこと。効かせるにはコンテナの作り直しが要る。DCB の生成物と同じ（#469）。
     init: true
-    # codex のサンドボックス（bwrap）のために、AppArmor と seccomp の既定の制限を外す。
-    # Docker の既定の seccomp が namespace の作成を止め（Docker Desktop でも同じ）、
-    # ネイティブ Linux ではさらに AppArmor が mount を止める（片方だけ外しても動かない）。
-    # コンテナの中から namespace の作成や mount ができるようになり、隔離が弱まる。
-    # codex を使わなくなったら消してよい。
-    # DCB の --with-codex の生成物と同じ（#392）。
-    security_opt:
-      - apparmor=unconfined
-      - seccomp=unconfined
 volumes:
   gh-storage:
   claude-storage:
