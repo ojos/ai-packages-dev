@@ -337,7 +337,7 @@ if [[ "$ENGINE_JSON" -eq 1 ]]; then
   }
 
   # **落とす 4 点はこのスクリプトが決め、スキーマは「モデルに許す category」を
-  # 決める。** 2 か所に書くと片方だけ直る（shared-ai-rules.md「正本は 1 つ」）ので、
+  # 決める。** 2 か所に書くと片方だけ直る（shared-ai-rules.md 12 章「一覧の複製は機械照合で担保する」）ので、
   # 許す側の一覧はスキーマから読み、落とす側の 4 点がそこに含まれることを確かめる。
   BLOCKING_CATEGORIES='bug vulnerability type-error edge-case'
   ALL_CATEGORIES="$(jq -r '.properties.findings.items.properties.category.enum[]' "$SCHEMA_FILE" 2>/dev/null || true)"
@@ -434,13 +434,59 @@ extract_issue_refs() {
   }'
 }
 
-# issue の本文から acceptance の節（intake の YAML の `acceptance:` から次のキーまで）
-# を出す。
+# issue の本文から acceptance の節を出す。次の 2 つの形を拾い、本文で先に現れたほうを使う。
+#   - intake の YAML: 行頭の `acceptance:` から、次のキーかコードのフェンスまで
+#   - Markdown の見出し: 文言が acceptance の見出し（# の数と大文字小文字は問わない）から、
+#     次の同じ深さ以上の見出しの手前まで。見出しの判定はコードのフェンス（```）の外に限る
+# macOS の awk でも動くよう、GNU 拡張（IGNORECASE・match の配列引数など）に頼らない。
 extract_acceptance() {
   tr -d '\r' | awk '
-    /^acceptance:/ { on = 1; print; next }
-    on && (/^[A-Za-z_.]+:/ || /^```/) { exit }
-    on { print }
+    # コードのフェンス（行頭に 0〜3 個の空白を付けた、3 個以上の ` か ~ の並び）か。
+    # そうなら fch に文字、flen に並びの長さ、frest に並びの後ろを入れて 1 を返す
+    function fenceline(s,   t) {
+      if (s !~ /^ ? ? ?(```|~~~)/) return 0
+      t = s; sub(/^ +/, "", t); fch = substr(t, 1, 1)
+      if (fch == "`") match(t, /^`+/); else match(t, /^~+/)
+      flen = RLENGTH; frest = substr(t, RLENGTH + 1)
+      return 1
+    }
+    # ATX 見出しの深さ（行頭に 0〜3 個の空白、# が 1〜6 個、その後に空白か行末）。見出しでなければ 0
+    function depth(s,   t) {
+      if (s !~ /^ ? ? ?#+([ \t]|$)/) return 0
+      t = s; sub(/^ +/, "", t); match(t, /^#+/)
+      return (RLENGTH <= 6) ? RLENGTH : 0
+    }
+    # 見出しの文言（先頭の # と、末尾の空白・閉じの # の並びを除く）
+    function htext(s,   t) {
+      t = s; sub(/^ +/, "", t); sub(/^#+/, "", t)
+      sub(/[ \t]+$/, "", t); sub(/^[ \t]+/, "", t)
+      sub(/(^|[ \t]+)#+$/, "", t); sub(/[ \t]+$/, "", t)
+      return t
+    }
+    # フェンスの開閉。開いた文字と並びの長さを覚え、同じ文字で、同じかそれより長い並びが
+    # 空白だけを後ろに置いたときに閉じる
+    function track(s) {
+      if (fence == "") { fence = fch; fencelen = flen }
+      else if (fch == fence && flen >= fencelen && frest ~ /^[ \t]*$/) fence = ""
+    }
+    mode == 0 {
+      if (fenceline($0)) { track($0); next }
+      if ($0 ~ /^acceptance:/) { mode = 1; print; next }
+      if (fence == "" && depth($0) > 0) {
+        t = tolower(htext($0)); sub(/:$/, "", t)
+        if (t == "acceptance") { mode = 2; d = depth($0); fence = ""; print; next }
+      }
+      next
+    }
+    mode == 1 {
+      if ($0 ~ /^[A-Za-z_.]+:/ || $0 ~ /^```/) exit
+      print; next
+    }
+    mode == 2 {
+      if (fenceline($0)) { track($0); print; next }
+      if (fence == "" && depth($0) > 0 && depth($0) <= d) exit
+      print
+    }
   '
 }
 
