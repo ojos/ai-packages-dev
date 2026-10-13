@@ -108,7 +108,7 @@ echo CHECKS_ATTACHED
 - **ワークフローごとに、最新の実行 1 件だけを見ます。** `reopened` などで同じ SHA に実行が重なると、古い失敗が一覧に残るためです。一覧は全ページを読みます（`--paginate`）。
 - **commit status を出すワークフロー（`second-opinion-gate`、`review-gate`）は、実行の成否では判定しません。** 下の commit status で判定します。たとえば `second-opinion-gate` は、記録が無いうちに起動した実行が失敗のまま残り、記録を投稿したあとの緑は、`second-opinion-record.sh post` が起こす手動実行（`workflow_dispatch`）が付ける status として出ます（定期実行は置きません）。実行の成否で判定すると、投稿しても緑になりません。除くワークフローの名前（`gates`）は、プロジェクトの構成に合わせて直してください。
 
-**判定に使う関数（`workflow_runs_on_pr`・`expected_workflows`・`filter_active`・`missing_workflows`・`runs_verdict`）と、有効なワークフローを読む jq の式（`active_jq`）は、目印の行（`# >>> land:...` と `# <<< land:...`）で囲んでいます。** テストがこの部分だけを雛形から取り出し、仕込みのリポジトリや仕込みの一覧で実行して確かめるためです。目印の行を消さず、囲んだ部分が外側の変数に依存しない形を保ってください。
+**判定に使う関数（`workflow_runs_on_pr`・`expected_workflows`・`filter_active`・`missing_workflows`・`runs_verdict`）と、有効なワークフローを読む jq の式（`active_jq`）、8 の再判定の関数（`rejudge_one`）は、目印の行（`# >>> land:...` と `# <<< land:...`）で囲んでいます。** テストがこの部分だけを雛形から取り出し、仕込みのリポジトリや仕込みの一覧で実行して確かめるためです。目印の行を消さず、囲んだ部分が外側の変数に依存しない形を保ってください。
 
 **このスキルの本文では、「`$` の直後に数字」を書きません。** awk の欄は `$(0)`・`$(3)`、シェルの引数は `${1}` の形で書きます（コメントの中も同じです）。Claude Code は、スキルを起動するとき、本文の「`$` の直後に数字」を、0 から数えた引数に置き換えるためです（`/land 29` では、`$` のすぐ後に `0` を書いた箇所が `29` になります）。上の 2 つの形は置き換えの規則に一致しないので、スキルとして読み込んでも、テストがファイルから取り出して実行しても、同じに動きます。`tests/test-skill-template-args.sh` がこれを検査します。
 
@@ -377,6 +377,54 @@ CI が緑でも、Copilot の指摘が 0 件でも、読まずにマージしま
 # sha は 2 で最後に確かめたコミット。再判定するゲートは「既定ブランチにあるもの」で決める
 # （PR の作業ツリーで決めると、PR でゲートを消せば再判定を飛ばせ、ゲートを新設する PR は
 # 既定ブランチにまだ無いワークフローを起こそうとして止まる）
+# >>> land:rejudge
+# rejudge_one <ワークフローのファイル名> <既定ブランチ> <sha> — 1 つのゲートを再判定する。
+# 結果を REJUDGE_* の行で出し、通らなければ 1 を返す。
+rejudge_one() {
+  local wf="${1}" base="${2}" sha="${3}" ctx me prev t0 verdict st id run pending
+  ctx="${wf%.yml}"
+  # 自分の login。待ちを「自分が起こした手動実行」に絞るために要る。読めなければ止める
+  # （絞らないと、ほかの人の手動実行が先に終わっただけで、自分の実行を待たずに打ち切る）
+  me="$(gh api user --jq .login)" || me=""
+  if [ -z "$me" ]; then echo "REJUDGE_FAIL $wf: 自分の login を読めない（gh api user）"; return 1; fi
+  # 起こす前の最新の手動実行の番号（誰が起こした実行でも数える）。判定結果が「起こしたあとの
+  # 実行」のものかを見る基準なので、絞らない。読めなければ止める（0 で代えると古い実行を取り違える）
+  prev="$(gh run list --workflow "$wf" --event workflow_dispatch --limit 1 --json databaseId --jq '.[0].databaseId // 0')" || prev=""
+  if [ -z "$prev" ]; then echo "REJUDGE_FAIL $wf: 実行の一覧を読めない"; return 1; fi
+  # 起こした時刻（GitHub 側との時計のずれを見込んで 60 秒戻す）。自分が起こした手動実行に
+  # 絞っているので、この余裕のあいだに作られたほかの人の実行は数えない。これより後に作られた
+  # 自分の手動実行が現れるまでは、「手動実行がすべて終わった」と判定しない
+  t0="$(date -u -d '-60 sec' +%Y-%m-%dT%H:%M:%SZ)"
+  if ! gh workflow run "$wf" --ref "$base"; then echo "REJUDGE_DISPATCH_FAILED $wf: 手で起こす: gh workflow run $wf --ref $base"; return 1; fi
+  # head の判定結果を書いた実行（status の target_url）が、起こしたあとに既定ブランチで
+  # 始まった手動実行で、終わっていることを確かめる。誰が起こした実行でも、既定ブランチの
+  # 版で動いた実行なら同じ判定ロジックなので、取り違えても判定の信頼性は変わらない。
+  # 30 秒 × 40 回 = 20 分。自分の手動実行がすべて終わっても書き直されなければ、その時点で止める。
+  # 限界: 同じアカウントの別のセッションが同時に起こした実行は区別できず、unchanged で止まりうる。
+  # そのときは案内どおり、猶予が過ぎてから 1 回やり直す
+  verdict=""
+  for _ in $(seq 40); do
+    sleep 30
+    st="$(gh api "repos/{owner}/{repo}/commits/$sha/status" --jq ".statuses[] | select(.context == \"$ctx\") | \"\(.state) \(.target_url)\"")" || st=""
+    id="${st##*/actions/runs/}"
+    case "$id" in ''|*[!0-9]*) id=0 ;; esac
+    if [ "$id" -gt "$prev" ]; then
+      run="$(gh api "repos/{owner}/{repo}/actions/runs/$id" --jq '"\(.event) \(.head_branch) \(.status) \(.path // "" | sub("@.*$"; ""))"')" || run=""
+      if [ "$run" = "workflow_dispatch $base completed .github/workflows/$wf" ]; then verdict="${st%% *} run $id"; break; fi
+    fi
+    pending="$(gh run list --workflow "$wf" --event workflow_dispatch --user "$me" --limit 20 --json databaseId,status,createdAt \
+      --jq "[.[] | select(.databaseId > $prev)] | (any(.createdAt >= \"$t0\") and all(.status == \"completed\"))")" || pending=""
+    if [ "$pending" = true ]; then verdict="unchanged"; break; fi
+  done
+  case "$verdict" in
+    "success run "*) echo "REJUDGE_OK $wf: ${verdict#success }" ;;
+    "") echo "REJUDGE_FAIL $wf: 20 分待っても、起こした手動実行が判定結果を書かない"; return 1 ;;
+    unchanged) echo "REJUDGE_FAIL $wf: 手動実行は終わったが、head の判定結果が書き直されていない（猶予の内側で見送られた可能性）: ${st:-なし}"; return 1 ;;
+    *) echo "REJUDGE_FAIL $wf: 再判定の結果が success ではない: $verdict"; return 1 ;;
+  esac
+}
+# <<< land:rejudge
+
 ng=0
 base="$(gh repo view --json defaultBranchRef --jq .defaultBranchRef.name)" || base=""
 wfs="$([ -n "$base" ] && gh api "repos/{owner}/{repo}/contents/.github/workflows?ref=$base" --jq '.[].name')" || wfs=""
@@ -390,37 +438,7 @@ for wf in second-opinion-gate.yml review-gate.yml; do
   busy="$(gh api --paginate "repos/{owner}/{repo}/actions/runs?head_sha=$sha&per_page=100" \
     --jq ".workflow_runs[] | select((.path // \"\" | sub(\"@.*$\"; \"\")) == \".github/workflows/$wf\" and .status != \"completed\") | .id")" || busy="?"
   if [ -n "$busy" ]; then echo "REJUDGE_BUSY $wf: この head の実行が終わっていない（または読めない）: $busy"; ng=1; continue; fi
-  # 起こす前の最新の手動実行の番号。読めなければ止める（0 で代えると古い実行を取り違える）
-  prev="$(gh run list --workflow "$wf" --event workflow_dispatch --limit 1 --json databaseId --jq '.[0].databaseId // 0')" || prev=""
-  if [ -z "$prev" ]; then echo "REJUDGE_FAIL $wf: 実行の一覧を読めない"; ng=1; continue; fi
-  # 起こした時刻（GitHub 側との時計のずれを見込んで 60 秒戻す）。これより後に作られた
-  # 手動実行が現れるまでは、「手動実行がすべて終わった」と判定しない
-  t0="$(date -u -d '-60 sec' +%Y-%m-%dT%H:%M:%SZ)"
-  if ! gh workflow run "$wf" --ref "$base"; then echo "REJUDGE_DISPATCH_FAILED $wf: 手で起こす: gh workflow run $wf --ref $base"; ng=1; continue; fi
-  # head の判定結果を書いた実行（status の target_url）が、起こしたあとに既定ブランチで
-  # 始まった手動実行で、終わっていることを確かめる。誰が起こした実行でも、既定ブランチの
-  # 版で動いた実行なら同じ判定ロジックなので、取り違えても判定の信頼性は変わらない。
-  # 30 秒 × 40 回 = 20 分。手動実行がすべて終わっても書き直されなければ、その時点で止める
-  verdict=""
-  for _ in $(seq 40); do
-    sleep 30
-    st="$(gh api "repos/{owner}/{repo}/commits/$sha/status" --jq ".statuses[] | select(.context == \"$ctx\") | \"\(.state) \(.target_url)\"")" || st=""
-    id="${st##*/actions/runs/}"
-    case "$id" in ''|*[!0-9]*) id=0 ;; esac
-    if [ "$id" -gt "$prev" ]; then
-      run="$(gh api "repos/{owner}/{repo}/actions/runs/$id" --jq '"\(.event) \(.head_branch) \(.status) \(.path // "" | sub("@.*$"; ""))"')" || run=""
-      if [ "$run" = "workflow_dispatch $base completed .github/workflows/$wf" ]; then verdict="${st%% *} run $id"; break; fi
-    fi
-    pending="$(gh run list --workflow "$wf" --event workflow_dispatch --limit 20 --json databaseId,status,createdAt \
-      --jq "[.[] | select(.databaseId > $prev)] | (any(.createdAt >= \"$t0\") and all(.status == \"completed\"))")" || pending=""
-    if [ "$pending" = true ]; then verdict="unchanged"; break; fi
-  done
-  case "$verdict" in
-    "success run "*) echo "REJUDGE_OK $wf: ${verdict#success }" ;;
-    "") echo "REJUDGE_FAIL $wf: 20 分待っても、起こした手動実行が判定結果を書かない"; ng=1 ;;
-    unchanged) echo "REJUDGE_FAIL $wf: 手動実行は終わったが、head の判定結果が書き直されていない（猶予の内側で見送られた可能性）: ${st:-なし}"; ng=1 ;;
-    *) echo "REJUDGE_FAIL $wf: 再判定の結果が success ではない: $verdict"; ng=1 ;;
-  esac
+  rejudge_one "$wf" "$base" "$sha" || ng=1
 done
 [ "$ng" -eq 0 ]
 ```
@@ -428,7 +446,8 @@ done
 最後の行が 0 で終われば、再判定の結果は緑です。**0 以外なら、マージせずに止めます。** 出力の行で次のように扱います。
 
 - `REJUDGE_FAIL` で、判定結果が `failure` / `error` のとき: マージせずに止めて報告します。
-- `REJUDGE_BUSY`、または判定結果が書き直されていないとき: push の直後（猶予の内側）で見送られたか、PR 側の実行がまだ動いています。猶予（数分）が過ぎてから 1 回だけやり直し、それでも通らなければ止めて報告します。
+- `REJUDGE_BUSY`、または判定結果が書き直されていないとき: push の直後（猶予の内側）で見送られたか、PR 側の実行がまだ動いています。猶予（数分）が過ぎてから 1 回だけやり直し、それでも通らなければ止めて報告します。待ちは自分のアカウントが起こした手動実行に絞っているので、ほかの人の手動実行とは取り違えません。**同じアカウントの別のセッションが同時に起こした実行は区別できず**、その実行が先に終わると、判定結果が書き直される前に止まることがあります。このときも、猶予が過ぎてから 1 回やり直します。
+- `REJUDGE_FAIL` で自分の login を読めないとき: 待ちを自分が起こした手動実行に絞れないので、止めて報告します（認証を確かめる）。
 - `REJUDGE_DISPATCH_FAILED`、または 20 分待っても判定結果が書かれないとき: 止めて報告します（権限の不足が多い）。
 
 **判定結果は、起こしたあとに既定ブランチで始まり、終わった手動実行が書いたものだけを受け入れます。** status の `target_url` は書いた実行の URL なので、その実行が既定ブランチの手動実行（`workflow_dispatch`）で、起こす前の最新の番号より新しく、終わっていることを確かめてから、その `success` を緑とします。前からある `success`（PR 側の版の実行が偽って書いたものを含む）は、変わっていなければこの照合で落ちます。**この再判定を飛ばしません。** 飛ばすと、定期実行を置かない構成では、偽の成功や取りこぼしが残ったままマージされます。**`/land` を通さないマージ（画面から直接など）は、この再判定を通りません。**
