@@ -40,8 +40,24 @@ name: second-opinion-gate
 #
 #   - 記録を求めない PR … その場で判定する（success）
 #   - 記録が在る       … その場で判定する（success）
-#   - 記録が無い       … **status を pending にして成功で終える**（赤にしない）
+#   - 記録が無い       … **status を pending にして成功で終える**（赤にしない）。
+#                         書いた直後にもう一度記録を確かめ、在れば判定して確定の status で
+#                         上書きする（下記「競合」）
 #   - 確かめられない   … 失敗で知らせる（status は付けない）
+#
+# **競合。** この実行が「記録なし」を読んだ直後に post の手動実行が success を書き、その後で
+# この実行が pending を書くと、確定した判定が pending に戻る（concurrency のグループが
+# 違うので防げない）。そこで pending を書いた**後**に再確認する。記録の投稿が再確認より前なら
+# この実行が確定を書き、後なら post が起こす手動実行が pending の後に確定を書く。
+#
+# **例外: 既定ブランチにこのワークフローがまだ無い（導入の PR）ときは、従来どおり眠る。**
+# 手動実行は既定ブランチのワークフローしか起動しないので、post は手動実行を起こさない
+# （second-opinion-record.sh の dispatch_gate）。pending で終えると、判定し直す契機が無くなる。
+# このときだけ GRACE_SEC 眠ってから判定し、待っているあいだに head が動いたら判定しない
+# （新しい push 自身の実行が判定する）。有無は contents API の 404 だけで決める。
+# **404 以外の読めなさ（権限・通信）は、眠らない側（pending）に倒す。** 読めない理由の大半は
+# 一時的な不調で、そのたびに数分眠るのは占有と課金を戻すことになる。導入の PR だけが
+# 取り残されうるが、その場合も `/land` の再判定と手動実行で拾える。警告は出す。
 #
 # 判定の確定は、`post` が起こす手動実行と `/land` の再判定が持つ（どちらも、猶予の中でも
 # 記録があれば判定し、猶予を過ぎて記録が無ければ赤にする）。**記録を投稿しないまま放置した
@@ -150,13 +166,16 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           # 起動の契機になった head SHA。pull_request の契機は、この SHA に対して判定する。
           TRIGGER_SHA: ${{ github.event.pull_request.head.sha }}
+          # 既定ブランチにこのワークフローが在るかを見るために要る（冒頭の例外）。
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
 
           # 記録が投稿されるまでの猶予（秒）。**掃き寄せ（手動実行）の側だけで使う。**
           #
-          # pull_request の契機では眠らない（冒頭「pull_request の契機では眠らない」）。
+          # pull_request の契機では眠らない（冒頭「pull_request の契機では眠らない」。
+          # 既定ブランチにこのワークフローがまだ無い導入の PR だけは眠る）。
           # 記録が無ければ pending で終え、判定は post が起こす手動実行と /land の再判定に任せる。
           # 掃き寄せは、push からこの秒数が経つまでは、記録が無い PR に赤を付けずに見送る。
           GRACE_SEC=300
@@ -345,26 +364,70 @@ jobs:
             fi
 
             # **眠らない。** 記録を求めない PR と、記録が在る PR はその場で判定する。記録が
-            # 無ければ pending を書いて成功で終える（冒頭「pull_request の契機では眠らない」）。
+            # 無ければ pending を書き、もう一度確かめる（冒頭「pull_request の契機では眠らない」）。
             # 確定は、post が起こす手動実行と /land の再判定が持つ。
-            rc=0
+            #
+            # 例外: 既定ブランチにこのワークフローがまだ無いとき（導入の PR）は、手動実行が
+            # 起こされず判定し直す契機が無いので、従来どおり眠ってから判定する。
+            # 404 以外の読めなさは眠らない側に倒す（冒頭に理由）。
+            intro=0
             if ! is_exempt "$PR_NUMBER"; then
-              has_record "$PR_NUMBER" "$TRIGGER_SHA" || rc=$?
+              probe=0
+              probe_out="$(gh api "repos/${REPO}/contents/.github/workflows/second-opinion-gate.yml?ref=${DEFAULT_BRANCH}" --jq .name 2>&1)" || probe=$?
+              if [ "$probe" -ne 0 ]; then
+                case "$probe_out" in
+                  *"HTTP 404"*) intro=1 ;;
+                  *) echo "::warning::既定ブランチのワークフローの有無を確かめられませんでした。眠らずに判定します。" ;;
+                esac
+              fi
             fi
-            case "$rc" in
-              0)
-                echo "PR #${PR_NUMBER} を判定します"
-                judge "$PR_NUMBER" "$TRIGGER_SHA" || failed=1
-                ;;
-              1)
-                echo "PR #${PR_NUMBER}: 記録がまだありません。pending にして終わります（記録の投稿後に判定されます）。"
-                report "$TRIGGER_SHA" pending "waiting for second-opinion record: run second-opinion-record.sh post" || failed=1
-                ;;
-              *)
-                echo "::error::PR #${PR_NUMBER}: 記録の有無を確かめられませんでした（GitHub API から読めない）。status は付けていません。手動実行（workflow_dispatch）で再判定してください。"
-                failed=1
-                ;;
-            esac
+
+            if [ "$intro" -eq 1 ]; then
+              echo "PR #${PR_NUMBER}: 既定ブランチにこのワークフローがまだ無いため、記録の投稿を ${GRACE_SEC} 秒待ちます。"
+              sleep "$GRACE_SEC"
+              # 待っているあいだに push が入ったら判定しない。新しい push 自身の実行が、
+              # 同じ猶予を置いてから判定する。判定しないことを失敗にもしない。
+              current="$(gh api "repos/${REPO}/pulls/${PR_NUMBER}" --jq .head.sha)"
+              if [ "$current" != "$TRIGGER_SHA" ]; then
+                echo "PR #${PR_NUMBER}: 待っているあいだに head が ${TRIGGER_SHA:0:7} から ${current:0:7} へ動きました。この実行は判定しません。"
+                exit 0
+              fi
+              judge "$PR_NUMBER" "$TRIGGER_SHA" || failed=1
+            else
+              rc=0
+              if ! is_exempt "$PR_NUMBER"; then
+                has_record "$PR_NUMBER" "$TRIGGER_SHA" || rc=$?
+              fi
+              case "$rc" in
+                0)
+                  echo "PR #${PR_NUMBER} を判定します"
+                  judge "$PR_NUMBER" "$TRIGGER_SHA" || failed=1
+                  ;;
+                1)
+                  echo "PR #${PR_NUMBER}: 記録がまだありません。pending にします（記録の投稿後に判定されます）。"
+                  report "$TRIGGER_SHA" pending "waiting for second-opinion record: run second-opinion-record.sh post" || failed=1
+                  # **pending を書いた後で、もう一度確かめる**（冒頭「競合」）。読み取りと書き込みの
+                  # あいだに post の手動実行が確定を書いていても、ここで上書きし直す。
+                  rc2=0
+                  has_record "$PR_NUMBER" "$TRIGGER_SHA" || rc2=$?
+                  case "$rc2" in
+                    0)
+                      echo "PR #${PR_NUMBER}: pending を書いた後に記録が見つかりました。判定し直します。"
+                      judge "$PR_NUMBER" "$TRIGGER_SHA" || failed=1
+                      ;;
+                    1) ;;
+                    *)
+                      echo "::error::PR #${PR_NUMBER}: 記録の有無を再確認できませんでした（GitHub API から読めない）。pending のままです。手動実行（workflow_dispatch）で再判定してください。"
+                      failed=1
+                      ;;
+                  esac
+                  ;;
+                *)
+                  echo "::error::PR #${PR_NUMBER}: 記録の有無を確かめられませんでした（GitHub API から読めない）。status は付けていません。手動実行（workflow_dispatch）で再判定してください。"
+                  failed=1
+                  ;;
+              esac
+            fi
           else
             echo "open な PR を掃き寄せます"
             now="$(date -u +%s)"

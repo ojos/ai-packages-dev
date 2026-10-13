@@ -78,11 +78,25 @@ if [ "$method" = "POST" ]; then
   exit 0
 fi
 case "$path" in
+  */contents/*)
+    # 既定ブランチのワークフローの有無。contents ファイルが 404 / 500 のときは失敗を模す。
+    mode="$(cat "$FIXTURES/contents" 2>/dev/null || echo present)"
+    case "$mode" in
+      present) echo second-opinion-gate.yml; exit 0 ;;
+      404) echo "gh: Not Found (HTTP 404)" >&2; exit 1 ;;
+      *) echo "gh: Server Error (HTTP 500)" >&2; exit 1 ;;
+    esac
+    ;;
   */pulls\?*) file=pulls.json ;;
   */commits/*/check-runs) file=checkruns.json ;;
   */pulls/*/commits) file=commits.json ;;
   */pulls/*) file=pr.json ;;
-  */issues/*/comments) file=comments.json ;;
+  */issues/*/comments)
+    # comments.1.json があれば、statuses への最初の書き込みより前はそれ、後は comments.json を返す
+    # （pending を書いた後に記録が現れる競合を模す）。
+    file=comments.json
+    if [ -f "$FIXTURES/comments.1.json" ] && [ ! -f "$FIXTURES/statuses" ]; then file=comments.1.json; fi
+    ;;
   *) echo "gh stub: 知らない path: $path" >&2; exit 1 ;;
 esac
 [ -f "$FIXTURES/$file" ] || exit 1
@@ -202,8 +216,10 @@ fi
 
 # pull_request の経路は眠らない（#559）。run の本文の pull_request 分岐に sleep が無く、
 # 偽の sleep も呼ばれない。
-it "pull_request の経路に sleep が無い"
-pr_branch="$(awk '/if \[ "\$EVENT" = "pull_request" \]; then/{f=1} /^else$/{if(f)exit} f' "$WORK/run.sh")"
+# 導入の PR（既定ブランチにワークフローが無い）の枝だけは眠る。それ以外の枝には sleep が無い。
+it "pull_request の経路に（導入の PR の枝を除いて）sleep が無い"
+pr_branch="$(awk '/if \[ "\$EVENT" = "pull_request" \]; then/{f=1} /^else$/{if(f)exit} f' "$WORK/run.sh" \
+  | awk '/if \[ "\$intro" -eq 1 \]; then/{skip=1;next} skip && /^  else$/{skip=0;next} !skip')"
 if [[ -n "$pr_branch" ]] && ! printf '%s\n' "$pr_branch" | command grep -Eq '(^|[^[:alnum:]_])sleep[[:space:]]'; then
   pass
 else
@@ -229,6 +245,55 @@ for rec in no yes; do
     fail "sleep が呼ばれた、または終了コードが $rc（want 0）"
   fi
 done
+
+# 競合: 最初の確認では記録が無く、pending を書いた後の再確認で記録が見つかる。
+# 確定の status（success）で上書きし直す（最後の status が success）。
+it "pending を書いた後の再確認で記録が見つかると、judge して success を書く"
+fx="$WORK/fx"; rm -rf "$fx"; mkdir -p "$fx"
+printf '{"user":{"login":"someone"},"draft":false,"head":{"sha":"%s"}}' "$SHA" > "$fx/pr.json"
+printf '[%s]' "$(commit someone someone false)" > "$fx/commits.json"
+printf '[]' > "$fx/comments.1.json"
+printf '[%s]' "$(record_comment someone OWNER)" > "$fx/comments.json"
+( cd "$REPO_ROOT" && PATH="$WORK/bin:$PATH" FIXTURES="$fx" GH_TOKEN=x REPO=o/r EVENT=pull_request \
+    PR_NUMBER=1 TRIGGER_SHA="$SHA" DEFAULT_BRANCH=main RUN_URL=u bash "$WORK/run.sh" ) >/dev/null 2>&1
+rc=$?
+if [[ "$(tail -n1 "$fx/statuses" 2>/dev/null)" == success && "$(head -n1 "$fx/statuses")" == pending && "$rc" == 0 ]]; then
+  pass
+else
+  fail "statuses=$(tr '\n' ' ' < "$fx/statuses" 2>/dev/null) rc=$rc"
+fi
+
+# 導入の PR: 既定ブランチにワークフローが無い（contents API が 404）ときは、眠ってから判定する。
+# 404 以外の読めなさは眠らない側（pending）に倒す。ワークフローが在れば眠らない（上の検査）。
+for mode in 404 500; do
+  fx="$WORK/fx"; rm -rf "$fx"; mkdir -p "$fx"
+  printf '{"user":{"login":"someone"},"draft":false,"head":{"sha":"%s"}}' "$SHA" > "$fx/pr.json"
+  printf '[%s]' "$(commit someone someone false)" > "$fx/commits.json"
+  printf '[]' > "$fx/comments.json"
+  printf '%s' "$mode" > "$fx/contents"
+  ( cd "$REPO_ROOT" && PATH="$WORK/bin:$PATH" FIXTURES="$fx" GH_TOKEN=x REPO=o/r EVENT=pull_request \
+      PR_NUMBER=1 TRIGGER_SHA="$SHA" DEFAULT_BRANCH=main RUN_URL=u bash "$WORK/run.sh" ) >/dev/null 2>&1
+  got="$(cat "$fx/statuses" 2>/dev/null || echo none)"
+  if [[ "$mode" == 404 ]]; then
+    it "既定ブランチにワークフローが無い（404）と、眠ってから判定する"
+    if [[ -e "$fx/slept" && "$got" == failure ]]; then pass; else fail "slept=$([[ -e $fx/slept ]] && echo y || echo n) statuses=$got"; fi
+  else
+    it "既定ブランチのワークフローの有無を確かめられない（404 以外）と、眠らず pending にする"
+    if [[ ! -e "$fx/slept" && "$got" == pending ]]; then pass; else fail "slept=$([[ -e $fx/slept ]] && echo y || echo n) statuses=$got"; fi
+  fi
+done
+
+# 導入の PR でも、待っているあいだに head が動いたら判定しない。
+it "導入の PR は、眠っているあいだに head が動けば判定しない"
+fx="$WORK/fx"; rm -rf "$fx"; mkdir -p "$fx"
+printf '{"user":{"login":"someone"},"draft":false,"head":{"sha":"%s"}}' "ffffffffffffffffffffffffffffffffffffffff" > "$fx/pr.json"
+printf '[%s]' "$(commit someone someone false)" > "$fx/commits.json"
+printf '[]' > "$fx/comments.json"
+printf '404' > "$fx/contents"
+( cd "$REPO_ROOT" && PATH="$WORK/bin:$PATH" FIXTURES="$fx" GH_TOKEN=x REPO=o/r EVENT=pull_request \
+    PR_NUMBER=1 TRIGGER_SHA="$SHA" DEFAULT_BRANCH=main RUN_URL=u bash "$WORK/run.sh" ) >/dev/null 2>&1
+rc=$?
+if [[ -e "$fx/slept" && ! -e "$fx/statuses" && "$rc" == 0 ]]; then pass; else fail "statuses=$(cat "$fx/statuses" 2>/dev/null) rc=$rc"; fi
 
 # 記録の有無を確かめられないときは、status を付けず失敗で終える。
 it "pull_request の経路は記録を確かめられなければ status を付けず失敗する"
