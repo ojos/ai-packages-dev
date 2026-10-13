@@ -1882,16 +1882,41 @@ log_has '\[runner\] \[https://github.com/my-org\] \[h-r1\] \[devhost,x\]$'
 log_lacks '\[my-group\]'
 rrun 0 "runner run: group を書かず、ラベルも無い行は 3 つの引数のまま" -- runner run r2
 log_has '\[runner\] \[https://github.com/my-org\] \[h-r2\] \[\]$'
-# 登録に失敗したコンテナはコンテナ内の 78 で抜ける。group のあるランナーだけ、直らない失敗(78)にする。
-grep -q 'exit 78' "$DEV" || ng "$CUR: グループの登録失敗を 78 で抜ける処理がありません"
-rrun 78 "runner run: 指定したグループで登録が失敗したら 78（既定のグループで登録し直さない）" FAKE_RUN_EXIT=78 FAKE_REGISTERED_NAME=h-g1 -- runner run g1
-expect_err "ランナーグループ my-group へ登録できませんでした"
+# コンテナを起こす前に、組織のランナーグループの一覧で有無を確かめる。
+rrun 0 "runner run: group があれば、コンテナを起こす前にグループの一覧を引く" -- runner run g1
+log_has '^curl .*\[GET\] .*\[https://api.github.com/orgs/my-org/actions/runner-groups\?per_page=100&page=1\]$'
+a="$(grep -n 'runner-groups' "$LOG" | sed -n 1p | cut -d: -f1)"
+b="$(grep -n '^docker \[run\]' "$LOG" | sed -n 1p | cut -d: -f1)"
+if [[ -z "$a" || -z "$b" ]] || ! (( a < b )); then ng "$CUR: グループの一覧が docker run より前ではありません"; fi
+rrun 78 "runner run: グループが組織に無ければ 78（既定のグループで登録し直さない。docker run もトークンの取得もしない）" FAKE_GROUPS=Default,other -- runner run g1
+expect_err "ランナーグループ my-group が組織 my-org にありません"
 expect_err "既定のグループへは入りません"
-log_has '^docker \[stop\] \[dev-runner-g1\]$'
-[[ "$(grep -c '^docker \[run\]' "$LOG")" == "1" ]] || ng "$CUR: 登録の失敗のあとに docker run を重ねています"
+log_lacks '^docker \[run\]'
+log_lacks 'registration-token'
+log_lacks '^docker \[stop\]'
+log_lacks '\[DELETE\]'
 no_pat_leak
-rrun 1 "runner run: group を書かないランナーは、コンテナの失敗が 78 でも直らない失敗にしない（従来どおり 1）" FAKE_RUN_EXIT=78 -- runner run r1
+for code in 401 403 404; do
+  rrun 78 "runner run: グループの一覧が HTTP $code なら、直らない失敗(78)" FAKE_API_FAIL=groups FAKE_API_CODE=$code -- runner run g1
+  expect_err "ランナーグループの一覧を取得できませんでした"
+  log_lacks '^docker \[run\]'
+  no_pat_leak
+done
+for code in 429 500 503; do
+  rrun 1 "runner run: グループの一覧が HTTP $code なら、一時的な失敗(1。ユニットが起こし直す)" FAKE_API_FAIL=groups FAKE_API_CODE=$code -- runner run g1
+  expect_err "ランナーグループの一覧を取得できませんでした"
+  log_lacks '^docker \[run\]'
+  no_pat_leak
+done
+rrun 1 "runner run: 通信の失敗でグループの一覧を引けなければ 1" FAKE_API_NETFAIL=1 -- runner run g1
+log_lacks '^docker \[run\]'
+rrun 1 "runner run: グループはあるが config.sh（コンテナ）が失敗したら 1（78 にしない。起こし直す）" FAKE_RUN_EXIT=1 FAKE_REGISTERED_NAME=h-g1 -- runner run g1
+expect_err "終了コード 1"
+log_has '^docker \[stop\] \[dev-runner-g1\]$'
+rrun 1 "runner run: コンテナの終了コードが 78 でも、group の有無によらず 1（コンテナ内で 78 を作らない）" FAKE_RUN_EXIT=78 -- runner run g1
 expect_err "終了コード 78"
+rrun 0 "runner run: group を書かない行は、グループの一覧を引かない" -- runner run r1
+log_lacks 'runner-groups'
 T="$WORK/conf/runners-group"
 for bad in 'a/b' 'a;b' '../x' 'a\$b'; do
   printf 'z my-org group=%s\n' "$bad" >"$T"
