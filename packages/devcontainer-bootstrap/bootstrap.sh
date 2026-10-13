@@ -8874,7 +8874,7 @@ TMPL
 #   この値が SendMessage の宛先名になり、ListAgents にも出る。PID の 16 進は起動ごとに変わる
 #   （同じ作業ツリーで複数のセッションを動かしても、同時に起動しても宛先名が重ならないようにするため）。
 #   ただし起動の引数に --resume=<会話の識別子> / --resume <会話の識別子>（UUID の形）があれば、
-#   末尾を PID ではなくその識別子の先頭 4 桁にする。会話を再開しても宛先名が変わらず、
+#   末尾を PID ではなくその識別子の先頭 8 桁（最初のハイフンの前）にする。会話を再開しても宛先名が変わらず、
 #   ほかのセッションが一度覚えた宛先名へ再起動の後も送れる。識別子の形に合わないときは PID を使う。
 #
 # 何も変えずに exec "$@" するとき（起動を妨げないことが最優先）:
@@ -8939,12 +8939,12 @@ read_host_label() { # スクリプトのあるディレクトリ
   [ -n "$HOST_LABEL" ] || HOST_LABEL="${SESSION_HOST_LABEL:-}"
 }
 
-# 引数から会話の識別子（UUID の形）を取り出し、先頭 4 桁を変数 SESSION_ID へ入れる。
+# 引数から会話の識別子（UUID の形）を取り出し、先頭 8 桁（最初のハイフンの前）を変数 SESSION_ID へ入れる。
 # 見つからなければ空にする。bash の組み込みだけで動き、失敗しても止まらない。
 #   --resume=<id> と --resume <id>（空白区切り）を読む。--resume の直後が UUID の形でなければ無視する。
 extract_session_id() { # 起動の引数…
   local re='^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$'
-  local prev="" a id
+  local prev="" a id lower c i
   SESSION_ID=""
   for a in "$@"; do
     id=""
@@ -8954,9 +8954,20 @@ extract_session_id() { # 起動の引数…
     esac
     prev="$a"
     if [ -n "$id" ] && [[ "$id" =~ $re ]]; then
-      # ${var,,} は bash 4 以上（コンテナの中の bash で動かす前提）。大文字小文字で名前が変わらないよう小文字にそろえる。
-      id="${id:0:4}"
-      SESSION_ID="${id,,}"
+      # 大文字小文字で名前が変わらないよう、先頭 8 桁を小文字にそろえる。
+      # 変数名に ,, を付ける小文字化は bash 4 以降の書き方なので使わない（bash 3.2 で止まらないよう case で 1 文字ずつ置き換える）。
+      id="${id:0:8}"
+      lower=""
+      i=0
+      while [ "$i" -lt 8 ]; do
+        c="${id:$i:1}"
+        case "$c" in
+          A) c=a ;; B) c=b ;; C) c=c ;; D) c=d ;; E) c=e ;; F) c=f ;;
+        esac
+        lower="$lower$c"
+        i=$((i + 1))
+      done
+      SESSION_ID="$lower"
       return 0
     fi
   done
@@ -8967,7 +8978,7 @@ extract_session_id() { # 起動の引数…
 # 末尾は、このラッパー自身の PID（$$）の 16 進にする。ラッパーは最後に exec するので、$$ は
 # そのまま Claude Code の PID になる。同時に生きているセッションどうしで PID は重ならないため、
 # 2 つを同時に起動しても宛先名は重ならない（乱数だと、json が書かれる前の同時起動で重なりうる）。
-# 会話の識別子が取れていれば（SESSION_ID）、PID の代わりに識別子の先頭 4 桁を使う。
+# 会話の識別子が取れていれば（SESSION_ID）、PID の代わりに識別子の先頭 8 桁（最初のハイフンの前）を使う。
 compute_name() {
   local top wt hex
   SESSION_NAME=""

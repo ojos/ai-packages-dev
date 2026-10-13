@@ -162,15 +162,16 @@ run_wrapper_args() {
   local proj="$1" cwd="$2"; shift 2
   (cd "$cwd" && env -u CLAUDE_CODE_SESSION_NAME -u SESSION_HOST_LABEL bash "$proj/scripts/claude-session-wrapper.sh" "$STUB" "$@" 2>/dev/null)
 }
+REPO_ROOT_FOR_WRAPPER="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 SID="961eec28-3c7e-4188-b64a-dd819d46db23"
 
-it "--resume=<id> の形で、名前の末尾が識別子の先頭 4 桁になる"
+it "--resume=<id> の形で、名前の末尾が識別子の先頭 8 桁になる"
 n_eq="$(field NAME "$(run_wrapper_args "$P1" "$REPO" --resume="$SID")")"
-assert_eq "$n_eq" "lab-my-repo-961e" "名前"
+assert_eq "$n_eq" "lab-my-repo-961eec28" "名前"
 
 it "--resume <id>（空白区切り）でも同じ名前になる"
 res="$(run_wrapper_args "$P1" "$REPO" --resume "$SID")"
-if [[ "$(field NAME "$res")" == "lab-my-repo-961e" && "$(field ARGC "$res")" == "2" ]]; then pass; else fail "$res"; fi
+if [[ "$(field NAME "$res")" == "lab-my-repo-961eec28" && "$(field ARGC "$res")" == "2" ]]; then pass; else fail "$res"; fi
 
 it "同じ識別子なら、PID が違っても同じ名前になる"
 n_a="$(field NAME "$(run_wrapper_args "$P1" "$REPO" --resume="$SID")")"
@@ -179,7 +180,14 @@ assert_eq "$n_a" "$n_b" "名前"
 
 it "大文字の識別子でも小文字の名前になり、同じ会話の小文字と同じ名前になる"
 n_up="$(field NAME "$(run_wrapper_args "$P1" "$REPO" --resume="${SID^^}")")"
-assert_eq "$n_up" "lab-my-repo-961e" "名前"
+assert_eq "$n_up" "lab-my-repo-961eec28" "名前"
+
+it "ラッパーの雛形と写しに、bash 4 以降の展開（小文字化・大文字化）が無い"
+if command grep -qE '\$\{[A-Za-z_]+(,,|\^\^|,|\^)\}' "$WRAPPER" "$REPO_ROOT_FOR_WRAPPER/scripts/claude-session-wrapper.sh" "$REPO_ROOT_FOR_WRAPPER/packages/devcontainer-bootstrap/bootstrap.sh" 2>/dev/null; then
+  fail "bash 4 以降の展開が残っている"
+else
+  pass
+fi
 
 it "識別子が無ければ、今のとおり PID の 16 進になる"
 res="$(run_wrapper_args "$P1" "$REPO" --flag)"
