@@ -686,4 +686,95 @@ else
 fi
 git -C "$REPO" checkout -q -
 
+# ---- 10. パッケージが配置したファイルの追加行は参照の抽出から外す（ORIGIN の hash:。owned: は外さない） ----
+
+git -C "$REPO" checkout -q -b origin-selftest
+printf 'x\n' > "$REPO/pkg.txt"
+printf 'x\n' > "$REPO/plain.txt"
+printf 'x\n' > "$REPO/both.txt"
+printf 'x\n' > "$REPO/eq=path.txt"
+printf 'x\n' > "$REPO/日本語.txt"
+git -C "$REPO" add pkg.txt plain.txt both.txt eq=path.txt 日本語.txt
+git -C "$REPO" commit -q -m "base of origin"
+printf 'a #31\n' > "$REPO/pkg.txt"
+printf 'a #32\n' > "$REPO/plain.txt"
+printf 'a #33\n' > "$REPO/both.txt"
+printf 'a #34\n' > "$REPO/eq=path.txt"
+printf 'a #35\n' > "$REPO/日本語.txt"
+git -C "$REPO" add pkg.txt plain.txt both.txt eq=path.txt 日本語.txt
+git -C "$REPO" commit -q -m "ORIGIN の検査用の変更（#38）"
+
+# 範囲のレビューを回し、引いた番号（gh-calls）を残す。出力は $WORK/out / $WORK/err。
+run_origin_review() {
+  rm -f "$RECORD/stdin" "$RECORD/gh-calls"
+  : > "$RECORD/fake.env"
+  (
+    cd "$REPO" || exit 1
+    PATH="$FAKE_BIN:$PATH" \
+    FAKE_CODEX_RECORD="$RECORD" \
+    FAKE_GH_RECORD="$RECORD/gh-calls" \
+    FAKE_GH_DIR="$WORK/gh-none" \
+    FAKE_CODEX_ANSWER='{"reviewed":true,"findings":[]}' \
+      bash "$REVIEW" --engine codex --range 'HEAD~1..HEAD' > "$WORK/out" 2> "$WORK/err"
+  )
+  local rc=$?
+  touch "$RECORD/gh-calls"
+  return "$rc"
+}
+# 番号を引きに行ったか（issues/N の呼び出しがあれば 0）
+called() { grep -q "issues/$1\$" "$RECORD/gh-calls"; }
+
+mkdir -p "$REPO/.devcontainer" "$WORK/gh-none"
+cat > "$REPO/.devcontainer/ORIGIN" <<'ORIGIN'
+version=1
+hash:pkg.txt=aaaa
+hash:both.txt=bbbb
+owned:both.txt=1
+hash:eq=path.txt=cccc
+hash:日本語.txt=dddd
+hash:unrelated.txt=eeee
+ORIGIN
+
+it "ORIGIN の hash: のファイルの追加行は拾わず、記録の無いファイル・owned: のファイルは拾う"
+rc=0; run_origin_review || rc=$?
+detail=""
+[[ "$rc" -eq 0 ]] || detail="exit=$rc "
+called 31 && detail="${detail}hash: のファイルの #31 を引いている "
+called 34 && detail="${detail}= を含む hash: のファイルの #34 を引いている "
+called 32 || detail="${detail}記録の無いファイルの #32 を引いていない "
+called 33 || detail="${detail}hash: と owned: のファイルの #33 を引いていない "
+called 35 || detail="${detail}引用符付きの見出しのファイルの #35 を引いていない（外さずに拾うはず） "
+called 38 || detail="${detail}コミットメッセージの #38 を引いていない "
+if [[ -z "$detail" ]]; then pass; else fail "$detail"; fi
+
+it "外したファイルがあるときは件数の行が出る"
+if grep -q 'パッケージが配置したファイル 2 件の追加行は、参照の抽出から外しました' "$WORK/out"; then
+  pass
+else
+  fail "件数の行が無い、または件数が違う。out: $(cat "$WORK/out")"
+fi
+
+it "ORIGIN が無いときは、すべての追加行とコミットメッセージから拾い、件数の行は出ない"
+mv "$REPO/.devcontainer/ORIGIN" "$WORK/ORIGIN.saved"
+rc=0; run_origin_review || rc=$?
+detail=""
+[[ "$rc" -eq 0 ]] || detail="exit=$rc "
+for n in 31 32 33 34 35 38; do
+  called "$n" || detail="${detail}#$n を引いていない "
+done
+grep -q 'の追加行は、参照の抽出から外しました' "$WORK/out" && detail="${detail}件数の行が出ている "
+if [[ -z "$detail" ]]; then pass; else fail "$detail"; fi
+
+it "ORIGIN があっても差分に該当ファイルが無ければ、件数の行は出ず、コミットメッセージの #N は拾う"
+printf 'version=1\nhash:unrelated.txt=eeee\n' > "$REPO/.devcontainer/ORIGIN"
+rc=0; run_origin_review || rc=$?
+detail=""
+[[ "$rc" -eq 0 ]] || detail="exit=$rc "
+called 31 || detail="${detail}#31 を引いていない "
+called 38 || detail="${detail}#38 を引いていない "
+grep -q 'の追加行は、参照の抽出から外しました' "$WORK/out" && detail="${detail}件数の行が出ている "
+if [[ -z "$detail" ]]; then pass; else fail "$detail"; fi
+rm -rf "$REPO/.devcontainer"
+git -C "$REPO" checkout -q -
+
 exit_with_result

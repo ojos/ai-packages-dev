@@ -410,6 +410,14 @@ resolve_issue_context
 #     public なので部外者の文がプロンプトへ入りうる。「リポジトリの持ち主の login と
 #     一致するか」で絞らない——組織所有のリポジトリでは持ち主は組織名で、個人の
 #     login と一致することがなく、すべての参照が除外される
+#   - **パッケージが配置したファイルの追加行は拾わない。** DCB の `.devcontainer/ORIGIN`
+#     に `hash:<パス>=<sha256>` の記録があるパスが該当する。そこにある番号は、例示や
+#     上流（パッケージ側）の issue 番号で、利用側のリポジトリの番号ではない。ただし
+#     `owned:<パス>=1` の記録もあるパス（プロジェクトが所有・編集するファイル）は外さない。
+#     中身は利用側が書いたもので、そこにある番号は本物の参照のため。ORIGIN が無い・読め
+#     ないときは従来どおり、すべての追加行から拾う（DCB 無しでも使える）。差分の見出しの
+#     パスが引用符付き（git が特殊な文字を符号化した形）のときは一致を判定できないため、
+#     外さずに拾う（取りこぼすより従来どおり載せるほうへ倒す）。外したときは件数を出す
 #   - issue は「状態・タイトル・acceptance の節」、PR は「状態・タイトル」だけ。
 #     本文全体は載せない（消費と、古い本文による誤検出を抑える）
 #   - **上限は REFERENCED_LIMIT 本。超えた分は捨てたと出す**
@@ -490,8 +498,58 @@ extract_acceptance() {
   '
 }
 
+# 差分（標準入力）から、追加行（先頭の `+` を外したもの）か、外したファイルの件数を出す。
+# 環境変数 PKG_PATHS（改行区切りのパス）に挙がったファイルの追加行は外す。
+# 引数 "lines": 追加行を出す / "count": 外したファイルの件数を出す。
+# 見出しの判定は diff --git から最初の @@ までに限る（追加行の内容が `+++ ` で始まっても、
+# 見出しとは取り違えない）。GNU 拡張は使わない。
+added_lines_of_diff() {
+  PKG_PATHS="${PKG_PATHS-}" awk -v mode="$1" '
+    BEGIN {
+      n = split(ENVIRON["PKG_PATHS"], arr, "\n")
+      for (i = 1; i <= n; i++) if (arr[i] != "") pk[arr[i]] = 1
+    }
+    /^diff --git / { inhdr = 1; skip = 0; next }
+    inhdr && /^@@/ { inhdr = 0 }
+    inhdr && /^\+\+\+ / {
+      p = substr($0, 5)
+      # 引用符付き・/dev/null など、b/ で始まらない形は判定できない。外さない
+      if (substr(p, 1, 2) == "b/") {
+        p = substr(p, 3)
+        sub(/\t.*$/, "", p)
+        if (p in pk) { skip = 1; if (!(p in seen)) { seen[p] = 1; cnt++ } }
+      }
+      next
+    }
+    mode == "lines" && !inhdr && !skip && /^\+/ { print substr($0, 2) }
+    END { if (mode == "count") print cnt + 0 }
+  '
+}
+
+# DCB の ORIGIN から「パッケージが配置し、プロジェクトの所有でもないファイル」のパスを
+# 改行区切りで出す。hash: の記録のうち、owned: の記録があるものを除く。行の文法は
+# `<種別>:<パス>=<値>`（パスに = を含みうるので、最後の = で区切る）。
+# ORIGIN が無い・読めないときは何も出さない。
+package_owned_paths() {
+  local root origin
+  root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+  [[ -n "$root" ]] || root="."
+  origin="$root/.devcontainer/ORIGIN"
+  [[ -r "$origin" ]] || return 0
+  awk '
+    function path_of(line, pre,   s, k) {
+      s = substr(line, length(pre) + 1)
+      for (k = length(s); k > 1; k--) if (substr(s, k, 1) == "=") return substr(s, 1, k - 1)
+      return ""
+    }
+    /^hash:/  { p = path_of($0, "hash:");  if (p != "") hp[++nh] = p }
+    /^owned:/ { p = path_of($0, "owned:"); if (p != "") own[p] = 1 }
+    END { for (j = 1; j <= nh; j++) if (!(hp[j] in own)) print hp[j] }
+  ' "$origin" 2>/dev/null || true
+}
+
 resolve_referenced_context() {
-  local refs nums n kept dropped rejected unreadable json association title state acc
+  local refs nums n kept dropped rejected unreadable json association title state acc pkg_paths skipped_files
   # コミットメッセージを先に置く。「(#123)」のように、変更が名指しした番号が
   # 先頭に来る。**範囲（A..B）のときだけ**ログを読む。単独のリビジョンに git log を
   # 当てると履歴の全部を読むことになる。
@@ -499,8 +557,15 @@ resolve_referenced_context() {
   if [[ "$RANGE" == *..* ]]; then
     refs="$(git log --format=%B "$RANGE" 2>/dev/null | extract_issue_refs || true)"
   fi
+  pkg_paths="$(package_owned_paths)"
+  if [[ -n "$pkg_paths" ]]; then
+    skipped_files="$(printf '%s\n' "$diff_text" | PKG_PATHS="$pkg_paths" added_lines_of_diff count || true)"
+    if [[ "${skipped_files:-0}" -gt 0 ]]; then
+      echo "[second-opinion] パッケージが配置したファイル ${skipped_files} 件の追加行は、参照の抽出から外しました"
+    fi
+  fi
   refs="$refs
-$(printf '%s\n' "$diff_text" | awk '/^\+/ && !/^\+\+\+ / { print substr($0, 2) }' | extract_issue_refs || true)"
+$(printf '%s\n' "$diff_text" | PKG_PATHS="$pkg_paths" added_lines_of_diff lines | extract_issue_refs || true)"
   # 出てきた順に重複を落とし、枝の issue（上で全文を載せた）を除く。
   nums="$(printf '%s\n' "$refs" | awk -v skip="$branch_issue_num" 'NF && $0 != skip && !seen[$0]++')"
   if [[ -z "$nums" ]]; then
