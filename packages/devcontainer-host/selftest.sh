@@ -555,6 +555,14 @@ if [[ "${2:-}" == "-K" ]]; then
         fi
         ;;
       "DELETE https://api.github.com/orgs/"*"/actions/runners/77") code=204 ;;
+      "GET https://api.github.com/orgs/"*"/actions/runner-groups?per_page=100&page="*)
+        # FAKE_GROUPS: 組織にあるグループ名（カンマ区切り。既定は Default,my-group）。FAKE_API_FAIL=groups で FAKE_API_CODE を返す
+        if [[ "${FAKE_API_FAIL:-}" == "groups" ]]; then
+          body='{"message":"error"}' code="${FAKE_API_CODE:-403}"
+        else
+          body="$(jq -nc --arg g "${FAKE_GROUPS:-Default,my-group}" '{total_count: ($g | split(",") | length), runner_groups: [$g | split(",")[] | {id: 1, name: .}]}')"
+        fi
+        ;;
       *) echo "fake curl: 想定外の API: $method $url" >&2; exit 2 ;;
     esac
   fi
@@ -1734,6 +1742,8 @@ r4  my-org  pat_file=$WORK/conf/pat-ro
 r5  my-org  docker=yes
 r6  my-org  lan=allow
 r7  my-org  lan=allow  docker=yes
+g1  my-org  group=my-group
+g2  my-org  labels=devhost,x  group=my-group
 EOF
 mkdir -p "$WORK/lock"
 # 規則の印（root のスクリプトが置くもの）。ブリッジ名が合う印を既定で置き、個別の試験が差し替える。
@@ -1858,6 +1868,43 @@ log_lacks '^docker \[network\]'
 rrun 0 "runner run: lan=allow かつ docker=yes は、ソケットだけを渡し、ネットワークは指定しない" -- runner run r7
 log_lacks '\[--network\]'
 log_has '\[-v\] \[.*/docker.sock:/var/run/docker.sock\]'
+
+# ── ランナーグループ（group=）──
+rrun 0 "runner run: group=<名前> の行は、config.sh へ --runnergroup <名前> を渡す（ラベルがあるとき）" -- runner run g2
+log_has '\$\{4:\+--runnergroup "\$4"\}'
+log_has '\[runner\] \[https://github.com/my-org\] \[h-g2\] \[devhost,x\] \[my-group\]$'
+rrun 0 "runner run: group=<名前> の行は、ラベルが無くても 4 つ目の引数に名前が入る（3 つ目は空）" -- runner run g1
+log_has '\[runner\] \[https://github.com/my-org\] \[h-g1\] \[\] \[my-group\]$'
+expect_out_line 'group=my-group'
+no_pat_leak
+rrun 0 "runner run: group を書かない行の config.sh の引数は変わらない（--runnergroup の名前を渡さない）" -- runner run r1
+log_has '\[runner\] \[https://github.com/my-org\] \[h-r1\] \[devhost,x\]$'
+log_lacks '\[my-group\]'
+rrun 0 "runner run: group を書かず、ラベルも無い行は 3 つの引数のまま" -- runner run r2
+log_has '\[runner\] \[https://github.com/my-org\] \[h-r2\] \[\]$'
+# 登録に失敗したコンテナはコンテナ内の 78 で抜ける。group のあるランナーだけ、直らない失敗(78)にする。
+grep -q 'exit 78' "$DEV" || ng "$CUR: グループの登録失敗を 78 で抜ける処理がありません"
+rrun 78 "runner run: 指定したグループで登録が失敗したら 78（既定のグループで登録し直さない）" FAKE_RUN_EXIT=78 FAKE_REGISTERED_NAME=h-g1 -- runner run g1
+expect_err "ランナーグループ my-group へ登録できませんでした"
+expect_err "既定のグループへは入りません"
+log_has '^docker \[stop\] \[dev-runner-g1\]$'
+[[ "$(grep -c '^docker \[run\]' "$LOG")" == "1" ]] || ng "$CUR: 登録の失敗のあとに docker run を重ねています"
+no_pat_leak
+rrun 1 "runner run: group を書かないランナーは、コンテナの失敗が 78 でも直らない失敗にしない（従来どおり 1）" FAKE_RUN_EXIT=78 -- runner run r1
+expect_err "終了コード 78"
+T="$WORK/conf/runners-group"
+for bad in 'a/b' 'a;b' '../x' 'a\$b'; do
+  printf 'z my-org group=%s\n' "$bad" >"$T"
+  run 2 "runners: group に許可外の文字（$bad）があれば設定の誤り" -- DEV_RUNNERS_FILE="$T" -- runner run z
+  expect_err "group に使えるのは英数字と . _ - だけです"
+  expect_no_calls
+done
+printf 'z my-org group=a b\n' >"$T"
+run 2 "runners: group に空白があれば設定の誤り（キー=値の形でない）" -- DEV_RUNNERS_FILE="$T" -- runner run z
+expect_no_calls
+printf 'z my-org group=\n' >"$T"
+run 2 "runners: group の値が空なら設定の誤り" -- DEV_RUNNERS_FILE="$T" -- runner run z
+expect_no_calls
 
 rrun 78 "runner run: ロックの置き場所に group / other の書き込み権限があれば拒む(78)" DEV_RUNNER_LOCK_DIR="$LK" -- runner run r1
 expect_err "書き込み権限があります"
@@ -2007,10 +2054,45 @@ expect_out_line '\[FAIL\] イメージ dev-runner:local がありません'
 rrun 3 "doctor --runner: ユニットが止まっていれば WARN。docker=yes は INFO で知らせる" -- doctor --runner r2
 expect_out_line '\[INFO\] docker=yes: ジョブがホストの Docker を自由に操作できます'
 expect_out_line '\[WARN\] ユニット dev-runner@r2.service: inactive'
+# group を書いたランナー: 組織のランナーグループの一覧を引く。
+rrun 0 "doctor --runner: group がグループの一覧にあれば OK" FAKE_ACTIVE_UNITS=dev-runner@g1.service -- doctor --runner g1
+expect_out_line '\[OK  \] ランナーグループ my-group が組織 my-org にあります'
+log_has '^curl \[-sSL\] \[-K\] \[-\] \[-X\] \[GET\] .*\[https://api.github.com/orgs/my-org/actions/runner-groups\?per_page=100&page=1\]$'
+no_pat_leak
+rrun 1 "doctor --runner: group が一覧に無ければ FAIL" FAKE_GROUPS=Default,other FAKE_ACTIVE_UNITS=dev-runner@g1.service -- doctor --runner g1
+expect_out_line '\[FAIL\] ランナーグループ my-group が組織 my-org にありません'
+no_pat_leak
+rrun 1 "doctor --runner: グループ名は完全一致で見る（部分一致では OK にしない）" FAKE_GROUPS=Default,my-group-2 FAKE_ACTIVE_UNITS=dev-runner@g1.service -- doctor --runner g1
+expect_out_line '\[FAIL\] ランナーグループ my-group が組織 my-org にありません'
+for code in 401 403 404; do
+  rrun 3 "doctor --runner: グループの一覧が HTTP $code で読めなければ WARN（理由を出す）" FAKE_API_FAIL=groups FAKE_API_CODE=$code FAKE_ACTIVE_UNITS=dev-runner@g1.service -- doctor --runner g1
+  expect_out_line '\[WARN\] ランナーグループ my-group: グループの一覧を読めませんでした（HTTP 401 / 403 / 404'
+  no_pat_leak
+done
+rrun 3 "doctor --runner: グループの一覧が HTTP 500 で読めなければ WARN" FAKE_API_FAIL=groups FAKE_API_CODE=500 FAKE_ACTIVE_UNITS=dev-runner@g1.service -- doctor --runner g1
+expect_out_line '\[WARN\] ランナーグループ my-group: グループの一覧を読めませんでした（API の不調'
+no_pat_leak
+rrun 3 "doctor --runner: 通信の失敗でグループの一覧を読めなければ WARN" FAKE_API_NETFAIL=1 FAKE_ACTIVE_UNITS=dev-runner@g1.service -- doctor --runner g1
+expect_out_line '\[WARN\] ランナーグループ my-group'
+no_pat_leak
+rrun 0 "doctor --runner: group を書かないランナーは、グループの一覧を引かない" FAKE_ACTIVE_UNITS=dev-runner@r1.service -- doctor --runner r1
+log_lacks 'runner-groups'
 rrun 2 "doctor --runner: 名前が無い" -- doctor --runner
 expect_no_calls
 rrun 2 "doctor --runner: 未登録の名前" -- doctor --runner nope
 expect_err "登録されていないランナーです: nope"
+
+# group= の説明が、runners.example・README・dev help の 3 か所にあること。
+CUR="group= の説明の照合"
+n=$((n + 1))
+GROUP_EXAMPLE="${DEV_RUNNERS_EXAMPLE:-$HERE/runners.example}"
+if ! grep -qE '^#   group=<名前>' "$GROUP_EXAMPLE"; then ng "runners.example に group=<名前> の説明がありません"; fi
+if ! grep -qE '^# [a-z0-9]+ +my-org +.*group=my-group' "$GROUP_EXAMPLE"; then ng "runners.example に group= を使った例の行がありません"; fi
+if ! grep -qF -- 'ラベルは安全の境界になりません' "$README"; then ng "README に「ラベルは安全の境界になりません」がありません"; fi
+if ! grep -qF -- '`group=<名前>`' "$README"; then ng "README に group=<名前> の説明がありません"; fi
+run 0 "help runner: group= の説明がある" -- -- help runner
+expect_out_line 'group=名前 は登録先のランナーグループ'
+expect_out_line '\[group=名前\]'
 
 # ── 7. 使い方 ─────────────────────────────────────────────────────────────────
 run 2 "引数なし" -- --

@@ -269,7 +269,7 @@ fork などの外部の PR が、その機械で任意のコードを走らせ�
 
 ```bash
 # 1. install.sh で入れる（「install.sh で入れる」）。runner.Dockerfile・dev-runner@.service・runners の雛形が置かれる
-# 2. 設定を書く（名前 組織 [labels=a,b] [docker=yes|no] [lan=allow|deny] [pat_file=絶対パス]）
+# 2. 設定を書く（名前 組織 [labels=a,b] [docker=yes|no] [lan=allow|deny] [group=名前] [pat_file=絶対パス]）
 $EDITOR ~/.config/dev/runners
 # 2b. 出口の規則を root で入れる（下の「出口の制限」。入れないと dev runner run は起動しない）
 dev runner net script | sudo install -m 755 /dev/stdin /usr/local/sbin/dev-runner-net
@@ -318,6 +318,15 @@ journalctl --user -u dev-runner@<名前>.service -n 20
     宛先の許可リスト（インターネット側の絞り込み）や IPv6 の規則は持ちません（ネットワークは IPv6 を無効にして作ります）。
     ユニットを止めても（Docker の停止を含む）消えるのは印だけで、規則は残ります（Docker の live-restore でコンテナが動き続けるあいだも制限が外れないようにするため）。規則を外すのは、利用者が明示して `sudo /usr/local/sbin/dev-runner-net clear` を打つときだけで、そのあいだ動いているランナーは制限が外れます。
   - **使えない構成。** Docker が nftables のファイアウォールのバックエンドを使う構成（`--iptables=false` を含む）では、Docker は FORWARD から `DOCKER-USER` への飛び先を作らないため、この規則は効きません。`apply` は FORWARD に `DOCKER-USER` への飛び先があることを確かめ、無ければ何も入れず、印も置かずに失敗します（制限が効かないまま ready にならないようにするため）。
+- **ラベルは安全の境界になりません。使えるリポジトリを絞るのはランナーグループです。** 組織単位で登録したランナーは、
+  グループを指定しないと組織の既定のグループに入り、組織のどの非公開のリポジトリでも `runs-on` にラベルを書けば、外部の機械の上でコードを走らせられます。
+  `runners` の `group=<名前>` で登録先のグループを指定し、そのグループを使えるリポジトリを GitHub 側で絞ってください。
+  - 名前に使えるのは英数字と `.` `_` `-` だけです（空白を含む名前は扱いません）。書かない行は、従来どおり既定のグループに入ります。
+  - **グループの作成と、使えるリポジトリの設定は GitHub 側で行います**（`dev` は作りません）。既定以外のグループを作れるプランは GitHub のドキュメントで確かめてください。
+  - 指定したグループが無い、または登録が拒まれたときは、`dev runner run` は 78 で終わります（ユニットは起こし直しません）。**既定のグループへ黙って入りません。**
+    グループ名かグループ側の設定を直してから `start` し直します。
+  - `dev doctor --runner <名前>` は、`group=` を書いたランナーについて、組織のランナーグループの一覧（PAT の「Self-hosted runners: Read」で読めます）を引き、
+    あれば OK、無ければ FAIL、読めなければ WARN（理由を出します。PAT の値は出しません）にします。
 - **イメージ。** 公式のランナーのイメージ（`ghcr.io/actions/actions-runner`）に、配るワークフローが使う道具（git・gh・jq・shellcheck など）を
   足したものです（`runner.Dockerfile`）。**公式のイメージの版は固定しています**（`ARG RUNNER_VERSION`）。コンテナが使い捨てなので
   ランナーの自動更新は効かず、古すぎる版は GitHub が受け付けなくなります。版を上げるのは手で行います。**`runner.Dockerfile` は編集しません**
@@ -549,7 +558,10 @@ run: ユニット dev-runner@<名前>.service の ExecStart。1 回の起動で�
   Docker のソケットは、設定ファイルで docker=yes にしたランナーにだけ渡す（既定は渡さない。
   渡すと、ジョブがホストの Docker を自由に操作できる）。
 設定ファイル: runners（既定は ~/.config/dev/runners（XDG_CONFIG_HOME があればその下）。環境変数 DEV_RUNNERS_FILE で差し替える。書式は runners.example）。
-  1 行 1 ランナーで「名前 組織 [labels=a,b] [docker=yes|no] [lan=allow|deny] [pat_file=絶対パス]」。
+  1 行 1 ランナーで「名前 組織 [labels=a,b] [docker=yes|no] [lan=allow|deny] [group=名前] [pat_file=絶対パス]」。
+  group=名前 は登録先のランナーグループ（英数字と . _ - だけ。書かなければ組織の既定のグループ）。ラベルは安全の境界にならない
+  （組織のどのリポジトリでも runs-on に書ける）。使えるリポジトリを絞るのはグループで、グループの作成と対象の設定は GitHub 側で行う。
+  グループが無い、または登録が拒まれたときは 78 で終わり、既定のグループへは入らない。
   `runner_version=X.Y.Z` だけの行は、イメージに使う公式のランナーの版（共通の設定）。
 net: 出口の規則を入れる root の部分を標準出力へ出す（dev 自身は何も入れない。sudo で入れる手順は、このパッケージの README の自前のランナーの節）。
   script  規則を入れるスクリプト（/usr/local/sbin/dev-runner-net）。apply / unmark / clear / rules を持つ
@@ -558,7 +570,7 @@ net: 出口の規則を入れる root の部分を標準出力へ出す（dev �
 点検は dev doctor --runner <名前>。curl と jq が要る。
 
 終了コード: 0 = ジョブを終えて止まった（build は作れた） / 1 = 一時的な失敗（API の 429・5xx や通信の失敗、コンテナの失敗、出口の規則の印がまだ無い、など。ユニットは起こし直す） /
-            2 = 使い方か設定ファイルの誤り / 75 = 同じ名前がすでに動いている / 78 = イメージが無い・PAT の権限が緩い・Docker のソケットが無い・出口の規則の印のブリッジ名が違う・API が 401 / 403 / 404（PAT の失効・権限不足・組織名の誤り）
+            2 = 使い方か設定ファイルの誤り / 75 = 同じ名前がすでに動いている / 78 = イメージが無い・PAT の権限が緩い・Docker のソケットが無い・出口の規則の印のブリッジ名が違う・group を指定したランナーグループへ登録できない・API が 401 / 403 / 404（PAT の失効・権限不足・組織名の誤り）
             （2 と 78 は、ユニットが起こし直さない）
 失敗したとき: dev doctor --runner <名前> で原因を見分ける。
 ```
