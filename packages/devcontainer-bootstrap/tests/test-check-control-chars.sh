@@ -187,6 +187,56 @@ printf 'clean\n' > "$repo/bin-fixture.dat"
 run_check "$repo"
 assert_pass "ステージ済みのバイナリ"
 
+# 唯一の追跡ファイルだけを持つ使い捨てのリポジトリを作り、そのパスを返す（検査スクリプトは未追跡）。
+new_sole_repo() {
+  local out
+  out="$(new_workdir)/p"
+  mkdir -p "$out/scripts"
+  cp "$BASE/scripts/check-control-chars.sh" "$out/scripts/"
+  (
+    cd "$out" || exit 1
+    git init -q
+    printf '%s\n' "$1" > sole.txt
+    git add sole.txt
+    $GIT_AS commit -q -m c1
+  ) >/dev/null 2>&1
+  printf '%s' "$out"
+}
+
+it "唯一の追跡ファイルを作業ツリーで消し、索引に禁止バイトがあれば、索引側として落ちる"
+repo="$(new_sole_repo clean)"
+printf 'a\000b\n' > "$repo/sole.txt"
+( cd "$repo" && git add sole.txt ) >/dev/null 2>&1
+rm "$repo/sole.txt"
+run_check "$repo"
+assert_fail "唯一のファイルを消した NUL" "sole.txt (staged)"
+
+it "唯一の追跡ファイルを作業ツリーで消しても、索引が綺麗なら通る"
+repo="$(new_sole_repo clean)"
+rm "$repo/sole.txt"
+run_check "$repo"
+assert_pass "唯一のファイルを消した綺麗な索引"
+
+it "assume-unchanged のファイルは、禁止バイトをステージして作業ツリーだけを直しても落ちる"
+repo="$(new_repo)"
+printf 'one\n' > "$repo/flag-fixture.txt"
+( cd "$repo" && git add -f flag-fixture.txt && $GIT_AS commit -q -m add-flag \
+    && printf 'a\000b\n' > flag-fixture.txt && git add flag-fixture.txt \
+    && git update-index --assume-unchanged flag-fixture.txt ) >/dev/null 2>&1
+printf 'clean\n' > "$repo/flag-fixture.txt"
+run_check "$repo"
+assert_fail "assume-unchanged の NUL" "flag-fixture.txt (staged)"
+
+it "skip-worktree のファイルは、禁止バイトをステージして作業ツリーだけを直しても落ちる"
+repo="$(new_repo)"
+printf 'one\n' > "$repo/skip-fixture.txt"
+( cd "$repo" && git add -f skip-fixture.txt && $GIT_AS commit -q -m add-skip \
+    && printf 'a\000b\n' > skip-fixture.txt && git add skip-fixture.txt \
+    && git update-index --skip-worktree skip-fixture.txt ) >/dev/null 2>&1
+printf 'clean\n' > "$repo/skip-fixture.txt"
+run_check "$repo"
+assert_fail "skip-worktree の NUL" "skip-fixture.txt (staged)"
+
 # ── 検査が成立していないことを合格にしない ────────────────────────────────────
 
 it "git 管理外では落ちる（検査が成立していない）"

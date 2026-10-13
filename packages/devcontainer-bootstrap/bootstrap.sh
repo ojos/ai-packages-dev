@@ -3098,6 +3098,8 @@ TMPL
 #     索引と作業ツリーで内容が違うファイル（git diff --name-only -z。作業ツリーで消したものを
 #     含む）は、索引の blob を取り出して同じ規則で検査する。報告には「<パス> (staged)」と
 #     示すので、作業ツリー側の検出と区別できる。
+#   - assume-unchanged / skip-worktree の印が付いたファイルは、git diff が作業ツリーの変更を
+#     列挙しない。git ls-files -v で印を列挙し、差分の一覧に加えて索引の blob を必ず読む。
 #   - 索引側で読むのは通常のファイル（モード 100644 / 100755）の blob だけ。サブモジュール
 #     （160000）とシンボリックリンク（120000）は読まない。リンクの blob はリンク先のパス
 #     文字列で、作業ツリー側でリンクを走査しないのと同じ理由で対象外とする。
@@ -3173,6 +3175,7 @@ TRACKED="$WORK/tracked.z"
 TARGETS="$WORK/targets.z"
 STAGED_DIR="$WORK/staged"
 DIFF_NAMES="$WORK/diff-names.z"
+FLAGGED="$WORK/flagged.z"
 SUSPECTS="$WORK/suspects.z"
 GREP_ERR="$WORK/grep.err"
 
@@ -3232,9 +3235,10 @@ done < "$TRACKED" > "$TARGETS"
 # --literal-pathspecs は、パス名の * や : を git にパターンとして解釈させないため。
 staged_count=0
 mkdir -p "$STAGED_DIR"
-git diff --name-only -z > "$DIFF_NAMES" || fail "git diff に失敗しました。索引と作業ツリーの差分を列挙できません。"
-while IFS= read -r -d '' path; do
-  entry_file="$WORK/entry.z"
+
+# stage_index_blob <パス> — 索引のそのパスの blob を取り出して走査対象へ加える。
+stage_index_blob() {
+  local path="$1" entry_file="$WORK/entry.z" entry meta mode rest sha stage staged_file
   git --literal-pathspecs ls-files -s -z -- "$path" > "$entry_file" \
     || fail "git ls-files -s に失敗しました（$path）。索引のエントリを読めません。"
   # 出力は「<モード> <sha> <stage>TAB<パス>」。マージ中の衝突（stage 1-3）は複数行になりうる。
@@ -3254,7 +3258,32 @@ while IFS= read -r -d '' path; do
     printf '%s (staged)' "$path" > "$staged_file.label"
     printf '%s\0' "$staged_file" >> "$TARGETS"
   done < "$entry_file"
+}
+
+git diff --name-only -z > "$DIFF_NAMES" || fail "git diff に失敗しました。索引と作業ツリーの差分を列挙できません。"
+while IFS= read -r -d '' path; do
+  stage_index_blob "$path"
 done < "$DIFF_NAMES"
+
+# assume-unchanged / skip-worktree の印が付いたファイルは、git diff が作業ツリーの変更を
+# 列挙しない。だが次のコミットに入る内容は索引の blob なので、差分の有無によらず必ず読む。
+# git ls-files -v の先頭の印は、小文字 = assume-unchanged、S / s = skip-worktree。
+git ls-files -v -z > "$FLAGGED" || fail "git ls-files -v に失敗しました。印の付いたファイルを列挙できません。"
+while IFS= read -r -d '' rec; do
+  tag="${rec%% *}"
+  case "$tag" in
+    [a-zS]) ;;
+    *) continue ;;
+  esac
+  path="${rec#* }"
+  # 差分の一覧に既にあるものは二重に読まない。
+  already=0
+  while IFS= read -r -d '' diffed; do
+    if [[ "$diffed" == "$path" ]]; then already=1; break; fi
+  done < "$DIFF_NAMES"
+  [[ "$already" -eq 0 ]] || continue
+  stage_index_blob "$path"
+done < "$FLAGGED"
 
 # 報告に出す名前。索引から取り出した一時ファイルは、元のパスに「(staged)」を添えて示す。
 display_name() {
@@ -3267,8 +3296,8 @@ display_name() {
 
 [[ "$tracked_count" -gt 0 ]] \
   || fail "追跡ファイルが 1 件もありません。検査していないことと、制御文字が無いことは別なので失敗させます。"
-[[ "$target_count" -gt 0 ]] \
-  || fail "走査できる追跡ファイルが 1 件もありません（全件が実体なし、またはリンク）。検査が成立していないため失敗させます。"
+[[ $((target_count + staged_count)) -gt 0 ]] \
+  || fail "走査できる追跡ファイルが 1 件もありません（全件が実体なし、またはリンク。索引側の blob も 0 件）。検査が成立していないため失敗させます。"
 
 # ── 1 段目: 禁止バイトを含むファイルを 1 回の走査で拾う ──────────────────────
 #
