@@ -25,34 +25,33 @@
 #                解禁しない（下記「ツールの解禁」）
 #   codex        Codex CLI（codex exec）。ChatGPT アカウントの OAuth 認証（または
 #                API キー）。`--output-schema` で構造化出力を強制できるため、
-#                判定は JSON で行う。**読み取り専用サンドボックスでツールを解禁する**
-#                唯一のエンジン（下記「ツールの解禁」）
+#                判定は JSON で行う。ツールは解禁せず、起動する環境も絞る
+#                （下記「ツールの解禁」「codex の実行環境」）
 #
 # ツールの解禁:
-#   ツールを解禁するのは、読み取り専用サンドボックスが実際に書き込みを止めることを
-#   確かめられたエンジンだけに限る。旗の名前（「plan」「read-only」等）だけでは
-#   実際に止まるかどうかは分からない——名前から読み取れることと実際の動作は別である。
+#   どのエンジンにもツールを解禁しない。差分はプロンプトへ埋め込み、モデルには
+#   ファイルも環境も触らせない。
 #
-#   codex は `--sandbox read-only` を使う。書き込み系のシステムコールを拒否し、
-#   読み取り系（`git diff` 等）だけを許可するサンドボックスで、ユーザー名前空間
-#   （Linux）や Seatbelt（macOS）といった OS 機構に依存する。ユーザー名前空間の
-#   作成を禁止する環境（コンテナの seccomp 制限等）では、サンドボックスの初期化
-#   自体が失敗し、**読み取りを含めてコマンドが一切実行できない**（fail-closed。
-#   認証不要の `codex sandbox` サブコマンドで直接確認した）。書き込みが素通りする
-#   形には振れず、動かないか止まるかのどちらかである。
+#   書き込みを止められることだけでは、ツールを解禁してよい根拠にならない。
+#   モデルにはファイルも環境も触らせず、実行環境を最小にする方針で、ツールそのものを
+#   無効にする。差分の外を読ませる補助は、この方針を優先して手放した。
 #
-#   antigravity には対応する旗が無い。`--mode plan` は名前が「計画のみ」を示すが、
-#   `--dangerously-skip-permissions` と併せて使うと実際にファイルへ書き込めた
+#   antigravity も同じ理由でツールを解禁しない。`--mode plan` は名前が「計画のみ」を
+#   示すが、`--dangerously-skip-permissions` と併せて使うと実際にファイルへ書き込めた
 #   （確認用の書き込みが実際に成立した）。**止めない旗をツール解禁の根拠にはしない。**
-#   したがって antigravity は差分をプロンプトへ埋め込む従来の形を保ち、ツールは
-#   解禁しない。
 #
-#   ツールを解禁したエンジン（codex）にも、差分は標準入力で必ず渡す。ツールは
-#   差分の外のファイル・テスト・宣言を読むための補助にとどめる。読み取り専用の
-#   サンドボックスは、ユーザー名前空間を禁じたコンテナでは起動せず、読み取りの
-#   コマンドも含めて一切実行できない（実測）。差分の取得までツールに任せると、
-#   その環境では差分を見ないまま回答が返る。標準入力なので引数の上限は受けず、
-#   チャンク分割は要らない。
+#   差分は codex にも標準入力で渡す。標準入力なので引数の上限は受けず、チャンク
+#   分割は要らない。
+#
+# codex の実行環境:
+#   codex は、渡す環境変数・作業場所・ツールを最小にして起動する。
+#   - 環境変数: `.env` を読み込む前の値から、許可リスト（下記 CODEX_ENV_ALLOW）の
+#     変数だけを控え、`env -i` で起動した codex へその分だけ渡す。`.env` にだけある
+#     変数は渡らない。`.env` に書いたプロキシも渡らない（読み込む前の値だけを渡す）。
+#   - 作業場所: 秘密を置かない使い捨てのディレクトリ。
+#   - ツール: `shell_environment_policy.inherit=none`、各ツールの `--disable`、
+#     `web_search` の無効化、`--ignore-user-config`（~/.codex/config.toml を効かせない）。
+#     旗の名前は codex の版に依存する。受け付けられない版では codex が失敗して止まる。
 #
 # 判定のぶれについて:
 #   このレビューは非決定的で、同じ差分でも実行のたびに結果が変わる。いずれの CLI にも
@@ -75,7 +74,7 @@
 # 分割について:
 #   antigravity は差分をコマンドライン引数へ直接載せる（gemini は一時ファイルを
 #   @<パス> で参照させるため、引数へ載るのはパス文字列だけで対象外。codex は
-#   ツールを解禁したため差分そのものを渡さない）。引数 1 個あたりには Linux の
+#   標準入力で渡すため対象外）。引数 1 個あたりには Linux の
 #   MAX_ARG_STRLEN（カーネル定数: PAGE_SIZE * 32。既定は 131,072 バイト）という
 #   固定上限があり、これは合計を制限する ARG_MAX とは別物。実測でも「10 万バイトの
 #   引数を 20 個渡す（合計 200 万バイト）」は通り、「単一引数が 131,073 バイト」は
@@ -145,6 +144,31 @@ set -euo pipefail
 # SECOND_OPINION_MODEL が既に確定した変数に負けて、設定したつもりで効かない。
 # 検証もすり抜けるため、不正な値がそのまま走ることになる。
 __SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# codex へ渡してよい環境変数の許可リスト。値は **.env を読み込む前** の環境から
+# 控える（読み込んだ後だと、.env にだけある変数や .env が書き換えた値が混ざる）。
+# 必要最小限だけを挙げる:
+#   HOME / CODEX_HOME   認証情報の置き場所（codex login の状態）を見つけるため
+#   PATH                codex 自身の起動（node 等）に要る
+#   LANG / LC_*         文字コード
+#   TMPDIR              一時ファイルの置き場所
+#   TERM                端末の判定（出力の装飾）
+#   *_PROXY / *_proxy   外のモデルへ届く経路。.env に書いた値は届かない
+#   SSL_CERT_FILE 等    プロキシ越しの証明書
+CODEX_ENV_ALLOW=(
+  HOME CODEX_HOME PATH LANG LANGUAGE LC_ALL LC_CTYPE LC_MESSAGES TMPDIR TERM
+  HTTPS_PROXY HTTP_PROXY ALL_PROXY NO_PROXY
+  https_proxy http_proxy all_proxy no_proxy
+  SSL_CERT_FILE SSL_CERT_DIR
+)
+CODEX_ENV_PASS=()
+for __name in "${CODEX_ENV_ALLOW[@]}"; do
+  if [[ -n "${!__name+x}" ]]; then
+    CODEX_ENV_PASS+=("$__name=${!__name}")
+  fi
+done
+unset __name
+
 if [[ -f "$__SCRIPT_DIR/load-project-env.sh" ]]; then
   # shellcheck source=scripts/load-project-env.sh
   . "$__SCRIPT_DIR/load-project-env.sh"
@@ -221,10 +245,9 @@ if [[ "$RUNS" -lt 1 ]]; then
   exit 1
 fi
 
-# エンジンの能力フラグ。「ツールを解禁するか」「判定を JSON スキーマ方式で
-# 行うか」はエンジンごとに固定で、利用者が選べる値ではない（上記ヘッダ「ツールの
-# 解禁」参照）。既定は両方 0（従来どおり、差分を渡し判定トークンで判定する）。
-ENGINE_TOOLS=0
+# エンジンの能力フラグ。「判定を JSON スキーマ方式で行うか」はエンジンごとに固定で、
+# 利用者が選べる値ではない。既定は 0（差分を渡し判定トークンで判定する）。
+# ツールはどのエンジンにも解禁しない（上記ヘッダ「ツールの解禁」）。
 ENGINE_JSON=0
 
 # 判定を JSON で行うエンジンが強制する回答の形。判定そのものはモデルに出させず、
@@ -279,10 +302,8 @@ case "$ENGINE" in
     if [[ -z "$MODEL" ]]; then
       MODEL="gpt-6-sol"
     fi
-    # サンドボックスが実際に書き込みを止めることを確認済みのエンジンなので
-    # ツールを解禁する（上記ヘッダ「ツールの解禁」）。構造化出力は
+    # ツールは解禁しない（上記ヘッダ「ツールの解禁」）。構造化出力は
     # `--output-schema` で強制できる。
-    ENGINE_TOOLS=1
     ENGINE_JSON=1
     ;;
   *)
@@ -538,16 +559,10 @@ read -r -d '' REPORT_RULES_JSON <<'EOF' || true
 - 前置きや作業の説明は書かないでください。
 EOF
 
-if [[ -n "$RANGE" ]]; then
-  diff_cmd="git diff $RANGE"
-else
-  diff_cmd="git diff --cached"
-fi
-
 # ゲート対象は review-workflow.md の限定に合わせる。本文を分けるのは
-# ENGINE_JSON（判定トークン方式か JSON スキーマ方式か）と ENGINE_TOOLS
-# （ツールを解禁しているか）の 2 つの能力フラグで、エンジン名そのものでは分けない
-# ——能力が増減したらフラグ側を直せば、本文の分岐はそのまま追随する。
+# ENGINE_JSON（判定トークン方式か JSON スキーマ方式か）の能力フラグで、エンジン名
+# そのものでは分けない——能力が増減したらフラグ側を直せば、本文の分岐はそのまま
+# 追随する。
 if [[ "$ENGINE_JSON" -eq 0 ]]; then
   # 判定トークン方式（gemini）。差分はプロンプトへ埋め込み、ツールは使わせない。
   #
@@ -577,32 +592,13 @@ if [[ "$ENGINE_JSON" -eq 0 ]]; then
   - 指摘がある場合: \`VERDICT: FINDINGS\`
 - 指摘がある場合は、判定トークンより前に、各指摘について「該当ファイルと行」「何が問題か」「なぜ問題か（再現条件や影響）」を簡潔に記述してください。
 - 通過判定は最後の行だけで行います。判定トークンの無い出力は指摘ありとして扱います。"
-elif [[ "$ENGINE_TOOLS" -eq 0 ]]; then
-  # JSON スキーマ方式だがツールは解禁しない（antigravity）。差分はプロンプトへ
-  # 埋め込む（従来どおり分割の対象になる）。先頭に空行を置かない理由は
+else
+  # JSON スキーマ方式（antigravity / codex）。ツールは解禁しない。差分はプロンプトへ
+  # 埋め込む（antigravity は分割の対象になる。codex は標準入力で渡す）。先頭に空行を置かない理由は
   # gemini の分岐と同じ（$PROMPT の実体に不要な改行を増やさない）。
   PROMPT="上記は git の差分です。コードレビューを行ってください。
 
 レビューに必要な情報はこのプロンプトに含まれています。**ファイル読み取りやコマンド実行のツールを使わないでください。** ツールの実行は非対話実行では承認できず、拒否されると回答そのものが返らなくなります。
-
-$REPORT_RULES_JSON"
-else
-  # JSON スキーマ方式で、かつツールを解禁する（codex）。
-  #
-  # **差分は標準入力で必ず渡す。ツールは差分の外を読むための補助にとどめる。**
-  # 読み取り専用のサンドボックスは、実行環境によって起動しない（ユーザー名前空間の
-  # 作成を禁じたコンテナでは、サンドボックス自体が立ち上がらず、読み取りのコマンドも
-  # 含めて一切実行できない。実測）。差分の取得までモデルのツールに任せると、その
-  # 環境では差分を 1 行も見ないまま回答が返り、中身の無いレビューが通る。差分を
-  # 先に渡しておけば、ツールが使えない環境でも差分そのものは必ずレビューされる。
-  # 標準入力なので引数の上限は受けず、分割は要らない。
-  PROMPT="上記はこのリポジトリの git の差分です（\`$diff_cmd\` の出力）。コードレビューを行ってください。
-
-**読み取りのコマンドとファイル読み取りを使ってよい**です。差分の外のファイル・テスト・
-宣言・ドキュメントも読み、**事実を確かめてから**報告してください（推測で書かない）。
-**書き込みはできません**（サンドボックスが読み取り専用です）。
-**コマンドが実行できない環境でも、上の差分だけでレビューを完結させてください。**
-その場合、差分の外を確かめられなかったことを理由に指摘を作らないでください。
 
 $REPORT_RULES_JSON"
 fi
@@ -629,6 +625,9 @@ printf '%s\n' "$diff_text" > "$diff_file"
 #   走らないため、ここで消すだけでは --runs 2 以上のときに前の回の回答を読む）。
 stdin_file="/dev/null"
 answer_file=""
+# 起動する作業場所と、コマンドの前置き（codex だけが絞る。他は現在の場所・そのまま）。
+run_cwd="$PWD"
+run_prefix=()
 
 # 差分の渡し方はエンジンごとに違う。**いずれも「差分が加工されずモデルへ届くこと」を
 # 実測で確かめたうえで選んでいる。** 1 つの作法を他へ流用しない。
@@ -852,7 +851,7 @@ case "$ENGINE" in
   codex)
     # codex exec は `-` を指定すると、指示文そのものを標準入力から読む。差分と
     # プロンプトを「差分が先・プロンプトが後」の順で 1 つのファイルにまとめて流す
-    # （上記ヘッダ「ツールの解禁」。ツールが使えない環境でも差分は必ず届く）。
+    # （上記ヘッダ「ツールの解禁」。ツールは使わせないので差分はここでしか届かない）。
     # 引数に載せないので単一引数の上限を受けない。分割しない（1 チャンク）。
     CLI="codex"
     chunk_paths=("$diff_file")
@@ -1035,20 +1034,35 @@ $PROMPT" --output-format json --json-schema "$SCHEMA_FILE")
       answer_file="$work_dir/codex-answer.json"
 
       # 標準入力には「差分が先・プロンプトが後」の順で流す（プロンプト冒頭の
-      # 「上記は git の差分です」が指す先を保つ）。差分を渡す理由は PROMPT の
-      # 組み立ての注記（サンドボックスが起動しない環境）。
+      # 「上記は git の差分です」が指す先を保つ）。ツールは使わせないので、
+      # 差分はここでしか届かない。
       stdin_file="$work_dir/codex-input.txt"
       printf '%s\n\n%s\n' "$diff_text" "$PROMPT" > "$stdin_file"
 
-      # --sandbox read-only: ツールの解禁はここが担保する（上記ヘッダ「ツールの
-      #   解禁」）。既定に頼らず明示する。
+      # --sandbox read-only: 既定に頼らず明示する（ツールは下で無効にする）。
       # --output-schema: 回答の形を強制する。これで「出力の最後の行の判定トークン」
       #   を解析する仕組みが要らなくなり、ナレーション 1 行で誤分類する故障クラスが
       #   構造的に消える。
       # --color never: ANSI のエスケープが JSON に混じらないようにする。
-      args=(exec - --sandbox read-only --color never \
+      # 以降は実行環境を絞る旗（上記ヘッダ「codex の実行環境」）:
+      # --skip-git-repo-check: 作業場所は git のリポジトリではない使い捨ての場所。
+      # --ignore-user-config: ~/.codex/config.toml を効かせない。
+      # inherit=none: codex が起動するコマンドへ環境変数を引き継がない。
+      # --disable: シェル・ブラウザ・画像・アプリ等の経路を閉じる。
+      # web_search="disabled": 外への検索の経路を閉じる。
+      args=(exec - --sandbox read-only --color never --skip-git-repo-check \
+            --ignore-user-config \
+            -c 'shell_environment_policy.inherit=none' \
+            -c 'web_search="disabled"' \
+            --disable shell_tool --disable browser_use --disable in_app_browser \
+            --disable computer_use --disable apps --disable code_mode_host \
+            --disable view_image --disable goals --disable image_generation \
             --output-schema "$SCHEMA_FILE" -o "$answer_file")
       [[ -n "$MODEL" ]] && args+=(--model "$MODEL")
+      # 秘密の無い使い捨ての作業場所で、許可リストの環境変数だけを渡して起動する。
+      run_cwd="$work_dir/codex-cwd"
+      mkdir -p "$run_cwd"
+      run_prefix=(env -i ${CODEX_ENV_PASS[@]+"${CODEX_ENV_PASS[@]}"})
       ;;
   esac
 
@@ -1067,7 +1081,9 @@ $PROMPT" --output-format json --json-schema "$SCHEMA_FILE")
     # 警告が stderr に出る）。判定はモデルの回答だけで行い、stderr は失敗したときの
     # 診断に回す。gemini / antigravity は差分を引数で渡すため標準入力は渡さない。
     # codex は標準入力に流す（stdin_file は codex 以外のとき /dev/null のまま）。
-    output="$($CLI "${args[@]}" <"$stdin_file" 2>"$stderr_file")" || {
+    # codex は秘密の無い作業場所で、許可リストの環境変数だけを渡して起動する
+    # （run_cwd / run_prefix。他のエンジンは現在の場所・そのまま）。
+    output="$(cd "$run_cwd" && ${run_prefix[@]+"${run_prefix[@]}"} $CLI "${args[@]}" <"$stdin_file" 2>"$stderr_file")" || {
       echo "error: second opinion failed (engine=$ENGINE, run $run/$RUNS$( [[ "$chunk_count" -gt 1 ]] && echo ", chunk $chunk_idx/$chunk_count" ))" >&2
       cat "$stderr_file" >&2
       printf '%s\n' "$output" >&2
