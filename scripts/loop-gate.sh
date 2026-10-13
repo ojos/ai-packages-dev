@@ -117,7 +117,7 @@ resolve_integration_base() {
 # push 済みで上流 == HEAD だと差分が空になる。remote があるのに既定ブランチの追跡枝が
 # 無いなら、空ツリー（= リポジトリ全体）へは広げずレビュー対象なしとして扱う。
 resolve_review_range_without_base() {
-  local upstream
+  local upstream upstream_empty=0
   upstream="$(git rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null || true)"
   if [[ -n "$upstream" ]]; then
     # **起点は上流の先端ではなく、上流と HEAD の分岐点にする。** 範囲は両端のツリーの
@@ -129,10 +129,11 @@ resolve_review_range_without_base() {
     if range_has_diff "$upstream_mb..HEAD"; then
       REVIEW_RANGE="$upstream_mb..HEAD"
       REVIEW_RANGE_REASON="no default branch tracking ref was found; reviewing from the merge-base ${upstream_mb:0:12} with the upstream $upstream"
-    else
-      REVIEW_NO_TARGET=1
+      return 0
     fi
-    return 0
+    # 上流との差分が空（push 済み）。ここで対象なしとして通すと、第二意見が一度も
+    # 差分を見ないまま通る偽の緑になる。以前と同じく、下の空ツリーからの全体へ戻る。
+    upstream_empty=1
   fi
 
   # remote が無いプロジェクト。起点が無いので空ツリーからの全体を対象にする。
@@ -149,7 +150,11 @@ resolve_review_range_without_base() {
   empty_tree="$(git hash-object -t tree /dev/null 2>/dev/null || true)"
   if [[ -n "$empty_tree" ]] && range_has_diff "$empty_tree..HEAD"; then
     REVIEW_RANGE="$empty_tree..HEAD"
-    REVIEW_RANGE_REASON="no default branch tracking ref and no upstream; reviewing the whole history"
+    if [[ "$upstream_empty" -eq 1 ]]; then
+      REVIEW_RANGE_REASON="no default branch tracking ref was found and the upstream range has no diff (branch already pushed); reviewing the whole history"
+    else
+      REVIEW_RANGE_REASON="no default branch tracking ref and no upstream; reviewing the whole history"
+    fi
     return 0
   fi
 

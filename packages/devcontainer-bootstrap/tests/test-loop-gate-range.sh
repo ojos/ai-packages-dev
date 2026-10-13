@@ -294,14 +294,16 @@ for b in origin/HEAD origin/main origin/master; do
 done
 assert_eq "$found" "" "解決できてしまった既定ブランチ"
 
-it "既定ブランチを解決できず、上流との差分も空なら、対象なしにする（空ツリーまで広げない）"
+it "既定ブランチを解決できず、上流と HEAD が同じ（push 済み）なら、空ツリーからの全体へ戻り、対象なしにしない"
+# 対象なしで通すと、第二意見が一度も差分を見ないまま通る偽の緑になる。
 repo2="$(new_workdir)/no-base-pushed"
 mk_repo "$repo2" "$(new_workdir)/origin.git" trunk
 out_txt="$(run_resolve "$repo2")"
-if [[ "$(field "$out_txt" RANGE)" == "" && "$(field "$out_txt" NO_TARGET)" == "1" ]]; then
+empty_tree2="$(cd "$repo2" && git hash-object -t tree /dev/null)"
+if [[ "$(field "$out_txt" RANGE)" == "$empty_tree2..HEAD" && "$(field "$out_txt" NO_TARGET)" == "0" ]]; then
   pass
 else
-  fail "上流と同じなのに対象が決まっている: $out_txt"
+  fail "空ツリーからの範囲になっていない: $out_txt"
 fi
 
 it "既定ブランチも上流も無ければ、空ツリーからの全体を対象にする"
