@@ -333,15 +333,19 @@ fi
 | 状態 | 動作 | 出力 |
 |---|---|---|
 | 手を入れていない（現物 = 記録したハッシュ） | 新しい版で更新する | `write: <path> (upgraded)` |
-| 手を入れて取り込み済みにした（現物 = `accepted:`）うえで、新しい版 = 記録（雛形が変わっていない） | 取り込むべき差分が無いので、現物を温存して報告するだけ。`.dcb-new` は置かず、残っている古い `.dcb-new` も消さない | `keep (modified, template unchanged)` |
-| 手を入れた（現物 ≠ 記録）が取り込み済みではない、または雛形が変わった、または記録が無く新しい版と違う | 上書きせず `<path>.dcb-new` を隣へ置き、差分の要約を出す。`.dcb-new` のモードは元のファイルに揃える | `keep (modified)` / `keep (no record)` |
+| 手を入れた（現物 ≠ 記録）が、雛形は変わっていない（新しい版 = 記録）。取り込み待ち（`pending:` や残っている `.dcb-new`）が無い | 取り込むべき差分が無いので、現物を温存して報告するだけ。`.dcb-new` は置かない。表示は現物の由来で分ける: 取り込み済み（現物 = `accepted:`）、プロジェクト所有（`owned:`）、それ以外 | `accepted (template unchanged)` / `owned (template unchanged)` / `modified (template unchanged)` |
+| 手を入れた（現物 ≠ 記録）うえで、雛形が変わった、または取り込み待ち（`pending:` や残っている `.dcb-new`）がある、または記録が無く新しい版と違う | 上書きせず `<path>.dcb-new` を隣へ置き（取り込む前に失った分も同じ版の `--upgrade` で置き直す）、差分の要約を出す。`.dcb-new` のモードは元のファイルに揃える。ORIGIN へ `pending:` を記録する | `keep (modified)` / `keep (no record)` |
 | 新しい版で増えた（現物が無い） | 生成する | `write: <path> (new)` |
 | 手を入れたが新しい版と同じ内容 | 更新済みとして扱い、古い `.dcb-new` があれば消す | `up-to-date` |
 | 新しい版で生成されなくなった | **報告するだけで削除しない**。記録からは外す | `no longer generated (not deleted)` |
 
+- **`keep` で始まる行は、取り込み待ち（`.dcb-new` を置いた）か、手を入れたため残したファイル**です。`(template unchanged)` が付く行は雛形が変わっていないので `.dcb-new` を置いておらず、取り込む差分はありません。
 - 現物がシンボリックリンクなら、たどらず手を入れた扱いにして `.dcb-new` を置きます。親ディレクトリが出力先の外を指すリンクなら、何も書かずに止めます（終了コード 1）。
 - 手を入れたファイルにも、ORIGIN には**新しい版のハッシュ**を記録します。次回の `--upgrade` で、その `.dcb-new` を取り込まないまま現物が新しい版と同じになれば、更新済みとして扱います。
 - ORIGIN の `accepted:` 行（下記 `--accept`）は、`--upgrade` が引き継ぎます。ただし、その回に `.dcb-new` を置いた（雛形が変わった）ファイル、または新しい版で更新したファイルの分は落とします。雛形が変わったあとの現物は、取り込み済みの記録と照らす前提が変わっているためです（`doctor.sh` は FAIL を出します）。
+- ORIGIN の `owned:` 行（プロジェクトが所有・編集するファイルの印）は、`--upgrade` が今回の生成対象から作り直します。`pending:` 行（`.dcb-new` の取り込み待ちの印）は、その回に `.dcb-new` を置いた（置き直した）ファイルだけに書きます。現物が新しい版と同じになった（`up-to-date` / `upgraded`）ファイルや、`--without-*` で生成対象から外れたファイルの分は残りません。`owned:` / `pending:` の無い既存の ORIGIN も読めます。次の `--upgrade` で `owned:` が書き足され、既に `.dcb-new` が残っているファイルには `pending:` が書き足されます。
+- `pending:` が無いのに `.dcb-new` が残っているファイル（`pending:` を導入する前の版が置いたもの）は、雛形が変わっていなければ `.dcb-new` を置き直さず、`keep (modified, .dcb-new left)` と報告して `pending:` を書き足します。
+- この版へ上げる前に、取り込まずに `.dcb-new` を失っていたファイルは、`pending:` が無いので作り直されません。
 - 手を入れたファイルは**自動では混ぜません**（3 方向マージはしません）。`.dcb-new` と現物を見比べ、必要な差分を手で混ぜてから `.dcb-new` を消してください。`.dcb-new` の残りは `doctor.sh` が WARN で報告します（[Doctor 自己診断](#doctor-自己診断)）。
 
 終了コード:
@@ -372,8 +376,10 @@ bash bootstrap.sh --accept scripts/verify.sh --output-dir <生成先> --dry-run 
 - 現物が `hash:` と一致するパスは、`accepted:` を外して「変更なし」（`unchanged:`）と報告します。同じパスを再度渡すと、行を差し替えます（行は 1 行のまま）。
 - 生成の引数（`--project-name` / `--languages` / `--with-*` / `--without-*` / `--base-image` / `--force` / `--no-gitignore` / `--gitignore-targets` / 規範の取得元など）や `--upgrade` と一緒に渡すと、何も書かずに止まります。`--output-dir` と `--dry-run` は併用できます（`--dry-run` は `plan:` 行だけを出し、ORIGIN を変えません）。パスは出力先からの相対パスで指定します。
 - 取り込み済みの記録は、**その内容の現物だけ**を許します。記録したあとでさらに手を入れると、`doctor.sh` は再び FAIL を出します（本当の乖離は引き続き検知します）。
-- 雛形が変わっていない版への `--upgrade` では、取り込み済みにしたファイル（現物 = `accepted:`）に `.dcb-new` を置かず、`accepted:` も引き継ぎます。したがって、取り込みを済ませて `--accept` したファイルは、`--upgrade` を繰り返しても `doctor.sh --strict` が 0 で終わる状態を保てます。
-- 手を入れても `--accept` していないファイルには、雛形が変わっていなくても `.dcb-new` を置きます。`.dcb-new` を取り込む前に失った場合も、同じ版で `--upgrade` をやり直せば作り直されます（`.dcb-new` を置いた時点で `accepted:` は外れるため）。
+- `--accept` は `pending:`（取り込み待ちの印）も外します。`.dcb-new` が残っているパスは受け付けないので、先に差分を取り込んで `.dcb-new` を消してから渡します。
+- 雛形が変わっていない版への `--upgrade` では、手を入れたファイルに `.dcb-new` を置きません。取り込み済みにしたファイル（現物 = `accepted:`）は `accepted:` も引き継ぎます。したがって、取り込みを済ませて `--accept` したファイルは、`--upgrade` を繰り返しても `doctor.sh --strict` が 0 で終わる状態を保てます。
+- 取り込み待ち（`pending:`）のファイルだけは、`.dcb-new` を取り込む前に失っても、同じ版で `--upgrade` をやり直せば作り直されます。
+- **プロジェクトが所有・編集するファイル**（`scripts/acceptance.sh` と `scripts/acceptance-remote.sh`）には、ORIGIN に `owned:` が記録されます。これらは日常的に編集するものなので、`--accept` しなくても、取り込み待ちが無い限り `doctor.sh` は FAIL にしません（編集した件数は `[OK]` で報告します）。`.dcb-new` を置いた（`pending:` がある）あいだは FAIL で、取り込んで `--accept` すると戻ります。一覧は `bootstrap.sh` の `project_owned_rel_paths` が持ち、`tests/test-owned-list.sh` がこの README の記述との一致を機械照合します。
 
 `--upgrade` の注意:
 
@@ -984,6 +990,8 @@ hash:.devcontainer/devcontainer.json=<sha256>
 hash:.env.example=<sha256>
 ...
 accepted:.devcontainer/devcontainer.json=<sha256>   # 取り込み済みにしたファイルがあるときだけ
+owned:scripts/acceptance.sh=1                        # プロジェクトが所有・編集するファイル
+pending:scripts/verify.sh=1                          # .dcb-new が取り込み待ちのときだけ
 ```
 
 | キー | 意味 |
@@ -994,6 +1002,8 @@ accepted:.devcontainer/devcontainer.json=<sha256>   # 取り込み済みにし�
 | `input:<名前>` | 生成結果を左右する入力（下記）。同じ名前は 1 回だけ。値の `%` `改行` は `%25` `%0A` `%0D` で符号化します |
 | `hash:<相対パス>` | その生成物の sha256（`sha256sum` が無い環境では `shasum -a 256`、それも無ければ `openssl dgst -sha256` を使います） |
 | `accepted:<相対パス>` | `bootstrap.sh --accept` が記録する、取り込み済みの現物の sha256。取り込み済みにしたファイルがあるときだけ書く（無い ORIGIN も有効）。`doctor.sh` は現物がこの値と一致すれば変化として扱わない。`--upgrade` は引き継ぎ、その回に `.dcb-new` を置いたファイルの分は落とす |
+| `owned:<相対パス>` | プロジェクト所有のファイルの印（値は `1`）。生成時と `--upgrade` が、今回の生成対象にあるものへ書く。`doctor.sh` は、`pending:` が無ければ現物が `hash:` と違っても乖離として扱わない |
+| `pending:<相対パス>` | `--upgrade` が `.dcb-new` を置いた（取り込み待ち）ファイルの印（値は `1`）。`--accept` か、現物が新しい版と同じになると外れる。あるあいだ `doctor.sh` は FAIL にする。`--upgrade` は、取り込む前に失った `.dcb-new` をこの印で作り直す |
 
 記録する入力と、記録しない入力:
 
@@ -1272,13 +1282,16 @@ github/gitignore のテンプレートは言語・OS・エディタの生成物�
 | 記録が無い | `[WARN]` **診断できません。** この生成先が本機能より前に作られたか、記録が削除された可能性があります。記録の無い生成先への遡及はできません |
 | 記録が壊れている（`version=` 行が読めない等） | `[FAIL]` 診断できません |
 | 記録した生成物が現物と一致しないが、`accepted:` の記録（`bootstrap.sh --accept`）とは一致する | `[OK]` 取り込み済みとして件数を報告 |
-| 記録した生成物が現物と一致せず、`accepted:` の記録とも一致しない | `[FAIL]` 該当ファイル名を添えて「生成時から変化しています」と報告し、`bootstrap.sh --accept <path>` の案内を添える |
+| 記録した生成物が現物と一致しないが、`owned:`（プロジェクトが所有・編集）の記録があり、`pending:` が無い | `[OK]` 編集済みの所有ファイルとして件数を報告 |
+| 記録した生成物が現物と一致せず、`accepted:` / `owned:` の記録とも合わない、または `pending:` がある | `[FAIL]` 該当ファイル名を添えて「生成時から変化しています」と報告し、`bootstrap.sh --accept <path>` の案内を添える |
 | 記録した生成物が消えている | `[FAIL]` 該当ファイル名を添えて報告 |
 | 記録の版が `doctor.sh` 自身の版より古い | `[WARN]` 「上流が更新されています」と報告 |
 | 記録の版が一致（または新しい） | `[OK]` |
 | `*.dcb-new` が残っている | `[WARN]` 一覧と取り込み方を出す（下記） |
 
-**書式の検査**: `version=` / `flags=` / `inputs-format=` / `input:<名前>=` / `hash:<パス>=<sha256>` / `accepted:<パス>=<sha256>` 以外の行、`%` の不正な並び、不正な `hash:` / `accepted:` の行は `[FAIL]`（記録が壊れている）です。新しい形式（`inputs-format=1`）では `version=` と `flags=`（空の値は可）が必須で、無ければ `[FAIL]` です。同じ `input:` の名前が重複していても `[FAIL]` です。`inputs-format` が `1` でなければ、知らない書式なので入力の検査を省いて `[WARN]` にします。`inputs-format` の無い古い形式は、行の文法だけを見て通します。
+**`doctor.sh` は `bootstrap.sh` と同じ版を使ってください。** 旧い `doctor.sh` は `owned:` / `pending:` を「認識できない行」として `[FAIL]` にします（`accepted:` の導入時と同じ性質）。
+
+**書式の検査**: `version=` / `flags=` / `inputs-format=` / `input:<名前>=` / `hash:<パス>=<sha256>` / `accepted:<パス>=<sha256>` / `owned:<パス>=<値>` / `pending:<パス>=<値>` 以外の行、`%` の不正な並び、不正な `hash:` / `accepted:` の行は `[FAIL]`（記録が壊れている）です。新しい形式（`inputs-format=1`）では `version=` と `flags=`（空の値は可）が必須で、無ければ `[FAIL]` です。同じ `input:` の名前が重複していても `[FAIL]` です。`inputs-format` が `1` でなければ、知らない書式なので入力の検査を省いて `[WARN]` にします。`inputs-format` の無い古い形式は、行の文法だけを見て通します。
 
 **残っている `*.dcb-new` の報告**: `bootstrap.sh --upgrade` が、手を入れたファイルの隣へ置いた新しい版（`<path>.dcb-new`）が出力先に残っていれば、`[WARN]` でパスを一覧します（`.git` と `node_modules` は除き、シンボリックリンクはたどりません）。取り込み方は、**元のファイルと `.dcb-new` の中身を見比べ、必要な差分を手で混ぜてから `.dcb-new` を消す**ことです。自動では混ぜません。`--strict` では、これも失格になります。
 

@@ -39,6 +39,10 @@ UPGRADE_LEFTOVER=""
 # するのは、更新・新規作成・up-to-date・.dcb-new など、ほかのどの分岐でも古い記録を残さないため
 # （落とす側を列挙すると、分岐を足したときに漏れて古い記録が生き残る）。
 UPGRADE_ACCEPT_KEEP=""
+# --upgrade が今回 .dcb-new を置いた（または置き直した）相対パスの一覧（改行区切り）。ORIGIN の
+# pending: 行（取り込み待ちの記録）はこのパスの分だけを書く。取り込み待ちでなくなったもの
+# （現物 = 新しい版、更新済み、生成対象から外れた）の記録を、列挙せずに落とすため。
+UPGRADE_PENDING=""
 # --accept <path>...: 手を入れたファイルを取り込み済みとして ORIGIN へ記録する（3 つ目の動作）。
 ACCEPT="false"
 ACCEPT_PATHS=()
@@ -469,7 +473,7 @@ EOF2
     return 0
   fi
 
-  # 書き直す。対象パスの既存の accepted: 行を落とし、accept のぶんを末尾へ足す。
+  # 書き直す。対象パスの既存の accepted: 行と pending: 行（取り込み待ちの記録）を落とし、accept のぶんを末尾へ足す。
   # 中身だけを差し替える（cat > で、ORIGIN のモード・所有者を変えない）。
   tmp="$(mktemp "${TMPDIR:-/tmp}/dcb-accept.XXXXXX")"
   # 一覧は改行を含むので -v ではなく環境変数で渡す（macOS の awk は -v の値の改行を拒む）。
@@ -480,6 +484,7 @@ EOF2
         if (a[i] == "") continue
         split(a[i], f, "\t")
         drop["accepted:" f[2] "="] = 1
+        drop["pending:" f[2] "="] = 1
       }
     }
     {
@@ -723,6 +728,15 @@ select_base_image() {
 select_base_image
 
 # ── 組み込みテンプレート（bash 3 互換） ─────────────────────────────────
+
+# プロジェクトが所有・編集するファイルの一覧（単一の定義。ORIGIN の owned: 行の元）。
+# README が「プロジェクトが所有・編集」と書くファイルと一致させる
+# （tests/test-owned-list.sh が機械照合する）。生成対象に無いものは記録しない。
+project_owned_rel_paths() {
+  printf '%s\n' \
+    'scripts/acceptance.sh' \
+    'scripts/acceptance-remote.sh'
+}
 
 # 生成する相対パス一覧。mode を廃したため単一の集合。
 template_rel_paths() {
@@ -11279,6 +11293,7 @@ upgrade_apply_file() {
   # シンボリックリンク（切れたものを含む）と通常ファイル以外は、たどらず比較もせず、
   # 手を入れた扱いにして新しい版を .dcb-new として置く（リンク先を書き換えない）。
   if [[ -L "$dest" || ( -e "$dest" && ! -f "$dest" ) ]]; then
+    UPGRADE_PENDING="${UPGRADE_PENDING}${rel}"$'\n'
     if [[ "$DRY_RUN" == "true" ]]; then
       echo "plan: keep (symlink or not a regular file) $dest -> $dest.dcb-new"
     else
@@ -11324,22 +11339,45 @@ upgrade_apply_file() {
     return 0
   fi
 
-  # 雛形が変わっておらず（新しい版 = 記録）、現物が取り込み済みの記録（accepted:）と一致する。
-  # 取り込むべき差分が無いので .dcb-new は置かない。
-  # accepted と一致しない現物には、雛形が変わっていなくても .dcb-new を置く。.dcb-new を置いた
-  # 時点で hash: は新しい版になり accepted: は外れるので、取り込む前に .dcb-new を失っても、
-  # 同じ版の --upgrade をやり直せば作り直される（hash: だけで判定すると作り直されない）。
-  acc="$(dcb_origin_get "$OUTPUT_DIR/$ORIGIN_REL_PATH" "accepted:$rel" 2>/dev/null || true)"
-  if [[ -n "$rec" && "$newh" == "$rec" && -n "$acc" && "$curh" == "$acc" ]]; then
-    UPGRADE_ACCEPT_KEEP="${UPGRADE_ACCEPT_KEEP}${rel}"$'\n'
-    if [[ "$DRY_RUN" == "true" ]]; then
-      echo "plan: keep (modified, template unchanged) $dest"
-    else
-      echo "keep (modified, template unchanged): $dest"
+  # 雛形が変わっておらず（新しい版 = 記録）、現物が記録と違う（手を入れた）。
+  # 取り込み待ち（pending:、または .dcb-new が現に残っている）なら、取り込む前に .dcb-new を
+  # 失った場合に備えて .dcb-new を置き直す（hash: だけでは取り込み待ちか分からない）。
+  # 取り込み待ちでなければ、取り込むべき差分が無いので .dcb-new を置かずに温存する。
+  # 温存の表示は、取り込み済み（accepted:）・プロジェクト所有（owned:）・それ以外で分ける。
+  # どれも .dcb-new を置かないので keep で始めない（keep は取り込み待ち・手を入れたため残した印）。
+  if [[ -n "$rec" && "$newh" == "$rec" ]]; then
+    # 記録に pending: が無くても .dcb-new が現に残っていれば取り込み待ちとして記録する
+    # （pending: を導入する前の版が置いたもの）。残っている .dcb-new は置き直さない。
+    if ! dcb_origin_get "$OUTPUT_DIR/$ORIGIN_REL_PATH" "pending:$rel" >/dev/null 2>&1 \
+      && [[ -e "$dest.dcb-new" || -L "$dest.dcb-new" ]]; then
+      UPGRADE_PENDING="${UPGRADE_PENDING}${rel}"$'\n'
+      if [[ "$DRY_RUN" == "true" ]]; then
+        echo "plan: keep (modified, .dcb-new left) $dest -> $dest.dcb-new"
+      else
+        echo "keep (modified, .dcb-new left): $dest -> $dest.dcb-new"
+      fi
+      return 0
     fi
-    return 0
+    if ! dcb_origin_get "$OUTPUT_DIR/$ORIGIN_REL_PATH" "pending:$rel" >/dev/null 2>&1; then
+      acc="$(dcb_origin_get "$OUTPUT_DIR/$ORIGIN_REL_PATH" "accepted:$rel" 2>/dev/null || true)"
+      if [[ -n "$acc" && "$curh" == "$acc" ]]; then
+        verb="accepted"
+        UPGRADE_ACCEPT_KEEP="${UPGRADE_ACCEPT_KEEP}${rel}"$'\n'
+      elif project_owned_rel_paths | grep -Fx -- "$rel" >/dev/null; then
+        verb="owned"
+      else
+        verb="modified"
+      fi
+      if [[ "$DRY_RUN" == "true" ]]; then
+        echo "plan: $verb (template unchanged) $dest"
+      else
+        echo "$verb (template unchanged): $dest"
+      fi
+      return 0
+    fi
   fi
 
+  UPGRADE_PENDING="${UPGRADE_PENDING}${rel}"$'\n'
   if [[ -n "$rec" ]]; then verb="modified"; else verb="no record"; fi
   if [[ "$DRY_RUN" == "true" ]]; then
     echo "plan: keep ($verb) $dest -> $dest.dcb-new"
@@ -11676,6 +11714,22 @@ EOF
     done <<EOF
 $origin_rels
 EOF
+    # プロジェクト所有のファイルの印（owned:）。毎回、一覧と今回の生成対象の積から作る
+    # （生成対象から外れたパスの記録は残らない）。
+    while IFS= read -r rel; do
+      [[ -n "$rel" ]] || continue
+      case $'\n'"$origin_rels"$'\n' in *$'\n'"$rel"$'\n'*) ;; *) continue ;; esac
+      echo "owned:$rel=1"
+    done < <(project_owned_rel_paths)
+    # 取り込み待ち（.dcb-new を置いた）の印（pending:）。--upgrade が今回置いたパスだけを、
+    # 今回の生成対象に残るものに限って書く。--accept か、現物 = 新しい版になれば外れる。
+    if [[ "$UPGRADE" == "true" ]]; then
+      while IFS= read -r rel; do
+        [[ -n "$rel" ]] || continue
+        case $'\n'"$origin_rels"$'\n' in *$'\n'"$rel"$'\n'*) ;; *) continue ;; esac
+        echo "pending:$rel=1"
+      done < <(printf '%s' "$UPGRADE_PENDING" | sort -u)
+    fi
     # --upgrade は取り込み済みの記録（accepted:）のうち、今回「雛形が変わっておらず、現物 =
     # accepted:」として温存したパスの分だけを引き継ぐ（UPGRADE_ACCEPT_KEEP。それ以外は落とす）。
     if [[ "$UPGRADE" == "true" && -f "$dest" ]]; then
