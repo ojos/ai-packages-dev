@@ -426,6 +426,7 @@ report_next_steps() {
   echo "[$PROG]   - ログインしていない間も動かすなら: sudo loginctl enable-linger \"\$USER\""
   echo "[$PROG]   - 常駐させるプロジェクトごとに: systemctl --user enable --now dev-up@<名前>.service"
   echo "[$PROG]   - 自前のランナーを使うなら（README.md の「自前のランナー」）: runners と PAT のファイル（権限 600）を書き、dev runner build でイメージを作り、systemctl --user enable --now dev-runner@<名前>.service"
+  echo "[$PROG]   - 自前のランナーの出口の規則は root で入れます（入れないと dev runner run は起動しません。LAN に届いてよいランナーは runners で lan=allow）: dev runner net script | sudo install -m 755 /dev/stdin /usr/local/sbin/dev-runner-net、dev runner net unit | sudo install -m 644 /dev/stdin /etc/systemd/system/dev-runner-net.service、sudo systemctl daemon-reload && sudo systemctl enable --now dev-runner-net.service"
   if [[ "$runner_df_state" == "update" ]]; then
     if [[ "$dry_run" -eq 1 ]]; then
       echo "[$PROG]   - 実行すると、ランナーの Dockerfile を更新します。実行したあとに、dev runner build でイメージを作り直し、動いているランナーのユニットを起こし直してください。"

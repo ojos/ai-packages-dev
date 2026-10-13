@@ -37,6 +37,9 @@
 # - docker（ランナー用）: `image inspect <イメージ>`（FAKE_IMAGE_MISSING=1 で無い）、`build -t <名前> -`（標準入力を $FAKE_STATE/build-stdin へ写す）、
 #   `rm -f <名前>`、`run ...`（**環境変数の一覧を $FAKE_STATE/run-env へ書く**。FAKE_RUN_SIGNAL=TERM で親へ TERM を送って 143 で抜ける
 #   ＝ユニットを止められた状況。FAKE_RUN_EXIT で抜ける終了コードを変える）。他の形は落とす
+# - docker `network inspect --format ... <名前>` と `network create ...`（自前のランナーの専用ネットワーク。作った印は $FAKE_STATE/network。
+#   FAKE_NET_BRIDGE / FAKE_NET_IPV6 で既存のネットワークの設定を差し替える。他の形は落とす）
+# - iptables: 引数を記録するだけ。`-C` は FAKE_IPT_CHECK（既定 1＝無い）で抜ける。規則の実体は見ない（生成した文面で確かめる）
 # - curl（API）: `-sSL -K - -X <メソッド> -H ... -w <書式> <URL>` の形だけ。**標準入力の設定を $FAKE_STATE/curl-config へ書き**
 #   （PAT が引数でなく標準入力で渡ることを見る）、FAKE_PAT_EXPECT を含まなければ 401 相当（22）で落とす。
 #   組織の登録用トークン（POST）・ランナーの一覧（GET、page 付き。FAKE_REGISTERED_NAME のランナーを 1 つ返す。FAKE_PAGES=2 なら 1 ページ目は 100 件の別のランナーで、自分は 2 ページ目）・登録の削除（DELETE）だけ
@@ -296,6 +299,21 @@ case "$sub" in
     [[ -n "${FAKE_PREV:-}" ]] || { echo "Error: No such container: $4" >&2; exit 1; }
     echo "$FAKE_PREV"
     ;;
+  network)
+    case "${1:-}" in
+      inspect)
+        [[ $# -eq 4 && "$2" == "--format" ]] || { echo "fake docker: 想定外の network inspect の引数: $*" >&2; exit 2; }
+        [[ -f "$FAKE_STATE/network" ]] || { echo "Error response from daemon: network $4 not found" >&2; exit 1; }
+        echo "${FAKE_NET_BRIDGE:-dev-runner0} ${FAKE_NET_IPV6:-false}"
+        ;;
+      create)
+        [[ "${FAKE_NET_CREATE_FAIL:-0}" != "1" ]] || { echo "Error response from daemon: network create に失敗しました" >&2; exit 1; }
+        : >"$FAKE_STATE/network"
+        echo "0123456789abcdef"
+        ;;
+      *) echo "fake docker: 想定外の network のサブコマンド: $*" >&2; exit 2 ;;
+    esac
+    ;;
   rm)
     [[ $# -eq 2 && "$1" == "-f" ]] || { echo "fake docker: 想定外の rm の引数: $*" >&2; exit 2; }
     ;;
@@ -312,6 +330,17 @@ case "$sub" in
     ;;
   *) echo "fake docker: この試験が想定していないサブコマンドです: $sub" >&2; exit 2 ;;
 esac
+EOF
+
+cat >"$FAKEBIN/iptables" <<EOF
+#!$BASH_BIN
+set -euo pipefail
+. "$FAKEBIN/_log"
+EOF
+cat >>"$FAKEBIN/iptables" <<'EOF'
+log_call iptables "$@"
+if [[ "${1:-}" == "-C" ]]; then exit "${FAKE_IPT_CHECK:-1}"; fi
+exit 0
 EOF
 
 cat >"$FAKEBIN/tmux" <<EOF
@@ -528,7 +557,7 @@ fi
 cp "$FAKE_CURL_DIR/${2##*/}" "$4"
 EOF
 
-chmod +x "$FAKEBIN/devcontainer" "$FAKEBIN/docker" "$FAKEBIN/tmux" "$FAKEBIN/systemctl" "$FAKEBIN/git" "$FAKEBIN/ps" "$FAKEBIN/journalctl" "$FAKEBIN/codex" "$FAKEBIN/curl"
+chmod +x "$FAKEBIN/devcontainer" "$FAKEBIN/docker" "$FAKEBIN/tmux" "$FAKEBIN/systemctl" "$FAKEBIN/git" "$FAKEBIN/ps" "$FAKEBIN/journalctl" "$FAKEBIN/codex" "$FAKEBIN/curl" "$FAKEBIN/iptables"
 for t in cut cksum mv jq tar gzip cp chmod cmp dirname; do
   p="$(command -v "$t")" || { echo "[devhost-selftest] $t が見つかりません" >&2; exit 1; }
   ln -s "$p" "$TOOLBIN/$t"
@@ -1687,8 +1716,14 @@ r2  my-org  docker=yes
 r3  my-org  pat_file=$WORK/conf/pat-loose
 r4  my-org  pat_file=$WORK/conf/pat-ro
 r5  my-org  docker=yes
+r6  my-org  lan=allow
+r7  my-org  lan=allow  docker=yes
 EOF
 mkdir -p "$WORK/lock"
+# 規則の印（root のスクリプトが置くもの）。ブリッジ名が合う印を既定で置き、個別の試験が差し替える。
+NETMARK="$WORK/netmark/ready"
+mkdir -p "$WORK/netmark"
+printf 'bridge=dev-runner0\n' >"$NETMARK"
 log_has() { grep -qE -- "$1" "$LOG" || { ng "$CUR: 呼び出しの記録に /$1/ がありません"; sed 's/^/    /' "$LOG" >&2; }; }
 log_lacks() { if grep -qE -- "$1" "$LOG"; then ng "$CUR: 呼び出しの記録に /$1/ があってはなりません"; fi; }
 # PAT の値が、どこにも出ていないこと（呼び出しの記録＝引数、docker へ渡った環境、標準出力・標準エラー）。
@@ -1705,13 +1740,14 @@ rrun() {
   while [[ $# -gt 0 && "$1" != "--" ]]; do ev+=("$1"); shift; done
   [[ $# -gt 0 ]] && shift
   reset_state
-  run "$want" "$rname" -- DEV_RUNNERS_FILE="$RCONF" DEV_RUNNER_HOSTNAME=h DEV_RUNNER_DOCKER_SOCK="$WORK/docker.sock" DEV_RUNNER_LOCK_DIR="$WORK/lock" \
+  [[ " ${ev[*]-} " == *" FAKE_NET_EXISTS=1 "* ]] && : >"$STATE/network"
+  run "$want" "$rname" -- DEV_RUNNER_NET_MARKER="$NETMARK" DEV_RUNNER_NET_WAIT=0 DEV_RUNNERS_FILE="$RCONF" DEV_RUNNER_HOSTNAME=h DEV_RUNNER_DOCKER_SOCK="$WORK/docker.sock" DEV_RUNNER_LOCK_DIR="$WORK/lock" \
     FAKE_PAT_EXPECT="$PATV" ${ev[@]+"${ev[@]}"} -- "$@"
 }
 
 rrun 0 "runner run: 登録用のトークンを取り、--ephemeral のランナーを --rm のコンテナで起こす" -- runner run r1
 log_has '^curl \[-sSL\] \[-K\] \[-\] \[-X\] \[POST\] .*\[https://api.github.com/orgs/my-org/actions/runners/registration-token\]$'
-log_has '^docker \[run\] \[--rm\] \[--name\] \[dev-runner-r1\] \[-e\] \[RUNNER_TOKEN\] \[dev-runner:local\] \[bash\] \[-c\]'
+log_has '^docker \[run\] \[--rm\] \[--name\] \[dev-runner-r1\] \[-e\] \[RUNNER_TOKEN\] \[--network\] \[dev-runner\] \[dev-runner:local\] \[bash\] \[-c\]'
 log_has '\-\-ephemeral'
 log_has '\[runner\] \[https://github.com/my-org\] \[h-r1\] \[devhost,x\]$'
 grep -q '^RUNNER_TOKEN=REGTOKEN123$' "$STATE/run-env" || ng "$CUR: docker へ登録用のトークンが環境変数で渡っていません"
@@ -1760,13 +1796,50 @@ rrun 0 "runner run: 前回のコンテナが無ければ、rm も wait も呼ば
 log_lacks '^docker \[(rm|wait)\]'
 
 rrun 0 "runner run: docker=yes のときだけ、ソケットをグループ付きで渡す" -- runner run r2
-log_has '^docker \[run\] \[--rm\] \[--name\] \[dev-runner-r2\] \[-e\] \[RUNNER_TOKEN\] \[-v\] \[.*/docker.sock:/var/run/docker.sock\] \[--group-add\] \[[0-9]+\] \[dev-runner:local\]'
+log_has '^docker \[run\] \[--rm\] \[--name\] \[dev-runner-r2\] \[-e\] \[RUNNER_TOKEN\] \[--network\] \[dev-runner\] \[-v\] \[.*/docker.sock:/var/run/docker.sock\] \[--group-add\] \[[0-9]+\] \[dev-runner:local\]'
 no_pat_leak
 
 # ロックの置き場所(c)。
 LK="$WORK/lk-open"
 mkdir -p "$LK"
 chmod 777 "$LK"
+# ── 出口の制限（専用ネットワークと規則の印）──
+rrun 0 "runner run: lan 指定なしのランナーは、専用ネットワークを指定して docker run される" -- runner run r1
+log_has '^docker \[run\] .*\[--network\] \[dev-runner\] \[dev-runner:local\]'
+rrun 0 "runner run: 専用ネットワークが無ければ作る。IPv6 は無効、ブリッジ名は固定" -- runner run r1
+log_has '^docker \[network\] \[create\] \[--driver\] \[bridge\] \[--ipv6=false\] \[-o\] \[com.docker.network.bridge.name=dev-runner0\] \[dev-runner\]$'
+log_has '^docker \[network\] \[inspect\] '
+rrun 0 "runner run: 専用ネットワークが既にあれば（ブリッジ名と IPv6 が合うとき）作り直さず、そこで動かす" FAKE_NET_EXISTS=1 -- runner run r1
+log_lacks '^docker \[network\] \[create\]'
+log_has '^docker \[run\] .*\[--network\] \[dev-runner\]'
+rrun 78 "runner run: 既存の専用ネットワークのブリッジ名が違えば拒む(78)" FAKE_NET_EXISTS=1 FAKE_NET_BRIDGE=br-abc -- runner run r1
+log_lacks '^docker \[run\]'
+rrun 78 "runner run: 既存の専用ネットワークで IPv6 が有効なら拒む(78)" FAKE_NET_EXISTS=1 FAKE_NET_IPV6=true -- runner run r1
+log_lacks '^docker \[run\]'
+rrun 1 "runner run: 専用ネットワークを作れなければ一時的な失敗(1)" FAKE_NET_CREATE_FAIL=1 -- runner run r1
+log_lacks '^docker \[run\]'
+
+rrun 78 "runner run: 印のファイルが無ければ、docker run せずに 78 で抜ける" DEV_RUNNER_NET_MARKER="$WORK/netmark/none" -- runner run r1
+expect_err "出口の規則の印がありません"
+log_lacks '^docker \[run\]'
+log_lacks '^docker \[network\]'
+log_lacks 'registration-token'
+printf 'bridge=br-other\n' >"$WORK/netmark/other"
+rrun 78 "runner run: 印のブリッジ名が違えば、docker run せずに 78 で抜ける" DEV_RUNNER_NET_MARKER="$WORK/netmark/other" -- runner run r1
+expect_err "ブリッジ名が"
+log_lacks '^docker \[run\]'
+printf 'bridge=dev-runner0-x\n' >"$WORK/netmark/prefix"
+rrun 78 "runner run: 印のブリッジ名は完全一致で見る（前方一致では通さない）" DEV_RUNNER_NET_MARKER="$WORK/netmark/prefix" -- runner run r1
+log_lacks '^docker \[run\]'
+
+rrun 0 "runner run: lan=allow のランナーは、ネットワークを指定せず、印も確かめずに動く" DEV_RUNNER_NET_MARKER="$WORK/netmark/none" -- runner run r6
+log_has '^docker \[run\] \[--rm\] \[--name\] \[dev-runner-r6\] \[-e\] \[RUNNER_TOKEN\] \[dev-runner:local\] \[bash\]'
+log_lacks '\[--network\]'
+log_lacks '^docker \[network\]'
+rrun 0 "runner run: lan=allow かつ docker=yes は、ソケットだけを渡し、ネットワークは指定しない" -- runner run r7
+log_lacks '\[--network\]'
+log_has '\[-v\] \[.*/docker.sock:/var/run/docker.sock\]'
+
 rrun 78 "runner run: ロックの置き場所に group / other の書き込み権限があれば拒む(78)" DEV_RUNNER_LOCK_DIR="$LK" -- runner run r1
 expect_err "書き込み権限があります"
 log_lacks '^docker \[run\]'
@@ -1869,6 +1942,9 @@ expect_no_calls
 rrun 2 "runner run: 名前が無い" -- runner run
 expect_no_calls
 T="$WORK/conf/runners.bad"
+printf 'z my-org lan=maybe\n' >"$T"
+run 2 "runners: lan は allow か deny" -- DEV_RUNNERS_FILE="$T" -- runner run x
+expect_err "lan は allow か deny です"
 printf 'x my-org bogus=1\n' >"$T"
 run 2 "runners: 知らないキーは設定の誤り" -- DEV_RUNNERS_FILE="$T" -- runner run x
 expect_err "知らないキーです"
@@ -1935,6 +2011,89 @@ unit_has 'Restart=always' "止まった理由を問わず起こし直す"
 unit_has 'StartLimitIntervalSec=0' "起動の直後に Docker が遅れても諦めない"
 unit_has 'WantedBy=default.target' "ユーザーのマネージャの起動（linger で起動時）に付く"
 if grep -qE '^[^#]*%I' "$UNIT"; then ng "ユニットが %I を使っています（名前の - が / に化ける）"; fi
+
+# ── 6g. runner の出口の規則（root のスクリプトとユニット）──────────────────────
+# 実機の iptables は呼ばない。スクリプトの rules が出す規則の文面を突き合わせ、apply は偽の iptables で回す。
+NETSH="$WORK/dev-runner-net.sh"
+rrun 0 "runner net script: 規則を入れるスクリプトを出す（dev は何も呼ばない）" -- runner net script
+expect_no_calls
+cp "$OUT" "$NETSH"
+"$BASH_BIN" -n "$NETSH" || ng "出力したスクリプトに構文の誤りがあります"
+[[ "$(sed -n 1p "$NETSH")" == '#!/usr/bin/env bash' ]] || ng "出力したスクリプトの 1 行目が bash の shebang ではありません"
+net_run() { # net_run <期待する終了コード> <説明> [VAR=値 ...] -- 引数
+  local want="$1" what="$2" ev=() code=0
+  shift 2
+  while [[ $# -gt 0 && "$1" != "--" ]]; do ev+=("$1"); shift; done
+  [[ $# -gt 0 ]] && shift
+  : >"$LOG"
+  n=$((n + 1))
+  CUR="$what"
+  env -i HOME="$WORK/home" PATH="$FAKEBIN:$TOOLBIN" FAKE_LOG="$LOG" FAKE_STATE="$STATE" \
+    DEV_RUNNER_NET_STATE_DIR="$WORK/netstate" ${ev[@]+"${ev[@]}"} \
+    "$BASH_BIN" "$NETSH" "$@" >"$OUT" 2>"$ERR" </dev/null || code=$?
+  [[ "$code" == "$want" ]] || { ng "$what: 終了コード want $want got $code"; sed 's/^/    stderr: /' "$ERR" >&2; }
+}
+rules_has() { grep -qxF -- "$1" "$OUT" || { ng "$CUR: 規則に「$1」の行がありません"; sed 's/^/    rules: /' "$OUT" >&2; }; }
+net_run 0 "net rules: FORWARD は、止める 5 つの帯への新しい接続を REJECT する" -- rules
+for cidr in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16 100.64.0.0/10; do
+  rules_has "-A DEV-RUNNER-FWD -d $cidr -m conntrack --ctstate NEW -j REJECT"
+done
+rules_has "-A DEV-RUNNER-IN -m conntrack --ctstate NEW -j REJECT"
+rules_has "-I DOCKER-USER -i dev-runner0 -j DEV-RUNNER-FWD"
+rules_has "-I INPUT -i dev-runner0 -j DEV-RUNNER-IN"
+rules_has "-F DEV-RUNNER-FWD"
+rules_has "-F DEV-RUNNER-IN"
+if grep -qE -- '-j ACCEPT' "$OUT"; then ng "$CUR: 既定の規則に ACCEPT があります（許可は DEV_RUNNER_NET_ALLOW_DNS の指定時だけ）"; fi
+if grep -qE -- '-d (0\.0\.0\.0/0|0/0)' "$OUT"; then ng "$CUR: 全宛先を止める規則があります（インターネットへ出られなくなる）"; fi
+net_run 0 "net rules: DEV_RUNNER_NET_ALLOW_DNS の宛先の 53 番だけを、止める規則より前で通す" DEV_RUNNER_NET_ALLOW_DNS="192.168.1.1 10.0.0.2" -- rules
+rules_has "-A DEV-RUNNER-FWD -d 192.168.1.1 -p udp --dport 53 -j ACCEPT"
+rules_has "-A DEV-RUNNER-FWD -d 10.0.0.2 -p tcp --dport 53 -j ACCEPT"
+rules_has "-A DEV-RUNNER-IN -d 192.168.1.1 -p udp --dport 53 -j ACCEPT"
+a_line="$(grep -nF -- '-A DEV-RUNNER-FWD -d 192.168.1.1 -p udp --dport 53 -j ACCEPT' "$OUT" | cut -d: -f1)"
+r_line="$(grep -nF -- '-A DEV-RUNNER-FWD -d 192.168.0.0/16' "$OUT" | cut -d: -f1)"
+[[ -n "$a_line" && -n "$r_line" && "$a_line" -lt "$r_line" ]] || ng "$CUR: 許可が止める規則より後ろにあります"
+net_run 1 "net rules: DEV_RUNNER_NET_ALLOW_DNS が IPv4 でなければ拒む" DEV_RUNNER_NET_ALLOW_DNS="1.2.3.4;reboot" -- rules
+net_run 1 "net apply: DEV_RUNNER_NET_ALLOW_DNS が不正なら、規則を 1 つも入れず印も置かない" DEV_RUNNER_NET_ALLOW_DNS="bogus" -- apply
+expect_no_calls
+[[ ! -e "$WORK/netstate/ready" ]] || ng "$CUR: 不正な指定なのに印が置かれています"
+
+rm -rf "$WORK/netstate"
+net_run 0 "net apply: 規則を入れ、印を置く" -- apply
+log_has '^iptables \[-N\] \[DEV-RUNNER-FWD\]$'
+log_has '^iptables \[-A\] \[DEV-RUNNER-FWD\] \[-d\] \[10.0.0.0/8\] \[-m\] \[conntrack\] \[--ctstate\] \[NEW\] \[-j\] \[REJECT\]$'
+log_has '^iptables \[-A\] \[DEV-RUNNER-IN\] \[-m\] \[conntrack\] \[--ctstate\] \[NEW\] \[-j\] \[REJECT\]$'
+log_has '^iptables \[-I\] \[DOCKER-USER\] \[-i\] \[dev-runner0\] \[-j\] \[DEV-RUNNER-FWD\]$'
+log_has '^iptables \[-I\] \[INPUT\] \[-i\] \[dev-runner0\] \[-j\] \[DEV-RUNNER-IN\]$'
+[[ "$(cat "$WORK/netstate/ready")" == "bridge=dev-runner0" ]] || ng "$CUR: 印の中身が bridge=dev-runner0 ではありません"
+# 印は、dev が読む形と一致する（スクリプトの印で dev runner run が通る）。
+cp "$WORK/netstate/ready" "$WORK/netmark/fromscript"
+rrun 0 "runner run: スクリプトが置いた印で通る（ブリッジ名の綴りが dev と一致する）" DEV_RUNNER_NET_MARKER="$WORK/netmark/fromscript" -- runner run r1
+net_run 0 "net apply: 飛び先が既にあれば（-C が 0）、足さない" FAKE_IPT_CHECK=0 -- apply
+log_lacks '^iptables \[-I\]'
+log_has '^iptables \[-C\] \[DOCKER-USER\] \[-i\] \[dev-runner0\] \[-j\] \[DEV-RUNNER-FWD\]$'
+net_run 0 "net clear: 印を消し、飛び先と鎖を外す" -- clear
+[[ ! -e "$WORK/netstate/ready" ]] || ng "$CUR: clear の後に印が残っています"
+log_has '^iptables \[-D\] \[DOCKER-USER\] \[-i\] \[dev-runner0\] \[-j\] \[DEV-RUNNER-FWD\]$'
+log_has '^iptables \[-D\] \[INPUT\] \[-i\] \[dev-runner0\] \[-j\] \[DEV-RUNNER-IN\]$'
+log_has '^iptables \[-X\] \[DEV-RUNNER-FWD\]$'
+net_run 1 "net: 知らない操作は拒む" -- bogus
+
+rrun 0 "runner net unit: 規則を入れるシステムのユニットを出す" -- runner net unit
+expect_no_calls
+NUNIT="$WORK/dev-runner-net.service"
+cp "$OUT" "$NUNIT"
+nunit_has() { grep -qxF -- "$1" "$NUNIT" || ng "規則のユニットに「$1」の行がありません（$2）"; }
+nunit_has 'After=docker.service' "Docker の後に入れる"
+nunit_has 'PartOf=docker.service' "Docker の再起動のたびに入れ直す"
+nunit_has 'Type=oneshot' "規則を入れて終わる"
+nunit_has 'RemainAfterExit=yes' "入れた状態を active で持つ"
+nunit_has 'ExecStart=/usr/local/sbin/dev-runner-net apply' "スクリプトの apply"
+nunit_has 'ExecStop=/usr/local/sbin/dev-runner-net clear' "止めたら印と規則を外す"
+nunit_has 'WantedBy=multi-user.target' "起動時に入れる"
+rrun 2 "runner net: 引数なし" -- runner net
+expect_err "使い方: dev runner net script|unit"
+rrun 2 "runner net: 知らない種類" -- runner net bogus
+expect_err "使い方: dev runner net script|unit"
 
 # ランナーのユニット（dev-runner@.service）。同じく要の行を綴りで見る。
 UNIT="${DEV_RUNNER_UNIT:-$HERE/dev-runner@.service}"
