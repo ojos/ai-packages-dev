@@ -291,7 +291,14 @@ dispatch_gate() {
     esac
   fi
   if ! gh workflow run second-opinion-gate.yml --ref "$default_branch" >/dev/null 2>&1; then
-    fail "記録は投稿しましたが、確認側を手動実行できませんでした（Actions の書き込み権限が無い、またはワークフローが既定ブランチに無い可能性）。手で起こしてください: $manual"
+    # **無効化されているワークフローは手動実行も拒まれる。** 権限を疑って遠回りしないよう、
+    # state を読んで、active でなければ無効だと伝える。読めない・active のときは候補に足す。
+    local wf_state
+    wf_state="$(gh api "repos/{owner}/{repo}/actions/workflows/second-opinion-gate.yml" --jq .state 2>/dev/null || true)"
+    if [[ -n "$wf_state" && "$wf_state" != "active" ]]; then
+      fail "記録は投稿しましたが、確認側（second-opinion-gate.yml）のワークフローが無効（${wf_state}）です。gh workflow enable second-opinion-gate.yml で有効にしてから、手で起こしてください: $manual"
+    fi
+    fail "記録は投稿しましたが、確認側を手動実行できませんでした（Actions の書き込み権限が無い、ワークフローが既定ブランチに無い、またはワークフローが無効化されている可能性）。手で起こしてください: $manual"
   fi
   printf '[second-opinion-record] 確認側を手動実行しました（ref=%s）。\n' "$default_branch"
 }

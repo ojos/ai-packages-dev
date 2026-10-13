@@ -57,6 +57,11 @@ case "$1 ${2-}" in
   "pr comment") echo posted >> "$FIXTURES/posted" ;;
   "repo view") [ "${GH_DEFAULT_BRANCH-main}" != "" ] || exit 1; echo "${GH_DEFAULT_BRANCH-main}" ;;
   "api repos/"*)
+    # ワークフローの state（無効化の判定）。GH_WF_STATE が空なら読めない扱い
+    case "$*" in *"actions/workflows"*)
+      [ -n "${GH_WF_STATE-}" ] || exit 1
+      echo "$GH_WF_STATE"; exit 0 ;;
+    esac
     # 確認側のワークフローが既定ブランチに在るか（contents）。GH_NO_GATE で 404 を返す
     if [ -n "${GH_NO_GATE-}" ]; then echo "gh: Not Found (HTTP 404)" >&2; exit 1; fi
     echo second-opinion-gate.yml
@@ -91,7 +96,7 @@ case_() {
   rm -rf "$fx"; mkdir -p "$fx"
   printf '%s' "$comments" > "$fx/comments.json"
   ( cd "$REPO" && PATH="$WORK/bin:$PATH" FIXTURES="$fx" GH_ME="$me" GH_AUTHOR="$author" \
-      GH_DISPATCH_FAIL="${GH_DISPATCH_FAIL-}" GH_DEFAULT_BRANCH="${GH_DEFAULT_BRANCH-main}" GH_NO_GATE="${GH_NO_GATE-}" \
+      GH_DISPATCH_FAIL="${GH_DISPATCH_FAIL-}" GH_DEFAULT_BRANCH="${GH_DEFAULT_BRANCH-main}" GH_NO_GATE="${GH_NO_GATE-}" GH_WF_STATE="${GH_WF_STATE-}" \
       bash "$SCRIPT" post ) >"$fx/out" 2>&1
   rc=$?
   posted=no; [ -f "$fx/posted" ] && posted=yes
@@ -119,6 +124,16 @@ GH_DEFAULT_BRANCH=trunk case_ "既定ブランチが main でなければ、そ�
 GH_DISPATCH_FAIL=1 case_ "確認側を手動実行できなければ、非 0 で終わる" 1 yes alice alice '[]'
 it "手動実行できなかったときの出力に、手で起こすコマンドが含まれる"
 if grep -q 'gh workflow run second-opinion-gate.yml --ref main' "$WORK/fx/out"; then pass; else fail "手で起こすコマンドが出力に無い: $(tr '\n' ' ' < "$WORK/fx/out")"; fi
+# ワークフローが無効なら、そうと分かる文言と enable の案内を出して非 0 で終わる。
+GH_DISPATCH_FAIL=1 GH_WF_STATE=disabled_manually case_ "手動実行に失敗し state が disabled_manually なら、非 0 で終わる" 1 yes alice alice '[]'
+it "無効のとき、無効であることと gh workflow enable の案内が出る"
+if grep -q 'disabled_manually' "$WORK/fx/out" && grep -q 'gh workflow enable second-opinion-gate.yml' "$WORK/fx/out"; then pass; else fail "案内が無い: $(tr '\n' ' ' < "$WORK/fx/out")"; fi
+GH_DISPATCH_FAIL=1 GH_WF_STATE=active case_ "手動実行に失敗し state が active なら、非 0 で終わる" 1 yes alice alice '[]'
+it "active のとき、無効化も候補に挙げた文言が出る"
+if grep -q '無効化されている可能性' "$WORK/fx/out" && ! grep -q 'gh workflow enable' "$WORK/fx/out"; then pass; else fail "文言が違う: $(tr '\n' ' ' < "$WORK/fx/out")"; fi
+GH_DISPATCH_FAIL=1 case_ "state を読めなくても非 0 で終わる" 1 yes alice alice '[]'
+it "state を読めないとき、無効化も候補に挙げた文言が出る"
+if grep -q '無効化されている可能性' "$WORK/fx/out"; then pass; else fail "文言が違う: $(tr '\n' ' ' < "$WORK/fx/out")"; fi
 GH_DEFAULT_BRANCH= case_ "既定ブランチを読めなければ、非 0 で終わる" 1 yes alice alice '[]'
 # 確認側を初めて入れる PR では、既定ブランチにまだワークフローが無い。手動実行は起こさず成功する。
 GH_NO_GATE=1 case_ "確認側が既定ブランチに無ければ、手動実行を起こさずに成功する" 0 yes alice alice '[]'
