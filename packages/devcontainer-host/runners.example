@@ -10,6 +10,10 @@
 #   labels=<a,b>        ランナーに足すラベル（カンマ区切り。既定は足さない）
 #   docker=<yes|no>     ホストの Docker のソケットをジョブへ渡すか（既定 no）。
 #                       yes にすると、ジョブがホストの Docker を自由に操作できる（実質、ホストの root 相当）
+#   lan=<allow|deny>    ジョブが外部の機械の LAN・機械自身へ届いてよいか（既定 deny）。
+#                       deny は専用の Docker ネットワークで動かし、出口の規則（dev runner net script / unit で root が入れる）が
+#                       入っていないと起動しない。allow にすると、その確認を外し、従来どおり既定のブリッジで動く
+#                       （LAN のプロキシ・社内のパッケージ置き場に頼るジョブ用）。docker=yes のランナーは、deny でもソケットで迂回できる
 #   pat_file=<絶対パス> PAT を置いたファイル（既定は同じディレクトリの runner-pat）。
 #                       group / other に権限があると(644 など)、dev runner は起動を拒む。600 か 400 にする
 #
@@ -27,3 +31,4 @@
 # runner1   my-org   labels=devhost
 # runner2   my-org   labels=devhost
 # docker1   my-org   labels=devhost,docker   docker=yes
+# lan1      my-org   labels=devhost,lan      lan=allow

@@ -87,6 +87,7 @@ usage() {
   dev doctor --runner <名前>
   dev runner build
   dev runner run <名前>     （systemd のユニット dev-runner@.service から使う）
+  dev runner net script|unit
   dev restart <名前>
   dev stop <名前>
   dev logs <名前> [-n <行数>]
@@ -629,10 +630,16 @@ R_ORGS=()
 R_LABELS=()
 R_DOCKER=()
 R_PAT=()
+R_LAN=()
 # ランナーのイメージに使う公式のランナーの版（設定ファイルの runner_version=X.Y.Z）。空なら Dockerfile の既定値。
 R_VERSION=""
 # 設定の誤りなど、起こし直しても直らない失敗の終了コード（EX_CONFIG）。ユニットの RestartPreventExitStatus が見る。
 EXIT_PERMANENT=78
+
+# ランナー専用の Docker ネットワークとそのブリッジ名。ブリッジ名は規則（root のスクリプト）と一致させる必要があるため固定する
+# （Docker が付ける br-<ID> はネットワークを作り直すたびに変わる）。規則側の綴りは runner_net_script の BRIDGE と同じ。
+RUNNER_NET_NAME="dev-runner"
+RUNNER_NET_BRIDGE="dev-runner0"
 
 runners_file() {
   if [[ -n "${DEV_RUNNERS_FILE:-}" ]]; then
@@ -692,7 +699,7 @@ load_runners() {
     for ((i = 0; i < ${#R_NAMES[@]}; i++)); do
       [[ "${R_NAMES[$i]}" == "$name" ]] && usage_error "$file:$lineno: 名前が重複しています: $name"
     done
-    labels="" dock="no"
+    labels="" dock="no" lan="deny"
     pat="$(dirname "$file")/runner-pat"
     for kv in "$@"; do
       if [[ "$kv" != *=* ]]; then
@@ -711,17 +718,24 @@ load_runners() {
             *) usage_error "$file:$lineno: docker は yes か no です: $val" ;;
           esac
           ;;
+        lan)
+          case "$val" in
+            allow | deny) lan="$val" ;;
+            *) usage_error "$file:$lineno: lan は allow か deny です: $val" ;;
+          esac
+          ;;
         pat_file)
           [[ "$val" == /* ]] || usage_error "$file:$lineno: pat_file は絶対パスで書きます（~ や \$HOME は展開しません）: $val"
           pat="$val"
           ;;
-        *) usage_error "$file:$lineno: 知らないキーです（labels / docker / pat_file）: $key" ;;
+        *) usage_error "$file:$lineno: 知らないキーです（labels / docker / lan / pat_file）: $key" ;;
       esac
     done
     R_NAMES+=("$name")
     R_ORGS+=("$org")
     R_LABELS+=("$labels")
     R_DOCKER+=("$dock")
+    R_LAN+=("$lan")
     R_PAT+=("$pat")
   done <"$file"
   if [[ ${#R_NAMES[@]} -eq 0 ]]; then
@@ -842,12 +856,13 @@ runner_api() {
 
 cmd_runner() {
   local sub="${1:-}"
-  [[ $# -ge 1 ]] || usage_error "使い方: dev runner build | dev runner run <名前>"
+  [[ $# -ge 1 ]] || usage_error "使い方: dev runner build | dev runner run <名前> | dev runner net script|unit"
   shift
   case "$sub" in
     build) cmd_runner_build "$@" ;;
     run) cmd_runner_run "$@" ;;
-    *) usage_error "知らない runner のサブコマンドです: $sub（build / run）" ;;
+    net) cmd_runner_net "$@" ;;
+    *) usage_error "知らない runner のサブコマンドです: $sub（build / run / net）" ;;
   esac
 }
 
@@ -970,6 +985,227 @@ runner_lock() {
   fi
 }
 
+# ── runner の出口の制限（専用ネットワークと、root が入れる規則）─────────────────────
+# ジョブが外部の機械の LAN・機械自身・リンクローカルへ届かないよう、ランナーを専用の Docker ネットワークで動かし、
+# そのブリッジからの出口を規則（iptables）で止める。規則の追加には root が要るため、dev 本体は入れない。
+# root で動く部分（スクリプトと systemd のシステムのユニット）は dev runner net script / unit が出力し、利用者が sudo で入れる。
+# 規則が入ると、スクリプトが印のファイルを置く。dev runner run は印を確かめ、無ければ起動しない。
+
+# 規則の印のファイル。1 行目が「bridge=<ブリッジ名>」。root だけが書ける場所（/run 配下）に置く。
+runner_net_marker() { printf '%s\n' "${DEV_RUNNER_NET_MARKER:-/run/dev-runner-net/ready}"; }
+
+# 印が無いとき待つ秒数。Docker の再起動では規則のユニットも入れ直すので、その間を待つ。
+runner_net_wait() { printf '%s\n' "${DEV_RUNNER_NET_WAIT:-30}"; }
+
+# 印のファイルを確かめる。無いときは一時的な失敗（1）で抜ける（規則のユニットが入れ終えるのを待つ間に、ユニットが起こし直す。
+# 78 にすると RestartPreventExitStatus に当たって二度と起きないため）。ブリッジ名が合わないのは設定の誤りなので 78。
+# 登録用のトークンを取る（API を呼ぶ）より前に呼ぶこと。起こし直しが API を消費しないようにするため。
+runner_net_require() {
+  local name="$1" marker waited=0 limit
+  marker="$(runner_net_marker)"
+  limit="$(runner_net_wait)"
+  [[ "$limit" =~ ^[0-9]+$ ]] || limit=0
+  while [[ ! -f "$marker" && "$waited" -lt "$limit" ]]; do
+    sleep 1
+    waited=$((waited + 1))
+  done
+  if [[ ! -f "$marker" ]]; then
+    die "$name: 出口の規則の印がありません: $marker。規則が入っていないまま動かさないため起動しません（ユニットが起こし直します）。規則を入れてください（dev runner net script / unit。README.md の「自前のランナー」）。LAN に届いてよいランナーは、設定ファイルで lan=allow にします"
+  fi
+  if ! grep -qxF "bridge=$RUNNER_NET_BRIDGE" "$marker"; then
+    die_permanent "$name: 出口の規則の印のブリッジ名が、このバージョンの dev と合いません（期待 bridge=$RUNNER_NET_BRIDGE）: $marker。規則のスクリプトとユニットを、dev runner net script / unit で入れ直してください"
+  fi
+}
+
+# 専用ネットワークが無ければ作る（IPv6 は無効、ブリッジ名は固定）。あれば、ブリッジ名と IPv6 が期待どおりかを確かめる。
+runner_net_ensure() {
+  local name="$1" out want="$RUNNER_NET_BRIDGE false"
+  if out="$(docker network inspect --format '{{index .Options "com.docker.network.bridge.name"}} {{.EnableIPv6}}' "$RUNNER_NET_NAME" 2>&1)"; then
+    [[ "$out" == "$want" ]] || die_permanent "$name: Docker のネットワーク $RUNNER_NET_NAME の設定が期待と違います（期待「$want」/ 実際「$out」）。docker network rm $RUNNER_NET_NAME で消してから起こし直してください"
+    return 0
+  fi
+  case "$out" in
+    *"No such network"* | *"not found"*) ;;
+    *) die "$name: docker に問い合わせられません（デーモンが起きていないかもしれません）: $out" ;;
+  esac
+  if ! out="$(docker network create --driver bridge --ipv6=false -o "com.docker.network.bridge.name=$RUNNER_NET_BRIDGE" "$RUNNER_NET_NAME" 2>&1)"; then
+    # 別のランナーが同時に作った場合は、作られていればよい。
+    if out="$(docker network inspect --format '{{index .Options "com.docker.network.bridge.name"}} {{.EnableIPv6}}' "$RUNNER_NET_NAME" 2>&1)" && [[ "$out" == "$want" ]]; then
+      return 0
+    fi
+    die "$name: Docker のネットワーク $RUNNER_NET_NAME を作れませんでした: $out"
+  fi
+  echo "[$PROG] $name: Docker のネットワーク $RUNNER_NET_NAME（ブリッジ $RUNNER_NET_BRIDGE、IPv6 無効）を作りました。"
+}
+
+# dev runner net script|unit: root で入れる部分を標準出力へ出す（dev 自身は何も入れない）。
+cmd_runner_net() {
+  [[ $# -eq 1 ]] || usage_error "使い方: dev runner net script|unit"
+  case "$1" in
+    script) runner_net_script ;;
+    unit) runner_net_unit ;;
+    *) usage_error "使い方: dev runner net script|unit（知らない種類です: $1）" ;;
+  esac
+}
+
+# 規則を入れる root のスクリプト（/usr/local/sbin/dev-runner-net）。単体で動く。
+#   apply  規則を入れ直して、印を置く（冪等）
+#   unmark 印だけを消す（規則は残す）
+#   clear  印と規則を外す（利用者が明示して打つときだけ）
+#   rules  入れる規則（iptables-restore に渡す内容）を出す。何も実行しない（試験用）
+runner_net_script() {
+  cat <<'EOF'
+#!/usr/bin/env bash
+# dev-runner-net — devhost の自前のランナー（専用の Docker ネットワーク）の出口を止める規則を入れる。
+#
+# root で動く。systemd のシステムのユニット dev-runner-net.service から呼ぶ（dev runner net unit）。
+#   dev-runner-net apply   規則を入れ直して、印のファイルを置く（何度呼んでもよい）
+#   dev-runner-net unmark  印のファイルだけを消す（規則は残す。ユニットの停止で呼ぶ）
+#   dev-runner-net clear   印のファイルを消し、規則を外す（利用者が明示して打つときだけ）
+#   dev-runner-net rules   入れる規則（iptables-restore に渡す内容）を出す。何も実行しない
+#
+# 入れ直しは iptables-restore --noflush の 1 回の取り込みで行う（鎖の中身の入れ替えと飛び先の追加が一度に切り替わる）。
+# 止めるもの（ランナーのブリッジから出る、新しい接続）:
+#   - FORWARD（DOCKER-USER から飛ぶ）: 10/8・172.16/12・192.168/16・169.254/16・100.64/10 への接続
+#   - INPUT: この機械自身への接続（ブリッジのゲートウェイ、LAN 側のアドレスを含む）
+# 通るもの: 上の帯の外（インターネット）。Docker の内蔵の DNS（127.0.0.11）はコンテナの中で応答する。
+# 上流の DNS が LAN の帯にあって名前が引けないときは、環境変数 DEV_RUNNER_NET_ALLOW_DNS（空白区切りの IPv4）へ書くと、
+# そのアドレスの 53 番だけを通す（/etc/default/dev-runner-net に書く）。
+set -euo pipefail
+
+BRIDGE="dev-runner0"
+FWD_CHAIN="DEV-RUNNER-FWD"
+IN_CHAIN="DEV-RUNNER-IN"
+BLOCKED_CIDRS=(10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16 100.64.0.0/10)
+STATE_DIR="${DEV_RUNNER_NET_STATE_DIR:-/run/dev-runner-net}"
+MARKER="$STATE_DIR/ready"
+ALLOW_DNS="${DEV_RUNNER_NET_ALLOW_DNS:-}"
+
+die() { echo "[dev-runner-net] $*" >&2; exit 1; }
+
+# 飛び先（DOCKER-USER / INPUT からランナーのブリッジの鎖へ）が既にあるか。
+hook_exists() { iptables -C "$1" -i "$BRIDGE" -j "$2" 2>/dev/null; }
+
+# iptables-restore --noflush に渡す内容を出す。引数は、足す飛び先（fwd / in。無ければ足さない）。
+# 鎖の宣言（:鎖 - [0:0]）は、既にある鎖の中身を同じ取り込みの中で空にして入れ直す。1 回の取り込みで切り替わるので、制限の無い瞬間ができない。
+restore_input() {
+  local c a h
+  echo "*filter"
+  echo ":$FWD_CHAIN - [0:0]"
+  echo ":$IN_CHAIN - [0:0]"
+  for a in $ALLOW_DNS; do
+    [[ "$a" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "DEV_RUNNER_NET_ALLOW_DNS に IPv4 でない値があります: $a"
+    echo "-A $FWD_CHAIN -d $a -p udp --dport 53 -j ACCEPT"
+    echo "-A $FWD_CHAIN -d $a -p tcp --dport 53 -j ACCEPT"
+    echo "-A $IN_CHAIN -d $a -p udp --dport 53 -j ACCEPT"
+    echo "-A $IN_CHAIN -d $a -p tcp --dport 53 -j ACCEPT"
+  done
+  for c in "${BLOCKED_CIDRS[@]}"; do
+    echo "-A $FWD_CHAIN -d $c -m conntrack --ctstate NEW -j REJECT"
+  done
+  echo "-A $IN_CHAIN -m conntrack --ctstate NEW -j REJECT"
+  for h in "$@"; do
+    case "$h" in
+      fwd) echo "-I DOCKER-USER -i $BRIDGE -j $FWD_CHAIN" ;;
+      in) echo "-I INPUT -i $BRIDGE -j $IN_CHAIN" ;;
+    esac
+  done
+  echo "COMMIT"
+}
+
+# 入れる規則の全文（飛び先も含む。何も実行しない）。
+rules() { restore_input fwd in; }
+
+need_restore() { command -v iptables-restore >/dev/null 2>&1 || die "iptables-restore がありません。何も入れていません"; }
+
+apply() {
+  local input hooks=()
+  # 入れ直しの途中で失敗したとき、古い印が残って「規則が入っている」と読まれないよう、先に消す。
+  rm -f "$MARKER"
+  need_restore
+  # 規則の生成に失敗したら（不正な DNS の指定など）、何も入れずに止まる。
+  hook_exists DOCKER-USER "$FWD_CHAIN" || hooks+=(fwd)
+  hook_exists INPUT "$IN_CHAIN" || hooks+=(in)
+  input="$(restore_input ${hooks[@]+"${hooks[@]}"})"
+  # DOCKER-USER が転送（FORWARD）の経路に入っていることを、何かを入れる前に確かめる。Docker が iptables を使っていない構成
+  # （nftables のバックエンドなど）では、Docker は FORWARD から DOCKER-USER への飛び先を作らない。自分で鎖を作って入れても
+  # 転送の経路に掛からないので、制限が効かないまま印を置くことになる。入っていなければ、何も入れず印も置かずに止まる。
+  if ! iptables -C FORWARD -j DOCKER-USER 2>/dev/null; then
+    die "FORWARD から DOCKER-USER への飛び先がありません。Docker が iptables を使っていない（nftables のバックエンド、--iptables=false など）か、Docker がまだ起きていません。この構成では出口の規則は効かないので、何も入れず印も置きません"
+  fi
+  # 鎖の中身の入れ替えと、足りない飛び先の追加を、1 回の取り込みで行う。失敗したら何も変わらず、印も置かない。
+  printf '%s\n' "$input" | iptables-restore --noflush
+  mkdir -p "$STATE_DIR"
+  chmod 755 "$STATE_DIR"
+  printf 'bridge=%s\n' "$BRIDGE" >"$MARKER.tmp"
+  chmod 644 "$MARKER.tmp"
+  mv -f "$MARKER.tmp" "$MARKER"
+  echo "[dev-runner-net] 規則を入れました（ブリッジ $BRIDGE）"
+}
+
+unmark() {
+  rm -f "$MARKER"
+  echo "[dev-runner-net] 印を消しました（規則は残します）"
+}
+
+clear_rules() {
+  local lines=() ch
+  rm -f "$MARKER"
+  need_restore
+  # 飛び先の削除と鎖の削除を 1 回の取り込みにする。無いものを消すと取り込み全体が失敗するので、あるものだけを入れる。
+  if hook_exists DOCKER-USER "$FWD_CHAIN"; then lines+=("-D DOCKER-USER -i $BRIDGE -j $FWD_CHAIN"); fi
+  if hook_exists INPUT "$IN_CHAIN"; then lines+=("-D INPUT -i $BRIDGE -j $IN_CHAIN"); fi
+  for ch in "$FWD_CHAIN" "$IN_CHAIN"; do
+    if iptables -n -L "$ch" >/dev/null 2>&1; then lines+=("-F $ch" "-X $ch"); fi
+  done
+  if [[ ${#lines[@]} -gt 0 ]]; then
+    { echo "*filter"; printf '%s\n' "${lines[@]}"; echo "COMMIT"; } | iptables-restore --noflush
+  fi
+  echo "[dev-runner-net] 規則を外しました"
+}
+
+case "${1:-}" in
+  apply) apply ;;
+  unmark) unmark ;;
+  clear) clear_rules ;;
+  rules) rules ;;
+  *) die "使い方: dev-runner-net apply|unmark|clear|rules" ;;
+esac
+EOF
+}
+
+# 規則を入れるシステムのユニット（/etc/systemd/system/dev-runner-net.service）。
+runner_net_unit() {
+  cat <<'EOF'
+# dev-runner-net.service — devhost の自前のランナーの出口を止める規則を入れる（root で動くシステムのユニット）。
+#
+# dev runner net unit で出力し、/etc/systemd/system/ へ置く。導入の手順は README.md の「自前のランナー」。
+# Docker のデーモンが再起動するたびに入れ直す（PartOf）。Docker の再起動で DOCKER-USER が作り直されても、規則が外れたままにならない。
+# 止めたとき（Docker の停止を含む）は、印だけを消し、規則は消さない。Docker の live-restore でコンテナが動き続けるあいだも、
+# 制限が外れないようにするため。自分の鎖と飛び先は Docker の再起動でも残り、起動時の apply が 1 回の取り込みで入れ替える。
+# 規則を外すのは、利用者が明示して dev-runner-net clear を打つときだけ。
+# PartOf は Docker の停止と再起動しか伝えない。停止（印を消す）のあとに docker.service だけを起動しても印が戻らないよう、
+# [Install] の WantedBy=docker.service で、Docker の起動に合わせてこのユニットも起動する（systemctl enable で効く）。
+
+[Unit]
+Description=devhost の自前のランナーの出口の規則（専用ブリッジから LAN と機械自身への接続を止める）
+After=docker.service
+PartOf=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# 上流の DNS が LAN の帯にあるときの許可（DEV_RUNNER_NET_ALLOW_DNS="192.0.2.53" の形。無くてもよい）。
+EnvironmentFile=-/etc/default/dev-runner-net
+ExecStart=/usr/local/sbin/dev-runner-net apply
+ExecStop=/usr/local/sbin/dev-runner-net unmark
+
+[Install]
+WantedBy=multi-user.target
+WantedBy=docker.service
+EOF
+}
+
 # systemd のユニット（dev-runner@.service）の ExecStart。1 回の起動で、ジョブを 1 つ受けて終わる。
 # (1) PAT で登録用のトークンを取り、(2) --ephemeral のランナーを --rm のコンテナで動かし、
 # (3) コンテナが止まったら抜ける。起こし直しはユニット（Restart=always）が行う。
@@ -978,7 +1214,7 @@ cmd_runner_run() {
   [[ $# -eq 1 ]] || usage_error "使い方: dev runner run <名前>"
   load_runners
   find_runner "$1"
-  local name="$1" org="${R_ORGS[$RIDX]}" labels="${R_LABELS[$RIDX]}" dock="${R_DOCKER[$RIDX]}" patf="${R_PAT[$RIDX]}"
+  local name="$1" org="${R_ORGS[$RIDX]}" labels="${R_LABELS[$RIDX]}" dock="${R_DOCKER[$RIDX]}" patf="${R_PAT[$RIDX]}" lan="${R_LAN[$RIDX]}"
   need docker "Docker Engine を入れてください。"
   need curl "curl を入れてください。"
   need jq "jq を入れてください。"
@@ -996,6 +1232,14 @@ cmd_runner_run() {
   # PAT は、group / other に権限があれば読む前に拒む。
   why="$(runner_pat_problem "$patf")" || die_permanent "$name: $why"
   runner_pat_load "$patf" || die_permanent "$name: PAT ファイルを読めませんでした"
+
+  # 出口の制限。lan=allow のランナーだけが、専用ネットワークと規則の印の確認を外す（従来どおり既定のブリッジで動く）。
+  local net_args=()
+  if [[ "$lan" != "allow" ]]; then
+    runner_net_require "$name"
+    runner_net_ensure "$name"
+    net_args=(--network "$RUNNER_NET_NAME")
+  fi
 
   local sock="" gid="" args
   if [[ "$dock" == "yes" ]]; then
@@ -1054,11 +1298,11 @@ cmd_runner_run() {
 
   # コンテナへ渡すのは登録用のトークン（1 時間で切れる）だけ。値は引数に書かず、名前だけを -e に渡す
   # （docker が環境から読む）。PAT はこのプロセスの変数にあるだけで、export していない。
-  args=(run --rm --name "$RUNNER_CNAME" -e RUNNER_TOKEN)
+  args=(run --rm --name "$RUNNER_CNAME" -e RUNNER_TOKEN ${net_args[@]+"${net_args[@]}"})
   if [[ "$dock" == "yes" ]]; then
     args+=(-v "$sock:/var/run/docker.sock" --group-add "$gid")
   fi
-  echo "[$PROG] $name: ランナー $RUNNER_GHNAME を起こします（組織 $org、docker=$dock）。ジョブを 1 つ受けたら終わります。"
+  echo "[$PROG] $name: ランナー $RUNNER_GHNAME を起こします（組織 $org、docker=$dock、lan=$lan）。ジョブを 1 つ受けたら終わります。"
   # ここから先は、正常に終わらなければ後始末（コンテナの停止と登録の削除）をする。
   RUNNER_NEED_CLEANUP=1
   RUNNER_TOKEN="$tok" docker "${args[@]}" "$img" bash -c \
@@ -1719,6 +1963,7 @@ dev runner — GitHub Actions の自前のランナーを、使い捨てのコ�
 使い方:
   dev runner build
   dev runner run <名前>
+  dev runner net script|unit
 
 build: ランナーのイメージ（公式のランナーのイメージに道具を足した runner.Dockerfile）を作る。
   Dockerfile は標準入力から渡す（ビルドの文脈を作らない）。Dockerfile は編集しない。公式のランナーの版を上げるときは、
@@ -1729,17 +1974,24 @@ run: ユニット dev-runner@<名前>.service の ExecStart。1 回の起動で�
   2. PAT で組織の登録用のトークンを取得する（PAT は引数にも環境変数にも出さない）
   3. --ephemeral のランナーを --rm のコンテナで起こす。コンテナへ渡すのは登録用のトークンだけ
   4. ジョブが 1 つ終わってコンテナが止まったら抜ける（ユニットが新しいコンテナで起こし直す）
+  3 の前（2 の API を呼ぶより前）に、出口の規則の印（/run/dev-runner-net/ready。ブリッジ名 dev-runner0 を含む）を確かめる。無いときは起動せず 1 で終わり（ユニットが起こし直す）、ブリッジ名が違うときは 78 で終わる
+  （Docker の再起動に備え、無ければ 30 秒まで待つ）。印があれば、専用の Docker ネットワーク dev-runner（IPv6 無効、ブリッジ名 dev-runner0 固定）を
+  無ければ作り、コンテナをそこで動かす。設定ファイルで lan=allow にしたランナーは、この確認を外し、既定のブリッジで動かす。
   コンテナを起こしたあと、正常に終わらなかったとき（止めたとき（ユニットの停止・TERM・INT・HUP）や失敗したとき）だけ、
   コンテナを止め、登録中のランナーを組織から外す（正常に終わったときは、GitHub 側で外れている）。
   Docker のソケットは、設定ファイルで docker=yes にしたランナーにだけ渡す（既定は渡さない。
   渡すと、ジョブがホストの Docker を自由に操作できる）。
 設定ファイル: runners（既定は ~/.config/dev/runners（XDG_CONFIG_HOME があればその下）。環境変数 DEV_RUNNERS_FILE で差し替える。書式は runners.example）。
-  1 行 1 ランナーで「名前 組織 [labels=a,b] [docker=yes|no] [pat_file=絶対パス]」。
+  1 行 1 ランナーで「名前 組織 [labels=a,b] [docker=yes|no] [lan=allow|deny] [pat_file=絶対パス]」。
   `runner_version=X.Y.Z` だけの行は、イメージに使う公式のランナーの版（共通の設定）。
+net: 出口の規則を入れる root の部分を標準出力へ出す（dev 自身は何も入れない。sudo で入れる手順は、このパッケージの README の自前のランナーの節）。
+  script  規則を入れるスクリプト（/usr/local/sbin/dev-runner-net）。apply / unmark / clear / rules を持つ
+  unit    それを呼ぶ systemd のシステムのユニット（/etc/systemd/system/dev-runner-net.service）
+  止める出口: 専用ブリッジから 10/8・172.16/12・192.168/16・169.254/16・100.64/10 と、機械自身への新しい接続。docker=yes のランナーはソケットで迂回できるので対象外。
 点検は dev doctor --runner <名前>。curl と jq が要る。
 
-終了コード: 0 = ジョブを終えて止まった（build は作れた） / 1 = 一時的な失敗（API の 429・5xx や通信の失敗、コンテナの失敗など。ユニットは起こし直す） /
-            2 = 使い方か設定ファイルの誤り / 75 = 同じ名前がすでに動いている / 78 = イメージが無い・PAT の権限が緩い・Docker のソケットが無い・API が 401 / 403 / 404（PAT の失効・権限不足・組織名の誤り）
+終了コード: 0 = ジョブを終えて止まった（build は作れた） / 1 = 一時的な失敗（API の 429・5xx や通信の失敗、コンテナの失敗、出口の規則の印がまだ無い、など。ユニットは起こし直す） /
+            2 = 使い方か設定ファイルの誤り / 75 = 同じ名前がすでに動いている / 78 = イメージが無い・PAT の権限が緩い・Docker のソケットが無い・出口の規則の印のブリッジ名が違う・API が 401 / 403 / 404（PAT の失効・権限不足・組織名の誤り）
             （2 と 78 は、ユニットが起こし直さない）
 失敗したとき: dev doctor --runner <名前> で原因を見分ける。
 EOF
