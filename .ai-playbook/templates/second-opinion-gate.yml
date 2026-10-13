@@ -28,13 +28,28 @@ name: second-opinion-gate
 # `scripts/second-opinion-gate-exempt.sh` が持つ（ワークフローへ判定を埋めない理由は
 # 下記「2 段目」と同じ）。
 #
-# ## 猶予を毎回置く
+# ## pull_request の契機では眠らない（記録が無ければ pending で終える）
 #
-# **要求側と確認側が同時に走る `review-gate.yml` 系の最終ゲートとは、ここが 1 点だけ
-# 設計が逆である。** あちらは `opened` のときだけ待つ。こちらは**記録が push の後に
-# 手元から投稿される**ので、`synchronize` でも同じことが起きる——push の直後に
-# このワークフローが走り、投稿はその数秒〜数分後になる。待たずに見ると、push のたびに
-# 赤が出る。**偽の赤はゲートへの信頼を削る**（review-workflow.md）。
+# 記録は push の後に手元から投稿されるので、push の直後に走るこの実行は投稿より先に
+# なりうる。**待たずに見て赤を付けると、push のたびに偽の赤が出る**（偽の赤はゲートへの
+# 信頼を削る。review-workflow.md）。かといって**眠って待つと、そのあいだランナーを占有し**
+# （自前のランナーが 1 台なら後続のジョブが止まり、GitHub のランナーなら PR の push ごとに
+# 数分の課金になる）、待つ意味も薄い——投稿の直後に `post` が手動実行を起こして判定する。
+#
+# そこで pull_request の契機は、眠らずにその場で次のとおり終える。
+#
+#   - 記録を求めない PR … その場で判定する（success）
+#   - 記録が在る       … その場で判定する（success）
+#   - 記録が無い       … **status を pending にして成功で終える**（赤にしない）
+#   - 確かめられない   … 失敗で知らせる（status は付けない）
+#
+# 判定の確定は、`post` が起こす手動実行と `/land` の再判定が持つ（どちらも、猶予の中でも
+# 記録があれば判定し、猶予を過ぎて記録が無ければ赤にする）。**記録を投稿しないまま放置した
+# PR は、赤ではなく pending のまま残る。** このゲートは required check ではないので、
+# どちらでもマージの可否は変わらない。
+#
+# **要求側と確認側が同時に走る `review-gate.yml` 系の最終ゲートとは、ここが設計が違う。**
+# あちらは `opened` のときだけ待つ。こちらは待たない。
 #
 # ## 要求はしない
 #
@@ -133,18 +148,17 @@ jobs:
           # 置換するので、値に引用符が混ざればシェルの構文ごと変わりうる。加えて
           # `bash -n` は `${{ ... }}` を通してしまうため、構文検査でも気づけない。
           PR_NUMBER: ${{ github.event.pull_request.number }}
-          # 起動の契機になった head SHA。**待ったあとに head が動いていないかを見るために要る**
-          # （下の「待っているあいだに push が入ったら」）。
+          # 起動の契機になった head SHA。pull_request の契機は、この SHA に対して判定する。
           TRIGGER_SHA: ${{ github.event.pull_request.head.sha }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
 
-          # 記録が投稿されるまでの猶予（秒）。
+          # 記録が投稿されるまでの猶予（秒）。**掃き寄せ（手動実行）の側だけで使う。**
           #
-          # **毎回置く**（冒頭「猶予を毎回置く」）。
-          # 記録は push の後に手元から投稿されるので、push で起動したこの実行は
-          # 投稿より先に走る。待たずに見ると push のたびに赤が出る。
+          # pull_request の契機では眠らない（冒頭「pull_request の契機では眠らない」）。
+          # 記録が無ければ pending で終え、判定は post が起こす手動実行と /land の再判定に任せる。
+          # 掃き寄せは、push からこの秒数が経つまでは、記録が無い PR に赤を付けずに見送る。
           GRACE_SEC=300
 
           # **掃き寄せ側は、push の時刻で待つ。**
@@ -330,31 +344,27 @@ jobs:
               exit 0
             fi
 
-            # 記録を求めない PR は、投稿を待つ理由が無い。
-            if is_exempt "$PR_NUMBER"; then
-              echo "PR #${PR_NUMBER} は記録を求めない PR です。待たずに判定します。"
-            else
-              echo "PR #${PR_NUMBER} を判定します（記録の投稿を ${GRACE_SEC} 秒待ちます）"
-              sleep "$GRACE_SEC"
+            # **眠らない。** 記録を求めない PR と、記録が在る PR はその場で判定する。記録が
+            # 無ければ pending を書いて成功で終える（冒頭「pull_request の契機では眠らない」）。
+            # 確定は、post が起こす手動実行と /land の再判定が持つ。
+            rc=0
+            if ! is_exempt "$PR_NUMBER"; then
+              has_record "$PR_NUMBER" "$TRIGGER_SHA" || rc=$?
             fi
-
-            # **待っているあいだに push が入ったら、判定しない。**
-            #
-            # 待った後の head を取って判定すると、**新しい push に対して猶予を 1 秒も
-            # 与えずに赤を付ける**ことになる。逆に起動時の SHA へ付けると、それはもう head
-            # ではないので **PR の checks 欄に何も現れないまま「判定した」ことになる。**
-            #
-            # **どちらも採らない。譲る。** 新しい push には、それ自身の実行が同じ猶予を
-            # 置いてから判定する。届かなければ手動実行の掃き寄せが拾う（そちらも head の時刻で待つ）。
-            # **判定しないことを失敗にもしない**——赤でも緑でもなく、この実行の担当が
-            # 終わっただけである。
-            current="$(gh api "repos/${REPO}/pulls/${PR_NUMBER}" --jq .head.sha)"
-            if [ "$current" != "$TRIGGER_SHA" ]; then
-              echo "PR #${PR_NUMBER}: 待っているあいだに head が ${TRIGGER_SHA:0:7} から ${current:0:7} へ動きました。"
-              echo "PR #${PR_NUMBER}: この実行は判定しません（新しい push 自身の実行が、同じ猶予を置いてから判定します）。"
-              exit 0
-            fi
-            judge "$PR_NUMBER" "$TRIGGER_SHA" || failed=1
+            case "$rc" in
+              0)
+                echo "PR #${PR_NUMBER} を判定します"
+                judge "$PR_NUMBER" "$TRIGGER_SHA" || failed=1
+                ;;
+              1)
+                echo "PR #${PR_NUMBER}: 記録がまだありません。pending にして終わります（記録の投稿後に判定されます）。"
+                report "$TRIGGER_SHA" pending "waiting for second-opinion record: run second-opinion-record.sh post" || failed=1
+                ;;
+              *)
+                echo "::error::PR #${PR_NUMBER}: 記録の有無を確かめられませんでした（GitHub API から読めない）。status は付けていません。手動実行（workflow_dispatch）で再判定してください。"
+                failed=1
+                ;;
+            esac
           else
             echo "open な PR を掃き寄せます"
             now="$(date -u +%s)"

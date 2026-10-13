@@ -9,7 +9,7 @@
 #   gh    … 用意した JSON に、呼ばれた --jq の式を本物の jq で当てて返す。**YAML に書いた
 #           jq の式もそのまま確かめる。** status の投稿（POST statuses）は state を
 #           記録するだけ
-#   sleep … 何もしない（猶予の 300 秒を待たない）
+#   sleep … 呼ばれたら印を残す（pull_request の経路で眠らないことを確かめる。#559）
 #
 # 回すのは pull_request の経路と、掃き寄せ（workflow_dispatch）の経路である。掃き寄せは同じ judge を
 # 呼ぶので、ここで見るのは「判定するか、見送るか」の分かれ目（push の時刻の採り方）だけ。
@@ -88,7 +88,7 @@ esac
 [ -f "$FIXTURES/$file" ] || exit 1
 jq -r "$expr" "$FIXTURES/$file"
 STUB
-printf '#!/usr/bin/env bash\nexit 0\n' > "$WORK/bin/sleep"
+printf '#!/usr/bin/env bash\necho called >> "$FIXTURES/slept"\nexit 0\n' > "$WORK/bin/sleep"
 chmod +x "$WORK/bin/gh" "$WORK/bin/sleep"
 
 SHA=0123456789abcdef0123456789abcdef01234567
@@ -153,23 +153,23 @@ case_() {
 DEP='dependabot[bot]'
 case_ "Dependabot の PR は記録が無くても success" success "$DEP" no \
   "$(commit "$DEP" web-flow true)"
-case_ "人の PR で記録が無ければ failure" failure someone no \
+case_ "人の PR で記録が無ければ pending（眠らず、赤にしない。#559）" pending someone no \
   "$(commit someone someone false)"
 case_ "人の PR で記録があれば success" success someone yes \
   "$(commit someone someone false)"
-case_ "Dependabot の PR に人のコミットが混ざり記録が無ければ failure" failure "$DEP" no \
+case_ "Dependabot の PR に人のコミットが混ざり記録が無ければ pending" pending "$DEP" no \
   "$(commit "$DEP" web-flow true)" "$(commit someone someone false)"
 # author は作る側が書ける。GitHub の署名が無ければ Dependabot 名義でも信じない。
-case_ "Dependabot 名義でも署名が無ければ failure" failure "$DEP" no \
+case_ "Dependabot 名義でも署名が無ければ pending" pending "$DEP" no \
   "$(commit "$DEP" web-flow true)" "$(commit "$DEP" someone false)"
-case_ "Dependabot 名義で committer が web-flow でも未検証なら failure" failure "$DEP" no \
+case_ "Dependabot 名義で committer が web-flow でも未検証なら pending" pending "$DEP" no \
   "$(commit "$DEP" web-flow false)"
 
 # 記録の書き手（#370）。public なので誰でも印つきのコメントを書ける。数えるのは
 # PR の作者自身の記録だけである。
-case_ "PR の作者以外（無関係な人）が書いた印だけなら failure" failure someone stranger \
+case_ "PR の作者以外（無関係な人）が書いた印だけなら pending" pending someone stranger \
   "$(commit someone someone false)"
-case_ "PR の作者以外の協力者が書いた印だけでも failure（作者自身の記録だけを数える）" failure someone collaborator \
+case_ "PR の作者以外の協力者が書いた印だけでも pending（作者自身の記録だけを数える）" pending someone collaborator \
   "$(commit someone someone false)"
 case_ "作者自身の記録があれば、他人の印が混ざっていても success" success someone both \
   "$(commit someone someone false)"
@@ -183,7 +183,7 @@ case_ "作者自身の記録なら、立場が NONE に見えても success" suc
 # SHA が変わったら古いコメントで通らないこと（#361 の受け入れ条件）。記録の印は
 # 直前の head（OLD_SHA）に紐づいており、いまの head（SHA）とは一致しない。
 OLD_SHA=fedcba9876543210fedcba9876543210fedcba9
-it "SHA が変わった PR は古いコメントでは success にならない"
+it "SHA が変わった PR は古いコメントでは success にならない（pending）"
 fx="$WORK/fx"
 rm -rf "$fx"; mkdir -p "$fx"
 printf '{"user":{"login":"someone"},"draft":false,"head":{"sha":"%s"}}' "$SHA" > "$fx/pr.json"
@@ -194,10 +194,54 @@ printf '[%s]' "$(record_comment someone OWNER "$OLD_SHA")" > "$fx/comments.json"
 ( cd "$REPO_ROOT" && PATH="$WORK/bin:$PATH" FIXTURES="$fx" GH_TOKEN=x REPO=o/r EVENT=pull_request \
     PR_NUMBER=1 TRIGGER_SHA="$SHA" RUN_URL=u bash "$WORK/run.sh" ) >/dev/null 2>&1 || true
 got="$(cat "$fx/statuses" 2>/dev/null || echo none)"
-if [[ "$got" == failure ]]; then
+if [[ "$got" == pending ]]; then
   pass
 else
-  fail "want=failure got=$(echo "$got" | tr '\n' ' ')"
+  fail "want=pending got=$(echo "$got" | tr '\n' ' ')"
+fi
+
+# pull_request の経路は眠らない（#559）。run の本文の pull_request 分岐に sleep が無く、
+# 偽の sleep も呼ばれない。
+it "pull_request の経路に sleep が無い"
+pr_branch="$(awk '/if \[ "\$EVENT" = "pull_request" \]; then/{f=1} /^else$/{if(f)exit} f' "$WORK/run.sh")"
+if [[ -n "$pr_branch" ]] && ! printf '%s\n' "$pr_branch" | command grep -Eq '(^|[^[:alnum:]_])sleep[[:space:]]'; then
+  pass
+else
+  fail "pull_request の分岐に sleep が残っている（または分岐を取り出せなかった）"
+fi
+
+for rec in no yes; do
+  it "pull_request の経路は眠らず成功で終える（記録=$rec）"
+  fx="$WORK/fx"; rm -rf "$fx"; mkdir -p "$fx"
+  printf '{"user":{"login":"someone"},"draft":false,"head":{"sha":"%s"}}' "$SHA" > "$fx/pr.json"
+  printf '[%s]' "$(commit someone someone false)" > "$fx/commits.json"
+  if [[ "$rec" == yes ]]; then
+    printf '[%s]' "$(record_comment someone OWNER)" > "$fx/comments.json"
+  else
+    printf '[]' > "$fx/comments.json"
+  fi
+  ( cd "$REPO_ROOT" && PATH="$WORK/bin:$PATH" FIXTURES="$fx" GH_TOKEN=x REPO=o/r EVENT=pull_request \
+      PR_NUMBER=1 TRIGGER_SHA="$SHA" RUN_URL=u bash "$WORK/run.sh" ) >/dev/null 2>&1
+  rc=$?
+  if [[ ! -e "$fx/slept" && "$rc" == 0 ]]; then
+    pass
+  else
+    fail "sleep が呼ばれた、または終了コードが $rc（want 0）"
+  fi
+done
+
+# 記録の有無を確かめられないときは、status を付けず失敗で終える。
+it "pull_request の経路は記録を確かめられなければ status を付けず失敗する"
+fx="$WORK/fx"; rm -rf "$fx"; mkdir -p "$fx"
+printf '{"user":{"login":"someone"},"draft":false,"head":{"sha":"%s"}}' "$SHA" > "$fx/pr.json"
+printf '[%s]' "$(commit someone someone false)" > "$fx/commits.json"
+( cd "$REPO_ROOT" && PATH="$WORK/bin:$PATH" FIXTURES="$fx" GH_TOKEN=x REPO=o/r EVENT=pull_request \
+    PR_NUMBER=1 TRIGGER_SHA="$SHA" RUN_URL=u bash "$WORK/run.sh" ) >/dev/null 2>&1
+rc=$?
+if [[ ! -e "$fx/statuses" && "$rc" != 0 ]]; then
+  pass
+else
+  fail "status=$(cat "$fx/statuses" 2>/dev/null) rc=$rc"
 fi
 
 # ── 掃き寄せ（workflow_dispatch）──────────────────────────────────────────────────────
