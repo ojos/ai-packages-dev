@@ -180,9 +180,14 @@ fi
 # 環境変数は SECOND_OPINION_* を正とし、旧名 GEMINI_REVIEW_* も受理する。旧名は
 # エンジン名を含むため、エンジンを選べるようになった時点で名前が事実と合わなくなる。
 # ただし取り込み済みの利用側が .env を書き換えるまでゲートが止まるのは避ける。
+#
+# モデル名の旧名（GEMINI_REVIEW_MODEL）だけは、エンジンが gemini のときに限って引き継ぐ。
+# 旧名は gemini 用のモデル名で、codex / antigravity へ渡すとそのエンジンでは解決できず、
+# 実行できなくなる。エンジンは --engine の引数解析の後で確定するため、引き継ぎは
+# 引数解析の後で行う（下記）。
 RANGE=""
 ENGINE="${SECOND_OPINION_ENGINE:-gemini}"
-MODEL="${SECOND_OPINION_MODEL:-${GEMINI_REVIEW_MODEL:-}}"
+MODEL="${SECOND_OPINION_MODEL:-}"
 RUNS="${SECOND_OPINION_RUNS:-${GEMINI_REVIEW_RUNS:-1}}"
 
 usage() {
@@ -226,6 +231,12 @@ while [[ $# -gt 0 ]]; do
     *) echo "error: unknown option: $1" >&2; usage; exit 1 ;;
   esac
 done
+
+# 旧名のモデル名は gemini のときだけ使う（上記）。--model / SECOND_OPINION_MODEL が
+# あればそちらが勝つ。codex / antigravity では空のまま、各エンジンの既定に任せる。
+if [[ -z "$MODEL" && "$ENGINE" == "gemini" ]]; then
+  MODEL="${GEMINI_REVIEW_MODEL:-}"
+fi
 
 # 不正な回数で黙って 1 回に落とすと、増やしたつもりのゲートが実際には
 # 効いていない状態になる。着手前に止める。
