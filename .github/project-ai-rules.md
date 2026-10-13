@@ -274,6 +274,7 @@ bash scripts/second-opinion-review.sh --engine codex           # エンジン切
 | オプション | 環境変数 | 既定 | 意味 |
 |---|---|---|---|
 | `--range <git-range>` | — | ステージ済み差分 | レビュー対象の差分範囲 |
+| `--base <rev>` | — | — | 索引と `<rev>` の差（コミット済みとステージ済みの両方）をレビュー対象にする。`--range` と併用できない。`loop-gate.sh` は、ステージ済み差分があるとき既定ブランチとの分岐点を渡す |
 | `--engine <name>` | `SECOND_OPINION_ENGINE` | `gemini` | レビューを実行する CLI（`gemini` / `antigravity` / `codex`） |
 | `--model <name>` | `SECOND_OPINION_MODEL` | 各 CLI の既定 | 使用モデル |
 | `--runs <n>` | `SECOND_OPINION_RUNS` | `1` | 実行回数（1 以上の整数。不正値は実行前に停止） |

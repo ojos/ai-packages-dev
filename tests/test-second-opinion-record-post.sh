@@ -147,7 +147,7 @@ it "scope が base:<rev>+staged の記録を save できる"
 if [[ "$save_rc" == 0 ]] && grep -q "tree=${BASE_SCOPE_SHA:0:12}" "$WORK/save-out"; then pass; else fail "save できない: $(cat "$WORK/save-out")"; fi
 it "base:<rev>+staged の記録は、scope と索引のツリーの紐づけを meta に残す"
 meta="$(cd "$REPO" && bash "$SCRIPT" show 2>&1)"
-if printf '%s' "$meta" | grep -q "base:$SHA+staged"; then pass; else fail "scope が残っていない: $meta"; fi
+if printf '%s' "$meta" | grep "base:$SHA+staged" >/dev/null; then pass; else fail "scope が残っていない: $meta"; fi
 case_ "base:<rev>+staged の記録を post が投稿できる（HEAD のツリーと一致するとき）" 0 yes alice alice '[]' "$RUN"
 it "起点の無い base:+staged は拒否する"
 if ( cd "$REPO" && printf 'LGTM\n' | bash "$SCRIPT" save --engine fake --verdict pass --scope "base:+staged" --runs 1 ) >/dev/null 2>&1; then
