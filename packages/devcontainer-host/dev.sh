@@ -631,6 +631,7 @@ R_LABELS=()
 R_DOCKER=()
 R_PAT=()
 R_LAN=()
+R_GROUP=()
 # ランナーのイメージに使う公式のランナーの版（設定ファイルの runner_version=X.Y.Z）。空なら Dockerfile の既定値。
 R_VERSION=""
 # 設定の誤りなど、起こし直しても直らない失敗の終了コード（EX_CONFIG）。ユニットの RestartPreventExitStatus が見る。
@@ -665,7 +666,7 @@ runner_docker_sock() { printf '%s\n' "${DEV_RUNNER_DOCKER_SOCK:-/var/run/docker.
 runner_github_name() { printf '%s-%s\n' "${DEV_RUNNER_HOSTNAME:-${HOSTNAME:-host}}" "$1"; }
 
 load_runners() {
-  local file lineno=0 line name org kv key val i labels dock pat
+  local file lineno=0 line name org kv key val i labels dock pat grp
   file="$(runners_file)"
   if [[ ! -f "$file" ]]; then
     usage_error "設定ファイルがありません: $file
@@ -699,7 +700,7 @@ load_runners() {
     for ((i = 0; i < ${#R_NAMES[@]}; i++)); do
       [[ "${R_NAMES[$i]}" == "$name" ]] && usage_error "$file:$lineno: 名前が重複しています: $name"
     done
-    labels="" dock="no" lan="deny"
+    labels="" dock="no" lan="deny" grp=""
     pat="$(dirname "$file")/runner-pat"
     for kv in "$@"; do
       if [[ "$kv" != *=* ]]; then
@@ -724,11 +725,15 @@ load_runners() {
             *) usage_error "$file:$lineno: lan は allow か deny です: $val" ;;
           esac
           ;;
+        group)
+          [[ "$val" =~ ^[A-Za-z0-9._-]+$ ]] || usage_error "$file:$lineno: group に使えるのは英数字と . _ - だけです（空白は使えません）: $val"
+          grp="$val"
+          ;;
         pat_file)
           [[ "$val" == /* ]] || usage_error "$file:$lineno: pat_file は絶対パスで書きます（~ や \$HOME は展開しません）: $val"
           pat="$val"
           ;;
-        *) usage_error "$file:$lineno: 知らないキーです（labels / docker / lan / pat_file）: $key" ;;
+        *) usage_error "$file:$lineno: 知らないキーです（labels / docker / lan / group / pat_file）: $key" ;;
       esac
     done
     R_NAMES+=("$name")
@@ -736,6 +741,7 @@ load_runners() {
     R_LABELS+=("$labels")
     R_DOCKER+=("$dock")
     R_LAN+=("$lan")
+    R_GROUP+=("$grp")
     R_PAT+=("$pat")
   done <"$file"
   if [[ ${#R_NAMES[@]} -eq 0 ]]; then
@@ -1214,7 +1220,7 @@ cmd_runner_run() {
   [[ $# -eq 1 ]] || usage_error "使い方: dev runner run <名前>"
   load_runners
   find_runner "$1"
-  local name="$1" org="${R_ORGS[$RIDX]}" labels="${R_LABELS[$RIDX]}" dock="${R_DOCKER[$RIDX]}" patf="${R_PAT[$RIDX]}" lan="${R_LAN[$RIDX]}"
+  local name="$1" org="${R_ORGS[$RIDX]}" labels="${R_LABELS[$RIDX]}" dock="${R_DOCKER[$RIDX]}" patf="${R_PAT[$RIDX]}" lan="${R_LAN[$RIDX]}" grp="${R_GROUP[$RIDX]}"
   need docker "Docker Engine を入れてください。"
   need curl "curl を入れてください。"
   need jq "jq を入れてください。"
@@ -1285,6 +1291,19 @@ cmd_runner_run() {
     *) docker rm -f "$RUNNER_CNAME" >/dev/null 2>&1 || true ;;
   esac
 
+  # group があるときは、コンテナを起こす前に、そのグループが組織にあるか一覧で確かめる（後始末の要る物は、まだ何も起こしていない）。
+  # 無い・一覧を読む権限が無い（401 / 403 / 404）は直らない失敗なので 78、429・5xx・通信の失敗は一時的な失敗なので 1（ユニットが起こし直す）。
+  if [[ -n "$grp" ]]; then
+    local grc=0
+    runner_group_exists "$org" "$grp" || grc=$?
+    case "$grc" in
+      0) ;;
+      1) die_permanent "$name: ランナーグループ $grp が組織 $org にありません。既定のグループへは入りません。GitHub 側でグループを作るか、runners の group= を直してください。直してから systemctl --user start dev-runner@$name.service で起こし直します" ;;
+      10) die_permanent "$name: ランナーグループの一覧を取得できませんでした(PAT の失効・権限不足、または組織名の誤り)。PAT の権限(組織の Self-hosted runners: Read and write)と組織名($org)を確かめてください。直してから systemctl --user start dev-runner@$name.service で起こし直します" ;;
+      *) die "$name: ランナーグループの一覧を取得できませんでした(API の不調か通信の失敗です。ユニットが起こし直します)" ;;
+    esac
+  fi
+
   local resp tok arc=0
   resp="$(runner_api POST "/orgs/$org/actions/runners/registration-token")" || arc=$?
   if [[ "$arc" -eq 10 ]]; then
@@ -1302,24 +1321,77 @@ cmd_runner_run() {
   if [[ "$dock" == "yes" ]]; then
     args+=(-v "$sock:/var/run/docker.sock" --group-add "$gid")
   fi
-  echo "[$PROG] $name: ランナー $RUNNER_GHNAME を起こします（組織 $org、docker=$dock、lan=$lan）。ジョブを 1 つ受けたら終わります。"
+  echo "[$PROG] $name: ランナー $RUNNER_GHNAME を起こします（組織 $org、docker=$dock、lan=$lan${grp:+、group=$grp}）。ジョブを 1 つ受けたら終わります。"
   # ここから先は、正常に終わらなければ後始末（コンテナの停止と登録の削除）をする。
   RUNNER_NEED_CLEANUP=1
+  # group があるときだけ、4 つ目の引数で --runnergroup を渡す。group を書かない行の引数は従来のまま。
+  # 指定したグループが無いとき、config.sh は既定のグループへ落ちずに失敗する（actions/runner の ConfigurationManager が
+  # 「Could not find any self-hosted runner group named ...」で止まる）ので、既定のグループへ黙って入らない。
+  # グループの有無は上で確かめ済みだが、確認と登録のあいだにグループが消えることはある。そこで config.sh の出力を流しながら捕まえ、
+  # 非 0 で終わり、かつ group 指定があり、かつ出力に「Could not find any self-hosted runner group named」があるときだけ、コンテナを 78 で抜ける
+  # （照合する文言は actions/runner の src/Runner.Listener/Configuration/ConfigurationManager.cs の TaskAgentPoolNotFoundException
+  # `Could not find any self-hosted runner group named "<名前>".` から取った。大文字小文字は区別しない）。それ以外の失敗は終了コードをそのまま返す。
+  # 出力は config.sh のもので、RUNNER_TOKEN は含まれない。写しはコンテナ内の一時ファイルで、コンテナと一緒に消える。
   RUNNER_TOKEN="$tok" docker "${args[@]}" "$img" bash -c \
-    'set -euo pipefail
-./config.sh --unattended --ephemeral --disableupdate --replace --url "$1" --token "$RUNNER_TOKEN" --name "$2" ${3:+--labels "$3"}
+    'set -uo pipefail
+out="$(mktemp "${TMPDIR:-/tmp}/config.XXXXXX")"
+./config.sh --unattended --ephemeral --disableupdate --replace --url "$1" --token "$RUNNER_TOKEN" --name "$2" ${3:+--labels "$3"} ${4:+--runnergroup "$4"} 2>&1 | tee "$out"
+rc=${PIPESTATUS[0]}
+if [ "$rc" -ne 0 ]; then
+  if [ -n "${4:-}" ] && grep -qi "Could not find any self-hosted runner group named" "$out"; then exit 78; fi
+  exit "$rc"
+fi
 unset RUNNER_TOKEN
-exec ./run.sh' runner "https://github.com/$org" "$RUNNER_GHNAME" "$labels" &
+exec ./run.sh' runner "https://github.com/$org" "$RUNNER_GHNAME" "$labels" ${grp:+"$grp"} &
   RUNNER_CHILD=$!
   tok=""
   local rc=0
   wait "$RUNNER_CHILD" || rc=$?
   RUNNER_CHILD=""
+  if [[ "$rc" -eq 78 && -n "$grp" ]]; then
+    die_permanent "$name: ランナーグループ $grp が組織 $org にありません（登録の時点で見つかりませんでした）。既定のグループへは入りません。GitHub 側でグループを作るか、runners の group= を直してください。直してから systemctl --user start dev-runner@$name.service で起こし直します"
+  fi
   if [[ "$rc" -ne 0 ]]; then
     die "$name: ランナーのコンテナが失敗して止まりました（終了コード $rc）。ユニットが起こし直します。"
   fi
   RUNNER_NEED_CLEANUP=0
   echo "[$PROG] $name: ジョブを終えてコンテナが止まりました。ユニットが新しいコンテナで起こし直します。"
+}
+
+# 組織のランナーグループの一覧（全ページ）に、名前が完全一致するグループがあるか調べる。要 RUNNER_PAT（runner_pat_load 済み）。
+# dev runner run（コンテナを起こす前の確認）と dev doctor --runner が共有する。
+# 戻り値: 0 = ある / 1 = 無い / 10 = 直らない失敗（401・403・404） / 11 = 一時的な失敗（429・5xx・通信の失敗）。
+# 使い方: runner_group_exists <組織> <グループ名>
+runner_group_exists() {
+  local org="$1" grp="$2" page=1 resp rc names=""
+  while :; do
+    rc=0
+    resp="$(runner_api GET "/orgs/$org/actions/runner-groups?per_page=100&page=$page")" || rc=$?
+    [[ "$rc" -eq 0 ]] || return "$rc"
+    names="$(printf '%s\n' "$resp" | jq -r '.runner_groups[]?.name' 2>/dev/null)" || return 11
+    # 完全一致で見る（group の値は英数字と . _ - だけなので、パターンの特殊文字は含まない）。
+    [[ $'\n'"$names"$'\n' == *$'\n'"$grp"$'\n'* ]] && return 0
+    # 1 ページが 100 件で埋まっていれば次のページを見る。
+    [[ "$(printf '%s\n' "$names" | grep -c .)" -ge 100 ]] || return 1
+    page=$((page + 1))
+  done
+}
+
+# group を指定したランナーの点検。組織のランナーグループの一覧にあれば OK、無ければ FAIL、読めなければ WARN（PAT の値は出さない）。
+# 使い方: doctor_runner_group <組織> <グループ名> <PAT ファイル>
+doctor_runner_group() {
+  local org="$1" grp="$2" patf="$3" rc=0
+  if ! runner_pat_problem "$patf" >/dev/null || ! runner_pat_load "$patf" 2>/dev/null; then
+    doc_line WARN "ランナーグループ $grp: PAT を読めないため、組織のグループの一覧を確かめられません"
+    return 0
+  fi
+  runner_group_exists "$org" "$grp" 2>/dev/null || rc=$?
+  case "$rc" in
+    0) doc_line OK "ランナーグループ $grp が組織 $org にあります" ;;
+    1) doc_line FAIL "ランナーグループ $grp が組織 $org にありません（dev runner run は 78 で止まる。GitHub 側でグループを作るか、runners の group= を直す）" ;;
+    10) doc_line WARN "ランナーグループ $grp: グループの一覧を読めませんでした（HTTP 401 / 403 / 404。PAT の権限（組織の Self-hosted runners: Read）か組織名 $org を確かめる）" ;;
+    *) doc_line WARN "ランナーグループ $grp: グループの一覧を読めませんでした（API の不調か通信の失敗）" ;;
+  esac
 }
 
 # dev doctor --runner <名前>: ランナーの点検。1 つでも FAIL なら 1、WARN だけなら 3、無ければ 0。
@@ -1328,7 +1400,7 @@ cmd_doctor_runner() {
   load_runners
   find_runner "$1"
   need docker "Docker Engine を入れてください。"
-  local name="$1" dock="${R_DOCKER[$RIDX]}" patf="${R_PAT[$RIDX]}" unit="dev-runner@${1}.service" img why us sock
+  local name="$1" dock="${R_DOCKER[$RIDX]}" patf="${R_PAT[$RIDX]}" grp="${R_GROUP[$RIDX]}" unit="dev-runner@${1}.service" img why us sock
   img="$(runner_image)"
   echo "[$PROG] doctor: ランナー $name（組織 ${R_ORGS[$RIDX]}）"
 
@@ -1353,6 +1425,10 @@ cmd_doctor_runner() {
     fi
   else
     doc_line OK "Docker のソケットは渡しません（docker=no）"
+  fi
+
+  if [[ -n "$grp" ]]; then
+    doctor_runner_group "${R_ORGS[$RIDX]}" "$grp" "$patf"
   fi
 
   us="$(unit_state "$unit")"
@@ -1982,7 +2058,10 @@ run: ユニット dev-runner@<名前>.service の ExecStart。1 回の起動で�
   Docker のソケットは、設定ファイルで docker=yes にしたランナーにだけ渡す（既定は渡さない。
   渡すと、ジョブがホストの Docker を自由に操作できる）。
 設定ファイル: runners（既定は ~/.config/dev/runners（XDG_CONFIG_HOME があればその下）。環境変数 DEV_RUNNERS_FILE で差し替える。書式は runners.example）。
-  1 行 1 ランナーで「名前 組織 [labels=a,b] [docker=yes|no] [lan=allow|deny] [pat_file=絶対パス]」。
+  1 行 1 ランナーで「名前 組織 [labels=a,b] [docker=yes|no] [lan=allow|deny] [group=名前] [pat_file=絶対パス]」。
+  group=名前 は登録先のランナーグループ（英数字と . _ - だけ。書かなければ組織の既定のグループ）。ラベルは安全の境界にならない
+  （組織のどのリポジトリでも runs-on に書ける）。使えるリポジトリを絞るのはグループで、グループの作成と対象の設定は GitHub 側で行う。
+  コンテナを起こす前にグループの一覧で有無を確かめ、無いとき（と一覧を読む権限が無いとき。登録の時点でグループが無かったときも）は 78 で終わり、既定のグループへは入らない（API の一時的な失敗は 1）。
   `runner_version=X.Y.Z` だけの行は、イメージに使う公式のランナーの版（共通の設定）。
 net: 出口の規則を入れる root の部分を標準出力へ出す（dev 自身は何も入れない。sudo で入れる手順は、このパッケージの README の自前のランナーの節）。
   script  規則を入れるスクリプト（/usr/local/sbin/dev-runner-net）。apply / unmark / clear / rules を持つ
@@ -1991,7 +2070,7 @@ net: 出口の規則を入れる root の部分を標準出力へ出す（dev �
 点検は dev doctor --runner <名前>。curl と jq が要る。
 
 終了コード: 0 = ジョブを終えて止まった（build は作れた） / 1 = 一時的な失敗（API の 429・5xx や通信の失敗、コンテナの失敗、出口の規則の印がまだ無い、など。ユニットは起こし直す） /
-            2 = 使い方か設定ファイルの誤り / 75 = 同じ名前がすでに動いている / 78 = イメージが無い・PAT の権限が緩い・Docker のソケットが無い・出口の規則の印のブリッジ名が違う・API が 401 / 403 / 404（PAT の失効・権限不足・組織名の誤り）
+            2 = 使い方か設定ファイルの誤り / 75 = 同じ名前がすでに動いている / 78 = イメージが無い・PAT の権限が緩い・Docker のソケットが無い・出口の規則の印のブリッジ名が違う・group で指定したランナーグループが組織に無い・API が 401 / 403 / 404（PAT の失効・権限不足・組織名の誤り）
             （2 と 78 は、ユニットが起こし直さない）
 失敗したとき: dev doctor --runner <名前> で原因を見分ける。
 EOF

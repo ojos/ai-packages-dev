@@ -14,6 +14,9 @@
 #                       deny は専用の Docker ネットワークで動かし、出口の規則（dev runner net script / unit で root が入れる）が
 #                       入っていないと起動しない。allow にすると、その確認を外し、従来どおり既定のブリッジで動く
 #                       （LAN のプロキシ・社内のパッケージ置き場に頼るジョブ用）。docker=yes のランナーは、deny でもソケットで迂回できる
+#   group=<名前>        登録先のランナーグループ（英数字と . _ - だけ。既定は書かない＝組織の既定のグループ）。
+#                       ラベルは安全の境界にならない（組織のどのリポジトリでも runs-on に書ける）。使えるリポジトリを絞るのはグループ。
+#                       グループの作成と対象の設定は GitHub 側で行う。グループが無いと（起動の前に一覧で確かめる。登録の時点で無かったときも）78 で止まり、既定のグループへは入らない
 #   pat_file=<絶対パス> PAT を置いたファイル（既定は同じディレクトリの runner-pat）。
 #                       group / other に権限があると(644 など)、dev runner は起動を拒む。600 か 400 にする
 #
@@ -32,3 +35,4 @@
 # runner2   my-org   labels=devhost
 # docker1   my-org   labels=devhost,docker   docker=yes
 # lan1      my-org   labels=devhost,lan      lan=allow
+# grp1      my-org   labels=devhost,grp      group=my-group
