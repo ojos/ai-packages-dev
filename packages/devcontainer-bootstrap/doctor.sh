@@ -272,7 +272,7 @@ check_origin_record() {
 
   check_origin_format "$origin_file" || return 0
 
-  local hash_count=0 unchanged_count=0 accepted_count=0 owned_count=0 changed="" missing="" line rel recorded_hash actual_hash accepted_hash
+  local hash_count=0 unchanged_count=0 accepted_count=0 owned_count=0 stale_pending="" stale_pending_count=0 changed="" missing="" line rel recorded_hash actual_hash accepted_hash
   while IFS= read -r line; do
     [[ -n "$line" ]] || continue
     rel="${line#hash:}"
@@ -287,6 +287,11 @@ check_origin_record() {
     actual_hash="$(dcb_file_sha256 "$TARGET_DIR/$rel")"
     if [[ "$actual_hash" == "$recorded_hash" ]]; then
       unchanged_count=$((unchanged_count + 1))
+      # 現物が記録と一致するのに pending: が残っている: 取り込む差分は無いが記録が古い。
+      if awk -v k="pending:$rel=" 'index($0, k) == 1 { f = 1 } END { exit !f }' "$origin_file"; then
+        stale_pending="$stale_pending $rel"
+        stale_pending_count=$((stale_pending_count + 1))
+      fi
     else
       # 手を入れた現物でも、取り込み済みとして記録した（accepted:）内容と一致すれば乖離としない。
       # その後さらに手を入れれば accepted とも一致せず、changed に戻る。
@@ -318,6 +323,9 @@ check_origin_record() {
   fi
   if [[ "$accepted_count" -gt 0 ]]; then
     ok "accepted as merged ($accepted_count file(s)): 取り込み済みとして記録した内容と一致しています"
+  fi
+  if [[ "$stale_pending_count" -gt 0 ]]; then
+    warn "stale pending record ($stale_pending_count file(s)):$stale_pending（取り込み待ちの記録（pending:）が残っていますが、現物は新しい版と一致しています。bootstrap.sh --accept <path> か --upgrade で外してください）"
   fi
   if [[ "$owned_count" -gt 0 ]]; then
     ok "edited project-owned file(s) ($owned_count file(s)): プロジェクトが所有・編集するファイルなので、生成時からの変化を乖離として扱いません"

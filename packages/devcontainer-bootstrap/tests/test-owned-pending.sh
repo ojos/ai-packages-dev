@@ -186,6 +186,30 @@ upgrade "$out" --without-aws
 it "--upgrade --without-aws で生成対象から外れたパスの owned: / pending: は残らない"
 if ! grep -F -- "$REMOTE" "$out/$ORIGIN_REL" >/dev/null && has_line "$out" "owned:$OWNED="; then pass; else fail "$(grep -F -- "$REMOTE" "$out/$ORIGIN_REL")"; fi
 
+# ── 現物が hash: と一致するのに pending: が残っている ─────────────────────────
+
+out="$(new_workdir)/p"
+gen "$out"
+edit "$out" "$OWNED"
+change_template_hash "$out" "$OWNED"
+upgrade "$out"
+cp "$out/$OWNED.dcb-new" "$out/$OWNED"
+rm -f "$out/$OWNED.dcb-new"
+
+it "現物 = 新しい版で pending: が残ると doctor.sh は WARN を出し、対象のパスと件数を示す"
+bash "$DOCTOR" --target-dir "$out" >"$TEST_TMP_ROOT/doctor.out" 2>&1; rc=$?
+if grep -F "[WARN]" "$TEST_TMP_ROOT/doctor.out" | grep -F "$OWNED" | grep -F "1 file(s)" >/dev/null; then pass; else fail "rc=$rc: $(cat "$TEST_TMP_ROOT/doctor.out")"; fi
+
+it "その WARN は --strict なしでは 0、--strict では 0 以外"
+bash "$DOCTOR" --target-dir "$out" >/dev/null 2>&1; rc1=$?
+doctor_strict "$out"; rc2=$?
+if [[ "$rc1" == "0" && "$rc2" != "0" ]]; then pass; else fail "rc1=$rc1 rc2=$rc2"; fi
+
+it "--accept で pending: が外れ、WARN が消えて --strict が 0 で終わる"
+accept "$out" "$OWNED"
+doctor_strict "$out"; rc=$?
+if [[ "$AC_RC" == "0" ]] && ! has_line "$out" "pending:$OWNED=" && [[ "$rc" == "0" ]] && ! grep -F "[WARN]" "$TEST_TMP_ROOT/doctor.out" >/dev/null; then pass; else fail "accept rc=$AC_RC doctor rc=$rc: $(cat "$TEST_TMP_ROOT/doctor.out")"; fi
+
 # ── doctor.sh の書式検査 ─────────────────────────────────────────────────────
 
 out="$(new_workdir)/p"
