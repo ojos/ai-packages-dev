@@ -331,7 +331,9 @@ case "$sub" in
       # コンテナの中の bash -c のスクリプトを、偽の config.sh（FAKE_CONFIG_MSG を出して FAKE_CONFIG_RC で終わる）で本当に走らせる。
       ctr="$FAKE_STATE/ctr"
       mkdir -p "$ctr"
-      printf '#!%s\necho "%s"\nexit %s\n' "$BASH" "$FAKE_CONFIG_MSG" "${FAKE_CONFIG_RC:-1}" >"$ctr/config.sh"
+      # 受け取った引数を 1 引数 1 行で $FAKE_STATE/config-args へ記録する。--token の値は伏せる（記録に残さない）。
+      printf '#!%s\nprev=""\nfor a in "$@"; do\n  if [ "$prev" = --token ]; then printf "%%s\\n" "<伏せ字>"; else printf "%%s\\n" "$a"; fi\n  prev="$a"\ndone >"%s/config-args"\necho "%s"\nexit %s\n' \
+        "$BASH" "$FAKE_STATE" "$FAKE_CONFIG_MSG" "${FAKE_CONFIG_RC:-1}" >"$ctr/config.sh"
       printf '#!%s\nexit 0\n' "$BASH" >"$ctr/run.sh"
       chmod +x "$ctr/config.sh" "$ctr/run.sh"
       while [[ $# -gt 0 && "$1" != "bash" ]]; do shift; done
@@ -1885,17 +1887,31 @@ log_lacks '\[--network\]'
 log_has '\[-v\] \[.*/docker.sock:/var/run/docker.sock\]'
 
 # ── ランナーグループ（group=）──
-rrun 0 "runner run: group=<名前> の行は、config.sh へ --runnergroup <名前> を渡す（ラベルがあるとき）" -- runner run g2
+# config.sh（偽物）が実際に受け取った引数を、1 行 1 引数の記録から 1 行へ並べて見る。
+cfg_args() { tr '\n' ' ' <"$STATE/config-args"; }
+cfg_want() {
+  local got
+  got="$(cfg_args)"
+  [[ "$got" == "$1" ]] || ng "$CUR: config.sh の引数が違います: 期待「$1」 実際「$got」"
+  if grep -qF -- "REGTOKEN" "$STATE/config-args"; then ng "$CUR: 引数の記録にトークンの値が残っています"; fi
+}
+BASEARGS='--unattended --ephemeral --disableupdate --replace --url https://github.com/my-org --token <伏せ字>'
+rrun 0 "runner run: group=<名前> の行は、config.sh へ --runnergroup <名前> を渡す（ラベルがあるとき）" FAKE_CONFIG_MSG=ok FAKE_CONFIG_RC=0 -- runner run g2
+cfg_want "$BASEARGS --name h-g2 --labels devhost,x --runnergroup my-group "
 log_has '\$\{4:\+--runnergroup "\$4"\}'
 log_has '\[runner\] \[https://github.com/my-org\] \[h-g2\] \[devhost,x\] \[my-group\]$'
-rrun 0 "runner run: group=<名前> の行は、ラベルが無くても 4 つ目の引数に名前が入る（3 つ目は空）" -- runner run g1
+rrun 0 "runner run: group=<名前> の行は、ラベルが無くても 4 つ目の引数に名前が入る（3 つ目は空）" FAKE_CONFIG_MSG=ok FAKE_CONFIG_RC=0 -- runner run g1
+cfg_want "$BASEARGS --name h-g1 --runnergroup my-group "
 log_has '\[runner\] \[https://github.com/my-org\] \[h-g1\] \[\] \[my-group\]$'
 expect_out_line 'group=my-group'
 no_pat_leak
-rrun 0 "runner run: group を書かない行の config.sh の引数は変わらない（--runnergroup の名前を渡さない）" -- runner run r1
+rrun 0 "runner run: group を書かない行の config.sh の引数は変わらない（--runnergroup の名前を渡さない）" FAKE_CONFIG_MSG=ok FAKE_CONFIG_RC=0 -- runner run r1
+cfg_want "$BASEARGS --name h-r1 --labels devhost,x "
+if grep -qF -- "--runnergroup" "$STATE/config-args"; then ng "$CUR: group なしの行に --runnergroup が渡っています"; fi
 log_has '\[runner\] \[https://github.com/my-org\] \[h-r1\] \[devhost,x\]$'
 log_lacks '\[my-group\]'
-rrun 0 "runner run: group を書かず、ラベルも無い行は 3 つの引数のまま" -- runner run r2
+rrun 0 "runner run: group を書かず、ラベルも無い行は 3 つの引数のまま" FAKE_CONFIG_MSG=ok FAKE_CONFIG_RC=0 -- runner run r2
+cfg_want "$BASEARGS --name h-r2 "
 log_has '\[runner\] \[https://github.com/my-org\] \[h-r2\] \[\]$'
 # コンテナを起こす前に、組織のランナーグループの一覧で有無を確かめる。
 rrun 0 "runner run: group があれば、コンテナを起こす前にグループの一覧を引く" -- runner run g1
