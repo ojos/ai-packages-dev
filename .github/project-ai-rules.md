@@ -278,7 +278,7 @@ bash scripts/second-opinion-review.sh --engine codex           # エンジン切
 | `--runs <n>` | `SECOND_OPINION_RUNS` | `1` | 実行回数（1 以上の整数。不正値は実行前に停止） |
 
 - 優先順位は CLI 引数 > `.env` > 既定です。`.env` は既に設定済みの環境変数も上書きするため、環境変数でエンジンを前置しても `.env` に負けます（`--engine` を使います）。
-- 環境変数の旧名 `GEMINI_REVIEW_MODEL` / `GEMINI_REVIEW_RUNS` も後方互換で受理します。新名が設定されていればそちらが勝ちます。
+- 環境変数の旧名 `GEMINI_REVIEW_MODEL` / `GEMINI_REVIEW_RUNS` も後方互換で受理します。新名が設定されていればそちらが勝ちます。ただし `GEMINI_REVIEW_MODEL` は gemini 用のモデル名なので、エンジンが `gemini` のときだけ引き継ぎます（`codex` / `antigravity` へ渡すと、そのエンジンでは実行できないためです）。それらのエンジンでは、`SECOND_OPINION_MODEL` も `--model` も無ければ、各エンジンの既定のモデルになります。`GEMINI_REVIEW_RUNS` はエンジンに依らず受理します。
 - 判定は多数決です。指摘を報告した run が**過半数**（`floor(N/2)+1`）に達したときだけ落とします。既定の `1` では閾値も 1 で、従来と同じ挙動になります。
 - 過半数に届かなかった指摘も出力に残ります。誤検出とは限らないため、内容を確認して採否を判断します。
 - 通過判定はエンジンによって方式が違います。`gemini` は構造化出力を強制する旗を持たないため、モデル出力の**最後の行**に置かれた判定トークン `VERDICT: LGTM` で判定します（`.ai-playbook/review-workflow.md`「第二意見の非決定性」）。前置き（作業ナレーション）が付いても判定は変わりません。判定トークンが無い出力は指摘あり扱いとし、その旨を出力へ明示します。`antigravity` / `codex` は構造化出力を強制できるため、判定トークンの解析はせず **JSON スキーマ**（`scripts/second-opinion-schema.json`）で判定します。モデルには通過・不通過そのものを出させず、指摘の種別（`category`）が `bug` / `vulnerability` / `type-error` / `edge-case` のいずれかで 1 件以上あれば落とします。JSON として読めない回答・スキーマの形を満たさない回答・差分を読めなかったと答えた回答（`reviewed: false` または欠落）も、指摘の中身によらず同じ扱い（失敗）にします。読めなかったものを LGTM として通さないためです。
