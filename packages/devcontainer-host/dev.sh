@@ -994,10 +994,12 @@ runner_lock() {
 # 規則の印のファイル。1 行目が「bridge=<ブリッジ名>」。root だけが書ける場所（/run 配下）に置く。
 runner_net_marker() { printf '%s\n' "${DEV_RUNNER_NET_MARKER:-/run/dev-runner-net/ready}"; }
 
-# 印が無いとき待つ秒数。Docker の再起動では規則のユニットも入れ直すので、その間に起こし直されて 78 で止まらないようにする。
+# 印が無いとき待つ秒数。Docker の再起動では規則のユニットも入れ直すので、その間を待つ。
 runner_net_wait() { printf '%s\n' "${DEV_RUNNER_NET_WAIT:-30}"; }
 
-# 印のファイルを確かめる。無い・ブリッジ名が合わないときは、起こし直しても直らないので 78 で抜ける。
+# 印のファイルを確かめる。無いときは一時的な失敗（1）で抜ける（規則のユニットが入れ終えるのを待つ間に、ユニットが起こし直す。
+# 78 にすると RestartPreventExitStatus に当たって二度と起きないため）。ブリッジ名が合わないのは設定の誤りなので 78。
+# 登録用のトークンを取る（API を呼ぶ）より前に呼ぶこと。起こし直しが API を消費しないようにするため。
 runner_net_require() {
   local name="$1" marker waited=0 limit
   marker="$(runner_net_marker)"
@@ -1008,7 +1010,7 @@ runner_net_require() {
     waited=$((waited + 1))
   done
   if [[ ! -f "$marker" ]]; then
-    die_permanent "$name: 出口の規則の印がありません: $marker。規則が入っていないまま動かさないため起動しません。規則を入れてください（dev runner net script / unit。README.md の「自前のランナー」）。LAN に届いてよいランナーは、設定ファイルで lan=allow にします"
+    die "$name: 出口の規則の印がありません: $marker。規則が入っていないまま動かさないため起動しません（ユニットが起こし直します）。規則を入れてください（dev runner net script / unit。README.md の「自前のランナー」）。LAN に届いてよいランナーは、設定ファイルで lan=allow にします"
   fi
   if ! grep -qxF "bridge=$RUNNER_NET_BRIDGE" "$marker"; then
     die_permanent "$name: 出口の規則の印のブリッジ名が、このバージョンの dev と合いません（期待 bridge=$RUNNER_NET_BRIDGE）: $marker。規則のスクリプトとユニットを、dev runner net script / unit で入れ直してください"
@@ -1048,7 +1050,8 @@ cmd_runner_net() {
 
 # 規則を入れる root のスクリプト（/usr/local/sbin/dev-runner-net）。単体で動く。
 #   apply  規則を入れ直して、印を置く（冪等）
-#   clear  印と規則を外す
+#   unmark 印だけを消す（規則は残す）
+#   clear  印と規則を外す（利用者が明示して打つときだけ）
 #   rules  入れる規則（iptables-restore に渡す内容）を出す。何も実行しない（試験用）
 runner_net_script() {
   cat <<'EOF'
@@ -1057,7 +1060,8 @@ runner_net_script() {
 #
 # root で動く。systemd のシステムのユニット dev-runner-net.service から呼ぶ（dev runner net unit）。
 #   dev-runner-net apply   規則を入れ直して、印のファイルを置く（何度呼んでもよい）
-#   dev-runner-net clear   印のファイルを消し、規則を外す
+#   dev-runner-net unmark  印のファイルだけを消す（規則は残す。ユニットの停止で呼ぶ）
+#   dev-runner-net clear   印のファイルを消し、規則を外す（利用者が明示して打つときだけ）
 #   dev-runner-net rules   入れる規則（iptables-restore に渡す内容）を出す。何も実行しない
 #
 # 入れ直しは iptables-restore --noflush の 1 回の取り込みで行う（鎖の中身の入れ替えと飛び先の追加が一度に切り替わる）。
@@ -1123,8 +1127,12 @@ apply() {
   hook_exists DOCKER-USER "$FWD_CHAIN" || hooks+=(fwd)
   hook_exists INPUT "$IN_CHAIN" || hooks+=(in)
   input="$(restore_input ${hooks[@]+"${hooks[@]}"})"
-  # DOCKER-USER が無ければ作る（Docker が後から作るときも既存を受け入れる）。ここは制限を変えない。
-  iptables -N DOCKER-USER 2>/dev/null || true
+  # DOCKER-USER が転送（FORWARD）の経路に入っていることを、何かを入れる前に確かめる。Docker が iptables を使っていない構成
+  # （nftables のバックエンドなど）では、Docker は FORWARD から DOCKER-USER への飛び先を作らない。自分で鎖を作って入れても
+  # 転送の経路に掛からないので、制限が効かないまま印を置くことになる。入っていなければ、何も入れず印も置かずに止まる。
+  if ! iptables -C FORWARD -j DOCKER-USER 2>/dev/null; then
+    die "FORWARD から DOCKER-USER への飛び先がありません。Docker が iptables を使っていない（nftables のバックエンド、--iptables=false など）か、Docker がまだ起きていません。この構成では出口の規則は効かないので、何も入れず印も置きません"
+  fi
   # 鎖の中身の入れ替えと、足りない飛び先の追加を、1 回の取り込みで行う。失敗したら何も変わらず、印も置かない。
   printf '%s\n' "$input" | iptables-restore --noflush
   mkdir -p "$STATE_DIR"
@@ -1133,6 +1141,11 @@ apply() {
   chmod 644 "$MARKER.tmp"
   mv -f "$MARKER.tmp" "$MARKER"
   echo "[dev-runner-net] 規則を入れました（ブリッジ $BRIDGE）"
+}
+
+unmark() {
+  rm -f "$MARKER"
+  echo "[dev-runner-net] 印を消しました（規則は残します）"
 }
 
 clear_rules() {
@@ -1153,9 +1166,10 @@ clear_rules() {
 
 case "${1:-}" in
   apply) apply ;;
+  unmark) unmark ;;
   clear) clear_rules ;;
   rules) rules ;;
-  *) die "使い方: dev-runner-net apply|clear|rules" ;;
+  *) die "使い方: dev-runner-net apply|unmark|clear|rules" ;;
 esac
 EOF
 }
@@ -1167,6 +1181,9 @@ runner_net_unit() {
 #
 # dev runner net unit で出力し、/etc/systemd/system/ へ置く。導入の手順は README.md の「自前のランナー」。
 # Docker のデーモンが再起動するたびに入れ直す（PartOf）。Docker の再起動で DOCKER-USER が作り直されても、規則が外れたままにならない。
+# 止めたとき（Docker の停止を含む）は、印だけを消し、規則は消さない。Docker の live-restore でコンテナが動き続けるあいだも、
+# 制限が外れないようにするため。自分の鎖と飛び先は Docker の再起動でも残り、起動時の apply が 1 回の取り込みで入れ替える。
+# 規則を外すのは、利用者が明示して dev-runner-net clear を打つときだけ。
 
 [Unit]
 Description=devhost の自前のランナーの出口の規則（専用ブリッジから LAN と機械自身への接続を止める）
@@ -1179,7 +1196,7 @@ RemainAfterExit=yes
 # 上流の DNS が LAN の帯にあるときの許可（DEV_RUNNER_NET_ALLOW_DNS="192.0.2.53" の形。無くてもよい）。
 EnvironmentFile=-/etc/default/dev-runner-net
 ExecStart=/usr/local/sbin/dev-runner-net apply
-ExecStop=/usr/local/sbin/dev-runner-net clear
+ExecStop=/usr/local/sbin/dev-runner-net unmark
 
 [Install]
 WantedBy=multi-user.target
@@ -1954,7 +1971,7 @@ run: ユニット dev-runner@<名前>.service の ExecStart。1 回の起動で�
   2. PAT で組織の登録用のトークンを取得する（PAT は引数にも環境変数にも出さない）
   3. --ephemeral のランナーを --rm のコンテナで起こす。コンテナへ渡すのは登録用のトークンだけ
   4. ジョブが 1 つ終わってコンテナが止まったら抜ける（ユニットが新しいコンテナで起こし直す）
-  3 の前に、出口の規則の印（/run/dev-runner-net/ready。ブリッジ名 dev-runner0 を含む）を確かめる。無い・ブリッジ名が違うときは起動せず 78 で終わる
+  3 の前（2 の API を呼ぶより前）に、出口の規則の印（/run/dev-runner-net/ready。ブリッジ名 dev-runner0 を含む）を確かめる。無いときは起動せず 1 で終わり（ユニットが起こし直す）、ブリッジ名が違うときは 78 で終わる
   （Docker の再起動に備え、無ければ 30 秒まで待つ）。印があれば、専用の Docker ネットワーク dev-runner（IPv6 無効、ブリッジ名 dev-runner0 固定）を
   無ければ作り、コンテナをそこで動かす。設定ファイルで lan=allow にしたランナーは、この確認を外し、既定のブリッジで動かす。
   コンテナを起こしたあと、正常に終わらなかったとき（止めたとき（ユニットの停止・TERM・INT・HUP）や失敗したとき）だけ、
@@ -1965,13 +1982,13 @@ run: ユニット dev-runner@<名前>.service の ExecStart。1 回の起動で�
   1 行 1 ランナーで「名前 組織 [labels=a,b] [docker=yes|no] [lan=allow|deny] [pat_file=絶対パス]」。
   `runner_version=X.Y.Z` だけの行は、イメージに使う公式のランナーの版（共通の設定）。
 net: 出口の規則を入れる root の部分を標準出力へ出す（dev 自身は何も入れない。sudo で入れる手順は、このパッケージの README の自前のランナーの節）。
-  script  規則を入れるスクリプト（/usr/local/sbin/dev-runner-net）。apply / clear / rules を持つ
+  script  規則を入れるスクリプト（/usr/local/sbin/dev-runner-net）。apply / unmark / clear / rules を持つ
   unit    それを呼ぶ systemd のシステムのユニット（/etc/systemd/system/dev-runner-net.service）
   止める出口: 専用ブリッジから 10/8・172.16/12・192.168/16・169.254/16・100.64/10 と、機械自身への新しい接続。docker=yes のランナーはソケットで迂回できるので対象外。
 点検は dev doctor --runner <名前>。curl と jq が要る。
 
-終了コード: 0 = ジョブを終えて止まった（build は作れた） / 1 = 一時的な失敗（API の 429・5xx や通信の失敗、コンテナの失敗など。ユニットは起こし直す） /
-            2 = 使い方か設定ファイルの誤り / 75 = 同じ名前がすでに動いている / 78 = イメージが無い・PAT の権限が緩い・Docker のソケットが無い・出口の規則の印が無い・API が 401 / 403 / 404（PAT の失効・権限不足・組織名の誤り）
+終了コード: 0 = ジョブを終えて止まった（build は作れた） / 1 = 一時的な失敗（API の 429・5xx や通信の失敗、コンテナの失敗、出口の規則の印がまだ無い、など。ユニットは起こし直す） /
+            2 = 使い方か設定ファイルの誤り / 75 = 同じ名前がすでに動いている / 78 = イメージが無い・PAT の権限が緩い・Docker のソケットが無い・出口の規則の印のブリッジ名が違う・API が 401 / 403 / 404（PAT の失効・権限不足・組織名の誤り）
             （2 と 78 は、ユニットが起こし直さない）
 失敗したとき: dev doctor --runner <名前> で原因を見分ける。
 EOF

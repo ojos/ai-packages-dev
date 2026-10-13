@@ -39,7 +39,7 @@
 #   ＝ユニットを止められた状況。FAKE_RUN_EXIT で抜ける終了コードを変える）。他の形は落とす
 # - docker `network inspect --format ... <名前>` と `network create ...`（自前のランナーの専用ネットワーク。作った印は $FAKE_STATE/network。
 #   FAKE_NET_BRIDGE / FAKE_NET_IPV6 で既存のネットワークの設定を差し替える。他の形は落とす）
-# - iptables: 引数を記録するだけ。`-C` は FAKE_IPT_CHECK（既定 1＝無い）、`-n -L` は FAKE_IPT_LIST（既定 1＝鎖が無い）で抜ける。
+# - iptables: 引数を記録するだけ。`-C FORWARD ...` は FAKE_IPT_FWD（既定 0＝DOCKER-USER への飛び先がある）、他の `-C` は FAKE_IPT_CHECK（既定 1＝無い）、`-n -L` は FAKE_IPT_LIST（既定 1＝鎖が無い）で抜ける。
 #   iptables-restore: 引数を記録し、標準入力を $FAKE_STATE/restore-in へ写す（FAKE_IPTR_FAIL=1 で失敗）。規則の実体は見ない（生成した文面で確かめる）
 # - curl（API）: `-sSL -K - -X <メソッド> -H ... -w <書式> <URL>` の形だけ。**標準入力の設定を $FAKE_STATE/curl-config へ書き**
 #   （PAT が引数でなく標準入力で渡ることを見る）、FAKE_PAT_EXPECT を含まなければ 401 相当（22）で落とす。
@@ -340,6 +340,7 @@ set -euo pipefail
 EOF
 cat >>"$FAKEBIN/iptables" <<'EOF'
 log_call iptables "$@"
+if [[ "${1:-}" == "-C" && "${2:-}" == "FORWARD" ]]; then exit "${FAKE_IPT_FWD:-0}"; fi
 if [[ "${1:-}" == "-C" ]]; then exit "${FAKE_IPT_CHECK:-1}"; fi
 if [[ "${1:-}" == "-n" && "${2:-}" == "-L" ]]; then exit "${FAKE_IPT_LIST:-1}"; fi
 exit 0
@@ -1834,8 +1835,11 @@ log_lacks '^docker \[run\]'
 rrun 1 "runner run: 専用ネットワークを作れなければ一時的な失敗(1)" FAKE_NET_CREATE_FAIL=1 -- runner run r1
 log_lacks '^docker \[run\]'
 
-rrun 78 "runner run: 印のファイルが無ければ、docker run せずに 78 で抜ける" DEV_RUNNER_NET_MARKER="$WORK/netmark/none" -- runner run r1
+rrun 1 "runner run: 印のファイルが無ければ、docker run せずに一時的な失敗(1)で抜ける（ユニットが起こし直す）" DEV_RUNNER_NET_MARKER="$WORK/netmark/none" -- runner run r1
 expect_err "出口の規則の印がありません"
+# 1 は dev-runner@.service の RestartPreventExitStatus に含まれない（含まれると二度と起き直らない）。
+RPES="$(sed -n 's/^RestartPreventExitStatus=//p' "${DEV_RUNNER_UNIT:-$HERE/dev-runner@.service}")"
+case " $RPES " in *" 1 "*) ng "印が無いときの終了コード 1 が RestartPreventExitStatus（$RPES）に含まれています" ;; esac
 log_lacks '^docker \[run\]'
 log_lacks '^docker \[network\]'
 log_lacks 'registration-token'
@@ -2076,12 +2080,18 @@ log_lacks '^iptables \[-N\]'
 [[ ! -e "$WORK/netstate/ready" ]] || ng "$CUR: 不正な指定なのに印が置かれています"
 
 rm -rf "$WORK/netstate"
+net_run 1 "net apply: FORWARD に DOCKER-USER への飛び先が無ければ、何も入れず印も置かずに失敗する" FAKE_IPT_FWD=1 -- apply
+expect_err "FORWARD から DOCKER-USER への飛び先がありません"
+log_lacks '^iptables-restore'
+log_lacks '^iptables \[-N\]'
+[[ ! -e "$WORK/netstate/ready" ]] || ng "$CUR: 飛び先が無いのに印が置かれています"
 net_run 0 "net apply: 規則を入れ、印を置く（入れ替えは 1 回の iptables-restore）" -- apply
 log_has '^iptables-restore \[--noflush\]$'
 [[ "$(grep -c '^iptables-restore' "$LOG")" == "1" ]] || ng "$CUR: iptables-restore が 1 回ではありません"
 # -F と -A と -I を iptables として別々に呼ばない（制限の無い瞬間を作らない）。規則は取り込みの内容にだけある。
 log_lacks '^iptables \[-(F|A|I|X|D)\]'
-log_has '^iptables \[-N\] \[DOCKER-USER\]$'
+log_lacks '^iptables \[-N\]'
+log_has '^iptables \[-C\] \[FORWARD\] \[-j\] \[DOCKER-USER\]$'
 grep -qxF -- '-A DEV-RUNNER-FWD -d 10.0.0.0/8 -m conntrack --ctstate NEW -j REJECT' "$STATE/restore-in" || ng "$CUR: 取り込みの内容に 10/8 の規則がありません"
 grep -qxF -- '-A DEV-RUNNER-IN -m conntrack --ctstate NEW -j REJECT' "$STATE/restore-in" || ng "$CUR: 取り込みの内容に INPUT の規則がありません"
 grep -qxF -- '-I DOCKER-USER -i dev-runner0 -j DEV-RUNNER-FWD' "$STATE/restore-in" || ng "$CUR: 取り込みの内容に DOCKER-USER の飛び先がありません"
@@ -2107,6 +2117,11 @@ for l in '-D DOCKER-USER -i dev-runner0 -j DEV-RUNNER-FWD' '-D INPUT -i dev-runn
 done
 net_run 0 "net clear: 何も入っていなければ（飛び先も鎖も無い）、iptables-restore を呼ばない" -- clear
 log_lacks '^iptables-restore'
+mkdir -p "$WORK/netstate"
+printf 'bridge=dev-runner0\n' >"$WORK/netstate/ready"
+net_run 0 "net unmark: 印だけを消し、iptables には触らない" -- unmark
+[[ ! -e "$WORK/netstate/ready" ]] || ng "$CUR: unmark の後に印が残っています"
+log_lacks '^iptables'
 net_run 1 "net: 知らない操作は拒む" -- bogus
 
 rrun 0 "runner net unit: 規則を入れるシステムのユニットを出す" -- runner net unit
@@ -2119,7 +2134,8 @@ nunit_has 'PartOf=docker.service' "Docker の再起動のたびに入れ直す"
 nunit_has 'Type=oneshot' "規則を入れて終わる"
 nunit_has 'RemainAfterExit=yes' "入れた状態を active で持つ"
 nunit_has 'ExecStart=/usr/local/sbin/dev-runner-net apply' "スクリプトの apply"
-nunit_has 'ExecStop=/usr/local/sbin/dev-runner-net clear' "止めたら印と規則を外す"
+nunit_has 'ExecStop=/usr/local/sbin/dev-runner-net unmark' "止めたら印だけを消す（live-restore で動き続けるコンテナの制限を外さない）"
+if grep -qE '^ExecStop(Post)?=.*(clear|-F|-X|iptables)' "$NUNIT"; then ng "規則のユニットが、止めるときに規則を消しています"; fi
 nunit_has 'WantedBy=multi-user.target' "起動時に入れる"
 rrun 2 "runner net: 引数なし" -- runner net
 expect_err "使い方: dev runner net script|unit"
