@@ -3,12 +3,14 @@
 #
 # ## なぜ要るのか
 #
-# --engine codex はツールを解禁した唯一のエンジンで、判定も JSON スキーマ方式に
-# 変わっている。どちらも、失敗しても緑に見える形で壊れうる。
+# --engine codex は、ツールを使わせず起動する環境も絞るエンジンで、判定は
+# JSON スキーマ方式である。どちらも、失敗しても緑に見える形で壊れうる。
 #
-#   1. 差分を渡してしまう。ツールを解禁した意味は「モデル自身に git diff を
-#      叩かせ、差分の外も読ませる」ことにある。差分を標準入力へ流すと、この
-#      意味が失われたまま気づけない。
+#   1. 差分が標準入力に載らない、またはツールを使う文面に戻る。ツールは使わせ
+#      ないので、差分が届く道は標準入力しかない。
+#   1b. 起動する環境が広がる。渡る環境変数・作業場所・引数の旗が、許可リストと
+#      無効化の組から外れる。仕込みの codex が実際に受け取った環境・作業場所・
+#      引数で確かめる。
 #   2. 判定が回答以外の文字列で行われる。codex の回答は -o のファイルから取る。
 #      stdout を読む実装へ戻ると、見出しや進捗が判定へ混ざる。
 #   3. 判定がモデルの category 以外で決まる。知らない category や形の崩れた
@@ -77,6 +79,14 @@ cat > "$FAKE_BIN/codex" <<'FAKE'
 #!/usr/bin/env bash
 set -euo pipefail
 
+# 被検査側は codex を env -i で起動するため、テストからの FAKE_CODEX_* は環境では
+# 届かない。記録先はこの仕込みの位置から解決し、切り替えは fake.env から読む。
+FAKE_CODEX_RECORD="$(cd "$(dirname "$0")/.." && pwd)/record"
+if [[ -f "$FAKE_CODEX_RECORD/fake.env" ]]; then
+  # shellcheck disable=SC1091
+  . "$FAKE_CODEX_RECORD/fake.env"
+fi
+
 if [[ "${1-}" == "login" && "${2-}" == "status" ]]; then
   if [[ "${FAKE_CODEX_LOGGED_IN:-1}" == "1" ]]; then
     echo "Logged in"
@@ -98,6 +108,11 @@ printf '%s\n' "$calls" > "$FAKE_CODEX_RECORD/calls"
 for a in "$@"; do
   printf '%s\n' "$a" >> "$FAKE_CODEX_RECORD/argv"
 done
+
+# 受け取った環境・作業場所を記録する（実行環境を絞れていることの検査に使う）。
+env | LC_ALL=C sort > "$FAKE_CODEX_RECORD/env"
+pwd > "$FAKE_CODEX_RECORD/cwd"
+ls -A > "$FAKE_CODEX_RECORD/cwd-list"
 
 # 受け取った標準入力を記録する。
 cat > "$FAKE_CODEX_RECORD/stdin"
@@ -171,8 +186,13 @@ run_review() {
   #
   # 関数の戻り値は被検査側の終了コードにする。末尾に別のコマンド（cat）を
   # 置くと、関数の戻り値がそちらに差し替わり、呼び出し側が rc を取り違える。
-  local rc
+  local rc v
   rm -f "$RECORD/calls"
+  # 仕込みの codex への切り替えは、環境ではなくファイルで渡す（env -i で届かない）。
+  : > "$RECORD/fake.env"
+  for v in $(compgen -e | command grep '^FAKE_CODEX_' || true); do
+    printf '%s=%q\n' "$v" "${!v}" >> "$RECORD/fake.env"
+  done
   (
     cd "$REPO" || exit 1
     PATH="$FAKE_BIN:$PATH" \
@@ -186,7 +206,7 @@ run_review() {
   return "$rc"
 }
 
-# ---- 1. 差分は渡さない（ツールの解禁）。プロンプトが取得コマンドを示す ----
+# ---- 1. 差分は標準入力で渡し、ツールを使わせない文面にする ----
 
 it "指摘なしの回答で exit 0 になる"
 rm -f "$RECORD/stdin" "$RECORD/argv"
@@ -219,29 +239,26 @@ fi
 it "codex が標準入力を受け取っている"
 if [[ -f "$RECORD/stdin" ]]; then pass; else fail "プロンプトの渡し方が壊れています（stdin が記録されていない）"; fi
 
-it "標準入力の先頭に差分そのものを渡している（ツールが使えない環境でも差分は必ず届く）"
-# 読み取り専用のサンドボックスは、ユーザー名前空間を禁じたコンテナでは起動せず、
-# モデルは git diff も叩けない。差分の取得をツールに任せると、その環境では差分を
-# 見ないまま回答が返る。差分を先に置き、プロンプトはその後に続ける。
+it "標準入力の先頭に差分そのものを渡している（ツールは使わせないので差分はここでしか届かない）"
 if [[ "$(sed -n 1p "$RECORD/stdin" 2>/dev/null)" == 'diff --git'* ]]; then
   pass
 else
   fail "標準入力の先頭が差分ではありません: $(sed -n 1,3p "$RECORD/stdin" 2>/dev/null)"
 fi
 
-it "プロンプトは差分の後に置き、コマンドが使えない環境でも差分だけで完結するよう指示している"
-if grep -q '上記はこのリポジトリの git の差分です' "$RECORD/stdin" 2>/dev/null \
-  && grep -q 'コマンドが実行できない環境でも、上の差分だけでレビューを完結させてください' "$RECORD/stdin" 2>/dev/null; then
+it "プロンプトは差分の後に置き、ツールを使わない文面である"
+if grep -q '上記は git の差分です' "$RECORD/stdin" 2>/dev/null \
+  && grep -q 'ファイル読み取りやコマンド実行のツールを使わないでください' "$RECORD/stdin" 2>/dev/null; then
   pass
 else
   fail "プロンプトの指示が見当たりません"
 fi
 
-it "標準入力が差分の取得コマンド（git diff）を指示している"
-if grep -q 'git diff' "$RECORD/stdin" 2>/dev/null; then
-  pass
+it "ツールの使用を促す文面（読み取りのコマンドを使ってよい等）が残っていない"
+if grep -q 'を使ってよい' "$RECORD/stdin" 2>/dev/null; then
+  fail "ツールを許す文面が残っています"
 else
-  fail "差分の取得コマンドの指示がありません: $(cat "$RECORD/stdin" 2>/dev/null)"
+  pass
 fi
 
 it "標準入力が報告の規則（category）を含む"
@@ -253,10 +270,14 @@ fi
 
 # ---- 2. 引数の形（読み取り専用・スキーマ・回答の口・既定モデル） ----
 
-it "引数に read-only sandbox / color never / --output-schema / -o が含まれる"
+it "引数に read-only sandbox / color never / --output-schema / -o / 環境を絞る旗（inherit=none・ツールの無効化・web_search の無効化・--ignore-user-config）が含まれる"
 argv="$(cat "$RECORD/argv" 2>/dev/null || true)"
 missing=""
-for needed in exec - --sandbox read-only --color never --output-schema -o; do
+for needed in exec - --sandbox read-only --color never --output-schema -o \
+  --skip-git-repo-check --ignore-user-config \
+  shell_environment_policy.inherit=none 'web_search="disabled"' \
+  shell_tool browser_use in_app_browser computer_use apps code_mode_host \
+  view_image goals image_generation; do
   printf '%s\n' "$argv" | grep -x -- "$needed" >/dev/null || missing="$missing $needed"
 done
 if [[ -z "$missing" ]]; then pass; else fail "引数に無いトークン:$missing"; fi
@@ -283,6 +304,52 @@ if [[ "$rc" -eq 0 ]]; then
 else
   fail "--model を渡した回で exit $rc"
 fi
+
+# ---- 2b. 起動する環境が絞られている（渡す環境変数・作業場所） ----
+#
+# 仕込みの codex が実際に受け取った環境と作業場所で確かめる。.env を読み込む前の
+# 値のうち、許可リストの変数だけが渡り、.env にだけある変数は渡らない。
+SECRET_ENV="$WORK/secret.env"
+cat > "$SECRET_ENV" <<'ENVEOF'
+DUMMY_ONLY_IN_ENVFILE=dummy-env-file-value
+GH_TOKEN=dummy-gh-token-from-envfile
+HTTPS_PROXY=http://envfile-proxy.invalid:3128
+ENVEOF
+# 作業ツリーの直下にも .env を置く（作業場所がここなら見えてしまう形）。
+printf 'DUMMY_ONLY_IN_ENVFILE=dummy-env-file-value\n' > "$REPO/.env"
+rm -f "$RECORD/env" "$RECORD/cwd" "$RECORD/cwd-list"
+rc=0
+PROJECT_ENV_FILE="$SECRET_ENV" \
+  HTTPS_PROXY="http://host-proxy.invalid:8080" \
+  DUMMY_ONLY_IN_HOST=dummy-host-value \
+  FAKE_CODEX_ANSWER='{"reviewed":true,"findings":[]}' run_review || rc=$?
+
+it "環境を絞った回でも exit 0 になる"
+if [[ "$rc" -eq 0 ]]; then pass; else fail "exit $rc: $(cat "$WORK/err")"; fi
+
+it ".env にだけある変数（GH_TOKEN・ダミーの秘密）が codex に渡らない"
+if command grep -qE '^(GH_TOKEN|DUMMY_ONLY_IN_ENVFILE|DUMMY_ONLY_IN_HOST)=' "$RECORD/env" 2>/dev/null; then
+  fail "渡ってはいけない変数が渡っている: $(command grep -oE '^(GH_TOKEN|DUMMY_ONLY_IN_ENVFILE|DUMMY_ONLY_IN_HOST)=' "$RECORD/env" | tr '\n' ' ')"
+else
+  [[ -s "$RECORD/env" ]] && pass || fail "環境の記録が無い"
+fi
+
+it ".env に書いた HTTPS_PROXY は渡らず、読み込む前の値だけが渡る"
+assert_eq "$(command grep '^HTTPS_PROXY=' "$RECORD/env" 2>/dev/null)" "HTTPS_PROXY=http://host-proxy.invalid:8080" "HTTPS_PROXY"
+
+it "渡る環境変数は許可リストの範囲に収まる"
+extra="$(command grep -oE '^[A-Za-z_][A-Za-z0-9_]*' "$RECORD/env" | command grep -vxE 'HOME|CODEX_HOME|PATH|LANG|LANGUAGE|LC_[A-Z]+|TMPDIR|TERM|HTTPS_PROXY|HTTP_PROXY|ALL_PROXY|NO_PROXY|https_proxy|http_proxy|all_proxy|no_proxy|SSL_CERT_FILE|SSL_CERT_DIR|PWD|SHLVL|OLDPWD|_' || true)"
+if [[ -z "$extra" ]]; then pass; else fail "許可リスト外の変数が渡っている: $(echo "$extra" | tr '\n' ' ')"; fi
+
+it "作業場所は一時ディレクトリで、リポジトリではなく、.env が無い"
+cwd_value="$(cat "$RECORD/cwd" 2>/dev/null)"
+if [[ -n "$cwd_value" && "$cwd_value" != "$(cd "$REPO" && pwd -P)" && "$cwd_value" != "$REPO" ]] \
+  && [[ ! -e "$cwd_value/.env" ]] && ! command grep -qx '.env' "$RECORD/cwd-list" 2>/dev/null; then
+  pass
+else
+  fail "作業場所が絞れていない: cwd=$cwd_value list=$(tr '\n' ' ' < "$RECORD/cwd-list" 2>/dev/null)"
+fi
+rm -f "$REPO/.env"
 
 # ---- 3. 判定は JSON の category から行う（4 点だけが落とす） ----
 
@@ -481,6 +548,7 @@ it "枝の名前の issue 番号から本文（acceptance 含む）を引いて�
 git -C "$REPO" checkout -q -b feat/9999-selftest-context
 rm -f "$RECORD/stdin"
 rc=0
+: > "$RECORD/fake.env"  # 直接呼ぶ回は既定の応答（run_review の切り替えを持ち越さない）
 (
   cd "$REPO"
   PATH="$FAKE_BIN:$PATH" \
@@ -539,6 +607,7 @@ git -C "$REPO" commit -q -m "refs を差し替える（#11）"
 
 rm -f "$RECORD/stdin" "$RECORD/gh-calls"
 rc=0
+: > "$RECORD/fake.env"  # 直接呼ぶ回は既定の応答（run_review の切り替えを持ち越さない）
 (
   cd "$REPO"
   PATH="$FAKE_BIN:$PATH" \
@@ -601,6 +670,7 @@ rm -f "$RECORD/stdin"
 printf 'hello\nworld\nagain\n' > "$REPO/sample.txt"
 git -C "$REPO" add sample.txt
 rc=0
+: > "$RECORD/fake.env"  # 直接呼ぶ回は既定の応答（run_review の切り替えを持ち越さない）
 (
   cd "$REPO"
   PATH="$failing_gh_bin:$FAKE_BIN:$PATH" \
