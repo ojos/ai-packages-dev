@@ -441,12 +441,37 @@ extract_issue_refs() {
 # macOS の awk でも動くよう、GNU 拡張（IGNORECASE・match の配列引数など）に頼らない。
 extract_acceptance() {
   tr -d '\r' | awk '
-    function depth(s) { match(s, /^#+/); return RLENGTH }
+    # コードのフェンスの種類（行頭に 0〜3 個の空白を付けた ``` / ~~~）。無ければ空
+    function fk(s) {
+      if (s ~ /^ ? ? ?```/) return "`"
+      if (s ~ /^ ? ? ?~~~/) return "~"
+      return ""
+    }
+    # ATX 見出しの深さ（行頭に 0〜3 個の空白、# が 1〜6 個、その後に空白か行末）。見出しでなければ 0
+    function depth(s,   t) {
+      if (s !~ /^ ? ? ?#+([ \t]|$)/) return 0
+      t = s; sub(/^ +/, "", t); match(t, /^#+/)
+      return (RLENGTH <= 6) ? RLENGTH : 0
+    }
+    # 見出しの文言（先頭の # と、末尾の空白・閉じの # の並びを除く）
+    function htext(s,   t) {
+      t = s; sub(/^ +/, "", t); sub(/^#+/, "", t)
+      sub(/[ \t]+$/, "", t); sub(/^[ \t]+/, "", t)
+      sub(/(^|[ \t]+)#+$/, "", t); sub(/[ \t]+$/, "", t)
+      return t
+    }
+    # フェンスの開閉。開いたのと同じ種類の行で閉じる
+    function track(k) {
+      if (fence == "") fence = k
+      else if (fence == k) fence = ""
+    }
     mode == 0 {
-      if ($0 ~ /^```/) { fence = !fence; next }
+      k = fk($0)
+      if (k != "") { track(k); next }
       if ($0 ~ /^acceptance:/) { mode = 1; print; next }
-      if (!fence && $0 ~ /^#+[ \t]+[Aa][Cc][Cc][Ee][Pp][Tt][Aa][Nn][Cc][Ee][ \t:]*$/) {
-        mode = 2; d = depth($0); fence = 0; print; next
+      if (fence == "" && depth($0) > 0) {
+        t = tolower(htext($0)); sub(/:$/, "", t)
+        if (t == "acceptance") { mode = 2; d = depth($0); fence = ""; print; next }
       }
       next
     }
@@ -455,8 +480,9 @@ extract_acceptance() {
       print; next
     }
     mode == 2 {
-      if ($0 ~ /^```/) { fence = !fence; print; next }
-      if (!fence && $0 ~ /^#+[ \t]/ && depth($0) <= d) exit
+      k = fk($0)
+      if (k != "") { track(k); print; next }
+      if (fence == "" && depth($0) > 0 && depth($0) <= d) exit
       print
     }
   '

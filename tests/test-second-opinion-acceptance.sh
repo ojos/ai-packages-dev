@@ -48,6 +48,30 @@ for target in ".ai-playbook/templates/second-opinion-review.sh" "scripts/second-
   it "acceptance の節が無ければ何も出さない"
   out="$(printf '## 概要\ntext\n## 関連\n' | extract_acceptance)"
   assert_eq "$out" "" "none"
+
+  it "空白 1〜3 個のフェンスの中の「# acceptance」は見出しとしない"
+  out="$(printf '   ```\n# acceptance\n- no\n   ```\ntext\n' | extract_acceptance)"
+  assert_eq "$out" "" "indented fence"
+
+  it "~~~ のフェンスの中の「# acceptance」も見出しとしない"
+  out="$(printf '~~~\n# acceptance\n- no\n~~~\ntext\n' | extract_acceptance)"
+  assert_eq "$out" "" "tilde fence"
+
+  it "~~~ のフェンスの中にバッククォート 3 つが出ても閉じない"
+  out="$(printf '~~~\n```\n# acceptance\n~~~\n' | extract_acceptance)"
+  assert_eq "$out" "" "mixed fence"
+
+  it "空白付きの「  ## acceptance」から取れる"
+  out="$(printf '  ## acceptance\n- a\n## x\n' | extract_acceptance)"
+  assert_eq "$out" $'  ## acceptance\n- a' "indented heading"
+
+  it "「## acceptance ##」から取れる"
+  out="$(printf '## acceptance ##\n- a\n## x\n' | extract_acceptance)"
+  assert_eq "$out" $'## acceptance ##\n- a' "closing hashes"
+
+  it "空白付きの次の見出しで節が終わる"
+  out="$(printf '## acceptance\n- a\n  ## x\n- b\n' | extract_acceptance)"
+  assert_eq "$out" $'## acceptance\n- a' "indented end"
 done
 
 exit_with_result
