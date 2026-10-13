@@ -39,7 +39,8 @@
 #   ＝ユニットを止められた状況。FAKE_RUN_EXIT で抜ける終了コードを変える）。他の形は落とす
 # - docker `network inspect --format ... <名前>` と `network create ...`（自前のランナーの専用ネットワーク。作った印は $FAKE_STATE/network。
 #   FAKE_NET_BRIDGE / FAKE_NET_IPV6 で既存のネットワークの設定を差し替える。他の形は落とす）
-# - iptables: 引数を記録するだけ。`-C` は FAKE_IPT_CHECK（既定 1＝無い）で抜ける。規則の実体は見ない（生成した文面で確かめる）
+# - iptables: 引数を記録するだけ。`-C` は FAKE_IPT_CHECK（既定 1＝無い）、`-n -L` は FAKE_IPT_LIST（既定 1＝鎖が無い）で抜ける。
+#   iptables-restore: 引数を記録し、標準入力を $FAKE_STATE/restore-in へ写す（FAKE_IPTR_FAIL=1 で失敗）。規則の実体は見ない（生成した文面で確かめる）
 # - curl（API）: `-sSL -K - -X <メソッド> -H ... -w <書式> <URL>` の形だけ。**標準入力の設定を $FAKE_STATE/curl-config へ書き**
 #   （PAT が引数でなく標準入力で渡ることを見る）、FAKE_PAT_EXPECT を含まなければ 401 相当（22）で落とす。
 #   組織の登録用トークン（POST）・ランナーの一覧（GET、page 付き。FAKE_REGISTERED_NAME のランナーを 1 つ返す。FAKE_PAGES=2 なら 1 ページ目は 100 件の別のランナーで、自分は 2 ページ目）・登録の削除（DELETE）だけ
@@ -340,6 +341,20 @@ EOF
 cat >>"$FAKEBIN/iptables" <<'EOF'
 log_call iptables "$@"
 if [[ "${1:-}" == "-C" ]]; then exit "${FAKE_IPT_CHECK:-1}"; fi
+if [[ "${1:-}" == "-n" && "${2:-}" == "-L" ]]; then exit "${FAKE_IPT_LIST:-1}"; fi
+exit 0
+EOF
+
+# iptables-restore: 引数を記録し、標準入力を $FAKE_STATE/restore-in へ写す。FAKE_IPTR_FAIL=1 で失敗する。
+cat >"$FAKEBIN/iptables-restore" <<EOF
+#!$BASH_BIN
+set -euo pipefail
+. "$FAKEBIN/_log"
+EOF
+cat >>"$FAKEBIN/iptables-restore" <<'EOF'
+log_call iptables-restore "$@"
+cat >"$FAKE_STATE/restore-in"
+[[ "${FAKE_IPTR_FAIL:-0}" != "1" ]] || { echo "iptables-restore: 失敗" >&2; exit 1; }
 exit 0
 EOF
 
@@ -557,7 +572,7 @@ fi
 cp "$FAKE_CURL_DIR/${2##*/}" "$4"
 EOF
 
-chmod +x "$FAKEBIN/devcontainer" "$FAKEBIN/docker" "$FAKEBIN/tmux" "$FAKEBIN/systemctl" "$FAKEBIN/git" "$FAKEBIN/ps" "$FAKEBIN/journalctl" "$FAKEBIN/codex" "$FAKEBIN/curl" "$FAKEBIN/iptables"
+chmod +x "$FAKEBIN/devcontainer" "$FAKEBIN/docker" "$FAKEBIN/tmux" "$FAKEBIN/systemctl" "$FAKEBIN/git" "$FAKEBIN/ps" "$FAKEBIN/journalctl" "$FAKEBIN/codex" "$FAKEBIN/curl" "$FAKEBIN/iptables" "$FAKEBIN/iptables-restore"
 for t in cut cksum mv jq tar gzip cp chmod cmp dirname; do
   p="$(command -v "$t")" || { echo "[devhost-selftest] $t が見つかりません" >&2; exit 1; }
   ln -s "$p" "$TOOLBIN/$t"
@@ -2041,8 +2056,10 @@ done
 rules_has "-A DEV-RUNNER-IN -m conntrack --ctstate NEW -j REJECT"
 rules_has "-I DOCKER-USER -i dev-runner0 -j DEV-RUNNER-FWD"
 rules_has "-I INPUT -i dev-runner0 -j DEV-RUNNER-IN"
-rules_has "-F DEV-RUNNER-FWD"
-rules_has "-F DEV-RUNNER-IN"
+rules_has "*filter"
+rules_has ":DEV-RUNNER-FWD - [0:0]"
+rules_has ":DEV-RUNNER-IN - [0:0]"
+rules_has "COMMIT"
 if grep -qE -- '-j ACCEPT' "$OUT"; then ng "$CUR: 既定の規則に ACCEPT があります（許可は DEV_RUNNER_NET_ALLOW_DNS の指定時だけ）"; fi
 if grep -qE -- '-d (0\.0\.0\.0/0|0/0)' "$OUT"; then ng "$CUR: 全宛先を止める規則があります（インターネットへ出られなくなる）"; fi
 net_run 0 "net rules: DEV_RUNNER_NET_ALLOW_DNS の宛先の 53 番だけを、止める規則より前で通す" DEV_RUNNER_NET_ALLOW_DNS="192.168.1.1 10.0.0.2" -- rules
@@ -2054,28 +2071,42 @@ r_line="$(grep -nF -- '-A DEV-RUNNER-FWD -d 192.168.0.0/16' "$OUT" | cut -d: -f1
 [[ -n "$a_line" && -n "$r_line" && "$a_line" -lt "$r_line" ]] || ng "$CUR: 許可が止める規則より後ろにあります"
 net_run 1 "net rules: DEV_RUNNER_NET_ALLOW_DNS が IPv4 でなければ拒む" DEV_RUNNER_NET_ALLOW_DNS="1.2.3.4;reboot" -- rules
 net_run 1 "net apply: DEV_RUNNER_NET_ALLOW_DNS が不正なら、規則を 1 つも入れず印も置かない" DEV_RUNNER_NET_ALLOW_DNS="bogus" -- apply
-expect_no_calls
+log_lacks '^iptables-restore'
+log_lacks '^iptables \[-N\]'
 [[ ! -e "$WORK/netstate/ready" ]] || ng "$CUR: 不正な指定なのに印が置かれています"
 
 rm -rf "$WORK/netstate"
-net_run 0 "net apply: 規則を入れ、印を置く" -- apply
-log_has '^iptables \[-N\] \[DEV-RUNNER-FWD\]$'
-log_has '^iptables \[-A\] \[DEV-RUNNER-FWD\] \[-d\] \[10.0.0.0/8\] \[-m\] \[conntrack\] \[--ctstate\] \[NEW\] \[-j\] \[REJECT\]$'
-log_has '^iptables \[-A\] \[DEV-RUNNER-IN\] \[-m\] \[conntrack\] \[--ctstate\] \[NEW\] \[-j\] \[REJECT\]$'
-log_has '^iptables \[-I\] \[DOCKER-USER\] \[-i\] \[dev-runner0\] \[-j\] \[DEV-RUNNER-FWD\]$'
-log_has '^iptables \[-I\] \[INPUT\] \[-i\] \[dev-runner0\] \[-j\] \[DEV-RUNNER-IN\]$'
+net_run 0 "net apply: 規則を入れ、印を置く（入れ替えは 1 回の iptables-restore）" -- apply
+log_has '^iptables-restore \[--noflush\]$'
+[[ "$(grep -c '^iptables-restore' "$LOG")" == "1" ]] || ng "$CUR: iptables-restore が 1 回ではありません"
+# -F と -A と -I を iptables として別々に呼ばない（制限の無い瞬間を作らない）。規則は取り込みの内容にだけある。
+log_lacks '^iptables \[-(F|A|I|X|D)\]'
+log_has '^iptables \[-N\] \[DOCKER-USER\]$'
+grep -qxF -- '-A DEV-RUNNER-FWD -d 10.0.0.0/8 -m conntrack --ctstate NEW -j REJECT' "$STATE/restore-in" || ng "$CUR: 取り込みの内容に 10/8 の規則がありません"
+grep -qxF -- '-A DEV-RUNNER-IN -m conntrack --ctstate NEW -j REJECT' "$STATE/restore-in" || ng "$CUR: 取り込みの内容に INPUT の規則がありません"
+grep -qxF -- '-I DOCKER-USER -i dev-runner0 -j DEV-RUNNER-FWD' "$STATE/restore-in" || ng "$CUR: 取り込みの内容に DOCKER-USER の飛び先がありません"
+grep -qxF -- '-I INPUT -i dev-runner0 -j DEV-RUNNER-IN' "$STATE/restore-in" || ng "$CUR: 取り込みの内容に INPUT の飛び先がありません"
+grep -qxF -- ':DEV-RUNNER-FWD - [0:0]' "$STATE/restore-in" || ng "$CUR: 取り込みの内容に鎖の宣言がありません"
+[[ "$(sed -n '$p' "$STATE/restore-in")" == "COMMIT" ]] || ng "$CUR: 取り込みの内容が COMMIT で終わっていません"
 [[ "$(cat "$WORK/netstate/ready")" == "bridge=dev-runner0" ]] || ng "$CUR: 印の中身が bridge=dev-runner0 ではありません"
 # 印は、dev が読む形と一致する（スクリプトの印で dev runner run が通る）。
 cp "$WORK/netstate/ready" "$WORK/netmark/fromscript"
 rrun 0 "runner run: スクリプトが置いた印で通る（ブリッジ名の綴りが dev と一致する）" DEV_RUNNER_NET_MARKER="$WORK/netmark/fromscript" -- runner run r1
-net_run 0 "net apply: 飛び先が既にあれば（-C が 0）、足さない" FAKE_IPT_CHECK=0 -- apply
-log_lacks '^iptables \[-I\]'
+net_run 0 "net apply: 飛び先が既にあれば（-C が 0）、取り込みに飛び先を含めない" FAKE_IPT_CHECK=0 -- apply
 log_has '^iptables \[-C\] \[DOCKER-USER\] \[-i\] \[dev-runner0\] \[-j\] \[DEV-RUNNER-FWD\]$'
-net_run 0 "net clear: 印を消し、飛び先と鎖を外す" -- clear
+if grep -q '^-I ' "$STATE/restore-in"; then ng "$CUR: 飛び先が既にあるのに -I を含めています"; fi
+grep -qxF -- '-A DEV-RUNNER-IN -m conntrack --ctstate NEW -j REJECT' "$STATE/restore-in" || ng "$CUR: 鎖の中身の入れ替えが取り込みにありません"
+net_run 1 "net apply: 取り込みに失敗したら、前の印も消えていて、新しい印も置かない" FAKE_IPTR_FAIL=1 -- apply
+[[ ! -e "$WORK/netstate/ready" ]] || ng "$CUR: 失敗したのに印が残っています"
+net_run 0 "net clear: 印を消し、飛び先と鎖を 1 回の iptables-restore で外す" FAKE_IPT_CHECK=0 FAKE_IPT_LIST=0 -- clear
 [[ ! -e "$WORK/netstate/ready" ]] || ng "$CUR: clear の後に印が残っています"
-log_has '^iptables \[-D\] \[DOCKER-USER\] \[-i\] \[dev-runner0\] \[-j\] \[DEV-RUNNER-FWD\]$'
-log_has '^iptables \[-D\] \[INPUT\] \[-i\] \[dev-runner0\] \[-j\] \[DEV-RUNNER-IN\]$'
-log_has '^iptables \[-X\] \[DEV-RUNNER-FWD\]$'
+[[ "$(grep -c '^iptables-restore' "$LOG")" == "1" ]] || ng "$CUR: iptables-restore が 1 回ではありません"
+log_lacks '^iptables \[-(F|A|I|X|D)\]'
+for l in '-D DOCKER-USER -i dev-runner0 -j DEV-RUNNER-FWD' '-D INPUT -i dev-runner0 -j DEV-RUNNER-IN' '-F DEV-RUNNER-FWD' '-X DEV-RUNNER-FWD' '-F DEV-RUNNER-IN' '-X DEV-RUNNER-IN'; do
+  grep -qxF -- "$l" "$STATE/restore-in" || ng "$CUR: 取り込みの内容に「$l」がありません"
+done
+net_run 0 "net clear: 何も入っていなければ（飛び先も鎖も無い）、iptables-restore を呼ばない" -- clear
+log_lacks '^iptables-restore'
 net_run 1 "net: 知らない操作は拒む" -- bogus
 
 rrun 0 "runner net unit: 規則を入れるシステムのユニットを出す" -- runner net unit

@@ -303,7 +303,7 @@ journalctl --user -u dev-runner@<名前>.service -n 20
   - **規則（root）。** 規則の追加には root が要ります。`dev` の本体とユーザーのユニットは root で動かないので、規則を入れる部分だけを別にし、
     `dev runner net script`（スクリプト）と `dev runner net unit`（systemd のシステムのユニット）が標準出力へ出します。上の手順 2b のとおり、利用者が `sudo` で入れます。
     ユニットは Docker の後に入れ（`After=docker.service`）、Docker の再起動のたびに入れ直します（`PartOf=docker.service`）。入れる規則は iptables で、`dev runner net script` の出力の `rules`
-    （`/usr/local/sbin/dev-runner-net rules` で、何も実行せずに文面を確かめられます）が正本です。
+    （`/usr/local/sbin/dev-runner-net rules` で、`iptables-restore` に渡す文面を、何も実行せずに確かめられます）が正本です。入れ直しは `iptables-restore --noflush` の 1 回の取り込みで鎖の中身と飛び先を一度に入れ替えるので、入れ替えの途中に制限の無い瞬間はできません（失敗したときは何も変わらず、印も置きません）。
     - FORWARD（`DOCKER-USER` から飛ぶ）: ブリッジから `10.0.0.0/8`・`172.16.0.0/12`・`192.168.0.0/16`・`169.254.0.0/16`・`100.64.0.0/10` への新しい接続を `REJECT`
     - INPUT: ブリッジから外部の機械自身（ゲートウェイ、LAN 側のアドレス）への新しい接続を `REJECT`。`DOCKER-USER` は転送の鎖なので、機械自身への接続には INPUT の規則が別に要ります
   - **印のファイル。** 規則を入れ終えると、スクリプトが `/run/dev-runner-net/ready`（1 行 `bridge=dev-runner0`）を置きます。`dev runner run` は、これが無い・ブリッジ名が違うときは
@@ -316,7 +316,7 @@ journalctl --user -u dev-runner@<名前>.service -n 20
     書いたら `sudo systemctl restart dev-runner-net.service` で入れ直します。
   - **限界。** `docker=yes` のランナーは、ホストの Docker のソケットを持つので、`--network host` のコンテナを起こして規則を迂回できます。制限が効くのは `docker=no`（既定）のランナーだけです。
     宛先の許可リスト（インターネット側の絞り込み）や IPv6 の規則は持ちません（ネットワークは IPv6 を無効にして作ります）。
-    規則の入れ直しは、鎖を空にしてから書き直すので、そのごく短い間は制限が外れます。規則を外すとき（`systemctl stop dev-runner-net.service`）、動いているランナーは制限が外れます。
+    規則を外すとき（`systemctl stop dev-runner-net.service`）、動いているランナーは制限が外れます。
 - **イメージ。** 公式のランナーのイメージ（`ghcr.io/actions/actions-runner`）に、配るワークフローが使う道具（git・gh・jq・shellcheck など）を
   足したものです（`runner.Dockerfile`）。**公式のイメージの版は固定しています**（`ARG RUNNER_VERSION`）。コンテナが使い捨てなので
   ランナーの自動更新は効かず、古すぎる版は GitHub が受け付けなくなります。版を上げるのは手で行います。**`runner.Dockerfile` は編集しません**

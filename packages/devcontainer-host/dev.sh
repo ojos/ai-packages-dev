@@ -1049,7 +1049,7 @@ cmd_runner_net() {
 # 規則を入れる root のスクリプト（/usr/local/sbin/dev-runner-net）。単体で動く。
 #   apply  規則を入れ直して、印を置く（冪等）
 #   clear  印と規則を外す
-#   rules  入れる規則を 1 行 1 つで出す（iptables の引数。何も実行しない。試験用）
+#   rules  入れる規則（iptables-restore に渡す内容）を出す。何も実行しない（試験用）
 runner_net_script() {
   cat <<'EOF'
 #!/usr/bin/env bash
@@ -1058,8 +1058,9 @@ runner_net_script() {
 # root で動く。systemd のシステムのユニット dev-runner-net.service から呼ぶ（dev runner net unit）。
 #   dev-runner-net apply   規則を入れ直して、印のファイルを置く（何度呼んでもよい）
 #   dev-runner-net clear   印のファイルを消し、規則を外す
-#   dev-runner-net rules   入れる規則を 1 行 1 つで出す（iptables の引数。何も実行しない）
+#   dev-runner-net rules   入れる規則（iptables-restore に渡す内容）を出す。何も実行しない
 #
+# 入れ直しは iptables-restore --noflush の 1 回の取り込みで行う（鎖の中身の入れ替えと飛び先の追加が一度に切り替わる）。
 # 止めるもの（ランナーのブリッジから出る、新しい接続）:
 #   - FORWARD（DOCKER-USER から飛ぶ）: 10/8・172.16/12・192.168/16・169.254/16・100.64/10 への接続
 #   - INPUT: この機械自身への接続（ブリッジのゲートウェイ、LAN 側のアドレスを含む）
@@ -1078,14 +1079,16 @@ ALLOW_DNS="${DEV_RUNNER_NET_ALLOW_DNS:-}"
 
 die() { echo "[dev-runner-net] $*" >&2; exit 1; }
 
-# 入れる規則。1 行が iptables の引数 1 回分。-N は作成（あれば無視）、-I は DOCKER-USER / INPUT への飛び先（無ければ足す）。
-rules() {
-  local c a
-  echo "-N DOCKER-USER"
-  echo "-N $FWD_CHAIN"
-  echo "-F $FWD_CHAIN"
-  echo "-N $IN_CHAIN"
-  echo "-F $IN_CHAIN"
+# 飛び先（DOCKER-USER / INPUT からランナーのブリッジの鎖へ）が既にあるか。
+hook_exists() { iptables -C "$1" -i "$BRIDGE" -j "$2" 2>/dev/null; }
+
+# iptables-restore --noflush に渡す内容を出す。引数は、足す飛び先（fwd / in。無ければ足さない）。
+# 鎖の宣言（:鎖 - [0:0]）は、既にある鎖の中身を同じ取り込みの中で空にして入れ直す。1 回の取り込みで切り替わるので、制限の無い瞬間ができない。
+restore_input() {
+  local c a h
+  echo "*filter"
+  echo ":$FWD_CHAIN - [0:0]"
+  echo ":$IN_CHAIN - [0:0]"
   for a in $ALLOW_DNS; do
     [[ "$a" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "DEV_RUNNER_NET_ALLOW_DNS に IPv4 でない値があります: $a"
     echo "-A $FWD_CHAIN -d $a -p udp --dport 53 -j ACCEPT"
@@ -1097,30 +1100,33 @@ rules() {
     echo "-A $FWD_CHAIN -d $c -m conntrack --ctstate NEW -j REJECT"
   done
   echo "-A $IN_CHAIN -m conntrack --ctstate NEW -j REJECT"
-  echo "-I DOCKER-USER -i $BRIDGE -j $FWD_CHAIN"
-  echo "-I INPUT -i $BRIDGE -j $IN_CHAIN"
+  for h in "$@"; do
+    case "$h" in
+      fwd) echo "-I DOCKER-USER -i $BRIDGE -j $FWD_CHAIN" ;;
+      in) echo "-I INPUT -i $BRIDGE -j $IN_CHAIN" ;;
+    esac
+  done
+  echo "COMMIT"
 }
 
-# 1 行の規則を実行する。-I は同じ規則が既にあれば足さない（-C で確かめる）。
-run_rule() {
-  local line="$1"
-  # shellcheck disable=SC2086
-  case "$line" in
-    "-N "*) iptables $line 2>/dev/null || true ;; # 既にある
-    "-I "*) iptables -C ${line#-I } 2>/dev/null || iptables $line ;;
-    *) iptables $line ;;
-  esac
-}
+# 入れる規則の全文（飛び先も含む。何も実行しない）。
+rules() { restore_input fwd in; }
+
+need_restore() { command -v iptables-restore >/dev/null 2>&1 || die "iptables-restore がありません。何も入れていません"; }
 
 apply() {
-  local line rule_lines
+  local input hooks=()
   # 入れ直しの途中で失敗したとき、古い印が残って「規則が入っている」と読まれないよう、先に消す。
   rm -f "$MARKER"
+  need_restore
   # 規則の生成に失敗したら（不正な DNS の指定など）、何も入れずに止まる。
-  rule_lines="$(rules)"
-  while IFS= read -r line; do
-    run_rule "$line"
-  done <<<"$rule_lines"
+  hook_exists DOCKER-USER "$FWD_CHAIN" || hooks+=(fwd)
+  hook_exists INPUT "$IN_CHAIN" || hooks+=(in)
+  input="$(restore_input ${hooks[@]+"${hooks[@]}"})"
+  # DOCKER-USER が無ければ作る（Docker が後から作るときも既存を受け入れる）。ここは制限を変えない。
+  iptables -N DOCKER-USER 2>/dev/null || true
+  # 鎖の中身の入れ替えと、足りない飛び先の追加を、1 回の取り込みで行う。失敗したら何も変わらず、印も置かない。
+  printf '%s\n' "$input" | iptables-restore --noflush
   mkdir -p "$STATE_DIR"
   chmod 755 "$STATE_DIR"
   printf 'bridge=%s\n' "$BRIDGE" >"$MARKER.tmp"
@@ -1130,14 +1136,18 @@ apply() {
 }
 
 clear_rules() {
+  local lines=() ch
   rm -f "$MARKER"
-  iptables -D DOCKER-USER -i "$BRIDGE" -j "$FWD_CHAIN" 2>/dev/null || true
-  iptables -D INPUT -i "$BRIDGE" -j "$IN_CHAIN" 2>/dev/null || true
-  local ch
+  need_restore
+  # 飛び先の削除と鎖の削除を 1 回の取り込みにする。無いものを消すと取り込み全体が失敗するので、あるものだけを入れる。
+  if hook_exists DOCKER-USER "$FWD_CHAIN"; then lines+=("-D DOCKER-USER -i $BRIDGE -j $FWD_CHAIN"); fi
+  if hook_exists INPUT "$IN_CHAIN"; then lines+=("-D INPUT -i $BRIDGE -j $IN_CHAIN"); fi
   for ch in "$FWD_CHAIN" "$IN_CHAIN"; do
-    iptables -F "$ch" 2>/dev/null || true
-    iptables -X "$ch" 2>/dev/null || true
+    if iptables -n -L "$ch" >/dev/null 2>&1; then lines+=("-F $ch" "-X $ch"); fi
   done
+  if [[ ${#lines[@]} -gt 0 ]]; then
+    { echo "*filter"; printf '%s\n' "${lines[@]}"; echo "COMMIT"; } | iptables-restore --noflush
+  fi
   echo "[dev-runner-net] 規則を外しました"
 }
 
