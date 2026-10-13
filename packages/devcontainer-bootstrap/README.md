@@ -830,7 +830,7 @@ VS Code は接続のたびにコンテナの `~/.docker/config.json` へ `credsS
   - 許可する author email は、環境変数 `ALLOWED_AUTHOR_EMAILS`（カンマ/空白区切り）を最優先し、無ければ `.env` の `GIT_IDENTITY_EMAIL` にフォールバックします。どちらでも解決できなければ fail-closed（exit 1）で止まります。
   - committer には `noreply@github.com`（GitHub の squash merge / web UI）、Co-Authored-By には加えて `noreply@anthropic.com`（AI コーディング規約の trailer）を許可します。
   - 許可エントリには `@example.com` / `*@example.com` の形でドメイン一括指定を書けます。**この 2 形だけ**をドメイン指定として解釈し、それ以外は完全一致です（任意の glob を許すと、設定ミスの `*` 1 文字で全 email が通り検知層が無効化されるため）。`*` 単体は何も許可しません。ローカル部が 1 文字以上あり、かつ `@` を含まないことを要求します（`@example.com` という email そのものや、`attacker@untrusted.com@example.com` の形を通さないため）。
-  - committer が `noreply@github.com` のコミットに限り、author が `<login>@users.noreply.github.com` の形であれば許可します。GitHub 側で「メールアドレスを非公開にする」を有効にしている利用者の PR マージ・web UI 編集に対応するためで、許可を committer に縛ることでローカルで作ったコミットには適用されません（ローカルの identity 適用漏れは従来どおり検知します）。
+  - committer が `noreply@github.com` のコミットに限り、author が `<login>@users.noreply.github.com` の形であれば許可します。GitHub 側で「メールアドレスを非公開にする」を有効にしている利用者の PR マージ・web UI 編集に対応するためで、許可を committer に縛るのは、適用漏れが通る範囲を狭めるためです。committer / author の email はローカルで自由に設定できるため、**この許可は偽装を防ぎません**（ローカルで作ったコミットでも、この 2 つを GitHub の形に設定すれば通ります）。この検査の目的は identity の適用漏れ（別アカウントの email の混入）の検出で、意図的な偽装への対策は書き込み権限の管理と、必要なら署名の検証（GitHub の verified な web-flow の署名）が担います。書き込み権限を持つ人を信頼するという既存のトレードオフと同じ側の判断です。
   - 同じ条件（`is_github_authored`）を `Co-Authored-By` にも適用します。マージした人と PR の作者が違う squash merge では、GitHub がマージの瞬間に作者を `Co-authored-by` として足します。PR の検査（マージ前）では見えず、`push(main)` の全履歴検査で初めて現れる形です。
   - 使い方: 既定は `origin/main..HEAD`、範囲指定可、`--full` で HEAD の全履歴（`git rev-list --all` にはしない）。
 - `scripts/verify-commit-identity-selftest.sh`（判定の自己試験。CI と手元で共用）
