@@ -87,20 +87,11 @@ case "$path" in
       *) echo "gh: Server Error (HTTP 500)" >&2; exit 1 ;;
     esac
     ;;
-  */commits/*/statuses)
-    # この head に既に付いている status（新しい順）。無ければ空の一覧。
-    if [ -f "$FIXTURES/head_statuses.json" ]; then file=head_statuses.json; else echo '[]' | jq -r "$expr"; exit 0; fi
-    ;;
   */pulls\?*) file=pulls.json ;;
   */commits/*/check-runs) file=checkruns.json ;;
   */pulls/*/commits) file=commits.json ;;
   */pulls/*) file=pr.json ;;
-  */issues/*/comments)
-    # comments.1.json があれば、statuses への最初の書き込みより前はそれ、後は comments.json を返す
-    # （pending を書いた後に記録が現れる競合を模す）。
-    file=comments.json
-    if [ -f "$FIXTURES/comments.1.json" ] && [ ! -f "$FIXTURES/statuses" ]; then file=comments.1.json; fi
-    ;;
+  */issues/*/comments) file=comments.json ;;
   *) echo "gh stub: 知らない path: $path" >&2; exit 1 ;;
 esac
 [ -f "$FIXTURES/$file" ] || exit 1
@@ -171,23 +162,23 @@ case_() {
 DEP='dependabot[bot]'
 case_ "Dependabot の PR は記録が無くても success" success "$DEP" no \
   "$(commit "$DEP" web-flow true)"
-case_ "人の PR で記録が無ければ pending（眠らず、赤にしない。#559）" pending someone no \
+case_ "人の PR で記録が無ければ status を書かない（眠らず、赤にもしない。#559）" none someone no \
   "$(commit someone someone false)"
 case_ "人の PR で記録があれば success" success someone yes \
   "$(commit someone someone false)"
-case_ "Dependabot の PR に人のコミットが混ざり記録が無ければ pending" pending "$DEP" no \
+case_ "Dependabot の PR に人のコミットが混ざり記録が無ければ status を書かない" none "$DEP" no \
   "$(commit "$DEP" web-flow true)" "$(commit someone someone false)"
 # author は作る側が書ける。GitHub の署名が無ければ Dependabot 名義でも信じない。
-case_ "Dependabot 名義でも署名が無ければ pending" pending "$DEP" no \
+case_ "Dependabot 名義でも署名が無ければ status を書かない" none "$DEP" no \
   "$(commit "$DEP" web-flow true)" "$(commit "$DEP" someone false)"
-case_ "Dependabot 名義で committer が web-flow でも未検証なら pending" pending "$DEP" no \
+case_ "Dependabot 名義で committer が web-flow でも未検証なら status を書かない" none "$DEP" no \
   "$(commit "$DEP" web-flow false)"
 
 # 記録の書き手（#370）。public なので誰でも印つきのコメントを書ける。数えるのは
 # PR の作者自身の記録だけである。
-case_ "PR の作者以外（無関係な人）が書いた印だけなら pending" pending someone stranger \
+case_ "PR の作者以外（無関係な人）が書いた印だけなら status を書かない" none someone stranger \
   "$(commit someone someone false)"
-case_ "PR の作者以外の協力者が書いた印だけでも pending（作者自身の記録だけを数える）" pending someone collaborator \
+case_ "PR の作者以外の協力者が書いた印だけでも status を書かない（作者自身の記録だけを数える）" none someone collaborator \
   "$(commit someone someone false)"
 case_ "作者自身の記録があれば、他人の印が混ざっていても success" success someone both \
   "$(commit someone someone false)"
@@ -201,7 +192,7 @@ case_ "作者自身の記録なら、立場が NONE に見えても success" suc
 # SHA が変わったら古いコメントで通らないこと（#361 の受け入れ条件）。記録の印は
 # 直前の head（OLD_SHA）に紐づいており、いまの head（SHA）とは一致しない。
 OLD_SHA=fedcba9876543210fedcba9876543210fedcba9
-it "SHA が変わった PR は古いコメントでは success にならない（pending）"
+it "SHA が変わった PR は古いコメントでは success にならない（status を書かない）"
 fx="$WORK/fx"
 rm -rf "$fx"; mkdir -p "$fx"
 printf '{"user":{"login":"someone"},"draft":false,"head":{"sha":"%s"}}' "$SHA" > "$fx/pr.json"
@@ -212,10 +203,10 @@ printf '[%s]' "$(record_comment someone OWNER "$OLD_SHA")" > "$fx/comments.json"
 ( cd "$REPO_ROOT" && PATH="$WORK/bin:$PATH" FIXTURES="$fx" GH_TOKEN=x REPO=o/r EVENT=pull_request \
     PR_NUMBER=1 TRIGGER_SHA="$SHA" RUN_URL=u bash "$WORK/run.sh" ) >/dev/null 2>&1 || true
 got="$(cat "$fx/statuses" 2>/dev/null || echo none)"
-if [[ "$got" == pending ]]; then
+if [[ "$got" == none ]]; then
   pass
 else
-  fail "want=pending got=$(echo "$got" | tr '\n' ' ')"
+  fail "want=none got=$(echo "$got" | tr '\n' ' ')"
 fi
 
 # pull_request の経路は眠らない（#559）。run の本文の pull_request 分岐に sleep が無く、
@@ -250,39 +241,8 @@ for rec in no yes; do
   fi
 done
 
-# 競合: 最初の確認では記録が無く、pending を書いた後の再確認で記録が見つかる。
-# 確定の status（success）で上書きし直す（最後の status が success）。
-it "pending を書いた後の再確認で記録が見つかると、judge して success を書く"
-fx="$WORK/fx"; rm -rf "$fx"; mkdir -p "$fx"
-printf '{"user":{"login":"someone"},"draft":false,"head":{"sha":"%s"}}' "$SHA" > "$fx/pr.json"
-printf '[%s]' "$(commit someone someone false)" > "$fx/commits.json"
-printf '[]' > "$fx/comments.1.json"
-printf '[%s]' "$(record_comment someone OWNER)" > "$fx/comments.json"
-( cd "$REPO_ROOT" && PATH="$WORK/bin:$PATH" FIXTURES="$fx" GH_TOKEN=x REPO=o/r EVENT=pull_request \
-    PR_NUMBER=1 TRIGGER_SHA="$SHA" DEFAULT_BRANCH=main RUN_URL=u bash "$WORK/run.sh" ) >/dev/null 2>&1
-rc=$?
-if [[ "$(tail -n1 "$fx/statuses" 2>/dev/null)" == success && "$(head -n1 "$fx/statuses")" == pending && "$rc" == 0 ]]; then
-  pass
-else
-  fail "statuses=$(tr '\n' ' ' < "$fx/statuses" 2>/dev/null) rc=$rc"
-fi
-
-# 既に確定（failure / success）が付いた head には、遅れて動いた実行が pending を書かない。
-for st in failure success; do
-  it "既に $st が付いた head には pending を書かず、$st のまま残る"
-  fx="$WORK/fx"; rm -rf "$fx"; mkdir -p "$fx"
-  printf '{"user":{"login":"someone"},"draft":false,"head":{"sha":"%s"}}' "$SHA" > "$fx/pr.json"
-  printf '[%s]' "$(commit someone someone false)" > "$fx/commits.json"
-  printf '[]' > "$fx/comments.json"
-  printf '[{"context":"other","state":"pending"},{"context":"second-opinion-gate","state":"%s"},{"context":"second-opinion-gate","state":"pending"}]' "$st" > "$fx/head_statuses.json"
-  ( cd "$REPO_ROOT" && PATH="$WORK/bin:$PATH" FIXTURES="$fx" GH_TOKEN=x REPO=o/r EVENT=pull_request \
-      PR_NUMBER=1 TRIGGER_SHA="$SHA" DEFAULT_BRANCH=main RUN_URL=u bash "$WORK/run.sh" ) >/dev/null 2>&1
-  rc=$?
-  if [[ ! -e "$fx/statuses" && "$rc" == 0 ]]; then pass; else fail "書き込み=$(cat "$fx/statuses" 2>/dev/null) rc=$rc"; fi
-done
-
 # 導入の PR: 既定ブランチにワークフローが無い（contents API が 404）ときは、眠ってから判定する。
-# 404 以外の読めなさは眠らない側（pending）に倒す。ワークフローが在れば眠らない（上の検査）。
+# 404 以外の読めなさは眠らない側（status を書かない）に倒す。ワークフローが在れば眠らない（上の検査）。
 for mode in 404 500; do
   fx="$WORK/fx"; rm -rf "$fx"; mkdir -p "$fx"
   printf '{"user":{"login":"someone"},"draft":false,"head":{"sha":"%s"}}' "$SHA" > "$fx/pr.json"
@@ -296,8 +256,8 @@ for mode in 404 500; do
     it "既定ブランチにワークフローが無い（404）と、眠ってから判定する"
     if [[ -e "$fx/slept" && "$got" == failure ]]; then pass; else fail "slept=$([[ -e $fx/slept ]] && echo y || echo n) statuses=$got"; fi
   else
-    it "既定ブランチのワークフローの有無を確かめられない（404 以外）と、眠らず pending にする"
-    if [[ ! -e "$fx/slept" && "$got" == pending ]]; then pass; else fail "slept=$([[ -e $fx/slept ]] && echo y || echo n) statuses=$got"; fi
+    it "既定ブランチのワークフローの有無を確かめられない（404 以外）と、眠らず status を書かない"
+    if [[ ! -e "$fx/slept" && "$got" == none ]]; then pass; else fail "slept=$([[ -e $fx/slept ]] && echo y || echo n) statuses=$got"; fi
   fi
 done
 
