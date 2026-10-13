@@ -5976,9 +5976,15 @@ resolve_review_range_without_base() {
   local upstream
   upstream="$(git rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null || true)"
   if [[ -n "$upstream" ]]; then
-    if range_has_diff "$upstream..HEAD"; then
-      REVIEW_RANGE="$upstream..HEAD"
-      REVIEW_RANGE_REASON="no default branch tracking ref was found; reviewing from the upstream $upstream"
+    # **起点は上流の先端ではなく、上流と HEAD の分岐点にする。** 範囲は両端のツリーの
+    # 差になるので、上流が分岐点より先へ進んでいると、上流側だけの変更を取り消す差分が
+    # 混ざる。
+    local upstream_mb
+    upstream_mb="$(git merge-base "$upstream" HEAD 2>/dev/null || true)"
+    [[ -n "$upstream_mb" ]] || upstream_mb="$upstream"
+    if range_has_diff "$upstream_mb..HEAD"; then
+      REVIEW_RANGE="$upstream_mb..HEAD"
+      REVIEW_RANGE_REASON="no default branch tracking ref was found; reviewing from the merge-base ${upstream_mb:0:12} with the upstream $upstream"
     else
       REVIEW_NO_TARGET=1
     fi
@@ -6023,7 +6029,14 @@ resolve_review_range() {
     if [[ -n "$mb" ]]; then
       REVIEW_RANGE_REASON="reviewing the whole PR from the merge-base ${mb:0:12} with $base"
       if [[ "$staged" -eq 1 ]]; then
-        REVIEW_BASE="$mb"
+        if git diff --cached --quiet "$mb" -- 2>/dev/null; then
+          # 起点から索引までの差が空（コミットした変更を索引で取り消した等）。
+          # reviewer を呼ぶと「対象なし」を返し、対象が実在すると見なして落ちる。
+          REVIEW_RANGE_REASON=""
+          REVIEW_NO_TARGET=1
+        else
+          REVIEW_BASE="$mb"
+        fi
       elif range_has_diff "$mb..HEAD"; then
         REVIEW_RANGE="$mb..HEAD"
       else

@@ -282,7 +282,8 @@ repo="$(new_workdir)/no-base"
 mk_repo "$repo" "$(new_workdir)/origin.git" trunk
 in_repo "$repo" "printf 'c1\n' > f1.txt && git add f1.txt && git $GIT_AUTHOR commit -q -m c1"
 out_txt="$(run_resolve "$repo")"
-assert_eq "$(field "$out_txt" RANGE)" "origin/trunk..HEAD" "既定ブランチ無しの範囲"
+mb="$(cd "$repo" && git merge-base origin/trunk HEAD)"
+assert_eq "$(field "$out_txt" RANGE)" "$mb..HEAD" "既定ブランチ無しの範囲（上流との分岐点）"
 
 it "既定ブランチを解決できない環境で origin/HEAD 等が実在しないことを確かめる"
 # 上のケースが「たまたま上流を採った」のではなく、前提どおり既定ブランチの
@@ -344,6 +345,35 @@ if [[ "$(field "$out_txt" BASE)" == "" && "$(field "$out_txt" RANGE)" == "" && "
   pass
 else
   fail "従来の決め方（引数なし）に戻っていない: $out_txt"
+fi
+
+it "既定ブランチを解決できず、上流が分岐点より先へ進んでいれば、起点は上流の先端ではなく上流との分岐点にする"
+# 上流の先端を起点にすると、上流側だけの変更を取り消す差分が第二意見へ渡る。
+repo4="$(new_workdir)/no-base-advanced"
+mk_repo "$repo4" "$(new_workdir)/origin.git" trunk
+in_repo "$repo4" "git checkout -q -b feat --track origin/trunk && printf 'own\n' > own.txt && git add own.txt && git $GIT_AUTHOR commit -q -m own"
+in_repo "$repo4" "git checkout -q trunk && printf 'other\n' > trunk-new.txt && git add trunk-new.txt && git $GIT_AUTHOR commit -q -m other && git push -q origin trunk && git checkout -q feat"
+out_txt="$(run_resolve "$repo4")"
+mb="$(cd "$repo4" && git merge-base origin/trunk HEAD)"
+assert_eq "$(field "$out_txt" RANGE)" "$mb..HEAD" "上流が進んだときの範囲"
+
+it "上流との分岐点を起点にすると、上流側だけの変更が差分に入らず、自分の変更は残る"
+names="$(cd "$repo4" && git diff --name-only "$(field "$out_txt" RANGE)" | tr '\n' ',')"
+assert_eq "$names" "own.txt," "範囲に入るファイル"
+
+it "上流へ戻った理由に、分岐点を起点にしたことが出る"
+assert_contains "$(field "$out_txt" REASON)" "merge-base" "上流へ戻った理由"
+
+it "ステージ済みがあっても、起点から索引までの差が空なら、対象なしにする（--base を渡さない）"
+repo5="$(new_workdir)/staged-empty"
+mk_repo "$repo5" "$(new_workdir)/origin.git" main
+in_repo "$repo5" "git remote set-head origin main"
+in_repo "$repo5" "git checkout -q -b feat && printf 'c1\n' > f1.txt && git add f1.txt && git $GIT_AUTHOR commit -q -m c1 && git rm -q f1.txt"
+out_txt="$(run_resolve_base "$repo5")"
+if [[ "$(field "$out_txt" BASE)" == "" && "$(field "$out_txt" RANGE)" == "" && "$(field "$out_txt" NO_TARGET)" == "1" ]]; then
+  pass
+else
+  fail "空の差分に --base を渡す状態になっている: $out_txt"
 fi
 
 # ── source ガード ─────────────────────────────────────────────────────────────
@@ -508,6 +538,27 @@ if out_txt="$(cd "$e2e" && ALLOWED_AUTHOR_EMAILS="t@example.com" VERIFY_ACCEPTAN
   fi
 else
   fail "全段合格なのに exit 非 0: $out_txt"
+fi
+
+# ── 起点から索引までの差が空: reviewer を呼ばずに対象なしで通る ───────────────
+
+it "ステージ済みで起点との差が空なら、reviewer を呼ばず、記録も残さず GATE_PASS になる"
+cat > "$e2e/scripts/second-opinion-review.sh" <<'STUB'
+#!/usr/bin/env bash
+echo "REVIEW_CALLED:$*"
+exit 1
+STUB
+in_repo "$e2e" "git rm -q FEATURE.txt STAGED.txt"
+if out_txt="$(cd "$e2e" && ALLOWED_AUTHOR_EMAILS="t@example.com" VERIFY_ACCEPTANCE="$acc" bash scripts/loop-gate.sh 2>&1)"; then
+  if printf '%s' "$out_txt" | grep -F 'no reviewable diff' >/dev/null \
+     && ! printf '%s' "$out_txt" | grep -F 'REVIEW_CALLED' >/dev/null \
+     && ! printf '%s' "$out_txt" | grep -F 'RECORD_SAVED' >/dev/null; then
+    pass
+  else
+    fail "reviewer が呼ばれた、または記録が残った: $out_txt"
+  fi
+else
+  fail "対象なしなのに exit 非 0: $out_txt"
 fi
 
 exit_with_result
