@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# second-opinion-review.sh の extract_acceptance が、issue 本文から acceptance の節を
+# 2 つの形（intake の YAML / Markdown の見出し）で取り出すことを確かめる（#562）。
+# 雛形と写しの両方に同じ試験を当てる。関数だけを取り出して実行する（非対話・ネットワーク不要）。
+
+set -uo pipefail
+. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+
+echo "test-second-opinion-acceptance"
+
+for target in ".ai-playbook/templates/second-opinion-review.sh" "scripts/second-opinion-review.sh"; do
+  echo " [$target]"
+  # shellcheck disable=SC1090
+  eval "$(awk '/^extract_acceptance\(\) \{/ { on = 1 } on { print } on && /^}/ { exit }' "$REPO_ROOT/$target")"
+
+  it "YAML の acceptance: から、次のキーの手前までが取れる"
+  out="$(printf 'goal: x\nacceptance:\n  - a\n  - b\npriority: 低\n' | extract_acceptance)"
+  assert_eq "$out" $'acceptance:\n  - a\n  - b' "yaml"
+
+  it "「## acceptance」から、次の ## の手前までが取れる"
+  out="$(printf '# t\n## acceptance\n- a\n- b\n## 関連\n- c\n' | extract_acceptance)"
+  assert_eq "$out" $'## acceptance\n- a\n- b' "h2"
+
+  it "「### acceptance」の中の「#### 補足」で切らず、次の ### の手前までが取れる"
+  out="$(printf '### acceptance\n- a\n#### 補足\n- b\n### 関連\n- c\n' | extract_acceptance)"
+  assert_eq "$out" $'### acceptance\n- a\n#### 補足\n- b' "h3"
+
+  it "「## Acceptance」（大文字）でも取れる"
+  out="$(printf '## Acceptance\n- a\n## x\n' | extract_acceptance)"
+  assert_eq "$out" $'## Acceptance\n- a' "case"
+
+  it "コードのフェンスの中の「# acceptance」は見出しとして扱わない"
+  out="$(printf '```\n# acceptance\n- no\n```\ntext\n' | extract_acceptance)"
+  assert_eq "$out" "" "fence"
+
+  it "節の中のフェンスの「#」は、節を切らない"
+  out="$(printf '## acceptance\n```\n# comment\n```\n- a\n## x\n' | extract_acceptance)"
+  assert_eq "$out" $'## acceptance\n```\n# comment\n```\n- a' "fence in section"
+
+  it "YAML が先に現れたら YAML を取る"
+  out="$(printf 'acceptance:\n  - y\npriority: 低\n## acceptance\n- h\n' | extract_acceptance)"
+  assert_eq "$out" $'acceptance:\n  - y' "yaml first"
+
+  it "見出しが先に現れたら見出しを取る"
+  out="$(printf '## acceptance\n- h\n## x\nacceptance:\n  - y\n' | extract_acceptance)"
+  assert_eq "$out" $'## acceptance\n- h' "heading first"
+
+  it "acceptance の節が無ければ何も出さない"
+  out="$(printf '## 概要\ntext\n## 関連\n' | extract_acceptance)"
+  assert_eq "$out" "" "none"
+done
+
+exit_with_result

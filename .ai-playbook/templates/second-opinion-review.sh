@@ -337,7 +337,7 @@ if [[ "$ENGINE_JSON" -eq 1 ]]; then
   }
 
   # **落とす 4 点はこのスクリプトが決め、スキーマは「モデルに許す category」を
-  # 決める。** 2 か所に書くと片方だけ直る（shared-ai-rules.md「正本は 1 つ」）ので、
+  # 決める。** 2 か所に書くと片方だけ直る（shared-ai-rules.md 12 章「一覧の複製は機械照合で担保する」）ので、
   # 許す側の一覧はスキーマから読み、落とす側の 4 点がそこに含まれることを確かめる。
   BLOCKING_CATEGORIES='bug vulnerability type-error edge-case'
   ALL_CATEGORIES="$(jq -r '.properties.findings.items.properties.category.enum[]' "$SCHEMA_FILE" 2>/dev/null || true)"
@@ -434,13 +434,31 @@ extract_issue_refs() {
   }'
 }
 
-# issue の本文から acceptance の節（intake の YAML の `acceptance:` から次のキーまで）
-# を出す。
+# issue の本文から acceptance の節を出す。次の 2 つの形を拾い、本文で先に現れたほうを使う。
+#   - intake の YAML: 行頭の `acceptance:` から、次のキーかコードのフェンスまで
+#   - Markdown の見出し: 文言が acceptance の見出し（# の数と大文字小文字は問わない）から、
+#     次の同じ深さ以上の見出しの手前まで。見出しの判定はコードのフェンス（```）の外に限る
+# macOS の awk でも動くよう、GNU 拡張（IGNORECASE・match の配列引数など）に頼らない。
 extract_acceptance() {
   tr -d '\r' | awk '
-    /^acceptance:/ { on = 1; print; next }
-    on && (/^[A-Za-z_.]+:/ || /^```/) { exit }
-    on { print }
+    function depth(s) { match(s, /^#+/); return RLENGTH }
+    mode == 0 {
+      if ($0 ~ /^```/) { fence = !fence; next }
+      if ($0 ~ /^acceptance:/) { mode = 1; print; next }
+      if (!fence && $0 ~ /^#+[ \t]+[Aa][Cc][Cc][Ee][Pp][Tt][Aa][Nn][Cc][Ee][ \t:]*$/) {
+        mode = 2; d = depth($0); fence = 0; print; next
+      }
+      next
+    }
+    mode == 1 {
+      if ($0 ~ /^[A-Za-z_.]+:/ || $0 ~ /^```/) exit
+      print; next
+    }
+    mode == 2 {
+      if ($0 ~ /^```/) { fence = !fence; print; next }
+      if (!fence && $0 ~ /^#+[ \t]/ && depth($0) <= d) exit
+      print
+    }
   '
 }
 
