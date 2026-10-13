@@ -522,6 +522,16 @@ VERIFY_ACCEPTANCE=scripts/acceptance-remote.sh bash scripts/verify.sh
 >
 > ただし **fork からの PR には Secrets もリポジトリ変数も渡りません。** `acceptance.sh` へリポジトリ変数や Secrets に依存する検査を足すと、その検査は fork からの PR でだけ供給元を失い、fail-closed な検査であれば常に赤くなります。恒常的な赤は「赤を無視する習慣」を生むため、足す側で次のどちらかを選んでください。(1) 供給元を要する検査は `acceptance.sh` へ入れず専用のワークフローに置く（許可 author email を要するコミット identity の検査は `identity-guard.yml` が持っています）。(2) fork からの PR を受け付けないリポジトリなら、ワークフロー内にコメントアウトで置いてある `if:` の 1 行を有効にする。
 
+**`scripts/verify.sh` を回す CI を自前で持っている場合**（前提ツールを入れてから `verify.sh` を回す独自のワークフローなど）は、`verify.yml` を消さずに、自前の CI の中身を `verify.yml` へ移して `--accept` します。
+
+- **`verify.yml` を消すと、`doctor.sh --strict` が「記録にあるのに無い」で FAIL になります。`--accept` でも消せません。** 意図した設計です。`verify.sh` が CI で必ず回ることを保証するため、外す入口を持ちません（`--without-*` でも外せません）。`verify.yml` はプロジェクトが所有するファイル（`owned:`）ではないため、手を入れたら `--accept` で取り込み済みにする、という通常の流れに乗せます。
+- 手順:
+  1. 自前の CI が入れている前提ツール（静的解析器など）の導入を、`verify.yml` の「プロジェクトの前提はここへ足す」の位置へ移します。
+  2. 自前のワークフロー（重複して `verify.sh` を回している側）を消します。
+  3. `bash bootstrap.sh --accept .github/workflows/verify.yml` で、手を入れた現物を取り込み済みにします。
+- **required check の名前が変わる場合**（自前の job 名から `verify.yml` の job 名へ）は、ブランチ保護・ruleset の側も直します。直さないと、存在しない check を待ち続けてマージできなくなります。
+- 雛形が変わった版へ `--upgrade` すると、手を入れた `verify.yml` は上書きされず `verify.yml.dcb-new` が隣に置かれます。差分を `verify.yml` へ取り込んでから、`--accept` し直します。
+
 > **この開発リポジトリ自身には `verify.yml` を置きません。** 既に `.github/workflows/ci.yml` が同じ役割を持ち、`scripts/acceptance.sh` がその 6 ジョブ + `identity-guard.yml` を完全ミラーしているため、`verify.yml` を置くと役割が重複し、`tests/test-ci-mirror.sh` のミラー対象が 2 本になります。**雛形を配りながら自分では使わない状態を、無自覚ではなく明示の判断として残します。**
 
 ### 配るワークフローの実行先（`ACTIONS_RUNS_ON`）
