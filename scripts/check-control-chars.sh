@@ -44,10 +44,18 @@
 #   - 行末の流儀（CRLF / 末尾改行）と、既存ファイルの一括修正。
 #
 # 検査対象の決め方:
-#   git ls-files -z を起点にし、作業ツリー上の実体を読む。
+#   git ls-files -z を起点にし、作業ツリー上の実体と、索引（ステージ済み）の blob の両方を読む。
 #   - 追跡対象だけを見る。制御文字が問題になるのは、それが共有される状態に入ってからである。
-#   - 索引に入った時点で対象になるので、コミット前（git add 済み）でも落ちる。
 #   - 作業ツリーの内容を読むため、追跡ファイルを編集して混入させた時点でも落ちる。
+#   - 索引の内容も読む。禁止バイトを含む内容を git add したあとに作業ツリーだけを直すと、
+#     作業ツリーは綺麗でも次のコミットには禁止バイトが入る。これを見逃さないため、
+#     索引と作業ツリーで内容が違うファイル（git diff --name-only -z。作業ツリーで消したものを
+#     含む）は、索引の blob を取り出して同じ規則で検査する。報告には「<パス> (staged)」と
+#     示すので、作業ツリー側の検出と区別できる。
+#   - 索引側で読むのは通常のファイル（モード 100644 / 100755）の blob だけ。サブモジュール
+#     （160000）とシンボリックリンク（120000）は読まない。リンクの blob はリンク先のパス
+#     文字列で、作業ツリー側でリンクを走査しないのと同じ理由で対象外とする。
+#   - 索引の blob もバイナリ判定は作業ツリーと同じ（下記の 2 段）。git の NUL 判定は使わない。
 #   - 実体が無いもの（削除済み・サブモジュール）とシンボリックリンクは走査しない。
 #     リンクを開くと git が持つ内容（リンク先のパス文字列）ではなくリンク先の実体を
 #     読んでしまい、判定が別物になるため。リンク先パスに制御文字が入る事態は考えにくい。
@@ -117,6 +125,8 @@ trap 'rm -rf "$WORK"' EXIT
 PATTERN="$WORK/forbidden.pattern"
 TRACKED="$WORK/tracked.z"
 TARGETS="$WORK/targets.z"
+STAGED_DIR="$WORK/staged"
+DIFF_NAMES="$WORK/diff-names.z"
 SUSPECTS="$WORK/suspects.z"
 GREP_ERR="$WORK/grep.err"
 
@@ -167,6 +177,47 @@ while IFS= read -r -d '' path; do
   target_count=$((target_count + 1))
   printf '%s\0' "$path"
 done < "$TRACKED" > "$TARGETS"
+
+# ── 索引側の blob の取り出し ─────────────────────────────────────────────────
+#
+# 索引と作業ツリーで内容が違うファイルだけを対象にする（同じなら作業ツリーの走査で足りる）。
+# 取り出した blob は $STAGED_DIR/<連番> に置き、元のパスは <連番>.label に持つ
+# （パス名に改行があっても崩れないよう、ファイルで持つ）。走査は他の対象と同じ経路に流す。
+# --literal-pathspecs は、パス名の * や : を git にパターンとして解釈させないため。
+staged_count=0
+mkdir -p "$STAGED_DIR"
+git diff --name-only -z > "$DIFF_NAMES" || fail "git diff に失敗しました。索引と作業ツリーの差分を列挙できません。"
+while IFS= read -r -d '' path; do
+  entry_file="$WORK/entry.z"
+  git --literal-pathspecs ls-files -s -z -- "$path" > "$entry_file" \
+    || fail "git ls-files -s に失敗しました（$path）。索引のエントリを読めません。"
+  # 出力は「<モード> <sha> <stage>TAB<パス>」。マージ中の衝突（stage 1-3）は複数行になりうる。
+  while IFS= read -r -d '' entry; do
+    meta="${entry%%$'\t'*}"
+    mode="${meta%% *}"
+    rest="${meta#* }"
+    sha="${rest%% *}"
+    stage="${rest#* }"
+    # 通常のファイルの blob だけを読む（理由は冒頭「検査対象の決め方」）。
+    [[ "$mode" == "100644" || "$mode" == "100755" ]] || continue
+    [[ "$stage" == "0" ]] || continue
+    staged_count=$((staged_count + 1))
+    staged_file="$STAGED_DIR/$staged_count"
+    git cat-file blob "$sha" > "$staged_file" \
+      || fail "git cat-file に失敗しました（$path）。索引の blob を読めません。"
+    printf '%s (staged)' "$path" > "$staged_file.label"
+    printf '%s\0' "$staged_file" >> "$TARGETS"
+  done < "$entry_file"
+done < "$DIFF_NAMES"
+
+# 報告に出す名前。索引から取り出した一時ファイルは、元のパスに「(staged)」を添えて示す。
+display_name() {
+  if [[ "$1" == "$STAGED_DIR/"* && -f "$1.label" ]]; then
+    cat "$1.label"
+  else
+    printf '%s' "$1"
+  fi
+}
 
 [[ "$tracked_count" -gt 0 ]] \
   || fail "追跡ファイルが 1 件もありません。検査していないことと、制御文字が無いことは別なので失敗させます。"
@@ -233,7 +284,7 @@ if [[ -s "$SUSPECTS" ]]; then
 
     violations=$((violations + 1))
     hit_lines="$(grep -c -a -f "$PATTERN" -- "$path" || true)"
-    printf '[control-chars]   %s（該当 %s 行）\n' "$path" "$hit_lines" >&2
+    printf '[control-chars]   %s（該当 %s 行）\n' "$(display_name "$path")" "$hit_lines" >&2
     # 該当行は cat -v で可視化してから出す。生のまま出すと、端末では**やはり見えない**。
     # 先頭 5 行に絞り、1 行 200 バイトで切る（長い行で対処が画面から流れないように）。
     grep -n -a -f "$PATTERN" -- "$path" 2>/dev/null \
@@ -243,8 +294,8 @@ fi
 
 # ── 結果 ─────────────────────────────────────────────────────────────────────
 
-printf '[control-chars] 検査したパス: 追跡 %s 件 / 走査 %s 件（実体なし・リンク %s 件、バイナリ %s 件）\n' \
-  "$tracked_count" "$target_count" "$skipped_count" "$binary_count"
+printf '[control-chars] 検査したパス: 追跡 %s 件 / 走査 %s 件（実体なし・リンク %s 件、バイナリ %s 件）、索引側 %s 件\n' \
+  "$tracked_count" "$target_count" "$skipped_count" "$binary_count" "$staged_count"
 
 if [[ "$violations" -gt 0 ]]; then
   printf '[control-chars] 表示されない制御文字を含むファイルを %s 件検出しました。\n' "$violations" >&2

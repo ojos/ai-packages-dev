@@ -135,6 +135,58 @@ printf 'a\tb\r\nc\n' > "$repo/tab-lf-cr.txt"
 run_check "$repo"
 assert_pass "TAB / LF / CR のみ"
 
+# ── 索引（ステージ済み）の内容 ──────────────────────────────────────────────
+#
+# 禁止バイトをステージしたあと作業ツリーだけを直すと、作業ツリーは綺麗でも次の
+# コミットには禁止バイトが入る。索引の blob も読まないと、この形は通ってしまう（#542）。
+
+it "禁止バイトをステージし、作業ツリーだけを直したとき、索引側の検出として落ちる（陽性）"
+repo="$(new_repo)"
+printf 'a\000b\n' > "$repo/staged-fixture.txt"
+( cd "$repo" && git add -f staged-fixture.txt ) >/dev/null 2>&1
+printf 'clean\n' > "$repo/staged-fixture.txt"
+run_check "$repo"
+assert_fail "ステージ済みの NUL" "staged-fixture.txt (staged)"
+
+it "作業ツリーだけに禁止バイトがある（未ステージの編集）ときは、従来どおり落ちる"
+repo="$(new_repo)"
+printf 'one\n' > "$repo/edit-fixture.txt"
+( cd "$repo" && git add -f edit-fixture.txt && $GIT_AS commit -q -m add-edit ) >/dev/null 2>&1
+printf 'a\000b\n' > "$repo/edit-fixture.txt"
+run_check "$repo"
+assert_fail "未ステージの NUL" "edit-fixture.txt"
+
+it "索引と作業ツリーがどちらも綺麗なら、差分があっても通る（陰性）"
+repo="$(new_repo)"
+printf 'one\n' > "$repo/diff-fixture.txt"
+( cd "$repo" && git add -f diff-fixture.txt ) >/dev/null 2>&1
+printf 'two\n' > "$repo/diff-fixture.txt"
+run_check "$repo"
+assert_pass "綺麗な差分"
+
+it "作業ツリーで消したファイルの索引側に禁止バイトがあれば落ちる"
+repo="$(new_repo)"
+printf 'a\000b\n' > "$repo/gone-fixture.txt"
+( cd "$repo" && git add -f gone-fixture.txt ) >/dev/null 2>&1
+rm "$repo/gone-fixture.txt"
+run_check "$repo"
+assert_fail "消したファイルの NUL" "gone-fixture.txt (staged)"
+
+it "索引の内容が違うシンボリックリンクがあっても、エラーで止まらず通る"
+repo="$(new_repo)"
+( cd "$repo" && ln -s README.md link-fixture && git add link-fixture && $GIT_AS commit -q -m add-link \
+    && rm link-fixture && ln -s LICENSE link-fixture && git add link-fixture && rm link-fixture && ln -s CHANGELOG.md link-fixture ) >/dev/null 2>&1
+run_check "$repo"
+assert_pass "リンクの差分"
+
+it "索引側がバイナリ（UTF-8 として不正）なら、作業ツリー側と同じく走査から外す"
+repo="$(new_repo)"
+printf '\211PNG\000\377\n' > "$repo/bin-fixture.dat"
+( cd "$repo" && git add -f bin-fixture.dat ) >/dev/null 2>&1
+printf 'clean\n' > "$repo/bin-fixture.dat"
+run_check "$repo"
+assert_pass "ステージ済みのバイナリ"
+
 # ── 検査が成立していないことを合格にしない ────────────────────────────────────
 
 it "git 管理外では落ちる（検査が成立していない）"
