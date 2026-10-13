@@ -50,6 +50,12 @@ name: second-opinion-gate
 # 違うので防げない）。そこで pending を書いた**後**に再確認する。記録の投稿が再確認より前なら
 # この実行が確定を書き、後なら post が起こす手動実行が pending の後に確定を書く。
 #
+# **キューで遅れて動いた実行も、確定を上書きしない。** pending を書く前に、この head の
+# commit status のうち context が `second-opinion-gate` の最新を読み、既に success /
+# failure / error が付いていれば pending を書かずに終える。push の後に付いた確定は
+# 手動実行（post が起こしたもの、`/land` の再判定）が書いたもので、信用できる。読めなければ
+# 「確かめられなかった」と同じ扱い（失敗で知らせる。pending は書かない）。
+#
 # **例外: 既定ブランチにこのワークフローがまだ無い（導入の PR）ときは、従来どおり眠る。**
 # 手動実行は既定ブランチのワークフローしか起動しないので、post は手動実行を起こさない
 # （second-opinion-record.sh の dispatch_gate）。pending で終えると、判定し直す契機が無くなる。
@@ -404,6 +410,20 @@ jobs:
                   judge "$PR_NUMBER" "$TRIGGER_SHA" || failed=1
                   ;;
                 1)
+                  # **確定が既に付いていれば、pending で上書きしない**（冒頭「競合」）。この head に
+                  # 付いた確定は、push の後に手動実行が書いたものなので信用できる。
+                  cur="$(gh api "repos/${REPO}/commits/${TRIGGER_SHA}/statuses" \
+                    --jq "[.[] | select(.context == \"${CONTEXT}\")][0].state // \"none\"" 2>/dev/null)" || cur=""
+                  case "$cur" in
+                    success|failure|error)
+                      echo "PR #${PR_NUMBER}: この head には既に確定の status（${cur}）が付いています。pending で上書きしません。"
+                      exit 0
+                      ;;
+                    "")
+                      echo "::error::PR #${PR_NUMBER}: head の status を読めませんでした（GitHub API から読めない）。status は付けていません。手動実行（workflow_dispatch）で再判定してください。"
+                      exit 1
+                      ;;
+                  esac
                   echo "PR #${PR_NUMBER}: 記録がまだありません。pending にします（記録の投稿後に判定されます）。"
                   report "$TRIGGER_SHA" pending "waiting for second-opinion record: run second-opinion-record.sh post" || failed=1
                   # **pending を書いた後で、もう一度確かめる**（冒頭「競合」）。読み取りと書き込みの

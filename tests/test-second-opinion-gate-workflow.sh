@@ -87,6 +87,10 @@ case "$path" in
       *) echo "gh: Server Error (HTTP 500)" >&2; exit 1 ;;
     esac
     ;;
+  */commits/*/statuses)
+    # この head に既に付いている status（新しい順）。無ければ空の一覧。
+    if [ -f "$FIXTURES/head_statuses.json" ]; then file=head_statuses.json; else echo '[]' | jq -r "$expr"; exit 0; fi
+    ;;
   */pulls\?*) file=pulls.json ;;
   */commits/*/check-runs) file=checkruns.json ;;
   */pulls/*/commits) file=commits.json ;;
@@ -262,6 +266,20 @@ if [[ "$(tail -n1 "$fx/statuses" 2>/dev/null)" == success && "$(head -n1 "$fx/st
 else
   fail "statuses=$(tr '\n' ' ' < "$fx/statuses" 2>/dev/null) rc=$rc"
 fi
+
+# 既に確定（failure / success）が付いた head には、遅れて動いた実行が pending を書かない。
+for st in failure success; do
+  it "既に $st が付いた head には pending を書かず、$st のまま残る"
+  fx="$WORK/fx"; rm -rf "$fx"; mkdir -p "$fx"
+  printf '{"user":{"login":"someone"},"draft":false,"head":{"sha":"%s"}}' "$SHA" > "$fx/pr.json"
+  printf '[%s]' "$(commit someone someone false)" > "$fx/commits.json"
+  printf '[]' > "$fx/comments.json"
+  printf '[{"context":"other","state":"pending"},{"context":"second-opinion-gate","state":"%s"},{"context":"second-opinion-gate","state":"pending"}]' "$st" > "$fx/head_statuses.json"
+  ( cd "$REPO_ROOT" && PATH="$WORK/bin:$PATH" FIXTURES="$fx" GH_TOKEN=x REPO=o/r EVENT=pull_request \
+      PR_NUMBER=1 TRIGGER_SHA="$SHA" DEFAULT_BRANCH=main RUN_URL=u bash "$WORK/run.sh" ) >/dev/null 2>&1
+  rc=$?
+  if [[ ! -e "$fx/statuses" && "$rc" == 0 ]]; then pass; else fail "書き込み=$(cat "$fx/statuses" 2>/dev/null) rc=$rc"; fi
+done
 
 # 導入の PR: 既定ブランチにワークフローが無い（contents API が 404）ときは、眠ってから判定する。
 # 404 以外の読めなさは眠らない側（pending）に倒す。ワークフローが在れば眠らない（上の検査）。
