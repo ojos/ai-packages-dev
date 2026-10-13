@@ -80,6 +80,7 @@ fi
 case "$path" in
   */contents/*)
     # 既定ブランチのワークフローの有無。contents ファイルが 404 / 500 のときは失敗を模す。
+    echo "$path" >> "$FIXTURES/contents_calls"
     mode="$(cat "$FIXTURES/contents" 2>/dev/null || echo present)"
     case "$mode" in
       present) echo second-opinion-gate.yml; exit 0 ;;
@@ -138,13 +139,24 @@ case_() {
     *) printf '[{"user":{"login":"%s"},"author_association":"OWNER","body":"関係ないコメント"}]' "$author" > "$fx/comments.json" ;;
   esac
   ( cd "$REPO_ROOT" && PATH="$WORK/bin:$PATH" FIXTURES="$fx" GH_TOKEN=x REPO=o/r EVENT=pull_request \
-      PR_NUMBER=1 TRIGGER_SHA="$SHA" RUN_URL=u bash "$WORK/run.sh" ) >"$fx/out" 2>&1 || true
+      PR_NUMBER=1 TRIGGER_SHA="$SHA" DEFAULT_BRANCH=main RUN_URL=u bash "$WORK/run.sh" ) >"$fx/out" 2>&1 || true
   got="$(cat "$fx/statuses" 2>/dev/null || echo none)"
   it "$name"
   if [[ "$got" == "$want" ]]; then
     pass
   else
     fail "want=$want got=$(echo "$got" | tr '\n' ' ')"
+  fi
+  # DEFAULT_BRANCH の渡し忘れ（set -u で止まり、確認の失敗として拾われて枝が変わる）を検出する。
+  it "$name（unbound variable / 既定ブランチ確認の失敗が出ない）"
+  if grep -q 'unbound variable' "$fx/out"; then
+    fail "unbound variable が出た"
+  elif grep -q '既定ブランチのワークフローの有無を確かめられませんでした' "$fx/out"; then
+    fail "既定ブランチの確認が失敗扱いになった"
+  elif [[ -e "$fx/contents_calls" ]] && ! grep -q 'ref=main' "$fx/contents_calls"; then
+    fail "contents が ref=main で呼ばれていない: $(cat "$fx/contents_calls")"
+  else
+    pass
   fi
   # 作者以外が書いた印つきコメントがあるときは、判定が変わらなくても ::warning:: が出る
   # （#370。stranger / collaborator / both のいずれも、数えない印が存在する）。
@@ -201,7 +213,7 @@ printf '[%s]' "$(commit someone someone false)" > "$fx/commits.json"
 # 作者の条件（#370）に引っかけて意図とは別の理由で failure にしない。
 printf '[%s]' "$(record_comment someone OWNER "$OLD_SHA")" > "$fx/comments.json"
 ( cd "$REPO_ROOT" && PATH="$WORK/bin:$PATH" FIXTURES="$fx" GH_TOKEN=x REPO=o/r EVENT=pull_request \
-    PR_NUMBER=1 TRIGGER_SHA="$SHA" RUN_URL=u bash "$WORK/run.sh" ) >/dev/null 2>&1 || true
+    PR_NUMBER=1 TRIGGER_SHA="$SHA" DEFAULT_BRANCH=main RUN_URL=u bash "$WORK/run.sh" ) >/dev/null 2>&1 || true
 got="$(cat "$fx/statuses" 2>/dev/null || echo none)"
 if [[ "$got" == none ]]; then
   pass
@@ -232,12 +244,21 @@ for rec in no yes; do
     printf '[]' > "$fx/comments.json"
   fi
   ( cd "$REPO_ROOT" && PATH="$WORK/bin:$PATH" FIXTURES="$fx" GH_TOKEN=x REPO=o/r EVENT=pull_request \
-      PR_NUMBER=1 TRIGGER_SHA="$SHA" RUN_URL=u bash "$WORK/run.sh" ) >/dev/null 2>&1
+      PR_NUMBER=1 TRIGGER_SHA="$SHA" DEFAULT_BRANCH=main RUN_URL=u bash "$WORK/run.sh" ) >"$fx/out" 2>&1
   rc=$?
   if [[ ! -e "$fx/slept" && "$rc" == 0 ]]; then
     pass
   else
     fail "sleep が呼ばれた、または終了コードが $rc（want 0）"
+  fi
+  # 「既定ブランチにワークフローがある」枝を通ったこと（確認が失敗して眠らない枝へ落ちたのではない）。
+  it "既定ブランチのワークフローを確認して眠らない枝を通る（記録=$rec）"
+  if grep -q 'ref=main' "$fx/contents_calls" 2>/dev/null \
+     && ! grep -q '確かめられませんでした' "$fx/out" \
+     && ! grep -q 'unbound variable' "$fx/out"; then
+    pass
+  else
+    fail "contents=$(cat "$fx/contents_calls" 2>/dev/null) out=$(head -c 300 "$fx/out")"
   fi
 done
 
@@ -279,7 +300,7 @@ fx="$WORK/fx"; rm -rf "$fx"; mkdir -p "$fx"
 printf '{"user":{"login":"someone"},"draft":false,"head":{"sha":"%s"}}' "$SHA" > "$fx/pr.json"
 printf '[%s]' "$(commit someone someone false)" > "$fx/commits.json"
 ( cd "$REPO_ROOT" && PATH="$WORK/bin:$PATH" FIXTURES="$fx" GH_TOKEN=x REPO=o/r EVENT=pull_request \
-    PR_NUMBER=1 TRIGGER_SHA="$SHA" RUN_URL=u bash "$WORK/run.sh" ) >/dev/null 2>&1
+    PR_NUMBER=1 TRIGGER_SHA="$SHA" DEFAULT_BRANCH=main RUN_URL=u bash "$WORK/run.sh" ) >/dev/null 2>&1
 rc=$?
 if [[ ! -e "$fx/statuses" && "$rc" != 0 ]]; then
   pass
