@@ -57,8 +57,8 @@ devcontainer-bootstrap（DCB）の README の「ネイティブ Linux の Docker
 （devhost は DCB とは別のリポジトリで配布されるため、DCB の README へは相対リンクにしません）。
 
 **ネイティブ Linux の Docker Engine で codex のサンドボックスを使うには、コンテナの AppArmor と
-seccomp の既定の制限を両方外す必要があります**（seccomp は Docker Desktop でも止めます）。DCB の `--with-codex` の生成物は、`compose.yaml` に
-`security_opt: [apparmor=unconfined, seccomp=unconfined]` を入れてあるので、そのままで動きます。
+seccomp の既定の制限を両方外す必要があります**（seccomp は Docker Desktop でも止めます）。DCB の `--with-codex` の生成物は、`devcontainer.json` に
+`"securityOpt": ["apparmor=unconfined", "seccomp=unconfined"]` を入れてあるので、そのままで動きます（`compose.yaml` の `security_opt` には置きません。go などの feature が同じ値を足すと、Compose が重複を拒否して起動しないためです）。
 `--with-codex` を使わずに codex を後から入れた場合や、それより前の DCB で生成した場合は、
 DCB の README の「コンテナの中での codex のサンドボックス」に従って足してください。
 AppArmor だけを外しても、seccomp が先に止めるので動きません（Ubuntu 26.04 の実機で実測）。
@@ -71,7 +71,7 @@ devhost は、`devcontainer.json` を持つプロジェクトなら DCB の生�
 |---|---|---|
 | tmux（`devcontainer.json` の feature として常に入る。`--with-*` では増減しない） | DCB の標準装備（common-utils・ripgrep・shellcheck・tmux・github-cli）の 1 つ | `dev attach` と `dev ls` の TMUX の列が使う。単体で使うときは、各自で入れる必要がある（「外部の機械の前提」） |
 | compose の `init: true`（`compose.yaml` の `app`） | PID 1 の `sleep infinity` は孤児になったプロセスを回収しない。これが無いと、ゾンビが溜まり、数日でプロセス数の上限に達して `docker exec` もコンテナ内のセッションも止まる | ゾンビの蓄積を防ぐ。`dev doctor` が見る pids の上限（pids.current / pids.max）とゾンビの数に効く。既存の生成先は、DCB の `--upgrade` で取り込んだあと、`dev rebuild` でコンテナを作り直すと効く |
-| codex のサンドボックスの設定（`--with-codex` のとき、`compose.yaml` の `security_opt: [apparmor=unconfined, seccomp=unconfined]`） | codex のサンドボックス（bwrap）は namespace を作って mount する。Docker の既定の seccomp が namespace の作成を、ネイティブ Linux では AppArmor が mount を止める | 外部の機械はネイティブ Linux の Docker Engine なので、これが無いと codex のサンドボックスが動かない。隔離は弱まる。詳しくは「外部の機械の前提」と DCB の README の「コンテナの中での codex のサンドボックス」 |
+| codex のサンドボックスの設定（`--with-codex` のとき、`devcontainer.json` の `"securityOpt": ["apparmor=unconfined", "seccomp=unconfined"]`） | codex のサンドボックス（bwrap）は namespace を作って mount する。Docker の既定の seccomp が namespace の作成を、ネイティブ Linux では AppArmor が mount を止める | 外部の機械はネイティブ Linux の Docker Engine なので、これが無いと codex のサンドボックスが動かない。隔離は弱まる。詳しくは「外部の機械の前提」と DCB の README の「コンテナの中での codex のサンドボックス」 |
 | UID の合わせ込み（`devcontainer.json` の `updateRemoteUserUID`。生成物は書かず、既定の有効に任せる） | ネイティブ Linux では bind mount の所有者が数値の UID のまま通り、ホストの利用者の UID が 1000 でないとワークスペースへ書き込めない | 外部の機械の利用者の UID が 1000 でなくても、devcontainer CLI がコンテナを作るときに合わせる。`false` にしないこと |
 
 ## 層と、この道具が戻すもの
