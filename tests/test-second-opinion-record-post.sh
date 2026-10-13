@@ -138,4 +138,22 @@ GH_DEFAULT_BRANCH= case_ "既定ブランチを読めなければ、非 0 で終
 # 確認側を初めて入れる PR では、既定ブランチにまだワークフローが無い。手動実行は起こさず成功する。
 GH_NO_GATE=1 case_ "確認側が既定ブランチに無ければ、手動実行を起こさずに成功する" 0 yes alice alice '[]'
 
+# 起点から索引まで（base:<rev>+staged）の記録は、staged と同じく索引のツリーに紐づく。
+# 変更の無い索引は HEAD のツリーと一致するので、その記録は post が投稿できる。
+BASE_SCOPE_SHA="$(git -C "$REPO" rev-parse HEAD^{tree})"
+( cd "$REPO" && printf 'LGTM\n' | bash "$SCRIPT" save --engine fake --verdict pass --scope "base:$SHA+staged" --runs 1 ) >"$WORK/save-out" 2>&1
+save_rc=$?
+it "scope が base:<rev>+staged の記録を save できる"
+if [[ "$save_rc" == 0 ]] && grep -q "tree=${BASE_SCOPE_SHA:0:12}" "$WORK/save-out"; then pass; else fail "save できない: $(cat "$WORK/save-out")"; fi
+it "base:<rev>+staged の記録は、scope と索引のツリーの紐づけを meta に残す"
+meta="$(cd "$REPO" && bash "$SCRIPT" show 2>&1)"
+if printf '%s' "$meta" | grep "base:$SHA+staged" >/dev/null; then pass; else fail "scope が残っていない: $meta"; fi
+case_ "base:<rev>+staged の記録を post が投稿できる（HEAD のツリーと一致するとき）" 0 yes alice alice '[]' "$RUN"
+it "起点の無い base:+staged は拒否する"
+if ( cd "$REPO" && printf 'LGTM\n' | bash "$SCRIPT" save --engine fake --verdict pass --scope "base:+staged" --runs 1 ) >/dev/null 2>&1; then
+  fail "空の起点を受け付けた"
+else
+  pass
+fi
+
 exit_with_result

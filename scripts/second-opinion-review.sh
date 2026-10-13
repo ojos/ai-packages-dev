@@ -186,6 +186,8 @@ fi
 # 実行できなくなる。エンジンは --engine の引数解析の後で確定するため、引き継ぎは
 # 引数解析の後で行う（下記）。
 RANGE=""
+# --base <rev>: 索引と <rev> の差（コミット済みとステージ済みの両方）を対象にする。
+BASE=""
 ENGINE="${SECOND_OPINION_ENGINE:-gemini}"
 MODEL="${SECOND_OPINION_MODEL:-}"
 RUNS="${SECOND_OPINION_RUNS:-${GEMINI_REVIEW_RUNS:-1}}"
@@ -196,6 +198,8 @@ usage: bash scripts/second-opinion-review.sh [options]
 
 options:
   --range <git-range>   レビュー対象の差分範囲（既定: ステージ済み差分）
+  --base <rev>          索引と <rev> の差（コミット済み + ステージ済み）をレビュー対象にする。
+                        PR 全体を渡したいときに使う。--range とは併用できない
   --engine <name>       レビューを実行する CLI（gemini | antigravity | codex。既定: gemini。
                         SECOND_OPINION_ENGINE でも指定可）
   --model <name>        使用モデル（既定: 各 CLI の既定。SECOND_OPINION_MODEL でも指定可）
@@ -224,6 +228,7 @@ need_value() {
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --range)  need_value "$1" "${2-}"; RANGE="$2";  shift 2 ;;
+    --base)   need_value "$1" "${2-}"; BASE="$2";   shift 2 ;;
     --engine) need_value "$1" "${2-}"; ENGINE="$2"; shift 2 ;;
     --model)  need_value "$1" "${2-}"; MODEL="$2";  shift 2 ;;
     --runs)   need_value "$1" "${2-}"; RUNS="$2";   shift 2 ;;
@@ -231,6 +236,12 @@ while [[ $# -gt 0 ]]; do
     *) echo "error: unknown option: $1" >&2; usage; exit 1 ;;
   esac
 done
+
+if [[ -n "$RANGE" && -n "$BASE" ]]; then
+  echo "error: --range と --base は併用できません" >&2
+  usage >&2
+  exit 1
+fi
 
 # 旧名のモデル名は gemini のときだけ使う（上記）。--model / SECOND_OPINION_MODEL が
 # あればそちらが勝つ。codex / antigravity では空のまま、各エンジンの既定に任せる。
@@ -356,6 +367,10 @@ fi
 if [[ -n "$RANGE" ]]; then
   diff_text="$(git diff "$RANGE")"
   scope="$RANGE"
+elif [[ -n "$BASE" ]]; then
+  # 索引と <rev> の差。<rev> 以降のコミット済みの変更と、ステージ済みの変更の両方が入る。
+  diff_text="$(git diff --cached "$BASE" --)"
+  scope="base:$BASE+staged"
 else
   diff_text="$(git diff --cached)"
   scope="staged"
@@ -558,6 +573,8 @@ resolve_referenced_context() {
   refs=""
   if [[ "$RANGE" == *..* ]]; then
     refs="$(git log --format=%B "$RANGE" 2>/dev/null | extract_issue_refs || true)"
+  elif [[ -n "$BASE" ]]; then
+    refs="$(git log --format=%B "$BASE..HEAD" 2>/dev/null | extract_issue_refs || true)"
   fi
   pkg_paths="$(package_owned_paths)"
   if [[ -n "$pkg_paths" ]]; then

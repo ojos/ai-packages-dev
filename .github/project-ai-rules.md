@@ -229,8 +229,9 @@ bash scripts/loop-gate.sh
   - **環境変数 `SECOND_OPINION_ENGINE=...` を前置する方法は使いません。** `scripts/second-opinion-review.sh` は `scripts/load-project-env.sh` 経由で `.env` を読み、`.env` の値が既存の環境変数を上書きします（優先順位は CLI 引数 > `.env` > 環境変数 > 既定）。`.env` に `SECOND_OPINION_ENGINE` があると、前置した値は無視されます。
   - 差し替えたコマンドが自分で範囲を決める場合は、従来どおり自分で記録を残します（`scripts/second-opinion-record.sh save`）。
 - ステージ済み差分が空のときは、`loop-gate.sh` が第二意見の対象を commit 済み範囲へ自動で切り替えます。commit 後にゲートを回すと第二意見が実質スキップされ、偽の緑が出るためです。
-- 切り替え先は「解決できた範囲」ではなく**実際に差分がある範囲**を選びます（上流ブランチ → `origin/HEAD` / `origin/main` / `origin/master` との分岐点 → remote が無ければ空ツリー の順）。push 済みのブランチでは上流と HEAD が同じで範囲が空になり、同じ偽の緑が復活するためです。
-- 分岐点まで戻しても差分が無いときは、`no reviewable diff` を出力したうえで `GATE_PASS` とします。空を一律 `GATE_FAIL` にすると、差分の無い状態でのゲート実行が落ちるためです。
+- **既定の対象は PR 全体です。** 起点は、`origin/HEAD` → `origin/main` → `origin/master` の順で解決した既定ブランチと HEAD の分岐点（merge-base）にします。ステージ済み差分があるときは `--base <起点>`（起点から索引まで）、空のときは `--range <起点>..HEAD` を渡します（上流があっても上流からではありません）。差分しか見えないエンジンに、修正分だけの小さな差分を渡すと、差分に現れない既存のコードについて誤った前提を立てて落ちるためです。入力が増える分、トークンの消費は増えます。
+- 既定ブランチの追跡枝を解決できないときだけ、従来の決め方に戻ります（ステージ済みがあれば reviewer の既定、空なら上流との分岐点 → HEAD。上流が無いとき、または上流との差分が空のとき（push 済みなど）は空ツリー → HEAD。差分が空なのに「対象なし」で通すと、偽の緑になるためです）。追跡枝は fetch しないので、手元が古ければ起点も古くなります。
+- 起点と HEAD に差分が無いときは、`no reviewable diff` を出力したうえで `GATE_PASS` とします。空を一律 `GATE_FAIL` にすると、差分の無い状態でのゲート実行が落ちるためです。
 - 両段（主レビュー・第二意見）とも対象は致命バグ・脆弱性・型エラー・エッジケースの見落としに限ります。修正は 1 イテレーションで完結させます。
 
 ### 指摘の却下
@@ -273,6 +274,7 @@ bash scripts/second-opinion-review.sh --engine codex           # エンジン切
 | オプション | 環境変数 | 既定 | 意味 |
 |---|---|---|---|
 | `--range <git-range>` | — | ステージ済み差分 | レビュー対象の差分範囲 |
+| `--base <rev>` | — | — | 索引と `<rev>` の差（コミット済みとステージ済みの両方）をレビュー対象にする。`--range` と併用できない。`loop-gate.sh` は、ステージ済み差分があるとき既定ブランチとの分岐点を渡す |
 | `--engine <name>` | `SECOND_OPINION_ENGINE` | `gemini` | レビューを実行する CLI（`gemini` / `antigravity` / `codex`） |
 | `--model <name>` | `SECOND_OPINION_MODEL` | 各 CLI の既定 | 使用モデル |
 | `--runs <n>` | `SECOND_OPINION_RUNS` | `1` | 実行回数（1 以上の整数。不正値は実行前に停止） |

@@ -147,4 +147,92 @@ else
 fi
 git -C "$REPO" checkout -q -
 
+# ── --base <rev>: 索引と <rev> の差を対象にする（#563） ──────────────────────
+#
+# 差分の外を読めないエンジンへ、修正分だけの小さな差分を渡すと、前提を誤って落ちる。
+# PR 全体（起点から索引まで）を渡せるように、--base を持つ。コミット済みの分と
+# ステージ済みの分の両方が入ることを、エンジンへ渡った差分の中身で確かめる。
+BASE_REPO="$WORK/base-repo"
+mkdir -p "$BASE_REPO" "$WORK/bin2"
+git -C "$BASE_REPO" init -q
+git -C "$BASE_REPO" config user.email "selftest@example.invalid"
+git -C "$BASE_REPO" config user.name "selftest"
+printf 'a\n' > "$BASE_REPO/a.txt"
+git -C "$BASE_REPO" add a.txt
+git -C "$BASE_REPO" commit -q -m a
+BASE_REV="$(git -C "$BASE_REPO" rev-parse HEAD)"
+printf 'committed\n' > "$BASE_REPO/committed.txt"
+git -C "$BASE_REPO" add committed.txt
+git -C "$BASE_REPO" commit -q -m b
+printf 'staged\n' > "$BASE_REPO/staged.txt"
+git -C "$BASE_REPO" add staged.txt
+
+# @<パス> で渡る差分の中身を保存する gemini。
+cat > "$WORK/bin2/gemini" <<'FAKE'
+#!/usr/bin/env bash
+set -euo pipefail
+for a in "$@"; do
+  case "$a" in
+    @*)
+      # 引数は「@<パス>」の後ろにプロンプトが続く。先頭の行がパス。
+      p="${a#@}"; p="${p%%$'\n'*}"
+      cat "$p" > "$FAKE_GEMINI_RECORD/diff"
+      ;;
+  esac
+done
+echo 'VERDICT: LGTM'
+FAKE
+chmod +x "$WORK/bin2/gemini"
+
+run_base_review() {
+  (
+    cd "$BASE_REPO" || exit 1
+    PATH="$WORK/bin2:$PATH" GEMINI_API_KEY="dummy-for-selftest" FAKE_GEMINI_RECORD="$RECORD" \
+      bash "$REVIEW" --engine gemini "$@" > "$WORK/out" 2> "$WORK/err"
+  )
+}
+
+it "--base <rev> は、コミット済みの変更とステージ済みの変更の両方を対象にする"
+rm -f "$RECORD/diff"
+rc=0
+run_base_review --base "$BASE_REV" || rc=$?
+if [[ "$rc" -eq 0 ]] && grep -q 'committed.txt' "$RECORD/diff" && grep -q 'staged.txt' "$RECORD/diff"; then
+  pass
+else
+  fail "両方が差分に入っていない (rc=$rc): $(cat "$RECORD/diff" 2>/dev/null)"
+fi
+
+it "--base <rev> は、<rev> より前の変更を対象にしない"
+if grep -q '^+++ b/a.txt' "$RECORD/diff"; then fail "起点より前の a.txt が入っている"; else pass; fi
+
+it "--base を使わない既定は、従来どおりステージ済み差分だけを対象にする"
+rm -f "$RECORD/diff"
+rc=0
+run_base_review || rc=$?
+if [[ "$rc" -eq 0 ]] && grep -q 'staged.txt' "$RECORD/diff" && ! grep -q 'committed.txt' "$RECORD/diff"; then
+  pass
+else
+  fail "既定の対象が変わっている (rc=$rc): $(cat "$RECORD/diff" 2>/dev/null)"
+fi
+
+it "--base の対象は出力の scope に現れる"
+run_base_review --base "$BASE_REV" || true
+if grep -q "base:$BASE_REV+staged" "$WORK/out"; then pass; else fail "scope が出ていない: $(cat "$WORK/out")"; fi
+
+it "--base と --range は併用できない"
+rc=0
+run_base_review --base "$BASE_REV" --range "$BASE_REV..HEAD" || rc=$?
+if [[ "$rc" -ne 0 ]] && grep -q '併用できません' "$WORK/err"; then pass; else fail "併用が通った (rc=$rc): $(cat "$WORK/err")"; fi
+
+it "--base に値が無ければ使い方を示して落ちる"
+rc=0
+run_base_review --base || rc=$?
+if [[ "$rc" -ne 0 ]] && grep -q -- '--base には値が必要です' "$WORK/err"; then pass; else fail "(rc=$rc): $(cat "$WORK/err")"; fi
+
+it "--base <rev> と索引の差が無ければ「対象なし」で 0 になる"
+rc=0
+git -C "$BASE_REPO" reset -q --hard HEAD
+run_base_review --base HEAD || rc=$?
+if [[ "$rc" -eq 0 ]] && grep -q 'no diff to review' "$WORK/out"; then pass; else fail "(rc=$rc): $(cat "$WORK/out")"; fi
+
 exit_with_result
