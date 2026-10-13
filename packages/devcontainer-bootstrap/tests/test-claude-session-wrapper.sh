@@ -177,6 +177,10 @@ n_a="$(field NAME "$(run_wrapper_args "$P1" "$REPO" --resume="$SID")")"
 n_b="$(field NAME "$(run_wrapper_args "$P1" "$REPO" --resume="$SID")")"
 assert_eq "$n_a" "$n_b" "名前"
 
+it "大文字の識別子でも小文字の名前になり、同じ会話の小文字と同じ名前になる"
+n_up="$(field NAME "$(run_wrapper_args "$P1" "$REPO" --resume="${SID^^}")")"
+assert_eq "$n_up" "lab-my-repo-961e" "名前"
+
 it "識別子が無ければ、今のとおり PID の 16 進になる"
 res="$(run_wrapper_args "$P1" "$REPO" --flag)"
 assert_eq "$(field NAME "$res")" "lab-my-repo-$(field PIDHEX "$res")" "名前"

@@ -8954,7 +8954,9 @@ extract_session_id() { # 起動の引数…
     esac
     prev="$a"
     if [ -n "$id" ] && [[ "$id" =~ $re ]]; then
-      SESSION_ID="${id:0:4}"
+      # ${var,,} は bash 4 以上（コンテナの中の bash で動かす前提）。大文字小文字で名前が変わらないよう小文字にそろえる。
+      id="${id:0:4}"
+      SESSION_ID="${id,,}"
       return 0
     fi
   done
