@@ -82,8 +82,8 @@ cp "$tmp" "$out/.gitignore"
 upgrade "$out"
 it "空行が累積した .gitignore への --upgrade も成功する"
 assert_eq "$UP_RC" "0"
-it "空行が累積した .gitignore も、1 回の実行で区切り 1 行に戻る"
-assert_eq "$(blank_lines_before_section "$out/.gitignore")" "1"
+it "区画がある .gitignore では、区画の外の空行を変えない（3 行のまま。#538）"
+assert_eq "$(blank_lines_before_section "$out/.gitignore")" "3"
 
 # ── プロジェクトの記述が無ければ、先頭に空行を作らない ─────────────────────
 
@@ -136,6 +136,31 @@ for mode in upgrade rerun force; do
   h1="$(cksum < "$o/.gitignore")"
   run_mode "$mode" "$o"
   it "$mode: 2 回続けても内容が変わらない（空行が累積しない）"
+  assert_eq "$(cksum < "$o/.gitignore")" "$h1"
+done
+
+# 空行 2 行・空白だけの行が区画の直前にあっても、そのまま残る。対が 2 つあれば 2 つ目は消える
+for mode in upgrade rerun force; do
+  o="$(new_workdir)/blank-$mode"
+  mkdir -p "$o"
+  printf 'before-1\n\n  \n\n%s\nold-1\n%s\nmid\n\n%s\nold-2\n%s\nafter-1\n' "$BEGIN_MARK" "$END_MARK" "$BEGIN_MARK" "$END_MARK" > "$o/.gitignore"
+  if [[ "$mode" == "upgrade" ]]; then
+    # --upgrade は由来の記録を要るので、先に別の出力先で作った記録を使わず、区画なしで生成してから戻す
+    o2="$(new_workdir)/blank-gen"
+    mkdir -p "$o2"; gen "$o2"
+    cp "$o/.gitignore" "$o2/.gitignore"
+    o="$o2"
+  fi
+  run_mode "$mode" "$o"; rc=$?
+  it "$mode: 対が 2 つ・直前に空行 2 行と空白だけの行があっても成功する"
+  assert_eq "$rc" "0"
+  it "$mode: 2 つ目の対が消え、外の行は空行・空白だけの行も含めて残る"
+  assert_eq "$(outside_lines "$o/.gitignore")" "$(printf 'before-1\n\n  \n\n<SEC>\nmid\n\nafter-1')"
+  it "$mode: 区画は 1 つだけで、1 つ目が新しい中身になる"
+  if [[ "$(grep -cxF "$BEGIN_MARK" "$o/.gitignore")" == "1" ]] && ! grep -qx 'old-1' "$o/.gitignore" && ! grep -qx 'old-2' "$o/.gitignore" && grep -qx 'stub-template-entry' "$o/.gitignore"; then pass; else fail "区画の数か中身が違う"; fi
+  h1="$(cksum < "$o/.gitignore")"
+  run_mode "$mode" "$o"
+  it "$mode: 2 回続けても内容が変わらない"
   assert_eq "$(cksum < "$o/.gitignore")" "$h1"
 done
 

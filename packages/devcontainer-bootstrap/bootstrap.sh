@@ -10663,20 +10663,17 @@ upsert_gitignore() {
   if [[ -f "$gitignore_path" ]] && gitignore_has_section "$gitignore_path"; then
     # 管理区画がある: その場所で中身だけを差し替える。区画の前後の行は位置も順序も保つ
     # （.gitignore は後勝ちで、利用側の否定パターンの効き方が位置で変わるため。#538）。
-    # 前側は末尾の空行を落とし、前側に行があれば区切りの空行を 1 行だけ置く（累積させない。#460）。
-    # 後ろ側はそのまま写す。壊れた区画は dcb_precheck_gitignore が書き込み前に止めている。
+    # 区画の外の行は、空行も空白だけの行も含めて一切変えない。空行を足さないので累積もしない
+    # （#460）。開始行〜終了行の対が複数あれば、最初の対だけを差し替え、2 つ目以降の対は取り除く。
+    # 壊れた区画は dcb_precheck_gitignore が書き込み前に止めている。
     awk -v start="$GITIGNORE_BEGIN" -v end="$GITIGNORE_END" -v secfile="$newsec" '
       state == 0 && $0 == start {
-        if (printed) print ""
         while ((getline line < secfile) > 0) print line
         close(secfile)
         state = 1; next
       }
-      state == 1 { if ($0 == end) state = 2; next }
-      state == 0 {
-        if ($0 ~ /^[[:space:]]*$/) { pending = pending $0 "\n"; next }
-        printf "%s", pending; pending = ""; print; printed = 1; next
-      }
+      state == 2 && $0 == start { state = 3; next }
+      state == 1 || state == 3 { if ($0 == end) state = 2; next }
       { print }
     ' "$gitignore_path" > "$tmp"
   else
