@@ -1184,6 +1184,8 @@ runner_net_unit() {
 # 止めたとき（Docker の停止を含む）は、印だけを消し、規則は消さない。Docker の live-restore でコンテナが動き続けるあいだも、
 # 制限が外れないようにするため。自分の鎖と飛び先は Docker の再起動でも残り、起動時の apply が 1 回の取り込みで入れ替える。
 # 規則を外すのは、利用者が明示して dev-runner-net clear を打つときだけ。
+# PartOf は Docker の停止と再起動しか伝えない。停止（印を消す）のあとに docker.service だけを起動しても印が戻らないよう、
+# [Install] の WantedBy=docker.service で、Docker の起動に合わせてこのユニットも起動する（systemctl enable で効く）。
 
 [Unit]
 Description=devhost の自前のランナーの出口の規則（専用ブリッジから LAN と機械自身への接続を止める）
@@ -1200,6 +1202,7 @@ ExecStop=/usr/local/sbin/dev-runner-net unmark
 
 [Install]
 WantedBy=multi-user.target
+WantedBy=docker.service
 EOF
 }
 

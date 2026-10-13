@@ -2137,6 +2137,7 @@ nunit_has 'ExecStart=/usr/local/sbin/dev-runner-net apply' "スクリプトの a
 nunit_has 'ExecStop=/usr/local/sbin/dev-runner-net unmark' "止めたら印だけを消す（live-restore で動き続けるコンテナの制限を外さない）"
 if grep -qE '^ExecStop(Post)?=.*(clear|-F|-X|iptables)' "$NUNIT"; then ng "規則のユニットが、止めるときに規則を消しています"; fi
 nunit_has 'WantedBy=multi-user.target' "起動時に入れる"
+nunit_has 'WantedBy=docker.service' "Docker を停止してから起動したときも、規則のユニットが起動されて印が戻る（PartOf は停止と再起動しか伝えない）"
 rrun 2 "runner net: 引数なし" -- runner net
 expect_err "使い方: dev runner net script|unit"
 rrun 2 "runner net: 知らない種類" -- runner net bogus
