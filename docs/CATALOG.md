@@ -45,6 +45,7 @@
 | `docs/records/DCB_MODE_REMOVAL_WITH_FLAGS.md` | 履歴・記録 | DCB の `--mode` を廃止し装備を `--with-*` フラグ（cloud/AI ツール）へ分解した仕様と実装完了の証跡（DCB v0.4.0 で出荷）。 |
 | `docs/records/DCB_RUBY_SUPPORT.md` | 履歴・記録 | DCB の `--languages` へ ruby を追加した仕様と実装完了の証跡（DCB v0.8.0 で出荷予定）。 |
 | `docs/records/DCB_RUST_SUPPORT.md` | 履歴・記録 | DCB の `--languages` へ rust を追加した仕様と実装完了の証跡（DCB v0.3.0 で出荷）。 |
+| `docs/records/DEVHOST_RUNNER_SCALING_AND_DEVCONTAINER_RUNNER.md` | 履歴・記録 | devhost の自前のランナーへのオートスケーリング・キューイングの追加と、devcontainer のランナーへの転用（認証情報を使った第二意見）を検討し、見送った判断の記録。 |
 | `docs/records/INTAKE_AUTO_SUGGEST_LOOP_RECORD.md` | 履歴・記録 | `@intake` の自動提案経路追加と、intake をループコーディング入口として機械判定ゲート化した判断根拠と実施記録。 |
 
 ### 計画（`plans/`）
