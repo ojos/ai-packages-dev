@@ -28,10 +28,10 @@ it "python 選択で python feature に installTools:true が入る"
 out="$(new_workdir)/p"
 run_bootstrap "$out" --languages python >/dev/null 2>&1
 dc="$out/.devcontainer/devcontainer.json"
-if jq -e --arg f "$PY_FEATURE" '.features[$f].installTools == true' "$dc" >/dev/null; then
+if jqc -e --arg f "$PY_FEATURE" '.features[$f].installTools == true' "$dc" >/dev/null; then
   pass
 else
-  fail "installTools:true が無い: $(jq --arg f "$PY_FEATURE" '.features[$f]' "$dc")"
+  fail "installTools:true が無い: $(jqc --arg f "$PY_FEATURE" '.features[$f]' "$dc")"
 fi
 
 it "python 選択で toolsToInstall に uv が含まれる"
@@ -39,12 +39,12 @@ out="$(new_workdir)/p"
 run_bootstrap "$out" --languages python >/dev/null 2>&1
 dc="$out/.devcontainer/devcontainer.json"
 # toolsToInstall はカンマ区切り文字列。前後の要素と衝突しない語境界で uv を探す。
-if jq -e --arg f "$PY_FEATURE" '
+if jqc -e --arg f "$PY_FEATURE" '
       (.features[$f].toolsToInstall // "")
       | split(",") | map(gsub("^ +| +$";"")) | index("uv")' "$dc" >/dev/null; then
   pass
 else
-  fail "toolsToInstall に uv が無い: $(jq -r --arg f "$PY_FEATURE" '.features[$f].toolsToInstall' "$dc")"
+  fail "toolsToInstall に uv が無い: $(jqc -r --arg f "$PY_FEATURE" '.features[$f].toolsToInstall' "$dc")"
 fi
 
 it "python 選択で既定ツール群が回帰していない（uv 追記で置換していない）"
@@ -53,7 +53,7 @@ run_bootstrap "$out" --languages python >/dev/null 2>&1
 dc="$out/.devcontainer/devcontainer.json"
 missing=""
 for t in flake8 black mypy pytest pylint; do
-  if ! jq -e --arg f "$PY_FEATURE" --arg t "$t" '
+  if ! jqc -e --arg f "$PY_FEATURE" --arg t "$t" '
         (.features[$f].toolsToInstall // "")
         | split(",") | map(gsub("^ +| +$";"")) | index($t)' "$dc" >/dev/null; then
     missing="$missing $t"
@@ -64,7 +64,7 @@ if [[ -z "$missing" ]]; then pass; else fail "既定ツールが欠落:$missing"
 it "生成された devcontainer.json は妥当な JSON（python 選択時）"
 out="$(new_workdir)/p"
 run_bootstrap "$out" --languages python,node,go >/dev/null 2>&1
-if jq -e . "$out/.devcontainer/devcontainer.json" >/dev/null 2>&1; then pass; else fail "JSON として不正"; fi
+if jqc -e . "$out/.devcontainer/devcontainer.json" >/dev/null 2>&1; then pass; else fail "JSON として不正"; fi
 
 # ── python 非選択時: python feature も uv も現れない ─────────────────────────
 
@@ -72,7 +72,7 @@ it "python 非選択（node のみ）では python feature が無い"
 out="$(new_workdir)/p"
 run_bootstrap "$out" --languages node >/dev/null 2>&1
 dc="$out/.devcontainer/devcontainer.json"
-if jq -e --arg f "$PY_FEATURE" '.features | has($f)' "$dc" >/dev/null; then
+if jqc -e --arg f "$PY_FEATURE" '.features | has($f)' "$dc" >/dev/null; then
   fail "非選択なのに python feature がある"
 else
   pass
@@ -99,10 +99,10 @@ it "python と併選した go feature は options を持たない（{}）"
 out="$(new_workdir)/p"
 run_bootstrap "$out" --languages python,go >/dev/null 2>&1
 dc="$out/.devcontainer/devcontainer.json"
-if jq -e '.features["ghcr.io/devcontainers/features/go:1"] == {}' "$dc" >/dev/null; then
+if jqc -e '.features["ghcr.io/devcontainers/features/go:1"] == {}' "$dc" >/dev/null; then
   pass
 else
-  fail "go feature に想定外の options が付いた: $(jq '.features["ghcr.io/devcontainers/features/go:1"]' "$dc")"
+  fail "go feature に想定外の options が付いた: $(jqc '.features["ghcr.io/devcontainers/features/go:1"]' "$dc")"
 fi
 
 exit_with_result

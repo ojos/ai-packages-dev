@@ -33,6 +33,15 @@ fail() {
   printf '       %s\n' "$1" >&2
 }
 
+# jq を JSONC（コメント付きの JSON）のファイルへ掛ける。使い方は jq と同じで、最後の引数を
+# ファイルとする。devcontainer.json は securityOpt の説明のコメントを持つ（#543）。
+# 文字列の中の // や /* は残す。GNU 拡張に頼らない（perl を使う）。
+jqc() {
+  local f="${!#}"
+  set -- "${@:1:$(($# - 1))}"
+  perl -0777 -pe 's{("(?:\\.|[^"\\])*")|//[^\n]*|/\*.*?\*/}{defined $1 ? $1 : ""}gse' "$f" | jq "$@"
+}
+
 assert_eq() {
   local actual="$1" expected="$2" what="${3:-value}"
   if [[ "$actual" == "$expected" ]]; then

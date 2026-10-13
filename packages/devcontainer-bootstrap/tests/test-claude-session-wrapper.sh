@@ -299,22 +299,22 @@ if [[ "$(field NAME "$res")" == "<unset>" && "$(field ARGC "$res")" == "1" ]]; t
 DC="$out/.devcontainer/devcontainer.json"
 
 it "--with-claude の生成物の devcontainer.json が claudeProcessWrapper を絶対パスで配線する"
-wired="$(jq -r '.customizations.vscode.settings["claudeCode.claudeProcessWrapper"] // empty' "$DC" 2>/dev/null)"
+wired="$(jqc -r '.customizations.vscode.settings["claudeCode.claudeProcessWrapper"] // empty' "$DC" 2>/dev/null)"
 assert_eq "$wired" "/home/vscode/.local/bin/claude-session-launcher" "配線先"
 
 it "配線先は作業ツリーの外の固定パスで、ラッパーを直接指さない"
 if [[ "$wired" == /home/*/.local/bin/* && "$wired" != /workspaces/* ]]; then pass; else fail "$wired"; fi
 
 it "--with-claude の生成物の onCreateCommand は on-attach.sh を呼ばず、postAttachCommand の設置は残る"
-oc="$(jq -r '.onCreateCommand // empty' "$DC" 2>/dev/null)"
-pa="$(jq -r '.postAttachCommand // empty' "$DC" 2>/dev/null)"
+oc="$(jqc -r '.onCreateCommand // empty' "$DC" 2>/dev/null)"
+pa="$(jqc -r '.postAttachCommand // empty' "$DC" 2>/dev/null)"
 if [[ -n "$oc" && "$oc" == *"claude-session-launcher"* ]] \
   && ! printf '%s' "$oc" | command grep -q 'on-attach' \
   && [[ "$pa" == *"scripts/on-attach.sh"* ]]; then pass; else fail "onCreate=$oc postAttach=$pa"; fi
 
 it "--with-claude を選ばない生成物には onCreateCommand がない"
 if ! command grep -q 'onCreateCommand' "$out_plain/.devcontainer/devcontainer.json" \
-  && [[ -z "$(jq -r '.onCreateCommand // empty' "$out_plain/.devcontainer/devcontainer.json" 2>/dev/null)" ]]; then pass; else fail "onCreateCommand が残っている"; fi
+  && [[ -z "$(jqc -r '.onCreateCommand // empty' "$out_plain/.devcontainer/devcontainer.json" 2>/dev/null)" ]]; then pass; else fail "onCreateCommand が残っている"; fi
 
 # onCreateCommand の書き出し先は決め打ちの /home/vscode/…（HOME に依らない）。試験では、その
 # 接頭辞だけを仕込みのホームへ置き換えて実行する。
@@ -344,7 +344,7 @@ it "中心の場面: on-attach.sh が --install-launcher を知らない古い�
 out_old="$(new_workdir)/old-attach"
 run_bootstrap "$out_old" --with-claude >/dev/null 2>&1
 printf '#!/usr/bin/env bash\necho "[on-attach] bootstrap active"\n' >"$out_old/scripts/on-attach.sh"
-oc_old="$(jq -r '.onCreateCommand // empty' "$out_old/.devcontainer/devcontainer.json" 2>/dev/null)"
+oc_old="$(jqc -r '.onCreateCommand // empty' "$out_old/.devcontainer/devcontainer.json" 2>/dev/null)"
 OLD_HOME="$WORK/old-home"
 mkdir -p "$OLD_HOME"
 run_oncreate "$OLD_HOME" "$oc_old" >/dev/null
@@ -415,10 +415,10 @@ it "--with-claude を選ばない生成物には claudeProcessWrapper の配線�
 if ! command grep -q 'claudeProcessWrapper' "$out_plain/.devcontainer/devcontainer.json"; then pass; else fail "配線が残っている"; fi
 
 it "--with-claude を選ばない生成物の devcontainer.json も JSON として読める"
-if jq -e . "$out_plain/.devcontainer/devcontainer.json" >/dev/null 2>&1; then pass; else fail "JSON として読めない"; fi
+if jqc -e . "$out_plain/.devcontainer/devcontainer.json" >/dev/null 2>&1; then pass; else fail "JSON として読めない"; fi
 
 it "--with-claude の生成物の devcontainer.json が JSON として読める"
-if jq -e . "$DC" >/dev/null 2>&1; then pass; else fail "JSON として読めない"; fi
+if jqc -e . "$DC" >/dev/null 2>&1; then pass; else fail "JSON として読めない"; fi
 
 it "--with-claude の生成物の .env.example に SESSION_HOST_LABEL=（値なし）がある"
 if command grep -qx 'SESSION_HOST_LABEL=' "$out/.env.example"; then pass; else fail "SESSION_HOST_LABEL= の行が無い"; fi

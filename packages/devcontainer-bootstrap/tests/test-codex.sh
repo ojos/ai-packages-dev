@@ -102,36 +102,74 @@ else
   fail "codex-storage が定義・マウントされていない"
 fi
 
-# ── security_opt: 単独 ────────────────────────────────────────────────────────
+# ── 緩和（securityOpt）: 単独 ─────────────────────────────────────────────────
 #
 # codex のサンドボックス（bwrap）は、Docker の既定の seccomp（namespace の作成。Docker
 # Desktop でも）と、ネイティブ Linux では AppArmor の docker-default（mount）にも止められる
-# （#392 で実測）。片方だけでは動かないので、2 つがそろって app に入ることを見る。
+# （#392 で実測）。片方だけでは動かないので、2 つがそろって入ることを見る。
+#
+# 置き場所は compose.yaml の security_opt ではなく devcontainer.json の securityOpt（#543）。
+# go などの feature が同じ seccomp=unconfined を足すため、compose.yaml に同じ値があると
+# Compose が重複を拒否して起動しない。devcontainer.json 側なら重複が除かれる。
 
-# app サービスの security_opt の要素を 1 行 1 件で返す（無ければ空）。
+# devcontainer.json の securityOpt の要素を 1 行 1 件で返す（無ければ空）。
 security_opts_of() {
-  awk '
-    /^    security_opt:$/ { in_opt = 1; next }
-    in_opt && /^      - / { sub(/^      - /, ""); print; next }
-    { in_opt = 0 }
-  ' "$1" 2>/dev/null
+  jqc -r '.securityOpt // [] | .[]' "$1" 2>/dev/null
 }
 
-it "単独指定で app に apparmor=unconfined と seccomp=unconfined がそろって入る"
-opts="$(security_opts_of "$cmp_cx" | sort | tr '\n' ' ')"
+# compose.yaml の緩和の記述（security_opt / unconfined）の行数。
+compose_relax_count() {
+  grep -cE 'security_opt|unconfined' "$1" 2>/dev/null || true
+}
+
+dc_cx="$OUT_CX/.devcontainer/devcontainer.json"
+
+it "単独指定で devcontainer.json の securityOpt に apparmor=unconfined と seccomp=unconfined がそろって入る"
+opts="$(security_opts_of "$dc_cx" | sort | tr '\n' ' ')"
 if [[ "$opts" == "apparmor=unconfined seccomp=unconfined " ]]; then
   pass
 else
-  fail "security_opt が期待と違う: [$opts]"
+  fail "securityOpt が期待と違う: [$opts]"
 fi
 
-it "security_opt は services.app の直下に置かれる（volumes: より前）"
-opt_line="$(grep -n '^    security_opt:$' "$cmp_cx" 2>/dev/null | head -n 1 | cut -d: -f1)"
-top_vol_line="$(grep -n '^volumes:$' "$cmp_cx" 2>/dev/null | head -n 1 | cut -d: -f1)"
-if [[ -n "$opt_line" && -n "$top_vol_line" && "$opt_line" -lt "$top_vol_line" ]]; then
+it "単独指定では compose.yaml に security_opt も unconfined も出ない"
+if [[ "$(compose_relax_count "$cmp_cx")" == "0" ]]; then
   pass
 else
-  fail "security_opt $opt_line / トップレベル volumes $top_vol_line の位置が不正"
+  fail "compose.yaml に緩和が残っている: $(grep -nE 'security_opt|unconfined' "$cmp_cx")"
+fi
+
+it "securityOpt の説明がコメントとして入り、devcontainer.json は JSONC として読める"
+if grep -qE '^  // .*seccomp' "$dc_cx" 2>/dev/null \
+   && grep -qE '^  // .*compose\.yaml の security_opt に置かない' "$dc_cx" 2>/dev/null \
+   && jqc -e . "$dc_cx" >/dev/null 2>&1; then
+  pass
+else
+  fail "コメントが無い、または JSONC として読めない"
+fi
+
+it "コメントは securityOpt の行の直前にある"
+if awk '/^  "securityOpt": \[$/ { exit (prev ~ /^  \/\/ /) ? 0 : 1 } { prev = $0 } END { if (NR == 0) exit 1 }' "$dc_cx" 2>/dev/null; then
+  pass
+else
+  fail "securityOpt の直前がコメントでない"
+fi
+
+it "go を併用しても、緩和は devcontainer.json の securityOpt に 1 回だけで compose.yaml には出ない"
+# go の feature は自分の metadata で seccomp=unconfined を足す。DCB 側が compose.yaml にも
+# 同じ値を置くと Compose が重複を拒否する（#543）。
+OUT_GO="$(new_workdir)/p"
+bash "$BOOTSTRAP" --project-name test --languages go --base-image "$TEST_BASE_IMAGE" \
+  --output-dir "$OUT_GO" --with-codex >/dev/null 2>&1
+dc_go="$OUT_GO/.devcontainer/devcontainer.json"
+n_key="$(grep -c '"securityOpt"' "$dc_go" 2>/dev/null || true)"
+n_sec="$(security_opts_of "$dc_go" | grep -c '^seccomp=unconfined$' || true)"
+if jqc -e '.features | has("ghcr.io/devcontainers/features/go:1")' "$dc_go" >/dev/null 2>&1 \
+   && [[ "$n_key" == "1" && "$n_sec" == "1" ]] \
+   && [[ "$(compose_relax_count "$(compose_of "$OUT_GO")")" == "0" ]]; then
+  pass
+else
+  fail "securityOpt の数=$n_key seccomp の数=$n_sec compose の緩和=$(compose_relax_count "$(compose_of "$OUT_GO")")"
 fi
 
 it "単独指定で所有権修復の対象に入る"
@@ -167,8 +205,9 @@ else
 fi
 
 it "単独指定では VS Code 拡張を追加しない"
-dc_cx="$OUT_CX/.devcontainer/devcontainer.json"
-if ! grep -qi 'codex' "$dc_cx" 2>/dev/null; then
+# securityOpt の説明のコメントが codex に触れるので、拡張の一覧だけを見る。
+ext_cx="$(jqc -r '.customizations.vscode.extensions[]' "$dc_cx" 2>/dev/null)"
+if [[ -n "$ext_cx" && "$(printf '%s\n' "$ext_cx" | grep -ci 'codex' || true)" == "0" ]]; then
   pass
 else
   fail "devcontainer.json に codex の記載がある"
@@ -197,12 +236,14 @@ else
   fail "gemini-storage=$n_gem codex-storage=$n_cdx"
 fi
 
-it "antigravity + codex でも security_opt は 1 つだけ入る"
-if [[ "$(grep -c '^    security_opt:$' "$cmp_ac" 2>/dev/null)" == "1" ]] \
-   && [[ "$(security_opts_of "$cmp_ac" | sort | tr '\n' ' ')" == "apparmor=unconfined seccomp=unconfined " ]]; then
+it "antigravity + codex でも securityOpt は 1 つだけ入り、compose.yaml には出ない"
+dc_ac="$OUT_AC/.devcontainer/devcontainer.json"
+if [[ "$(grep -c '"securityOpt"' "$dc_ac" 2>/dev/null)" == "1" ]] \
+   && [[ "$(security_opts_of "$dc_ac" | sort | tr '\n' ' ')" == "apparmor=unconfined seccomp=unconfined " ]] \
+   && [[ "$(compose_relax_count "$cmp_ac")" == "0" ]]; then
   pass
 else
-  fail "security_opt の数か中身が不正: $(grep -c '^    security_opt:$' "$cmp_ac")"
+  fail "securityOpt の数か中身が不正: $(grep -c '"securityOpt"' "$dc_ac")"
 fi
 
 it "antigravity + codex では両方の導入処理が入る"
@@ -248,17 +289,17 @@ else
   fail "codex 関連が残っている: $hits"
 fi
 
-it "codex を選ばない構成には security_opt が入らない（未指定・gemini・antigravity）"
+it "codex を選ばない構成には緩和が入らない（未指定・gemini・antigravity）"
 # 隔離を弱める設定なので、サンドボックスを使う codex を選んだ構成に限る（#392）。
 hits=""
 for o in "$OUT_NONE" "$OUT_GEM" "$OUT_AG"; do
-  [[ -n "$(security_opts_of "$(compose_of "$o")")" ]] && hits+="$o "
-  grep -q 'unconfined' "$(compose_of "$o")" 2>/dev/null && hits+="$o(unconfined) "
+  [[ -n "$(security_opts_of "$o/.devcontainer/devcontainer.json")" ]] && hits+="$o "
+  grep -qE 'unconfined|securityOpt|security_opt' "$o/.devcontainer/devcontainer.json" "$(compose_of "$o")" 2>/dev/null && hits+="$o(unconfined) "
 done
 if [[ -z "$hits" ]]; then
   pass
 else
-  fail "security_opt か unconfined が入っている: $hits"
+  fail "securityOpt か unconfined が入っている: $hits"
 fi
 
 # ── 版の下限チェックの振る舞い（生成された install-ai-tools.sh を実行） ───────

@@ -111,7 +111,7 @@ for kind in broken valid dir; do
   # リンクのまま残る（既存の設計）。
   st="$(all_state "$out" R .devcontainer/devcontainer.json scripts/verify.sh .gitignore)" || true
   st2="$(all_state "$out" L $PB_RELS .devcontainer/ORIGIN)" || true
-  if [[ "$RUN_RC" == "0" && -z "$msg" && -z "$st" && -z "$st2" ]] && jq -e . "$out/.devcontainer/devcontainer.json" >/dev/null; then
+  if [[ "$RUN_RC" == "0" && -z "$msg" && -z "$st" && -z "$st2" ]] && jqc -e . "$out/.devcontainer/devcontainer.json" >/dev/null; then
     pass
   else fail "rc=$RUN_RC msg=$msg st=$st st2=$st2"; fi
 

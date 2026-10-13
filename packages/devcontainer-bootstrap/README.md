@@ -62,7 +62,7 @@ ai-playbook・devcontainer-bootstrap（DCB）・devcontainer-host（devhost）�
 | `curl` | 常時 | github/gitignore テンプレートの取得、規範アーカイブのダウンロード |
 | `tar` | 規範の取得元に **URL** を指定した場合のみ（`--playbook-version` / URL 形式の `--playbook-from`） | アーカイブの展開 |
 
-`doctor.sh` は `jq` を使います（`devcontainer.json` の JSON 妥当性検査と `dockerComposeFile` の読み取り）。
+`doctor.sh` は `jq` と `perl` を使います（`devcontainer.json` の JSON 妥当性検査と `dockerComposeFile` の読み取り）。`--with-codex` の `devcontainer.json` は説明のコメント（`//`）を持つので、`doctor.sh` はコメントを除いてから `jq` へ渡します（JSONC として読みます。文字列の中の `//` は残します）。
 
 `docker` は**任意**です。あればベースイメージの `os/arch` 適合を実際のマニフェストで判定し、無ければ既定の `mcr.microsoft.com/devcontainers/base:noble` へフォールバックします（警告のみで停止しません）。候補は版の名前（コードネーム）で固定しており、`ubuntu` / `debian` のような浮動タグは使いません（上流が指す版を無告知で進め、features の導入が壊れることがあるため）。
 
@@ -280,7 +280,7 @@ fi
 - **AI ツールは明示 opt-in のみ**: `--with-<ai>` を指定したときだけ、CLI 導入・VS Code 拡張・設定ディレクトリの永続化（compose named volume）を行います。トークン有無による自動導入は行いません。
 - **`--with-gemini` と `--with-antigravity` は永続 volume を共有**: `agy` は資格情報を `~/.gemini/antigravity-cli/` に置くため、両者は同じ `~/.gemini` を使います。**どちらか一方でも指定すれば `gemini-storage` が 1 つだけ**作られ、両方指定しても重複しません。認証手段が違う（API キー / OAuth）ので、フラグは束ねず独立にしてあります。片方だけ使う構成をそのまま表現できます。
 - **`--with-codex` は専用の永続 volume**: Codex CLI は資格情報を `~/.codex/auth.json` に置くため、`gemini` / `antigravity` とは別の `codex-storage` を使います。認証手段（ChatGPT アカウントの OAuth または API キー）も設定ディレクトリも他の AI CLI と独立なので、既存のどの装備とも共有しません。
-- **`--with-codex` はコンテナの AppArmor と seccomp の既定の制限を外します**: codex のサンドボックスがコンテナの中で動くように、生成物の `compose.yaml` へ `security_opt: [apparmor=unconfined, seccomp=unconfined]` を入れます。`--with-codex` を選ばない構成には入りません（下記「[コンテナの中での codex のサンドボックス](#コンテナの中での-codex-のサンドボックス)」）。
+- **`--with-codex` はコンテナの AppArmor と seccomp の既定の制限を外します**: codex のサンドボックスがコンテナの中で動くように、生成物の `devcontainer.json` へ `"securityOpt": ["apparmor=unconfined", "seccomp=unconfined"]` を入れます（`compose.yaml` の `security_opt` ではありません。理由は下記）。`--with-codex` を選ばない構成には入りません（下記「[コンテナの中での codex のサンドボックス](#コンテナの中での-codex-のサンドボックス)」）。
 - **資格情報はホストから注入しません**: `remoteEnv` が運ぶのは作業ディレクトリのパス（`LOCAL_WORKSPACE_FOLDER`）だけです。認証はコンテナ内で行い、その状態を named volume に残します。唯一の例外は GitHub CLI で、PAT を `.env` の `GH_TOKEN` へ置けます（下記「[資格情報の扱い](#資格情報の扱い)」）。
 
 ### オプション入力
@@ -678,16 +678,19 @@ codex は、コマンドを読み取り専用などのサンドボックスの�
 | seccomp（Docker の既定のプロファイル） | ネイティブ Linux の Docker Engine と Docker Desktop（macOS）の両方 | `CAP_SYS_ADMIN` を持たないプロセスの namespace の作成 | `bwrap: No permissions to create new namespace` |
 | AppArmor（`docker-default`） | ネイティブ Linux の Docker Engine（AppArmor が有効なとき） | mount | `bwrap: Failed to make / slave: Permission denied` |
 
-先に止めるのは seccomp なので、**AppArmor だけを外しても動きません。** そのため `--with-codex` の生成物は、`compose.yaml` の `app` に次を入れます。
+先に止めるのは seccomp なので、**AppArmor だけを外しても動きません。** そのため `--with-codex` の生成物は、`devcontainer.json` に次を入れます。
 
-```yaml
-    security_opt:
-      - apparmor=unconfined
-      - seccomp=unconfined
+```jsonc
+  // （理由の説明のコメントが付きます）
+  "securityOpt": ["apparmor=unconfined", "seccomp=unconfined"],
 ```
 
+- **`compose.yaml` の `security_opt` には置きません**（v0.20.0 までは置いていました）。go などの feature は、自分の metadata で `seccomp=unconfined` を足します。`compose.yaml` にも同じ値があると、Compose が `security_opt items ... are equal` で重複を拒否し、コンテナが起動しません。`devcontainer.json` の `securityOpt` は、feature の値と重複が除かれて合成されます。
+- **`devcontainer.json` は JSONC（コメント付きの JSON）になります**。VS Code も devcontainer CLI も、コメントを許します。`jq` など厳密な JSON の読み手に渡すときは、コメントを除いてから渡してください（文字列の中の `//` を壊さないよう、`perl -0777 -pe 's{("(?:\\.|[^"\\])*")|//[^\n]*|/\*.*?\*/}{defined $1 ? $1 : ""}gse' .devcontainer/devcontainer.json | jq ...` のように文字列を先に拾う形にします。`sed 's://.*::'` は URL を壊します）。
+- **既存の生成先**は、`--upgrade` で `compose.yaml` と `devcontainer.json` の両方が変わります。手を入れていなければ自動で移ります。手を入れていれば `.dcb-new` が置かれるので、`compose.yaml` の `security_opt`（`apparmor=unconfined` / `seccomp=unconfined`）を消し、`devcontainer.json` へ `securityOpt` を足してください。
+
 - **実測した環境**: Ubuntu 26.04.1（カーネル 7.0.0-38、AppArmor 有効、`kernel.apparmor_restrict_unprivileged_userns = 1`）のネイティブの Docker Engine と、codex 0.160.0。既定と AppArmor だけ外した場合は `codex sandbox -- git status` が上の表の 1 行目で失敗し、2 つとも外すと通りました。ホストの `apparmor_restrict_unprivileged_userns` は、この失敗に関わっていませんでした。Docker Desktop（macOS）でも、既定のままでは同じ 1 行目で失敗し、2 つを外すと user namespace の作成と mount が通ることを確かめています。
-- **代償**: コンテナの中のプロセスが namespace を作り、mount できるようになります。Docker がコンテナに既定で掛けている隔離の 2 層を外すことになるので、`--with-codex` を選んだ構成に限っています。codex を使わなくなったら、`compose.yaml` からこの 3 行を消してください。
+- **代償**: コンテナの中のプロセスが namespace を作り、mount できるようになります。Docker がコンテナに既定で掛けている隔離の 2 層を外すことになるので、`--with-codex` を選んだ構成に限っています。codex を使わなくなったら、`devcontainer.json` から `securityOpt`（とその説明のコメント）を消してください。
 - **`systempaths=unconfined` は入れていません。** bwrap は `/proc` を新しく mount しようとして、Docker が `/proc` の一部を隠していることで拒まれますが、codex はこの失敗を自分で避けて動きます。外す範囲を広げずに済むので入れていません。
 - **Docker Desktop（macOS）** には AppArmor がなく、`apparmor=unconfined` は効き目がないだけで害はありません。止めているのは seccomp なので、Mac でもこの設定が要ります。
 
@@ -908,7 +911,7 @@ OAuth トークン（`CLAUDE_CODE_OAUTH_TOKEN`）を `remoteEnv` へ注入する
 
 装備の選択によらず常に生成するもの（`--dry-run` を付けると、この一覧が `plan:` 行としてそのまま確認できます）:
 
-- `.devcontainer/devcontainer.json`（言語別 feature を反映。docker-compose ベースで `.devcontainer/compose.yaml` の `app` サービスを参照）
+- `.devcontainer/devcontainer.json`（言語別 feature を反映。docker-compose ベースで `.devcontainer/compose.yaml` の `app` サービスを参照。`--with-codex` のときだけ、説明のコメント付きで `securityOpt` を持つ JSONC になる）
 - `.devcontainer/compose.yaml`（単一サービス `app` の compose 定義。compose 利用時は feature や devcontainer.json の mounts が適用されないため、docker socket を常に明示。認証用の永続 volume は `gh` を常時、cloud / AI CLI を `--with-*` 随伴で配置。`init: true` で PID 1 を Docker の組み込みの init にし、孤児になったプロセスを回収させる。PID 1 の `sleep infinity` は子を回収しないため、これが無いとゾンビが溜まり、数日でプロセス数の上限に達して `docker exec` もコンテナ内のセッションも止まる。既存の生成先は `--upgrade` で取り込んだあと、コンテナの作り直し（Rebuild）で効く）
 - `.env.example`（プロジェクト固有値の雛形。`GEMINI_API_KEY` / `GIT_IDENTITY_NAME` / `GIT_IDENTITY_EMAIL`）
 - `scripts/fix-mount-owner.sh`（永続 volume のマウント先を remoteUser 所有へ戻す。`postCreateCommand` の先頭で実行）
@@ -1268,7 +1271,7 @@ github/gitignore のテンプレートは言語・OS・エディタの生成物�
 
 | カテゴリ | 検査内容 |
 |---|---|
-| 静的構造 | `.devcontainer/devcontainer.json` / `.env.example` / `scripts/on-attach.sh` / `scripts/fix-mount-owner.sh` / `scripts/post-rebuild-check.sh` / `scripts/verify.sh` / `scripts/acceptance.sh` / `scripts/loop-gate.sh` / `scripts/check-no-secrets.sh` の実在。`devcontainer.json` が妥当な JSON であること。**`${localEnv:` の混入が無いこと**（下記）。`dockerComposeFile` が参照する compose ファイルが実在すること |
+| 静的構造 | `.devcontainer/devcontainer.json` / `.env.example` / `scripts/on-attach.sh` / `scripts/fix-mount-owner.sh` / `scripts/post-rebuild-check.sh` / `scripts/verify.sh` / `scripts/acceptance.sh` / `scripts/loop-gate.sh` / `scripts/check-no-secrets.sh` の実在。`devcontainer.json` が妥当な JSON であること（コメントは除いて判定します。JSONC として読みます）。**`${localEnv:` の混入が無いこと**（下記）。`dockerComposeFile` が参照する compose ファイルが実在すること |
 | スクリプト検査 | 生成した各スクリプトの `bash -n` 構文検査（NG なら FAIL）と実行ビットの有無（無ければ WARN） |
 | 生成物の由来（下記） | `.devcontainer/ORIGIN`（[生成物の由来の記録](#生成物の由来の記録devcontainerorigin)）と現物を突き合わせ、生成時からの変更・記録した版が古いことを検出する |
 | 実行時コマンドの可用性 | `bash` / `jq` / `perl` / `gh`。`devcontainer.json` の features から検出した言語ランタイム（`rust` は feature 名と実行ファイル名が異なるため `cargo` で判定。`ruby` は一致するため `ruby` で判定）。`--with-aws` / `--with-gcp` で配線した cloud CLI（`aws` / `gcloud` / `terraform`）。`docker-outside-of-docker` を配線していれば `docker`。いずれも不在は WARN |

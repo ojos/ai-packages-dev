@@ -873,7 +873,7 @@ TMPL
       # 永続 volume は構成に応じて条件配線する（__VOLUME_MOUNTS__ /
       # __VOLUME_SECTION__ を render_content が置換）。gh は常時、cloud と AI ツールは
       # 選択時のみ。docker socket は常に明示。
-      # security_opt（__SECURITY_OPT__）は --with-codex のときだけ出す（build_security_opt_block）。
+      # codex のサンドボックスの緩和（securityOpt）は compose.yaml に置かず、devcontainer.json 側に置く（#543）。
       cat <<'TMPL'
 services:
   app:
@@ -893,7 +893,6 @@ __VOLUME_MOUNTS__
     # 上限に達する。そうなると docker exec（エディタの接続）もコンテナ内のセッションも
     # 止まる。消さないこと。効かせるにはコンテナの作り直しが要る。
     init: true
-__SECURITY_OPT__
 __VOLUME_SECTION__
 TMPL
       ;;
@@ -913,6 +912,7 @@ TMPL
   "service": "app",
   "workspaceFolder": "/workspaces/__PROJECT_NAME__",
   "shutdownAction": "stopCompose",
+__SECURITY_OPT__
   "features": {
     "ghcr.io/devcontainers/features/common-utils:1": {
       "configureZsh": true
@@ -10413,7 +10413,7 @@ build_volume_section_block() {
   printf 'volumes:\n%s' "$defs"
 }
 
-# compose の app.security_opt（__SECURITY_OPT__）。--with-codex のときだけ出す。
+# devcontainer.json の securityOpt（__SECURITY_OPT__）。--with-codex のときだけ出す。
 #
 # codex のサンドボックスは bwrap で namespace を作り mount する。Docker の既定の seccomp が
 # namespace の作成を止め（ネイティブ Linux の Docker Engine でも Docker Desktop でも）、
@@ -10422,18 +10422,50 @@ build_volume_section_block() {
 # には AppArmor が無く、apparmor=unconfined は効き目が無いだけで害は無い。
 # systempaths=unconfined は要らない（codex は /proc の mount の失敗を自分で避ける）。
 # 隔離を弱めるので、サンドボックスを使う codex を選んだ構成に限る。
+#
+# 置き場所が compose.yaml の security_opt ではなく devcontainer.json の securityOpt なのは、
+# go などの feature が自分の metadata で seccomp=unconfined を足すため。compose.yaml に
+# 同じ値があると Compose が重複を拒否してコンテナが起動しない（#543）。devcontainer.json の
+# securityOpt は、feature の値と重複が除かれて合成される。
+# 説明のコメントは write_file の整形（jq）で消えるため、ここには値の行だけを置き、
+# コメントは dcb_json_normalize が書き戻す（build_security_opt_comment）。
 build_security_opt_block() {
   has_with codex || { printf ''; return; }
+  printf '%s\n' '  "securityOpt": ["apparmor=unconfined", "seccomp=unconfined"],'
+}
+
+# build_security_opt_block の値の行の直前へ書き戻す、説明のコメント（JSONC）。
+build_security_opt_comment() {
   cat <<'BLK'
-    # codex のサンドボックス（bwrap）のために、AppArmor と seccomp の既定の制限を外す。
-    # Docker の既定の seccomp が namespace の作成を止め（Docker Desktop でも同じ）、
-    # ネイティブ Linux ではさらに AppArmor が mount を止める（片方だけ外しても動かない）。
-    # コンテナの中から namespace の作成や mount ができるようになり、隔離が弱まる。
-    # codex を使わなくなったら消してよい。
-    security_opt:
-      - apparmor=unconfined
-      - seccomp=unconfined
+  // codex のサンドボックス（bwrap）のために、AppArmor と seccomp の既定の制限を外す。
+  // Docker の既定の seccomp が namespace の作成を止め（Docker Desktop でも同じ）、
+  // ネイティブ Linux ではさらに AppArmor が mount を止める（片方だけ外しても動かない）。
+  // コンテナの中から namespace の作成や mount ができるようになり、隔離が弱まる。
+  // codex を使わなくなったら消してよい。
+  // compose.yaml の security_opt に置かないこと。go などの feature が同じ値を足すため、
+  // Compose が重複を拒否してコンテナが起動しなくなる。
 BLK
+}
+
+# 生成する JSON の整形（標準入力 → 標準出力）。引数 1: 出力先の相対パス（write_file の rel）。
+# 条件行が残した末尾カンマを畳み、jq で整形する。devcontainer.json だけは、jq がコメントを
+# 消す（コメント付きは読めもしない）ので、整形のあとで securityOpt の直前へ説明のコメントを
+# 書き戻す。devcontainer.json は JSONC として読める（VS Code も devcontainers も許す）。
+# DCB の doctor.sh と試験は、コメントを除いてから jq へ渡す。
+dcb_json_normalize() {
+  local rel="$1"
+  case "$rel" in
+    .devcontainer/devcontainer.json)
+      perl -0777 -pe 's/,\s*([}\]])/$1/g' | jq . \
+        | CMT="$(build_security_opt_comment)" awk '
+            $0 == "  \"securityOpt\": [" { print ENVIRON["CMT"] }
+            { print }
+          '
+      ;;
+    *)
+      perl -0777 -pe 's/,\s*([}\]])/$1/g' | jq .
+      ;;
+  esac
 }
 
 # post-rebuild-check.sh の __VOLUME_CHECK_LINES__。永続 volume が実際にマウント
@@ -11505,7 +11537,7 @@ write_file() {
     # 何も書かない: 一時ファイルを作らず、中身をパイプでハッシュへ流して判定する。
     local h
     if [[ "$out" == *.json ]]; then
-      h="$(render_content "$content" | perl -0777 -pe 's/,\s*([}\]])/$1/g' | jq . | dcb_file_sha256 /dev/stdin)"
+      h="$(render_content "$content" | dcb_json_normalize "$rel" | dcb_file_sha256 /dev/stdin)"
     else
       h="$(render_content "$content" | dcb_file_sha256 /dev/stdin)"
     fi
@@ -11516,9 +11548,8 @@ write_file() {
     tmp="$(mktemp "${TMPDIR:-/tmp}/dcb-render.XXXXXX")"
     render_content "$content" > "$tmp"
     if [[ "$out" == *.json ]]; then
-      perl -0777 -i -pe 's/,\s*([}\]])/$1/g' "$tmp"
       tmp2="$(mktemp "${TMPDIR:-/tmp}/dcb-render.XXXXXX")"
-      jq . "$tmp" > "$tmp2"
+      dcb_json_normalize "$rel" < "$tmp" > "$tmp2"
       mv "$tmp2" "$tmp"
     fi
     upgrade_apply_file "$out" "$tmp"
@@ -11537,10 +11568,9 @@ write_file() {
   tmp="$(mktemp "${TMPDIR:-/tmp}/dcb-render.XXXXXX")"
   render_content "$content" > "$tmp"
   if [[ "$out" == *.json ]]; then
-    perl -0777 -i -pe 's/,\s*([}\]])/$1/g' "$tmp"
     # 従来どおりその場に書く。シンボリックリンクのときだけ、リンク自体を消してから書く。
     [[ -L "$out" ]] && rm -f "$out"
-    jq . "$tmp" > "$out"
+    dcb_json_normalize "$rel" < "$tmp" > "$out"
     rm -f "$tmp"
   else
     dcb_place_file "$tmp" "$out"

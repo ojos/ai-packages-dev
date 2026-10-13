@@ -22,13 +22,13 @@ it "rust 選択で devcontainer.json に rust feature が入る"
 out="$(new_workdir)/p"
 run_bootstrap "$out" --languages rust >/dev/null 2>&1
 dc="$out/.devcontainer/devcontainer.json"
-if jq -e --arg f "$RUST_FEATURE" '.features | has($f)' "$dc" >/dev/null; then pass; else fail "rust feature が無い"; fi
+if jqc -e --arg f "$RUST_FEATURE" '.features | has($f)' "$dc" >/dev/null; then pass; else fail "rust feature が無い"; fi
 
 it "rust 非選択（node のみ）では rust feature も残留プレースホルダも無い"
 out="$(new_workdir)/p"
 run_bootstrap "$out" --languages node >/dev/null 2>&1
 dc="$out/.devcontainer/devcontainer.json"
-if jq -e --arg f "$RUST_FEATURE" '.features | has($f)' "$dc" >/dev/null; then
+if jqc -e --arg f "$RUST_FEATURE" '.features | has($f)' "$dc" >/dev/null; then
   fail "非選択なのに rust feature がある"
 elif grep -q '__IF_RUNTIME_RUST__' "$dc"; then
   fail "未置換プレースホルダ __IF_RUNTIME_RUST__ が残っている"
@@ -39,7 +39,7 @@ fi
 it "生成された devcontainer.json は妥当な JSON（rust 選択時）"
 out="$(new_workdir)/p"
 run_bootstrap "$out" --languages rust,go,python >/dev/null 2>&1
-if jq -e . "$out/.devcontainer/devcontainer.json" >/dev/null 2>&1; then pass; else fail "JSON として不正"; fi
+if jqc -e . "$out/.devcontainer/devcontainer.json" >/dev/null 2>&1; then pass; else fail "JSON として不正"; fi
 
 # ── post-rebuild-check の検査行（汎用化） ─────────────────────────────────────
 
@@ -82,7 +82,7 @@ if grep -q '# template: Rust' "$out/.gitignore"; then pass; else fail "Rust タ�
 # ── VS Code language server 拡張の条件配線 ───────────────────────────────────
 
 ext_has() { # <devcontainer.json> <ext-id>
-  jq -e --arg e "$2" '.customizations.vscode.extensions | index($e)' "$1" >/dev/null
+  jqc -e --arg e "$2" '.customizations.vscode.extensions | index($e)' "$1" >/dev/null
 }
 
 it "rust 選択で rust-analyzer 拡張が入る"
@@ -110,7 +110,7 @@ it "node / php はサードパーティ language server 拡張を配線しない
 out="$(new_workdir)/p"
 run_bootstrap "$out" --languages node,php >/dev/null 2>&1
 dc="$out/.devcontainer/devcontainer.json"
-if jq -r '.customizations.vscode.extensions[]' "$dc" | grep -iE 'intelephense|php|typescript-language' >/dev/null; then
+if jqc -r '.customizations.vscode.extensions[]' "$dc" | grep -iE 'intelephense|php|typescript-language' >/dev/null; then
   fail "node/php にサードパーティ拡張が混入"
 else
   pass

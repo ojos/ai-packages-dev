@@ -23,7 +23,7 @@ DC="$out/.devcontainer/devcontainer.json"
 # ── remoteEnv は作業ディレクトリの受け渡しだけを担う ──────────────────────────
 
 it "remoteEnv のキーが LOCAL_WORKSPACE_FOLDER のみである"
-keys="$(jq -r '.remoteEnv | keys | join(",")' "$DC" 2>/dev/null)"
+keys="$(jqc -r '.remoteEnv | keys | join(",")' "$DC" 2>/dev/null)"
 assert_eq "$keys" "LOCAL_WORKSPACE_FOLDER" "remoteEnv のキー集合"
 
 it "devcontainer.json に localEnv 参照が残っていない"
@@ -37,7 +37,7 @@ fi
 it "AI ツールを選んでも remoteEnv は増えない"
 out2="$(new_workdir)/p2"
 run_bootstrap "$out2" --with-claude --with-gemini --with-copilot >/dev/null 2>&1
-keys2="$(jq -r '.remoteEnv | keys | join(",")' "$out2/.devcontainer/devcontainer.json" 2>/dev/null)"
+keys2="$(jqc -r '.remoteEnv | keys | join(",")' "$out2/.devcontainer/devcontainer.json" 2>/dev/null)"
 assert_eq "$keys2" "LOCAL_WORKSPACE_FOLDER" "--with-* 指定時の remoteEnv のキー集合"
 
 # ── トークン供給を前提としたスクリプトを配らない ──────────────────────────────

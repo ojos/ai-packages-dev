@@ -108,6 +108,22 @@ assert_workflow_valid() {
   fi
 }
 
+# JSONC（コメント付きの JSON）から、コメント（// と /* */）を除いて標準出力へ出す。
+# 文字列リテラルの中の // や /* は残す（URL を壊さない）。devcontainer.json は
+# --with-codex のとき説明のコメントを持つため、jq へはこれを通してから渡す。
+# GNU 拡張に頼らない（perl を使う。doctor.sh の同名の関数と同じ規則）。
+jsonc_strip() {
+  perl -0777 -pe 's{("(?:\\.|[^"\\])*")|//[^\n]*|/\*.*?\*/}{defined $1 ? $1 : ""}gse' "$1"
+}
+
+# jq を JSONC のファイルへ掛ける。使い方は jq と同じで、最後の引数をファイルとする
+# （jqc <jq の引数...> <ファイル>）。
+jqc() {
+  local f="${!#}"
+  set -- "${@:1:$(($# - 1))}"
+  jsonc_strip "$f" | jq "$@"
+}
+
 assert_file_exists() {
   if [[ -f "$1" ]]; then pass; else fail "file not found: $1"; fi
 }
