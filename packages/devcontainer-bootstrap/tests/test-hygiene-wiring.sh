@@ -80,13 +80,10 @@ it "doctor.sh の HYGIENE_CHECKS が bootstrap.sh の一覧と一致する"
 DOC_LIST="$(sed -n 's/^HYGIENE_CHECKS="\(.*\)"$/\1/p' "$DOCTOR" | sorted_names)"
 if [[ "$DOC_LIST" == "$BOOT_LIST" ]]; then pass; else fail "doctor: $DOC_LIST"; fi
 
-it "README の Doctor 節の「衛生検査の配線」の行が、4 本すべてを載せている"
+it "README の Doctor 節の「衛生検査の配線」の行が載せる検査の一覧が、bootstrap.sh の一覧と一致する（欠けも余分も落とす）"
 ROW="$(command grep '^| 衛生検査の配線 |' "$README" || true)"
-missing=""
-for n in $BOOT_LIST; do
-  case "$ROW" in *"\`$n\`"*) ;; *) missing="$missing $n" ;; esac
-done
-if [[ -n "$ROW" && -z "$missing" ]]; then pass; else fail "row=${ROW:+有} 欠落:$missing"; fi
+ROW_LIST="$(printf '%s\n' "$ROW" | command grep -o 'check-[a-z-]*\.sh' | sorted_names)"
+if [[ -n "$ROW" && "$ROW_LIST" == "$BOOT_LIST" ]]; then pass; else fail "row=${ROW:+有} 一覧: $ROW_LIST"; fi
 
 it "4 本がすべて無条件のテンプレート（template_rel_paths）に含まれる"
 TPL_BLOCK="$(awk '/^template_rel_paths\(\) \{/ { f = 1; next } f && /^\}/ { exit } f { print }' "$BOOTSTRAP")"
