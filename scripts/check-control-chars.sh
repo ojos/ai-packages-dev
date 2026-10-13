@@ -2,7 +2,9 @@
 # check-control-chars.sh — 追跡ファイルへの「表示されない制御文字」混入の検知ゲート
 #
 # 位置づけ:
-#   判定はこのスクリプトが持ち、scripts/acceptance.sh は呼ぶだけ。
+#   判定はこのスクリプトが持ち、scripts/acceptance.sh は呼ぶだけ。生成時の雛形の
+#   acceptance.sh はこれを呼ぶ。既存の出力先は acceptance.sh がプロジェクトの
+#   所有物なので、プロジェクト側で配線する（doctor.sh が未配線を WARN で知らせる）。
 #   scripts/check-no-secrets.sh / scripts/verify-commit-identity.sh と同じ形にそろえる。
 #
 #   verify.sh から直接呼ばず acceptance.sh へ置く理由: verify.sh が直接呼ぶのは

@@ -480,6 +480,44 @@ for loop_script in verify.sh acceptance.sh loop-gate.sh check-no-secrets.sh acce
   fi
 done
 
+# 配布された検査 4 本（衛生検査）が、acceptance.sh から参照されているかを見る。
+# 置かれただけで呼ばれない検査は効かない。acceptance.sh はプロジェクトの所有物なので
+# --upgrade は配線を書き換えられない。そのため WARN で知らせる（FAIL にはしない）。
+# 参照の判定はファイル名の出現で行う。コメントに書いたファイル名も参照に数えるので、
+# 意図して呼ばない検査は、ファイル名と理由をコメントで書けば WARN が出ない。
+# doctor.sh は単体で取得されうるため、この 4 本の一覧は bootstrap.sh を参照せずここに持つ
+# （bootstrap.sh の hygiene_check_rel_paths と同じ内容。一致は tests/test-hygiene-wiring.sh が
+# 機械照合する）。
+HYGIENE_CHECKS="check-control-chars.sh check-table-breaks.sh check-doc-links.sh check-shell-portability.sh"
+
+check_hygiene_wiring() {
+  local acceptance="$TARGET_DIR/scripts/acceptance.sh" name present=0 unwired="" unwired_count=0
+  # acceptance.sh が無いときは判定しない（実在は静的構造の検査が FAIL にする）。
+  [[ -f "$acceptance" ]] || return 0
+  for name in $HYGIENE_CHECKS; do
+    [[ -f "$TARGET_DIR/scripts/$name" ]] || continue
+    present=$((present + 1))
+    if ! grep -F -- "$name" "$acceptance" >/dev/null 2>&1; then
+      unwired="$unwired $name"
+      unwired_count=$((unwired_count + 1))
+    fi
+  done
+  [[ "$present" -gt 0 ]] || return 0
+  if [[ "$unwired_count" -eq 0 ]]; then
+    ok "hygiene checks are referenced from scripts/acceptance.sh ($present file(s))"
+    return 0
+  fi
+  warn "hygiene checks not wired into scripts/acceptance.sh ($unwired_count of $present):$unwired（置かれただけで、acceptance.sh から呼ばれていません）"
+  echo "  配線の例（scripts/acceptance.sh の、ran_any の判定の手前）:"
+  for name in $unwired; do
+    echo "    bash scripts/$name"
+  done
+  echo "  意図して呼ばない検査は、acceptance.sh にファイル名と理由をコメントで書くと、この WARN は出ません。"
+}
+
+section "Hygiene checks wiring"
+check_hygiene_wiring
+
 section "Generation origin"
 check_origin_record
 check_dcb_new_leftover
