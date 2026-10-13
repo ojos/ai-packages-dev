@@ -500,7 +500,7 @@ extract_acceptance() {
 
 # 差分（標準入力）から、追加行（先頭の `+` を外したもの）か、外したファイルの件数を出す。
 # 環境変数 PKG_PATHS（改行区切りのパス）に挙がったファイルの追加行は外す。
-# 引数 "lines": 追加行を出す / "count": 外したファイルの件数を出す。
+# 引数 "lines": 追加行を出す / "count": 追加行を実際に外したファイルの件数を出す。
 # 見出しの判定は diff --git から最初の @@ までに限る（追加行の内容が `+++ ` で始まっても、
 # 見出しとは取り違えない）。GNU 拡張は使わない。
 added_lines_of_diff() {
@@ -517,10 +517,12 @@ added_lines_of_diff() {
       if (substr(p, 1, 2) == "b/") {
         p = substr(p, 3)
         sub(/\t.*$/, "", p)
-        if (p in pk) { skip = 1; if (!(p in seen)) { seen[p] = 1; cnt++ } }
+        if (p in pk) { skip = 1; curp = p }
       }
       next
     }
+    # 件数は、追加行を実際に外したファイルだけ数える（削除だけの差分は数えない）
+    mode == "count" && !inhdr && skip && /^\+/ && !(curp in seen) { seen[curp] = 1; cnt++ }
     mode == "lines" && !inhdr && !skip && /^\+/ { print substr($0, 2) }
     END { if (mode == "count") print cnt + 0 }
   '

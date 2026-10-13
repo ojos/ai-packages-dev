@@ -774,6 +774,35 @@ called 31 || detail="${detail}#31 を引いていない "
 called 38 || detail="${detail}#38 を引いていない "
 grep -q 'の追加行は、参照の抽出から外しました' "$WORK/out" && detail="${detail}件数の行が出ている "
 if [[ -z "$detail" ]]; then pass; else fail "$detail"; fi
+printf 'version=1\nhash:del.txt=ffff\nhash:pkg.txt=aaaa\n' > "$REPO/.devcontainer/ORIGIN"
+printf 'one\ntwo\n' > "$REPO/del.txt"
+git -C "$REPO" add del.txt
+git -C "$REPO" commit -q -m "base of del"
+printf 'one\n' > "$REPO/del.txt"
+git -C "$REPO" add del.txt
+git -C "$REPO" commit -q -m "削除だけの変更"
+
+it "hash: のファイルの削除だけの差分では、件数の行が出ない"
+rc=0; run_origin_review || rc=$?
+detail=""
+[[ "$rc" -eq 0 ]] || detail="exit=$rc "
+grep -q 'の追加行は、参照の抽出から外しました' "$WORK/out" && detail="${detail}件数の行が出ている: $(cat "$WORK/out") "
+if [[ -z "$detail" ]]; then pass; else fail "$detail"; fi
+
+it "追加行のあるファイルと削除だけのファイルが混ざると、件数は追加行のあるファイルの数だけになる"
+printf 'a #36\n' > "$REPO/pkg.txt"
+printf 'one\ntwo\n' > "$REPO/del.txt"
+git -C "$REPO" add del.txt pkg.txt
+git -C "$REPO" commit -q -m "base of mixed"
+printf 'one\n' > "$REPO/del.txt"
+printf 'b #37\n' > "$REPO/pkg.txt"
+git -C "$REPO" add del.txt pkg.txt
+git -C "$REPO" commit -q -m "追加と削除の混在"
+rc=0; run_origin_review || rc=$?
+detail=""
+[[ "$rc" -eq 0 ]] || detail="exit=$rc "
+grep -q 'パッケージが配置したファイル 1 件の追加行は、参照の抽出から外しました' "$WORK/out" || detail="${detail}件数が 1 件でない: $(cat "$WORK/out") "
+if [[ -z "$detail" ]]; then pass; else fail "$detail"; fi
 rm -rf "$REPO/.devcontainer"
 git -C "$REPO" checkout -q -
 
