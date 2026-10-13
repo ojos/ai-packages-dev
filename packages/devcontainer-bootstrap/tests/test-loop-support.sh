@@ -390,8 +390,9 @@ else
   fail "全段合格なのに exit 非 0: $out_txt"
 fi
 
-it "ステージ済み差分があるときは範囲を渡さない（reviewer の既定に委ねる）"
-# 既定の対象を上書きしてしまうと、レビュー範囲が意図せず広がる。
+it "既定ブランチを解決できず、ステージ済み差分があるときは範囲を渡さない（reviewer の既定に委ねる）"
+# 起点にする既定ブランチが無いので、従来どおり。既定ブランチを解決できるときは
+# --base を渡す（test-loop-gate-range.sh が検査する）。
 printf 'change\n' > "$out/STAGED.txt"
 ( cd "$out" && git add STAGED.txt ) >/dev/null 2>&1
 if out_txt="$(cd "$out" && ALLOWED_AUTHOR_EMAILS="$ALLOWED_EMAIL" VERIFY_ACCEPTANCE="$acc" bash scripts/loop-gate.sh 2>&1)"; then

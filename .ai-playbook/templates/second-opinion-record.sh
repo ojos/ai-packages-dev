@@ -43,6 +43,7 @@
 # | レビューの対象 | 記録するもの | 投稿時の照合 |
 # |---|---|---|
 # | ステージ済み差分 | `git write-tree` の結果（索引のツリー） | `HEAD^{tree}` と一致すること |
+# | 起点から索引まで（`base:<rev>+staged`） | 同上（索引のツリー。起点は紐づけに使わない） | 同上 |
 # | コミット済みの範囲 | 範囲の終端の SHA | `HEAD` と一致すること |
 #
 # **一致しなければ投稿しない。** レビューの後に中身が変わったということなので、記録を
@@ -55,7 +56,7 @@
 # ## 使い方
 #
 #   bash scripts/second-opinion-record.sh save --engine <名前> --verdict <pass|findings> \
-#        --scope <staged|range:A..B> --runs <N> < 出力
+#        --scope <staged|base:<rev>+staged|range:A..B> --runs <N> < 出力
 #   bash scripts/second-opinion-record.sh show      # 記録を表示する
 #   bash scripts/second-opinion-record.sh verify     # 記録が HEAD に紐づくかを確かめる
 #   bash scripts/second-opinion-record.sh post       # PR へ投稿する（verify を通してから）
@@ -134,7 +135,7 @@ cmd_save() {
   done
   [[ -n "$engine" ]]  || fail "save には --engine が要ります。"
   [[ -n "$verdict" ]] || fail "save には --verdict が要ります（pass | findings）。"
-  [[ -n "$scope" ]]   || fail "save には --scope が要ります（staged | range:A..B）。"
+  [[ -n "$scope" ]]   || fail "save には --scope が要ります（staged | base:<rev>+staged | range:A..B）。"
   [[ "$verdict" == "pass" || "$verdict" == "findings" ]] \
     || fail "--verdict は pass か findings です: $verdict"
 
@@ -145,7 +146,7 @@ cmd_save() {
   # 紐づけの材料を、レビューの対象に応じて採る（冒頭「SHA の紐づけ」）。
   local bind_kind bind_value
   case "$scope" in
-    staged)
+    staged|base:?*+staged)
       bind_kind="tree"
       # 索引をツリーとして書く。ref は動かない。
       bind_value="$(git write-tree)" || fail "索引のツリーを書けません（git write-tree）。"
@@ -160,7 +161,7 @@ cmd_save() {
       bind_value="$(git rev-parse --verify "$end" 2>/dev/null)" \
         || fail "範囲の終端を解決できません: $end"
       ;;
-    *) fail "--scope は staged か range:A..B です: $scope" ;;
+    *) fail "--scope は staged か base:<rev>+staged か range:A..B です: $scope" ;;
   esac
 
   # **一時ファイルへ書いて確かめてから置き換える。** 既存の記録へ直接書くと、入力が空の
