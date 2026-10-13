@@ -10598,6 +10598,38 @@ build_gitignore_block() {
   fi
 }
 
+# .gitignore に管理区画の行（開始行か終了行）が 1 行でもあるか。
+gitignore_has_section() { # path
+  command grep -qxF -e "$GITIGNORE_BEGIN" -e "$GITIGNORE_END" "$1"
+}
+
+# 管理区画が壊れているか（壊れていれば 0）。開始行と終了行が対で、毎回開始が先に来ていれば
+# 正常（区画なしも正常）。
+gitignore_section_is_broken() { # path
+  [[ -f "$1" ]] || return 1
+  awk -v start="$GITIGNORE_BEGIN" -v end="$GITIGNORE_END" '
+    $0 == start { if (open) bad = 1; open = 1; next }
+    $0 == end { if (!open) bad = 1; open = 0; next }
+    END { exit (bad || open) ? 0 : 1 }
+  ' "$1"
+}
+
+# 書き込みを始める前に、.gitignore の管理区画が壊れていないかを検査する。壊れた区画の
+# どこまでが区画かは決められず、黙って消すと利用側の行を失うため、何も書かずに止める
+# （--dry-run も同じ。#538。#507 と同じく、書いてから止まる形にしない）。
+dcb_precheck_gitignore() {
+  local path="$OUTPUT_DIR/.gitignore"
+  [[ "$MANAGE_GITIGNORE" == "true" ]] || return 0
+  [[ -f "$path" ]] || return 0
+  # --upgrade 以外でシンボリックリンクは温存（--force なら置換）され、中身を読まない。
+  if [[ "$UPGRADE" != "true" && -L "$path" ]]; then return 0; fi
+  if gitignore_section_is_broken "$path"; then
+    echo "error: $path の管理セクションが壊れています（開始行 '$GITIGNORE_BEGIN' と終了行 '$GITIGNORE_END' が対になっていません）。何も書かずに止めます。" >&2
+    echo "  直し方: 壊れた行を消すか、足りない行を補ってください。管理セクションを触らないなら --no-gitignore を指定します。" >&2
+    exit 1
+  fi
+}
+
 upsert_gitignore() {
   local gitignore_path="$OUTPUT_DIR/.gitignore"
   local tmp block prev_mode=""
@@ -10620,27 +10652,44 @@ upsert_gitignore() {
 
   [[ -f "$gitignore_path" ]] && prev_mode="$(file_mode_octal "$gitignore_path")"
 
-  if [[ -f "$gitignore_path" ]]; then
-    # 管理区画を取り除き、末尾の空行も落とす。前回足した区切りの空行は区画の
-    # 外にあるため、落とさないと実行のたびに 1 行ずつ累積する（#460）。
-    # 空行は直後に空でない行が来たときだけ出力する。
-    awk -v start="$GITIGNORE_BEGIN" -v end="$GITIGNORE_END" '
-      $0 == start {skip=1; next}
-      $0 == end {skip=0; next}
-      skip {next}
-      /^[[:space:]]*$/ {pending = pending $0 "\n"; next}
-      {printf "%s", pending; pending=""; print}
-    ' "$gitignore_path" > "$tmp"
-    if [[ -s "$tmp" ]]; then
-      printf '\n' >> "$tmp"
-    fi
-  fi
-
+  local newsec
+  newsec="$(mktemp "${TMPDIR:-/tmp}/dcb-gitignore-sec.XXXXXX")"
   {
     printf '%s\n' "$GITIGNORE_BEGIN"
     printf '%s\n' "$block"
     printf '%s\n' "$GITIGNORE_END"
-  } >> "$tmp"
+  } > "$newsec"
+
+  if [[ -f "$gitignore_path" ]] && gitignore_has_section "$gitignore_path"; then
+    # 管理区画がある: その場所で中身だけを差し替える。区画の前後の行は位置も順序も保つ
+    # （.gitignore は後勝ちで、利用側の否定パターンの効き方が位置で変わるため。#538）。
+    # 区画の外の行は、空行も空白だけの行も含めて一切変えない。空行を足さないので累積もしない
+    # （#460）。開始行〜終了行の対が複数あれば、最初の対だけを差し替え、2 つ目以降の対は取り除く。
+    # 壊れた区画は dcb_precheck_gitignore が書き込み前に止めている。
+    awk -v start="$GITIGNORE_BEGIN" -v end="$GITIGNORE_END" -v secfile="$newsec" '
+      state == 0 && $0 == start {
+        while ((getline line < secfile) > 0) print line
+        close(secfile)
+        state = 1; next
+      }
+      state == 2 && $0 == start { state = 3; next }
+      state == 1 || state == 3 { if ($0 == end) state = 2; next }
+      { print }
+    ' "$gitignore_path" > "$tmp"
+  else
+    if [[ -f "$gitignore_path" ]]; then
+      # 区画が無い: 末尾の空行を落として、区切りの空行 1 行を挟んで末尾へ足す。
+      awk '
+        /^[[:space:]]*$/ {pending = pending $0 "\n"; next}
+        {printf "%s", pending; pending=""; print}
+      ' "$gitignore_path" > "$tmp"
+      if [[ -s "$tmp" ]]; then
+        printf '\n' >> "$tmp"
+      fi
+    fi
+    cat "$newsec" >> "$tmp"
+  fi
+  rm -f "$newsec"
 
   # mktemp は 0600 で作成し mv がそれを維持するため、既存 .gitignore のモードを
   # 潰してしまう。元のモードを復元し、644 は新規作成したファイルにのみ使う。
@@ -11821,6 +11870,7 @@ sorted_rels="$( { template_rel_paths; conditional_template_rel_paths; } | sort)"
 # 書き込みを始める前に、すべての生成先の親ディレクトリを検査する（--dry-run と
 # --upgrade も同じ。1 つでも出力先の外を指していれば、何も書かずに止まる）。
 dcb_precheck_destinations
+dcb_precheck_gitignore
 
 if [[ "$DRY_RUN" == "true" && "$UPGRADE" != "true" ]]; then
   echo "[bootstrap] dry-run: no files will be written"
