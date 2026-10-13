@@ -72,6 +72,26 @@ for target in ".ai-playbook/templates/second-opinion-review.sh" "scripts/second-
   it "空白付きの次の見出しで節が終わる"
   out="$(printf '## acceptance\n- a\n  ## x\n- b\n' | extract_acceptance)"
   assert_eq "$out" $'## acceptance\n- a' "indented end"
+
+  it "4 個のバッククォートで開いたフェンスの中の 3 個の行で閉じず、続く「# acceptance」を見出しとしない"
+  out="$(printf '````\n```\n# acceptance\n- no\n````\ntext\n' | extract_acceptance)"
+  assert_eq "$out" "" "long backtick fence"
+
+  it "~~~~ で開いたフェンスでも同じ"
+  out="$(printf '~~~~\n~~~\n# acceptance\n- no\n~~~~\ntext\n' | extract_acceptance)"
+  assert_eq "$out" "" "long tilde fence"
+
+  it "同じ長さの並びで閉じる"
+  out="$(printf '````\nx\n````\n## acceptance\n- a\n## y\n' | extract_acceptance)"
+  assert_eq "$out" $'## acceptance\n- a' "close same length"
+
+  it "より長い並びでも閉じる"
+  out="$(printf '```\nx\n`````\n## acceptance\n- a\n## y\n' | extract_acceptance)"
+  assert_eq "$out" $'## acceptance\n- a' "close longer"
+
+  it "節の中の長いフェンスの内側にある 3 個の行では閉じず、その中の見出しで節を切らない"
+  out="$(printf '## acceptance\n````\n```\n## x\n````\n- a\n## y\n' | extract_acceptance)"
+  assert_eq "$out" $'## acceptance\n````\n```\n## x\n````\n- a' "long fence in section"
 done
 
 exit_with_result

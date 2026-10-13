@@ -441,11 +441,14 @@ extract_issue_refs() {
 # macOS の awk でも動くよう、GNU 拡張（IGNORECASE・match の配列引数など）に頼らない。
 extract_acceptance() {
   tr -d '\r' | awk '
-    # コードのフェンスの種類（行頭に 0〜3 個の空白を付けた ``` / ~~~）。無ければ空
-    function fk(s) {
-      if (s ~ /^ ? ? ?```/) return "`"
-      if (s ~ /^ ? ? ?~~~/) return "~"
-      return ""
+    # コードのフェンス（行頭に 0〜3 個の空白を付けた、3 個以上の ` か ~ の並び）か。
+    # そうなら fch に文字、flen に並びの長さ、frest に並びの後ろを入れて 1 を返す
+    function fenceline(s,   t) {
+      if (s !~ /^ ? ? ?(```|~~~)/) return 0
+      t = s; sub(/^ +/, "", t); fch = substr(t, 1, 1)
+      if (fch == "`") match(t, /^`+/); else match(t, /^~+/)
+      flen = RLENGTH; frest = substr(t, RLENGTH + 1)
+      return 1
     }
     # ATX 見出しの深さ（行頭に 0〜3 個の空白、# が 1〜6 個、その後に空白か行末）。見出しでなければ 0
     function depth(s,   t) {
@@ -460,14 +463,14 @@ extract_acceptance() {
       sub(/(^|[ \t]+)#+$/, "", t); sub(/[ \t]+$/, "", t)
       return t
     }
-    # フェンスの開閉。開いたのと同じ種類の行で閉じる
-    function track(k) {
-      if (fence == "") fence = k
-      else if (fence == k) fence = ""
+    # フェンスの開閉。開いた文字と並びの長さを覚え、同じ文字で、同じかそれより長い並びが
+    # 空白だけを後ろに置いたときに閉じる
+    function track(s) {
+      if (fence == "") { fence = fch; fencelen = flen }
+      else if (fch == fence && flen >= fencelen && frest ~ /^[ \t]*$/) fence = ""
     }
     mode == 0 {
-      k = fk($0)
-      if (k != "") { track(k); next }
+      if (fenceline($0)) { track($0); next }
       if ($0 ~ /^acceptance:/) { mode = 1; print; next }
       if (fence == "" && depth($0) > 0) {
         t = tolower(htext($0)); sub(/:$/, "", t)
@@ -480,8 +483,7 @@ extract_acceptance() {
       print; next
     }
     mode == 2 {
-      k = fk($0)
-      if (k != "") { track(k); print; next }
+      if (fenceline($0)) { track($0); print; next }
       if (fence == "" && depth($0) > 0 && depth($0) <= d) exit
       print
     }
