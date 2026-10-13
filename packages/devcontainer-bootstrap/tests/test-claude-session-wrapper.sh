@@ -155,6 +155,48 @@ it "引数が無くても止まらない（exec するものが無いだけ）"
 (cd "$REPO" && bash "$P1/scripts/claude-session-wrapper.sh" >/dev/null 2>&1)
 assert_eq "$?" "0" "終了コード"
 
+# ── 会話の識別子から名前の末尾を決める ────────────────────────────────────────
+
+# run_wrapper_args <プロジェクト> <cwd> <引数…> : 本体の引数を指定して起動する。
+run_wrapper_args() {
+  local proj="$1" cwd="$2"; shift 2
+  (cd "$cwd" && env -u CLAUDE_CODE_SESSION_NAME -u SESSION_HOST_LABEL bash "$proj/scripts/claude-session-wrapper.sh" "$STUB" "$@" 2>/dev/null)
+}
+SID="961eec28-3c7e-4188-b64a-dd819d46db23"
+
+it "--resume=<id> の形で、名前の末尾が識別子の先頭 4 桁になる"
+n_eq="$(field NAME "$(run_wrapper_args "$P1" "$REPO" --resume="$SID")")"
+assert_eq "$n_eq" "lab-my-repo-961e" "名前"
+
+it "--resume <id>（空白区切り）でも同じ名前になる"
+res="$(run_wrapper_args "$P1" "$REPO" --resume "$SID")"
+if [[ "$(field NAME "$res")" == "lab-my-repo-961e" && "$(field ARGC "$res")" == "2" ]]; then pass; else fail "$res"; fi
+
+it "同じ識別子なら、PID が違っても同じ名前になる"
+n_a="$(field NAME "$(run_wrapper_args "$P1" "$REPO" --resume="$SID")")"
+n_b="$(field NAME "$(run_wrapper_args "$P1" "$REPO" --resume="$SID")")"
+assert_eq "$n_a" "$n_b" "名前"
+
+it "識別子が無ければ、今のとおり PID の 16 進になる"
+res="$(run_wrapper_args "$P1" "$REPO" --flag)"
+assert_eq "$(field NAME "$res")" "lab-my-repo-$(field PIDHEX "$res")" "名前"
+
+it "--resume の直後が識別子の形でなければ（--resume --verbose）、PID の 16 進になる"
+res="$(run_wrapper_args "$P1" "$REPO" --resume --verbose)"
+assert_eq "$(field NAME "$res")" "lab-my-repo-$(field PIDHEX "$res")" "名前"
+
+it "--resume=<UUID でない値> は無視して PID の 16 進になる"
+res="$(run_wrapper_args "$P1" "$REPO" --resume=not-a-uuid)"
+assert_eq "$(field NAME "$res")" "lab-my-repo-$(field PIDHEX "$res")" "名前"
+
+it "識別子があっても、ラベルが無ければ名前を変えずに exec する"
+res="$(run_wrapper_args "$P3" "$REPO" --resume="$SID")"
+if [[ "$(field NAME "$res")" == "<unset>" && "$(field ARGC "$res")" == "1" ]]; then pass; else fail "$res"; fi
+
+it "識別子があっても、設定済みの CLAUDE_CODE_SESSION_NAME は上書きしない"
+res="$(cd "$REPO" && CLAUDE_CODE_SESSION_NAME=given-name bash "$P1/scripts/claude-session-wrapper.sh" "$STUB" --resume="$SID" 2>/dev/null)"
+assert_eq "$(field NAME "$res")" "given-name" "名前"
+
 # ── ラッパーと /peers の署名が、同じ読み方でラベルを返す ──────────────────────
 
 it "read_host_label の本体が、ラッパーと session-peers.sh で一致する"

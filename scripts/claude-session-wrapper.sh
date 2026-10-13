@@ -12,6 +12,9 @@
 #   CLAUDE_CODE_SESSION_NAME を <ラベル>-<作業ツリー名>-<PID の 16 進> にして exec する。
 #   この値が SendMessage の宛先名になり、ListAgents にも出る。PID の 16 進は起動ごとに変わる
 #   （同じ作業ツリーで複数のセッションを動かしても、同時に起動しても宛先名が重ならないようにするため）。
+#   ただし起動の引数に --resume=<会話の識別子> / --resume <会話の識別子>（UUID の形）があれば、
+#   末尾を PID ではなくその識別子の先頭 4 桁にする。会話を再開しても宛先名が変わらず、
+#   ほかのセッションが一度覚えた宛先名へ再起動の後も送れる。識別子の形に合わないときは PID を使う。
 #
 # 何も変えずに exec "$@" するとき（起動を妨げないことが最優先）:
 #   - ラベルが無い
@@ -75,10 +78,33 @@ read_host_label() { # スクリプトのあるディレクトリ
   [ -n "$HOST_LABEL" ] || HOST_LABEL="${SESSION_HOST_LABEL:-}"
 }
 
+# 引数から会話の識別子（UUID の形）を取り出し、先頭 4 桁を変数 SESSION_ID へ入れる。
+# 見つからなければ空にする。bash の組み込みだけで動き、失敗しても止まらない。
+#   --resume=<id> と --resume <id>（空白区切り）を読む。--resume の直後が UUID の形でなければ無視する。
+extract_session_id() { # 起動の引数…
+  local re='^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$'
+  local prev="" a id
+  SESSION_ID=""
+  for a in "$@"; do
+    id=""
+    case "$a" in
+      --resume=*) id="${a#--resume=}" ;;
+      *) [ "$prev" = "--resume" ] && id="$a" ;;
+    esac
+    prev="$a"
+    if [ -n "$id" ] && [[ "$id" =~ $re ]]; then
+      SESSION_ID="${id:0:4}"
+      return 0
+    fi
+  done
+  return 0
+}
+
 # 宛先名を変数 SESSION_NAME へ計算する。失敗したら 1 を返す。git 以外の外部コマンドは使わない。
 # 末尾は、このラッパー自身の PID（$$）の 16 進にする。ラッパーは最後に exec するので、$$ は
 # そのまま Claude Code の PID になる。同時に生きているセッションどうしで PID は重ならないため、
 # 2 つを同時に起動しても宛先名は重ならない（乱数だと、json が書かれる前の同時起動で重なりうる）。
+# 会話の識別子が取れていれば（SESSION_ID）、PID の代わりに識別子の先頭 4 桁を使う。
 compute_name() {
   local top wt hex
   SESSION_NAME=""
@@ -89,7 +115,11 @@ compute_name() {
   wt="${top##*/}"
   [ -n "$wt" ] || return 1
 
-  printf -v hex '%x' "$$" || return 1
+  if [ -n "${SESSION_ID:-}" ]; then
+    hex="$SESSION_ID"
+  else
+    printf -v hex '%x' "$$" || return 1
+  fi
   [ -n "$hex" ] || return 1
 
   # 宛先名として安全な文字（英数字と ._-）だけにする。
@@ -98,6 +128,8 @@ compute_name() {
 
 if [ -z "${CLAUDE_CODE_SESSION_NAME:-}" ]; then
   read_host_label "$SCRIPT_DIR"
+  SESSION_ID=""
+  [ -z "$HOST_LABEL" ] || extract_session_id "$@"
   if [ -n "$HOST_LABEL" ] && compute_name && [ -n "$SESSION_NAME" ]; then
     export CLAUDE_CODE_SESSION_NAME="$SESSION_NAME"
   fi
