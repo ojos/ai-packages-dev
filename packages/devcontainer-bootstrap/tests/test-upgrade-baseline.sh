@@ -144,6 +144,18 @@ bash "$BOOTSTRAP" --accept "$A" --baseline-from "$base" --output-dir "$out2" >/d
 bash "$BOOTSTRAP" --upgrade --force --baseline-from "$base" --output-dir "$out2" >/dev/null 2>&1; rc2=$?
 if [[ "$rc1" != "0" && "$rc2" != "0" ]]; then pass; else fail "rc1=$rc1 rc2=$rc2"; fi
 
+it "出力先そのもの・空の文字列・<dir> 自体がリンクの --baseline-from は、終了コード 1 で止まり何も書かない"
+out5="$(new_workdir)/p"
+gen "$out5"
+age "$out5/$A"
+rm -f "$out5/$ORIGIN_REL"
+ln -s "$base" "$TEST_TMP_ROOT/base-link"
+before="$(sums "$out5")"
+upgrade "$out5" --baseline-from "$out5"; rc1=$UP_RC
+upgrade "$out5" --baseline-from ""; rc2=$UP_RC
+upgrade "$out5" --baseline-from "$TEST_TMP_ROOT/base-link"; rc3=$UP_RC
+if [[ "$rc1" == "1" && "$rc2" == "1" && "$rc3" == "1" && "$before" == "$(sums "$out5")" ]]; then pass; else fail "rc=$rc1,$rc2,$rc3"; fi
+
 it "--baseline-from は ORIGIN に記録しない"
 if ! command grep -F -- 'baseline' "$out/$ORIGIN_REL" >/dev/null; then pass; else fail "ORIGIN に baseline がある"; fi
 

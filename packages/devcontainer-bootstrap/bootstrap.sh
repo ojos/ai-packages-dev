@@ -31,6 +31,7 @@ UPGRADE="false"
 # --upgrade --baseline-from <dir>: 旧い版で生成した結果のディレクトリ。ORIGIN に hash: の記録が無い
 # ファイルを、ここの同じ相対パスの内容と照合する（実行の仕方であり、ORIGIN には記録しない）。
 BASELINE_FROM=""
+BASELINE_FROM_SET="false"
 MANAGE_GITIGNORE_EXPLICIT="false"
 GITIGNORE_TARGETS_EXPLICIT="false"
 # upgrade の結果の集計。UPGRADE_HASHES は「相対パス<TAB>新しい版のハッシュ」の行
@@ -315,7 +316,7 @@ while [[ $# -gt 0 ]]; do
     --dry-run)          DRY_RUN="true"; shift ;;
     --force)            FORCE="true"; shift ;;
     --upgrade)          UPGRADE="true"; shift ;;
-    --baseline-from)    BASELINE_FROM="$2"; shift 2 ;;
+    --baseline-from)    BASELINE_FROM="${2-}"; BASELINE_FROM_SET="true"; shift 2 ;;
     # 取り込み済みの記録。後ろの "-" で始まらない引数をすべてパスとして受ける。
     --accept)
       ACCEPT="true"; shift
@@ -355,16 +356,30 @@ fi
 
 # --baseline-from は --upgrade の判定の入力。それ以外（生成・--accept・--force）と一緒では
 # 使い道が無いので、何も書かずに止める。<dir> は書き込みの前に存在を確かめ、絶対パスへ直す。
-if [[ -n "$BASELINE_FROM" ]]; then
+if [[ "$BASELINE_FROM_SET" == "true" ]]; then
   if [[ "$UPGRADE" != "true" ]]; then
     echo "error: --baseline-from は --upgrade と一緒のときだけ指定できます。何も書かずに止めます。" >&2
+    exit 1
+  fi
+  if [[ -z "$BASELINE_FROM" ]]; then
+    echo "error: --baseline-from にはディレクトリが必要です（空の文字列は指定できません）。何も書かずに止めます。" >&2
+    exit 1
+  fi
+  if [[ -L "$BASELINE_FROM" ]]; then
+    echo "error: --baseline-from: $BASELINE_FROM はシンボリックリンクです。<dir> 側のリンクはたどらないので、実体のパスを渡してください。何も書かずに止めます。" >&2
     exit 1
   fi
   if [[ ! -d "$BASELINE_FROM" ]]; then
     echo "error: --baseline-from: $BASELINE_FROM は存在するディレクトリではありません。何も書かずに止めます。" >&2
     exit 1
   fi
-  BASELINE_FROM="$(cd "$BASELINE_FROM" && pwd)"
+  BASELINE_FROM="$(cd -P "$BASELINE_FROM" && pwd)"
+  # 出力先そのものを指すと、記録の無い現物がすべて「一致」になり、手を入れたものも上書きされる。
+  baseline_out="${OUTPUT_DIR:-$PWD}"
+  if [[ -d "$baseline_out" && "$(cd -P "$baseline_out" && pwd)" == "$BASELINE_FROM" ]]; then
+    echo "error: --baseline-from に出力先そのものは指定できません（現物と照合しても意味が無く、手を入れたファイルも上書きされます）。旧い版の生成結果を別のディレクトリへ作って渡してください。何も書かずに止めます。" >&2
+    exit 1
+  fi
 fi
 
 # --accept は 3 つ目の動作（生成・--upgrade とは別）。生成の引数や --upgrade と混ぜると、
@@ -384,7 +399,7 @@ if [[ "$ACCEPT" == "true" ]]; then
   [[ -z "$PLAYBOOK_FROM" ]] || accept_conflict="$accept_conflict --playbook-from"
   [[ -z "$PLAYBOOK_VERSION" ]] || accept_conflict="$accept_conflict --playbook-version"
   [[ "$PLAYBOOK_CONFLICT_POLICY_EXPLICIT" != "true" ]] || accept_conflict="$accept_conflict --playbook-conflict-policy"
-  [[ -z "$BASELINE_FROM" ]] || accept_conflict="$accept_conflict --baseline-from"
+  [[ "$BASELINE_FROM_SET" != "true" ]] || accept_conflict="$accept_conflict --baseline-from"
   if [[ -n "$accept_conflict" ]]; then
     echo "error: --accept は生成の引数や --upgrade と同時に指定できません（指定されたもの:$accept_conflict）。" >&2
     echo "       --output-dir と --dry-run だけが併用できます。何も書かずに止めます。" >&2
