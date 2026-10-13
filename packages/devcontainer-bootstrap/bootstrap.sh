@@ -738,6 +738,39 @@ project_owned_rel_paths() {
     'scripts/acceptance-remote.sh'
 }
 
+# 配布する衛生検査（acceptance.sh の雛形が呼ぶ検査）の相対パス一覧。単一の定義。
+# 同じ一覧を doctor.sh（HYGIENE_CHECKS。単体で取得されうるため自前で持つ）と README が
+# 書き写している。雛形の呼び出しを含めた四者の一致は tests/test-hygiene-wiring.sh が
+# 機械照合する。ここを変えたら雛形（scripts/acceptance.sh）・doctor.sh・README も変えること。
+hygiene_check_rel_paths() {
+  printf '%s\n' \
+    'scripts/check-control-chars.sh' \
+    'scripts/check-table-breaks.sh' \
+    'scripts/check-doc-links.sh' \
+    'scripts/check-shell-portability.sh'
+}
+
+# --upgrade の終わりに、衛生検査が acceptance.sh から参照されているかを見て、未配線なら
+# 配線を促す案内を出す（終了コードは変えない。doctor.sh の WARN と同じ判定）。
+# 判定はファイル名の出現で行う。コメントにファイル名と理由を書けば、意図して呼ばない
+# 検査として扱われ、案内は出ない。acceptance.sh が無いときは判定しない。
+upgrade_report_unwired_checks() {
+  local acceptance="$OUTPUT_DIR/scripts/acceptance.sh" rel name unwired=""
+  [[ -f "$acceptance" ]] || return 0
+  while IFS= read -r rel; do
+    [[ -f "$OUTPUT_DIR/$rel" ]] || continue
+    name="${rel##*/}"
+    if ! command grep -F -- "$name" "$acceptance" >/dev/null 2>&1; then
+      unwired="${unwired}  bash ${rel}"$'\n'
+    fi
+  done < <(hygiene_check_rel_paths)
+  [[ -n "$unwired" ]] || return 0
+  echo "[bootstrap] upgrade: 配布した検査が scripts/acceptance.sh から呼ばれていません（置かれただけで、効いていません）。" >&2
+  echo "[bootstrap] upgrade: acceptance.sh はプロジェクトの所有物なので、自動では配線しません。次の行を、ran_any の判定（受け入れ条件が未定義の失敗）の手前へ足してください:" >&2
+  printf '%s' "$unwired" >&2
+  echo "[bootstrap] upgrade: 意図して呼ばない検査は、acceptance.sh にファイル名と理由をコメントで書くと、この案内は出ません。" >&2
+}
+
 # 生成する相対パス一覧。mode を廃したため単一の集合。
 template_rel_paths() {
   printf '%s\n' \
@@ -3015,7 +3048,9 @@ TMPL
 # check-control-chars.sh — 追跡ファイルへの「表示されない制御文字」混入の検知ゲート
 #
 # 位置づけ:
-#   判定はこのスクリプトが持ち、scripts/acceptance.sh は呼ぶだけ。
+#   判定はこのスクリプトが持ち、scripts/acceptance.sh は呼ぶだけ。生成時の雛形の
+#   acceptance.sh はこれを呼ぶ。既存の出力先は acceptance.sh がプロジェクトの
+#   所有物なので、プロジェクト側で配線する（doctor.sh が未配線を WARN で知らせる）。
 #   scripts/check-no-secrets.sh / scripts/verify-commit-identity.sh と同じ形にそろえる。
 #
 #   verify.sh から直接呼ばず acceptance.sh へ置く理由: verify.sh が直接呼ぶのは
@@ -3492,7 +3527,9 @@ TMPL
 # することを機械で検査する
 #
 # 位置づけ:
-#   判定はこのスクリプトが持ち、scripts/acceptance.sh は呼ぶだけ。
+#   判定はこのスクリプトが持ち、scripts/acceptance.sh は呼ぶだけ。生成時の雛形の
+#   acceptance.sh はこれを呼ぶ。既存の出力先は acceptance.sh がプロジェクトの
+#   所有物なので、プロジェクト側で配線する（doctor.sh が未配線を WARN で知らせる）。
 #   scripts/check-control-chars.sh / scripts/check-table-breaks.sh と同じ形にそろえる。
 #
 # なぜ機構で押さえるか:
@@ -3969,7 +4006,9 @@ TMPL
 #   実行せずに検出する。
 #
 # 位置づけ:
-#   判定はこのスクリプトが持ち、scripts/acceptance.sh は呼ぶだけ。
+#   判定はこのスクリプトが持ち、scripts/acceptance.sh は呼ぶだけ。生成時の雛形の
+#   acceptance.sh はこれを呼ぶ。既存の出力先は acceptance.sh がプロジェクトの
+#   所有物なので、プロジェクト側で配線する（doctor.sh が未配線を WARN で知らせる）。
 #   scripts/check-control-chars.sh / scripts/check-table-breaks.sh と同じ形にそろえる。
 #
 # なぜ機構で押さえるか:
@@ -5667,6 +5706,21 @@ echo "[acceptance] project acceptance checks"
 ran_any=0
 
 __ACCEPTANCE_CHECK_LINES__
+
+# 衛生検査（言語のマニフェストに依存しない。配布された検査を呼ぶ）。
+# 言語ごとの検証（上）の後ろ、「1 つでも実行したか」の判定（下）の手前に置く。
+# ここは ran_any に数えない。マニフェストの無い構成が、検査だけで合格にならないようにする
+# （検証していないことを合格として報告しないため）。
+# 外したい検査は、行を消さずにファイル名と理由をコメントで残すこと（doctor.sh は、この
+# ファイルが 4 本のファイル名を参照していれば「未配線」の WARN を出さない）。
+echo "[acceptance] (hygiene) check-control-chars"
+bash scripts/check-control-chars.sh
+echo "[acceptance] (hygiene) check-table-breaks"
+bash scripts/check-table-breaks.sh
+echo "[acceptance] (hygiene) check-doc-links"
+bash scripts/check-doc-links.sh
+echo "[acceptance] (hygiene) check-shell-portability"
+bash scripts/check-shell-portability.sh
 
 if [[ "$ran_any" -eq 0 ]]; then
   echo "[acceptance] 受け入れ条件が未定義です。検証対象のマニフェストが 1 つも見つかりません。" >&2
@@ -11946,6 +12000,10 @@ fi
 # より先に書くと、この票の動機だったファイル（review-gate.yml /
 # second-opinion-review.sh 等）が記録に載らない（実測）。
 write_origin_record
+
+if [[ "$UPGRADE" == "true" ]]; then
+  upgrade_report_unwired_checks
+fi
 
 if [[ "$UPGRADE" == "true" && -n "$UPGRADE_LEFTOVER" ]]; then
   echo "[bootstrap] upgrade: 取り込み待ちの .dcb-new が残っています（手を入れたファイルの隣の新しい版、または以前の実行の残り）:" >&2

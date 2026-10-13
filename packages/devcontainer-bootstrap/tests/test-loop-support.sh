@@ -110,6 +110,9 @@ it "1 つも検証を実行できなければ非 0 で終了し、受け入れ�
 # マニフェストを 1 つも置かない複数言語 → すべて skip → ran_any=0 → 非 0。
 out="$(new_workdir)/p"
 run_bootstrap "$out" --languages node,go,python >/dev/null 2>&1
+# 衛生検査（雛形が言語ブロックの後ろで呼ぶ）は追跡ファイルを git から読むので、git 管理下にする。
+# 4 本が通っても、マニフェストが無ければ「未定義」で失敗する（4 本は ran_any に数えない）。
+make_tracked_repo "$out"
 if out_txt="$(cd "$out" && bash scripts/acceptance.sh 2>&1)"; then
   fail "検証対象が無いのに合格した: $out_txt"
 else
