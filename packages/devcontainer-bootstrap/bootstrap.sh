@@ -4057,6 +4057,7 @@ git ls-files -z '*.md' > "$MD_LIST" \
 
 md_count=0
 excluded_count=0
+unplaced_count=0
 : > "$TARGETS"
 while IFS= read -r -d '' md; do
   # 作業ツリーで消した（--deleted の）ものは走査しない。件数は追跡全体で数え済み。
@@ -4064,8 +4065,10 @@ while IFS= read -r -d '' md; do
     continue
   fi
   # sparse-checkout / skip-worktree で置いていない追跡 md は、リンク先としては実在する
-  # 扱いのまま、読めないので走査だけ飛ばす（awk が開けず止まるのを避ける）。
+  # 扱いのまま、読めないので走査だけ飛ばす（awk が開けず止まるのを避ける）。黙って
+  # 検査を弱めないよう、飛ばした件数を集計の行に出す。
   if [ ! -e "$md" ] && [ ! -L "$md" ]; then
+    unplaced_count=$((unplaced_count + 1))
     continue
   fi
   if is_excluded "$md"; then
@@ -4091,8 +4094,8 @@ done < "$MD_LIST"
 # プロジェクトの実体に Markdown が実在するかどうかとは別に、起動時の自己診断
 # （合成した入力で壊れたリンクを必ず検出できることを毎回確かめる）が独立に検出する。
 if [ "$md_count" -eq 0 ]; then
-  printf '[doc-links] 検査対象の Markdown がありません（除外 %s 件、実体なし %s 件）。検証対象が無いため合格として扱います。\n' \
-    "$excluded_count" "$absent_count"
+  printf '[doc-links] 検査対象の Markdown がありません（除外 %s 件、実体なし %s 件、作業ツリーに置いていない md %s 件）。検証対象が無いため合格として扱います。\n' \
+    "$excluded_count" "$absent_count" "$unplaced_count"
   echo "DOC_LINKS_PASS"
   exit 0
 fi
@@ -4142,8 +4145,8 @@ comm -23 "$WANTED" "$ALLOWED" > "$MISSING"
 unique_count="$(wc -l < "$WANTED" | tr -d ' ')"
 missing_count="$(wc -l < "$MISSING" | tr -d ' ')"
 
-printf '[doc-links] 検査したパス: 追跡 md %s 件（除外 %s 件）/ 実体なし %s 件（追跡全体。作業ツリーで消したもの）/ 相対リンク %s 本（ユニークな行き先 %s 件）\n' \
-  "$md_count" "$excluded_count" "$absent_count" "$link_count" "$unique_count"
+printf '[doc-links] 検査したパス: 追跡 md %s 件（除外 %s 件、作業ツリーに置いていない %s 件）/ 実体なし %s 件（追跡全体。作業ツリーで消したもの）/ 相対リンク %s 本（ユニークな行き先 %s 件）\n' \
+  "$md_count" "$excluded_count" "$unplaced_count" "$absent_count" "$link_count" "$unique_count"
 
 if [ "${missing_count:-0}" -gt 0 ]; then
   printf '[doc-links] 追跡対象として実在しない行き先を %s 件検出しました。\n' "$missing_count" >&2

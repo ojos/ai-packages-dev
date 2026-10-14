@@ -403,6 +403,13 @@ else
   fail "skip-worktree のファイルを消したものとして扱った: $CHECK_OUT"
 fi
 
+it "作業ツリーに置いていない追跡 md の走査を飛ばしたことを、件数で報告する"
+if printf '%s' "$CHECK_OUT" | grep '作業ツリーに置いていない 1 件' >/dev/null; then
+  pass
+else
+  fail "飛ばした件数が集計に出ていない: $CHECK_OUT"
+fi
+
 it "壊れたシンボリックリンクの追跡 Markdown は従来どおり落ちる"
 repo="$(new_repo)"
 mkdir -p "$repo/docs"
