@@ -819,7 +819,7 @@ VS Code は接続のたびにコンテナの `~/.docker/config.json` へ `credsS
 - **CWD 非依存。** スクリプト自身の位置（`scripts/` の 1 階層上）から `.env` を解決するため、サブディレクトリから呼んでも正しく読み込みます。`PROJECT_ENV_FILE` で対象ファイルを明示指定できます。
 - **bash / zsh 双方**で動作し、CRLF・`export KEY=VALUE`・`KEY = VALUE`・クォート囲みの各形式を吸収します。複数回読み込んでも安全（冪等）。`.env` が無ければ何もしません。
 - 対話シェルへは `scripts/on-attach.sh` が `~/.bashrc` / `~/.zshrc` へマーカー付きで**冪等に**注入するため、ターミナルから起動する CLI（`gemini` 等）にも `.env` の値が効きます。非対話実行（`scripts/second-opinion-review.sh` 等）は各スクリプトが冒頭で明示的に読み込みます。
-- **コンテナを作り直した直後は、VS Code の拡張から起動するプロセス（Claude Code など）に `.env` の値が届きません。** VS Code の拡張ホストは、`postAttachCommand` の `scripts/on-attach.sh` が `~/.bashrc` / `~/.zshrc` へ注入するより前に起動し、注入前のシェルから環境を取り込むためです。拡張から起動するプロセスはこの環境を受け継ぐので、会話やターミナルを開き直しても直りません。作り直した直後に 1 度、コマンドパレットから `Developer: Reload Window` を実行してください。拡張ホストが作り直され、注入後のシェルから環境を取り直します。
+- **コンテナを作り直した直後は、VS Code の拡張から起動するプロセス（Claude Code など）に `.env` の値が届きません。** VS Code の拡張ホストは、`postAttachCommand` の `scripts/on-attach.sh` が `~/.bashrc` / `~/.zshrc` へ注入するより前に起動し、注入前のシェルから環境を取り込むためです。拡張から起動するプロセスはこの環境を受け継ぐので、会話を開き直しても直りません（ターミナルで新しく開いたシェルは `~/.bashrc` を読むので、こちらには値が効きます）。作り直した直後に 1 度、コマンドパレットから `Developer: Reload Window` を実行してください。拡張ホストが作り直され、注入後のシェルから環境を取り直します。
 
 ## Git identity ガード
 
