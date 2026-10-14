@@ -385,6 +385,32 @@ rm "$repo/docs/b.md"
 run_check "$repo"
 assert_fail "消した文書へのリンク" "docs/b.md"
 
+it "消した追跡ファイルへのリンクの診断は、綴りの誤りではなく消したことを示す"
+assert_fail "消した文書への診断の文言" "作業ツリーで消した追跡ファイル"
+
+it "skip-worktree で実体の無い追跡ファイルへのリンクは通過する"
+repo="$(new_repo)"
+add_doc "$repo" "docs/a.md" '[b](b.md)
+'
+add_doc "$repo" "docs/b.md" 'x
+'
+commit_repo "$repo" add-a-b-skip
+( cd "$repo" && git update-index --skip-worktree docs/b.md && rm docs/b.md ) >/dev/null 2>&1
+run_check "$repo"
+if [[ "$CHECK_RC" -eq 0 ]] && printf '%s' "$CHECK_OUT" | grep 'DOC_LINKS_PASS' >/dev/null; then
+  pass
+else
+  fail "skip-worktree のファイルを消したものとして扱った: $CHECK_OUT"
+fi
+
+it "壊れたシンボリックリンクの追跡 Markdown は従来どおり落ちる"
+repo="$(new_repo)"
+mkdir -p "$repo/docs"
+ln -s no-such-target.md "$repo/docs/link.md"
+( cd "$repo" && git add -A && $GIT_AS commit -q -m add-broken-symlink ) >/dev/null 2>&1
+run_check "$repo"
+assert_fail "壊れたシンボリックリンク"
+
 # ── 検査が成立していないことを合格にしない ────────────────────────────────────
 
 it "git 管理外では落ちる（検査が成立していない）"
