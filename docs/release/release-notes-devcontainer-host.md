@@ -6,6 +6,11 @@ devhost（SSH で届く外部の機械で devcontainer を保つ道具。コマ�
 >
 > 同じ理由で、issue 参照は `ojos/ai-packages-dev#NNN` の形で書いてください。裸の `#NNN` は GitHub のオートリンクが**配布先リポジトリの issue** として解決するため、配布後は存在しない issue や無関係な issue を指します。
 
+## 次の版（未リリース）
+
+### Summary
+- **`dev.sh` と `selftest.sh` が、既定の重大度の shellcheck を通るようにした**（ojos/ai-packages-dev#589 / ojos/ai-packages-dev#590）。`dev.sh` は、ランナーの一覧を読むループの中で求めていた設定の置き場所（`dirname`）を、ループの前で求めるようにした（SC2094 の誤検出。挙動は変わらない）。`selftest.sh` の 13 件は意図した書き方なので、理由を書いて抑止した。開発リポジトリの CI で、配布する `.sh` の全体を既定の重大度の shellcheck に掛けるようにした。
+
 ## v0.3.0
 
 ### Summary

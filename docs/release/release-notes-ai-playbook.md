@@ -6,6 +6,26 @@
 >
 > 同じ理由で、issue 参照は `ojos/ai-packages-dev#NNN` の形で書いてください。裸の `#NNN` は GitHub のオートリンクが**配布先リポジトリの issue** として解決するため、配布後は存在しない issue や無関係な issue を指します。
 
+## v0.12.0
+
+### Summary
+- **`second-opinion-review.sh` が、エンジンの指定が無いまま既定の gemini を使い、しかもほかのエンジンの CLI が入っているときに知らせるようにした**（ojos/ai-packages-dev#591 / ojos/ai-packages-dev#592）。`--engine` でも `SECOND_OPINION_ENGINE` でも指定せず（空文字は未指定とみなす）、`agy` か `codex` が PATH にあるとき、stderr に `[second-opinion] notice:` で始まる 2 行（既定の gemini を使うこと・見つかった CLI・指定の方法）を出す。
+  - gemini と codex の両方を入れた構成で、`.env` を写し忘れた作業ツリーなどが黙って gemini で回るのを、気づけるようにするため。
+  - 判定（終了コード・LGTM）は変わらない。gemini だけの構成では出さない。
+  - 回数の検査の後、エンジンの検査の前に出す。gemini の CLI やキーが無くて止まる実行では、止まった理由（指定が無く gemini に落ちた）を先に示す。
+  - 文面に `(engine=` の形を含めない（devcontainer-bootstrap の `loop-gate.sh` は、出力の最初の `(engine=` から記録のエンジン名を読むため）。
+- **`second-opinion-review.sh` がブランチ名から issue 番号を取る規則を、devcontainer-bootstrap のセッション協調のフック（`session-coord-hook.sh` の `ISSUE_BRANCH_RE`）と同じにした**（ojos/ai-packages-dev#593 / ojos/ai-packages-dev#594）。規則は `(^|/)(issue-|gh-)?([1-9][0-9]{0,5})([-_]|$)` で、最初の一致を使う。今までは `feat/123-x` の形しか読まず、`123-x`・`issue-123`・`gh-123_x` などのブランチでは issue の文脈なしでレビューしていた。
+  - 取れなかったときのメッセージに、読める形を示す。
+  - 番号を読んだのに issue を引けなかったとき（gh が無い・取得の失敗）は、その番号を「参照された issue」の一覧から外さないようにした。今までは本文も状態も載らなかった。
+  - 限界: 日付や版を含む名前（`2026-10-14-hotfix` など）も番号として読む。その番号の issue があれば、関係の無い issue が文脈に載る（フックも同じ名前を同じく読む）。
+- **`second-opinion-review.sh` の `$CLI` を引用符で囲み、既定の重大度の shellcheck（SC2086）を通るようにした**（ojos/ai-packages-dev#589 / ojos/ai-packages-dev#590）。v0.11.0 で、codex を最小の環境で起動するための接頭辞を前に足したことで、`$CLI` が引数の位置になり、重大度を絞らずに shellcheck を回す利用側の受け入れ検査が落ちていた。CLI の名前は 1 語なので、動作は変わらない。配布する `.sh` の全体を、開発リポジトリの CI で既定の重大度の shellcheck に掛けるようにした。
+- 雛形の種類は 17 種のまま。
+
+### 移行
+- **雛形から写したファイルに手を入れていなければ、規範の更新で置き換わる**（DCB で規範を配置している場合は `bootstrap.sh --upgrade --playbook-version v0.12.0` で追従する）。手を入れたファイルは置き換わらないので、差分を手で取り込む。
+- 破壊的変更はない。devcontainer-bootstrap v0.21.0 / v0.22.0 のどちらとも組み合わせられる。
+- 通知の 2 行は stderr に出る。第二意見の出力を読んで処理している仕組みがあれば、`[second-opinion] notice:` で始まる行を読み飛ばす。
+
 ## v0.11.0
 
 ### Summary
