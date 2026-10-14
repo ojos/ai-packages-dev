@@ -495,7 +495,12 @@ extract_issue_refs() {
 }
 
 # issue の本文から acceptance の節を出す。次の 2 つの形を拾い、本文で先に現れたほうを使う。
-#   - intake の YAML: 行頭の `acceptance:` から、次のキーかコードのフェンスまで
+#   - intake の YAML: 行頭の `acceptance:` から、次のキーかコードのフェンスまで。
+#     フェンスの外の `acceptance:` は採る。フェンスの中の `acceptance:` は、同じフェンスの
+#     中でそれより前に行頭の `goal:` があったときだけ採る（intake の票は goal → … → acceptance の
+#     順で、フェンスの中に書く。goal: の無いフェンスは本文中のコード例とみなして採らない）。
+#     限界: goal: が acceptance: より後ろにある票、goal: と acceptance: を別々のフェンスに分けた
+#     票は拾わない。intake の雛形そのもの（goal: を含む）を引用したコード例は、本物として採る
 #   - Markdown の見出し: 文言が acceptance の見出し（# の数と大文字小文字は問わない）から、
 #     次の同じ深さ以上の見出しの手前まで。見出しの判定はコードのフェンス（```）の外に限る
 # macOS の awk でも動くよう、GNU 拡張（IGNORECASE・match の配列引数など）に頼らない。
@@ -526,12 +531,13 @@ extract_acceptance() {
     # フェンスの開閉。開いた文字と並びの長さを覚え、同じ文字で、同じかそれより長い並びが
     # 空白だけを後ろに置いたときに閉じる
     function track(s) {
-      if (fence == "") { fence = fch; fencelen = flen }
+      if (fence == "") { fence = fch; fencelen = flen; seengoal = 0 }
       else if (fch == fence && flen >= fencelen && frest ~ /^[ \t]*$/) fence = ""
     }
     mode == 0 {
       if (fenceline($0)) { track($0); next }
-      if ($0 ~ /^acceptance:/) { mode = 1; print; next }
+      if (fence != "" && $0 ~ /^goal:/) seengoal = 1
+      if ($0 ~ /^acceptance:/ && (fence == "" || seengoal)) { mode = 1; print; next }
       if (fence == "" && depth($0) > 0) {
         t = tolower(htext($0)); sub(/:$/, "", t)
         if (t == "acceptance") { mode = 2; d = depth($0); fence = ""; print; next }
@@ -539,7 +545,14 @@ extract_acceptance() {
       next
     }
     mode == 1 {
-      if ($0 ~ /^[A-Za-z_.]+:/ || $0 ~ /^```/) exit
+      # 節の終わりは、次のキーか、フェンスの行（``` と ~~~、0〜3 個の字下げを含む。fenceline と同じ判定）。
+      # 票がフェンスの中にあるときは、そのフェンスを閉じる行（track と同じ規則）でだけ終える。
+      # 別の記号や短い並びの行は閉じないので、acceptance の中身（`acceptance: |` の本文など）として残す
+      if ($0 ~ /^[A-Za-z_.]+:/) exit
+      if (fenceline($0)) {
+        if (fence == "") exit
+        if (fch == fence && flen >= fencelen && frest ~ /^[ \t]*$/) exit
+      }
       print; next
     }
     mode == 2 {

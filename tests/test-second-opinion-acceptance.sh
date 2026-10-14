@@ -92,6 +92,41 @@ for target in ".ai-playbook/templates/second-opinion-review.sh" "scripts/second-
   it "節の中の長いフェンスの内側にある 3 個の行では閉じず、その中の見出しで節を切らない"
   out="$(printf '## acceptance\n````\n```\n## x\n````\n- a\n## y\n' | extract_acceptance)"
   assert_eq "$out" $'## acceptance\n````\n```\n## x\n````\n- a' "long fence in section"
+  it "goal: の無いフェンス（コード例）の中の acceptance: を採らず、後ろの本物の見出しを採る (#597)"
+  out="$(printf '例:\n```yaml\nacceptance:\n  - 例の中身\n```\n\n## acceptance\n- 本物\n## x\n' | extract_acceptance)"
+  assert_eq "$out" $'## acceptance\n- 本物' "example fence then heading"
+
+  it "goal: の無いフェンスの後ろの、goal: を含む intake の票を採る (#597)"
+  out="$(printf '```yaml\nacceptance:\n  - 例\n```\n```yaml\ngoal: g\nacceptance:\n  - 本物\npriority: 低\n```\n' | extract_acceptance)"
+  assert_eq "$out" $'acceptance:\n  - 本物' "example fence then ticket"
+
+  it "intake の票だけのフェンスから採る (#597)"
+  out="$(printf '## 票\n```yaml\ngoal: g\nscope.in:\n  - s\nacceptance:\n  - a\npriority: 低\n```\n' | extract_acceptance)"
+  assert_eq "$out" $'acceptance:\n  - a' "ticket only"
+
+  it "フェンスの外の acceptance: は goal: が無くても採る (#597)"
+  out="$(printf 'text\nacceptance:\n  - a\n\nnext: 1\n' | extract_acceptance)"
+  assert_eq "$out" $'acceptance:\n  - a' "outside fence"
+
+  it "~~~ のフェンスの票は、閉じの行で節を終える（後ろの本文を含めない） (#597)"
+  out="$(printf '~~~yaml\ngoal: g\nacceptance:\n  - a\n~~~\n\n本文の続き\n- x\n' | extract_acceptance)"
+  assert_eq "$out" $'acceptance:\n  - a' "tilde fence"
+
+  it "字下げした閉じのフェンスでも、節を終える (#597)"
+  out="$(printf '```yaml\ngoal: g\nacceptance:\n  - a\n  ```\nafter\n' | extract_acceptance)"
+  assert_eq "$out" $'acceptance:\n  - a' "indented closing fence"
+
+  it "票のフェンスを閉じない別の記号のフェンス行は、acceptance の中身として残す (#597)"
+  out="$(printf '```yaml\ngoal: g\nacceptance: |\n  前\n  ~~~\n  後\n```\nafter\n' | extract_acceptance)"
+  assert_eq "$out" $'acceptance: |\n  前\n  ~~~\n  後' "non-closing fence line inside ticket"
+
+  it "フェンスの外の acceptance: は、新しいフェンスが開く行で終える（今までどおり） (#597)"
+  out="$(printf 'acceptance:\n  - a\n~~~\ncode\n~~~\n' | extract_acceptance)"
+  assert_eq "$out" $'acceptance:\n  - a' "outside fence ends at fence"
+
+  it "goal: が acceptance: より後ろにある票は拾わない（既知の限界） (#597)"
+  out="$(printf '```yaml\nacceptance:\n  - a\ngoal: g\n```\n' | extract_acceptance)"
+  assert_eq "$out" "" "goal after acceptance"
 done
 
 exit_with_result
