@@ -1003,4 +1003,95 @@ else
   pass
 fi
 
+# ── #591: エンジン未指定で既定の gemini に落ちたときの通知 ────────────────────
+#
+# 両方のエンジンを入れた構成で、.env を写し忘れた作業ツリーが黙って gemini で回るのを
+# 気づけるようにする。判定は変えない。文面に `(engine=` を含めると loop-gate.sh が
+# 出力の最初の `(engine=` からエンジン名を読むため、記録が狂う。
+
+NOTICE_MARK="既定の gemini を使います"
+
+# 通知の検査用: gemini の stub と、指定した追加 CLI の stub を同じ bin に置いて実行する。
+# 引数: 追加 CLI 名（空なら置かない） / review.sh への追加引数...。出力は stdout+stderr、$rc に終了コード。
+run_notice_case() {
+  local extra="$1"; shift
+  local d b
+  d="$(new_workdir)/r"; b="$(new_workdir)/bin"
+  mk_review_repo "$d"; mk_gemini_stub "$b" "L"
+  [[ -z "$extra" ]] || mk_cli_stub "$b" "$extra" "L"
+  out="$( cd "$d" && env -u SECOND_OPINION_ENGINE PATH="$b:$MIN_PATH" GEMINI_API_KEY=dummy bash scripts/second-opinion-review.sh "$@" 2>&1 )"; rc=$?
+}
+
+
+it "未指定で codex の CLI があれば、既定の gemini で回す旨と指定方法を知らせる（終了コードは変わらない）"
+run_notice_case codex
+if [[ "$rc" -eq 0 ]] \
+   && [[ "$out" == *"[second-opinion] notice:"*"$NOTICE_MARK"* ]] \
+   && [[ "$out" == *"--engine"* && "$out" == *"SECOND_OPINION_ENGINE"* ]]; then
+  pass
+else
+  fail "通知が出ない、または終了コードが変わった (exit $rc): $out"
+fi
+
+it "未指定で agy の CLI があるときも知らせる"
+run_notice_case agy
+if [[ "$rc" -eq 0 && "$out" == *"$NOTICE_MARK"* ]]; then pass; else fail "agy で通知が出ない (exit $rc): $out"; fi
+
+it "通知は、実際に見つかった CLI だけを挙げる（codex だけなら agy を挙げない）"
+run_notice_case codex
+if [[ "$out" == *"（codex の CLI も見つかっています）"* && "$out" != *"agy"* ]]; then pass; else fail "見つかった CLI と通知の名前が合わない: $out"; fi
+
+it "回数の誤り（--runs 0）で止まる実行では知らせない"
+run_notice_case codex --runs 0
+if [[ "$rc" -ne 0 && "$out" != *"$NOTICE_MARK"* ]]; then pass; else fail "止まる実行で通知が出た、または止まらなかった (exit $rc): $out"; fi
+
+it "ほかの CLI が無い（gemini だけ）なら知らせない"
+run_notice_case ""
+if [[ "$rc" -eq 0 && "$out" != *"$NOTICE_MARK"* ]]; then pass; else fail "gemini だけで通知が出た (exit $rc): $out"; fi
+
+it "--engine で指定していれば（gemini でも）知らせない"
+run_notice_case codex --engine gemini
+if [[ "$rc" -eq 0 && "$out" != *"$NOTICE_MARK"* ]]; then pass; else fail "--engine 指定で通知が出た (exit $rc): $out"; fi
+
+it "SECOND_OPINION_ENGINE で指定していれば知らせない"
+d="$(new_workdir)/r"; b="$(new_workdir)/bin"
+mk_review_repo "$d"; mk_gemini_stub "$b" "L"; mk_cli_stub "$b" codex "L"
+out="$( cd "$d" && PATH="$b:$MIN_PATH" GEMINI_API_KEY=dummy SECOND_OPINION_ENGINE=gemini bash scripts/second-opinion-review.sh 2>&1 )"; rc=$?
+if [[ "$rc" -eq 0 && "$out" != *"$NOTICE_MARK"* ]]; then pass; else fail "環境変数指定で通知が出た (exit $rc): $out"; fi
+
+it "SECOND_OPINION_ENGINE が空文字なら未指定扱いで知らせる"
+d="$(new_workdir)/r"; b="$(new_workdir)/bin"
+mk_review_repo "$d"; mk_gemini_stub "$b" "L"; mk_cli_stub "$b" codex "L"
+out="$( cd "$d" && PATH="$b:$MIN_PATH" GEMINI_API_KEY=dummy SECOND_OPINION_ENGINE= bash scripts/second-opinion-review.sh 2>&1 )"; rc=$?
+if [[ "$rc" -eq 0 && "$out" == *"$NOTICE_MARK"* ]]; then pass; else fail "空文字で通知が出ない (exit $rc): $out"; fi
+
+it "通知が出ても、指摘ありの判定（終了コード 1）は変わらない"
+d="$(new_workdir)/r"; b="$(new_workdir)/bin"
+mk_review_repo "$d"; mk_gemini_stub "$b" "F"; mk_cli_stub "$b" codex "L"
+out="$( cd "$d" && env -u SECOND_OPINION_ENGINE PATH="$b:$MIN_PATH" GEMINI_API_KEY=dummy bash scripts/second-opinion-review.sh 2>&1 )"; rc=$?
+if [[ "$rc" -eq 1 && "$out" == *"$NOTICE_MARK"* ]]; then pass; else fail "判定が変わった (exit $rc): $out"; fi
+
+it "通知が出る条件でも、loop-gate が残す記録のエンジン名は gemini になる"
+# 実物の reviewer の出力を、生成した loop-gate.sh の record_second_opinion へそのまま渡し、
+# 記録スクリプト（stub）が受け取った --engine を見る。抽出の式をここへ写すと、loop-gate 側の
+# 式が変わったときに追随せず、記録を実際に作らないまま通るため。loop-gate.sh は source では
+# ゲート本体を走らせない（source ガード）ので、関数だけを呼べる。
+run_notice_case codex
+cap="$(new_workdir)/capture.txt"; printf '%s\n' "$out" > "$cap"
+gen="$(new_workdir)/p"
+run_bootstrap "$gen" >/dev/null 2>&1
+cat > "$gen/scripts/second-opinion-record.sh" <<'STUB'
+#!/usr/bin/env bash
+echo "RECORD_SAVED:$*"
+cat >/dev/null
+STUB
+rec="$( . "$gen/scripts/loop-gate.sh" && record_second_opinion "$cap" "staged" 0 2>&1 )"
+if [[ "$out" != *"$NOTICE_MARK"* ]]; then
+  fail "通知が出ていない前提が崩れた: $out"
+elif [[ "$rec" == *"RECORD_SAVED:"*"--engine gemini "* ]]; then
+  pass
+else
+  fail "記録のエンジン名が gemini でない、または記録が作られない: $rec"
+fi
+
 exit_with_result

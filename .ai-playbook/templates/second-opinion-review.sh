@@ -189,6 +189,10 @@ RANGE=""
 # --base <rev>: 索引と <rev> の差（コミット済みとステージ済みの両方）を対象にする。
 BASE=""
 ENGINE="${SECOND_OPINION_ENGINE:-gemini}"
+# エンジンが --engine / SECOND_OPINION_ENGINE のどちらでも指定されたか。既定の gemini に
+# 落ちたことを、ほかの CLI が入っている環境で知らせるために使う（下記）。
+ENGINE_SPECIFIED=0
+[[ -n "${SECOND_OPINION_ENGINE:-}" ]] && ENGINE_SPECIFIED=1
 MODEL="${SECOND_OPINION_MODEL:-}"
 RUNS="${SECOND_OPINION_RUNS:-${GEMINI_REVIEW_RUNS:-1}}"
 
@@ -229,7 +233,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --range)  need_value "$1" "${2-}"; RANGE="$2";  shift 2 ;;
     --base)   need_value "$1" "${2-}"; BASE="$2";   shift 2 ;;
-    --engine) need_value "$1" "${2-}"; ENGINE="$2"; shift 2 ;;
+    --engine) need_value "$1" "${2-}"; ENGINE="$2"; ENGINE_SPECIFIED=1; shift 2 ;;
     --model)  need_value "$1" "${2-}"; MODEL="$2";  shift 2 ;;
     --runs)   need_value "$1" "${2-}"; RUNS="$2";   shift 2 ;;
     -h|--help) usage; exit 0 ;;
@@ -275,6 +279,24 @@ ENGINE_JSON=0
 # 判定を JSON で行うエンジンが強制する回答の形。判定そのものはモデルに出させず、
 # category から下の BLOCKING_CATEGORIES を見てこのスクリプトが決める。
 SCHEMA_FILE="$__SCRIPT_DIR/second-opinion-schema.json"
+
+# エンジンの指定が無いまま既定の gemini を使うとき、ほかのエンジンの CLI が入っていれば
+# 知らせる。両方を入れた構成で、.env を写し忘れた作業ツリーなどが黙って gemini で回るのを
+# 気づけるようにするため。gemini だけの構成では出さない（ノイズを増やさない）。
+# 判定（終了コード・LGTM）は変えない。文面に `(engine=` の形を含めない（loop-gate.sh が
+# 出力の最初の `(engine=` からエンジン名を読んで記録に残すため）。
+#
+# 回数の検査の後、エンジンの検査の前に置く。回数の誤りで止まる実行では出さず、gemini の
+# CLI やキーが無くて止まる実行では、止まった理由（指定が無く gemini に落ちた）を先に示すため。
+if [[ "$ENGINE_SPECIFIED" -eq 0 && "$ENGINE" == "gemini" ]]; then
+  __other_clis=""
+  command -v agy >/dev/null 2>&1 && __other_clis="agy"
+  command -v codex >/dev/null 2>&1 && __other_clis="${__other_clis:+$__other_clis / }codex"
+  if [[ -n "$__other_clis" ]]; then
+    echo "[second-opinion] notice: エンジンの指定が無いので既定の gemini を使います（$__other_clis の CLI も見つかっています）。" >&2
+    echo "[second-opinion] notice: 別のエンジンで回すには --engine <gemini|antigravity|codex> か、.env の SECOND_OPINION_ENGINE で指定してください。" >&2
+  fi
+fi
 
 # エンジンの検査は CLI を呼ぶ前に済ませる。未知の値をそのまま先へ流すと、
 # 「コマンドが無い」というエンジン不在のエラーに化けて、綴り間違いだと分からない。
