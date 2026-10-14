@@ -495,7 +495,11 @@ extract_issue_refs() {
 }
 
 # issue の本文から acceptance の節を出す。次の 2 つの形を拾い、本文で先に現れたほうを使う。
-#   - intake の YAML: 行頭の `acceptance:` から、次のキーかコードのフェンスまで
+#   - intake の YAML: 行頭の `acceptance:` から、次のキーかコードのフェンスまで。
+#     フェンスの外の `acceptance:` は採る。フェンスの中の `acceptance:` は、同じフェンスの
+#     中でそれより前に行頭の `goal:` があったときだけ採る（intake の票は goal → … → acceptance の
+#     順で、フェンスの中に書く。goal: の無いフェンスは本文中のコード例とみなして採らない）。
+#     限界: goal: が acceptance: より後ろにある票は拾わない
 #   - Markdown の見出し: 文言が acceptance の見出し（# の数と大文字小文字は問わない）から、
 #     次の同じ深さ以上の見出しの手前まで。見出しの判定はコードのフェンス（```）の外に限る
 # macOS の awk でも動くよう、GNU 拡張（IGNORECASE・match の配列引数など）に頼らない。
@@ -526,12 +530,13 @@ extract_acceptance() {
     # フェンスの開閉。開いた文字と並びの長さを覚え、同じ文字で、同じかそれより長い並びが
     # 空白だけを後ろに置いたときに閉じる
     function track(s) {
-      if (fence == "") { fence = fch; fencelen = flen }
+      if (fence == "") { fence = fch; fencelen = flen; seengoal = 0 }
       else if (fch == fence && flen >= fencelen && frest ~ /^[ \t]*$/) fence = ""
     }
     mode == 0 {
       if (fenceline($0)) { track($0); next }
-      if ($0 ~ /^acceptance:/) { mode = 1; print; next }
+      if (fence != "" && $0 ~ /^goal:/) seengoal = 1
+      if ($0 ~ /^acceptance:/ && (fence == "" || seengoal)) { mode = 1; print; next }
       if (fence == "" && depth($0) > 0) {
         t = tolower(htext($0)); sub(/:$/, "", t)
         if (t == "acceptance") { mode = 2; d = depth($0); fence = ""; print; next }

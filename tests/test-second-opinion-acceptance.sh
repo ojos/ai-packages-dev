@@ -92,6 +92,21 @@ for target in ".ai-playbook/templates/second-opinion-review.sh" "scripts/second-
   it "節の中の長いフェンスの内側にある 3 個の行では閉じず、その中の見出しで節を切らない"
   out="$(printf '## acceptance\n````\n```\n## x\n````\n- a\n## y\n' | extract_acceptance)"
   assert_eq "$out" $'## acceptance\n````\n```\n## x\n````\n- a' "long fence in section"
+  it "goal: の無いフェンス（コード例）の中の acceptance: を採らず、後ろの本物の見出しを採る (#597)"
+  out="$(printf '例:\n```yaml\nacceptance:\n  - 例の中身\n```\n\n## acceptance\n- 本物\n## x\n' | extract_acceptance)"
+  assert_eq "$out" $'## acceptance\n- 本物' "example fence then heading"
+
+  it "goal: の無いフェンスの後ろの、goal: を含む intake の票を採る (#597)"
+  out="$(printf '```yaml\nacceptance:\n  - 例\n```\n```yaml\ngoal: g\nacceptance:\n  - 本物\npriority: 低\n```\n' | extract_acceptance)"
+  assert_eq "$out" $'acceptance:\n  - 本物' "example fence then ticket"
+
+  it "intake の票だけのフェンスから採る (#597)"
+  out="$(printf '## 票\n```yaml\ngoal: g\nscope.in:\n  - s\nacceptance:\n  - a\npriority: 低\n```\n' | extract_acceptance)"
+  assert_eq "$out" $'acceptance:\n  - a' "ticket only"
+
+  it "フェンスの外の acceptance: は goal: が無くても採る (#597)"
+  out="$(printf 'text\nacceptance:\n  - a\n\nnext: 1\n' | extract_acceptance)"
+  assert_eq "$out" $'acceptance:\n  - a' "outside fence"
 done
 
 exit_with_result
