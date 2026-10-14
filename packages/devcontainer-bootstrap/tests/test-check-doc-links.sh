@@ -350,6 +350,41 @@ run_check "$repo"
 assert_fail "閉じていない ( の後ろのリンク" "docs/gone5.md"
 assert_fail "閉じていない ( の後ろのリンク（フラグメント）" "docs/gone6.md"
 
+# ── 作業ツリーで消した（未ステージの）追跡済み Markdown ─────────────────────
+
+it "追跡済みの Markdown を消しても（未ステージ）通過し、集計に実体なしの件数が出る"
+repo="$(new_repo)"
+add_doc "$repo" "docs/keep.md" '[ok](other.md)
+'
+add_doc "$repo" "docs/other.md" 'x
+'
+add_doc "$repo" "docs/del.md" '[gone](nowhere.md)
+'
+commit_repo "$repo" add-docs-for-delete
+rm "$repo/docs/del.md"
+run_check "$repo"
+if [[ "$CHECK_RC" -eq 0 ]] && printf '%s' "$CHECK_OUT" | grep 'DOC_LINKS_PASS' >/dev/null; then
+  pass
+else
+  fail "消した Markdown で止まった: $CHECK_OUT"
+fi
+if printf '%s' "$CHECK_OUT" | grep -F '実体なし 1 件' >/dev/null; then
+  pass
+else
+  fail "集計の行に実体なし 1 件が無い: $CHECK_OUT"
+fi
+
+it "消した文書へのリンクは壊れたリンクとして落ちる"
+repo="$(new_repo)"
+add_doc "$repo" "docs/a.md" '[b](b.md)
+'
+add_doc "$repo" "docs/b.md" 'x
+'
+commit_repo "$repo" add-a-b
+rm "$repo/docs/b.md"
+run_check "$repo"
+assert_fail "消した文書へのリンク" "docs/b.md"
+
 # ── 検査が成立していないことを合格にしない ────────────────────────────────────
 
 it "git 管理外では落ちる（検査が成立していない）"

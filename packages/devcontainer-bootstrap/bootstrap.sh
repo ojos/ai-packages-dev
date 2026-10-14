@@ -3669,6 +3669,12 @@ TMPL
 #   対象の形は `](...)` で、画像（`![alt](path)`）も同じ綴りなので一緒に見る。
 #
 #   「追跡対象として実在する」の判定に、作業ツリーの有無（test -e）を使わない。
+#   判定の母集合は `git ls-files` の集合のうち、**作業ツリーに実体があるもの**とする。
+#   追跡していても作業ツリーで消した（まだステージしていない）ファイルは、走査の
+#   対象からも、リンク先の集合からも外し、件数として報告する（消した文書へのリンクは
+#   壊れたリンクになる）。実体の有無は `-e` と `-L` で見る（壊れたシンボリックリンクは
+#   消したものとして扱わず、従来どおり走査に進めて失敗させる）。追跡していない
+#   ファイルを数えない意図は変えない。
 #   **配布されるのは追跡ファイルだけ**なので、ローカルにだけある生成物や無視
 #   されたファイルへのリンクは、手元では開けても配布された文書では 404 になる。
 #   判定は `git ls-files` から作った集合への所属で行う（ディレクトリは、追跡
@@ -3787,6 +3793,7 @@ trap 'rm -rf "$WORK"' EXIT
 EXTRACT="$WORK/extract.awk"
 ALLOWED="$WORK/allowed"
 TRACKED="$WORK/tracked.z"
+LIVE="$WORK/live.z"
 MD_LIST="$WORK/md.z"
 TARGETS="$WORK/targets"
 WANTED="$WORK/wanted"
@@ -3981,6 +3988,19 @@ tracked_count="${tracked_count:-0}"
 [ "$tracked_count" -gt 0 ] \
   || fail "追跡ファイルが 1 件もありません。検査していないことと、リンクが壊れていないことは別なので失敗させます。"
 
+# 作業ツリーに実体の無いもの（追跡していても、消してまだステージしていないもの）は
+# 集合から外す。壊れたシンボリックリンクは -L で実体ありとして残す（扱いを変えない）。
+# 判定は bash の組み込みだけで行う。
+: > "$LIVE"
+absent_count=0
+while IFS= read -r -d '' path; do
+  if [ -e "$path" ] || [ -L "$path" ]; then
+    printf '%s\0' "$path" >> "$LIVE"
+  else
+    absent_count=$((absent_count + 1))
+  fi
+done < "$TRACKED"
+
 # 祖先はシェルの文字列操作だけで削る（dirname を 1 件ごとに呼ぶとプロセスが
 # 追跡件数 × 階層ぶん起きるため）。
 while IFS= read -r -d '' path; do
@@ -3990,7 +4010,7 @@ while IFS= read -r -d '' path; do
     dir="${dir%/*}"
     [ -n "$dir" ] && printf '%s\n' "$dir"
   done
-done < "$TRACKED" | sort -u > "$ALLOWED"
+done < "$LIVE" | sort -u > "$ALLOWED"
 
 # ── 除外設定 ─────────────────────────────────────────────────────────────────
 #
@@ -4027,6 +4047,10 @@ md_count=0
 excluded_count=0
 : > "$TARGETS"
 while IFS= read -r -d '' md; do
+  # 作業ツリーで消した（実体の無い）ものは走査しない。件数は追跡全体で数え済み。
+  if [ ! -e "$md" ] && [ ! -L "$md" ]; then
+    continue
+  fi
   if is_excluded "$md"; then
     excluded_count=$((excluded_count + 1))
     continue
@@ -4050,8 +4074,8 @@ done < "$MD_LIST"
 # プロジェクトの実体に Markdown が実在するかどうかとは別に、起動時の自己診断
 # （合成した入力で壊れたリンクを必ず検出できることを毎回確かめる）が独立に検出する。
 if [ "$md_count" -eq 0 ]; then
-  printf '[doc-links] 検査対象の Markdown がありません（除外 %s 件）。検証対象が無いため合格として扱います。\n' \
-    "$excluded_count"
+  printf '[doc-links] 検査対象の Markdown がありません（除外 %s 件、実体なし %s 件）。検証対象が無いため合格として扱います。\n' \
+    "$excluded_count" "$absent_count"
   echo "DOC_LINKS_PASS"
   exit 0
 fi
@@ -4101,8 +4125,8 @@ comm -23 "$WANTED" "$ALLOWED" > "$MISSING"
 unique_count="$(wc -l < "$WANTED" | tr -d ' ')"
 missing_count="$(wc -l < "$MISSING" | tr -d ' ')"
 
-printf '[doc-links] 検査したパス: 追跡 md %s 件（除外 %s 件）/ 相対リンク %s 本（ユニークな行き先 %s 件）\n' \
-  "$md_count" "$excluded_count" "$link_count" "$unique_count"
+printf '[doc-links] 検査したパス: 追跡 md %s 件（除外 %s 件）/ 実体なし %s 件（追跡全体。作業ツリーで消したもの）/ 相対リンク %s 本（ユニークな行き先 %s 件）\n' \
+  "$md_count" "$excluded_count" "$absent_count" "$link_count" "$unique_count"
 
 if [ "${missing_count:-0}" -gt 0 ]; then
   printf '[doc-links] 追跡対象として実在しない行き先を %s 件検出しました。\n' "$missing_count" >&2
