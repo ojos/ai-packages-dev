@@ -21,7 +21,11 @@ REVIEW_TEMPLATE="$REPO_ROOT/.ai-playbook/templates/second-opinion-review.sh"
 
 # 1 行の単一引用符つき代入 NAME='...' から値を取り出す。
 extract_re() { # ファイル 変数名
-  sed -n "s/^$2='\\(.*\\)'\$/\\1/p" "$1" | head -n 1
+  # 最初の 1 件だけを使う。パイプの先で打ち切ると pipefail 下で判定が反転しうるので、
+  # awk に最後まで読ませる。
+  awk -v name="$2" 'index($0, name "='"'"'") == 1 && !done {
+    v = substr($0, length(name) + 3); sub(/'"'"'$/, "", v); print v; done = 1
+  }' "$1"
 }
 
 # 規則 re で枝 b から番号を取る（取れなければ空）。判定は両実装と同じ最初の一致の 3 つ目の括弧。
