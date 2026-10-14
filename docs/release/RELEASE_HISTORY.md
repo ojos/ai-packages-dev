@@ -9,14 +9,17 @@
 
 | パッケージ | リポジトリ | 現行バージョン | 配布形態 |
 |---|---|---|---|
-| devcontainer-bootstrap | `ojos/devcontainer-bootstrap` | v0.20.0 | GitHub Release + 資産 5 点（配布スクリプト 2: `bootstrap.sh` / `doctor.sh`、生成物 3: `SHA256SUMS` / `RELEASE-MANIFEST.json` / `PACKAGE_ARCHIVE.tar.gz`） |
-| ai-playbook | `ojos/ai-playbook` | v0.10.0 | git タグのみ |
-| devcontainer-host | `ojos/devcontainer-host` | v0.2.0 | GitHub Release + 資産 10 点（個別 7: `dev.sh` / `dev-up@.service` / `dev-runner@.service` / `runner.Dockerfile` / `install.sh` / `projects.example` / `runners.example`、生成物 3: `SHA256SUMS` / `RELEASE-MANIFEST.json` / `PACKAGE_ARCHIVE.tar.gz`） |
+| devcontainer-bootstrap | `ojos/devcontainer-bootstrap` | v0.21.0 | GitHub Release + 資産 5 点（配布スクリプト 2: `bootstrap.sh` / `doctor.sh`、生成物 3: `SHA256SUMS` / `RELEASE-MANIFEST.json` / `PACKAGE_ARCHIVE.tar.gz`） |
+| ai-playbook | `ojos/ai-playbook` | v0.11.0 | git タグのみ |
+| devcontainer-host | `ojos/devcontainer-host` | v0.3.0 | GitHub Release + 資産 10 点（個別 7: `dev.sh` / `dev-up@.service` / `dev-runner@.service` / `runner.Dockerfile` / `install.sh` / `projects.example` / `runners.example`、生成物 3: `SHA256SUMS` / `RELEASE-MANIFEST.json` / `PACKAGE_ARCHIVE.tar.gz`） |
 
 ### 新世代の版更新
 
 | パッケージ | 版 | 公開日 | 要点 |
 |---|---|---|---|
+| devcontainer-host | v0.3.0 | 2026-10-14 | **自前のランナー（`docker=no`）を専用の Docker ネットワーク `dev-runner` で動かし、外部の機械の LAN・機械自身・リンクローカルへの出口を止めた**（#560 / #572）。規則は `dev runner net script` / `unit` が出すスクリプトとユニットを `sudo` で入れ、`dev runner run` は規則を入れた印が無ければコンテナを起こさない。`runners` に `lan=allow|deny`（既定 `deny`）、上流の DNS 用に `DEV_RUNNER_NET_ALLOW_DNS`。`docker=yes` には効かない。**登録先のランナーグループを `runners` の `group=` で指定できる**（#576 / #580）。README の codex の緩和の置き場所を直した（#573）。**`docker=no` の既存のランナーは、規則を入れるまで起動しない** |
+| devcontainer-bootstrap | v0.21.0 | 2026-10-14 | **第二意見の既定の対象を、既定ブランチとの分岐点からの PR 全体にした**（#563 / #585）。**ORIGIN に `owned:` / `pending:` を足し、`acceptance.sh` を日常的に編集しても doctor が FAIL にしない・取り込み待ちを失わない**（#534 / #566。`--upgrade` の表示を改名）。**衛生検査 4 本を `acceptance.sh` の雛形が呼ぶ**（#540 / #579。未配線なら doctor の WARN と `--upgrade` の案内）。**`--upgrade --baseline-from <dir>`**（#536 / #583。ORIGIN の無い出力先を上げる）。`--with-codex` の緩和を `devcontainer.json` の `securityOpt` へ移した（#543 / #571。JSONC になりうる）。`.gitignore` の管理セクションをその場で差し替える（#538 / #575）。宛先名の末尾を会話の識別子に（#561 / #577）。`check-control-chars.sh` が索引も検査（#542 / #584）。README に Reload Window（#557 / #586）・自前の CI の手順（#539 / #581）・identity の検査の限界（#541 / #582）。**この版は ai-playbook v0.11.0 以降を要求する**（`loop-gate.sh` が `--base` を渡すため）。`--upgrade --playbook-version v0.11.0` で追従する |
+| ai-playbook | v0.11.0 | 2026-10-14 | **`second-opinion-review.sh` に `--base <rev>`**（#563 / #585）。**codex を、渡す環境変数・作業場所・ツールを最小にして起動する**（#565。`.env` のプロキシと `OPENAI_API_KEY` は届かなくなる）。`GEMINI_REVIEW_MODEL` を gemini のときだけ引き継ぐ（#544 / #570）。acceptance を Markdown の見出しからも取り出す（#562 / #574）。配置したファイルの追加行から `#N` を拾わない（#537 / #578）。`second-opinion-gate.yml` が PR の契機で眠らず、記録が無ければ status を書かない（#559 / #568）。`/land` の再判定の待ちを自分の実行に絞る（#555 / #564）、ワークフローを無効にしていたときの復帰の手順（#558 / #569）。`/peers` の案内（#577）。雛形は 17 種のまま。`/land` と `/peers` を写している利用側は更新が要る |
 | devcontainer-host | v0.2.0 | 2026-10-12 | **外部の機械で GitHub Actions の自前のランナーを、ジョブごとに使い捨てのコンテナとして常駐させる**（#547）。`dev runner build` / `dev runner run`、ユニット `dev-runner@.service`、`runner.Dockerfile`、設定 `runners`。PAT は group / other に権限の無いファイルに置き、引数・環境変数・ログに出さない。恒久的な失敗では再起動しない。Docker のソケットは設定したときだけ渡す。資産 7 点 → **10 点**。ランナーを使う機械では `install.sh` を再実行する |
 | devcontainer-bootstrap | v0.20.0 | 2026-10-12 | **生成するワークフロー 5 本の実行先を、リポジトリ変数 `ACTIONS_RUNS_ON` で切り替えられるようにした**（#546。未設定なら `ubuntu-latest`）。**ゲートのワークフローが 20 分ごとの定期実行を持たなくなった**（#545。private リポジトリで Actions の課金枠を減らし続けていた）。README に自前のランナーの注意と要る道具の一覧、PAT の権限に Actions の書き込みを足した。**この版は ai-playbook v0.10.0 以降を要求する**。`--upgrade --playbook-version v0.10.0` で追従する |
 | ai-playbook | v0.10.0 | 2026-10-12 | **ゲートの雛形から定期実行をなくし、`/land` のマージ直前の再判定と、記録の投稿のあとの手動実行で置き換えた**（#545）。**雛形のワークフローの `runs-on` を変数 `ACTIONS_RUNS_ON` で切り替えられるようにした**（#546）。`review-workflow.md` を追随。`second-opinion-record.sh post` と `/land` の再判定には Actions の書き込み権限が要る。雛形は 17 種のまま。`/land` を写している利用側は更新が要る |

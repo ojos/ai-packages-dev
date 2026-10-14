@@ -61,7 +61,7 @@ DEFAULT_TMUX_SESSION="main"
 # dev の版。公開する版（リリースのタグ）は、リリースの手順がこの行を書き換えて配る
 # （scripts/release-packages.sh の stamp_host_version）。リポジトリの中の値は、次に出す版の目印で、
 # 公開物の値ではない。行の形（DEV_VERSION="vX.Y.Z"）を変えると、リリースの手順が止まる。
-DEV_VERSION="v0.2.0"
+DEV_VERSION="v0.3.0"
 
 # ssh の非対話のコマンド（`ssh <ホスト> .local/bin/dev ...`）と systemd のユーザーのユニットは
 # ~/.profile を読まないので、~/.local/bin などが PATH に無い。devcontainer CLI の既定の置き場所

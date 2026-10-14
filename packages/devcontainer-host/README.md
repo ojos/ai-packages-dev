@@ -96,7 +96,7 @@ devhost は、`devcontainer.json` を持つプロジェクトなら DCB の生�
 マニフェストと `install.sh` を取得し、`install.sh` のハッシュをマニフェストと照合して、通ったときだけ実行します。
 
 ```bash
-TAG=v0.2.0   # devcontainer-host の最新安定リリース
+TAG=v0.3.0   # devcontainer-host の最新安定リリース
 BASE="https://github.com/ojos/devcontainer-host/releases/download/${TAG}"
 
 curl -fsSL "${BASE}/RELEASE-MANIFEST.json" -o RELEASE-MANIFEST.json
@@ -142,7 +142,7 @@ devhost は、独自の版を持つ公開リポジトリ `ojos/devcontainer-host
 `PACKAGE_ARCHIVE.tar.gz` / `SHA256SUMS` と、個別の資産 7 つのハッシュを持つので、取得したものを照合してから使います。
 
 ```bash
-TAG=v0.2.0   # devcontainer-host の最新安定リリース
+TAG=v0.3.0   # devcontainer-host の最新安定リリース
 BASE="https://github.com/ojos/devcontainer-host/releases/download/${TAG}"
 
 curl -sSL "${BASE}/RELEASE-MANIFEST.json" -o RELEASE-MANIFEST.json
@@ -225,7 +225,7 @@ cp devhost/projects.example ~/.config/dev/projects   # 名前と絶対パスを�
 **リンクではなく写しで置きます。** リンクにすると、そのリポジトリのブランチを切り替えただけで
 外部の機械の道具が黙って変わるためです。道具を更新するには、同じ `install` をもう一度打つか、
 `dev self-update` を使います。`dev self-update` は上の「devhost を入手する」と同じ照合（マニフェストの
-ハッシュの照合）を通してから、`dev.sh` だけを置き換えます（既定は最新、`--version v0.2.0` で固定）。
+ハッシュの照合）を通してから、`dev.sh` だけを置き換えます（既定は最新、`--version v0.3.0` で固定）。
 置き換え先が devhost の `dev.sh` だと確かめられないとき（リンク、別の道具など）は、何も置き換えずに止まります。
 ユニットのファイルと `projects` は書き換えません。更新のあとに、置いてあるユニットのファイルを同じリリースの
 `dev-up@.service` と比べ、違えば `install.sh` の再実行（または「ユニットを入れる」の `install` の打ち直し）を案内します。

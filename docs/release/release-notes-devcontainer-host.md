@@ -6,9 +6,21 @@ devhost（SSH で届く外部の機械で devcontainer を保つ道具。コマ�
 >
 > 同じ理由で、issue 参照は `ojos/ai-packages-dev#NNN` の形で書いてください。裸の `#NNN` は GitHub のオートリンクが**配布先リポジトリの issue** として解決するため、配布後は存在しない issue や無関係な issue を指します。
 
-## 次の版（未リリース）
+## v0.3.0
 
 ### Summary
+- **自前のランナー（`docker=no`）を専用の Docker ネットワークで動かし、外部の機械の LAN・外部の機械自身・リンクローカルへの出口を止めるようにした**（ojos/ai-packages-dev#560 / ojos/ai-packages-dev#572）。インターネット（GitHub、パッケージの取得）への出口は残す。
+  - `dev runner run` は、ランナー専用のネットワーク `dev-runner`（ブリッジ名 `dev-runner0`、IPv6 は無効）が無ければ作り、そこでコンテナを動かす。既存のネットワークのブリッジ名か IPv6 の設定が違えば、設定の誤り（78）で止まる。
+  - 規則は root で入れる。`dev runner net script` が規則のスクリプト（`/usr/local/sbin/dev-runner-net`。`apply` / `clear` / `rules` / `unmark`）を、`dev runner net unit` が systemd のシステムのユニット（`dev-runner-net.service`）を標準出力へ出すので、利用者が `sudo` で入れる。規則は iptables で、`DOCKER-USER` から `10/8`・`172.16/12`・`192.168/16`・`169.254/16`・`100.64/10` への新しい接続を拒否し、`INPUT` でランナーのブリッジから外部の機械自身への新しい接続を拒否する。入れ直しは 1 回の取り込みで行い、制限の無い瞬間を作らない。
+  - ユニットは Docker の起動・再起動に合わせて規則を入れ直し、入れ終えたら印（`/run/dev-runner-net/ready`）を置く。停止のときは印だけを消し、規則は消さない。規則を外すのは、利用者が `dev-runner-net clear` を打つときだけ。
+  - **`dev runner run` は、印が無ければコンテナを起こさない**（登録用のトークンを取る前に確かめる）。印が無ければ一時的な失敗（1）で抜け、systemd が起こし直す。印の中身が違えば 78。
+  - `runners` に `lan=allow|deny` を足した（既定は `deny`）。`lan=allow` のランナーは、従来どおり既定のブリッジで動き、印も確かめない。
+  - 上流の DNS が LAN の帯にある構成のために、`/etc/default/dev-runner-net` の `DEV_RUNNER_NET_ALLOW_DNS` で、指定した宛先の 53 番だけを通せる。既定では何も通さない。
+  - 限界:
+    - `docker=yes` のランナーには効かない（ホストの Docker のソケットを渡しているので、ジョブは `--network host` のコンテナを起こして規則を迂回できる）。
+    - 印は「規則を入れた」ことを示すだけで、規則が今も効いていることまでは保証しない。
+    - Docker が iptables を使わない構成（nftables のバックエンド、`--iptables=false`）では使えない（`FORWARD` から `DOCKER-USER` への飛び先が無ければ、印を置かずに失敗する）。
+- **README の codex のサンドボックスの緩和の置き場所を、`devcontainer.json` の `securityOpt` に直した**（ojos/ai-packages-dev#543 / ojos/ai-packages-dev#573）。devcontainer-bootstrap の `--with-codex` が置き場所を移したのに合わせた。`compose.yaml` の `security_opt` には置かない（go などの feature が同じ値を足すと、Compose が重複を拒否して起動しないため）。
 - **自前のランナーの登録先のランナーグループを、`runners` の `group=<名前>` で指定できるようにした**（ojos/ai-packages-dev#576）。組織単位で登録したランナーは、グループを指定しないと組織の既定のグループに入り、組織のどの非公開のリポジトリでも `runs-on` にラベルを書けば外部の機械でコードを走らせられる。**ラベルは安全の境界にならず、使えるリポジトリを絞るのはグループ。**
   - `group=` を書いた行だけ、`config.sh` に `--runnergroup <名前>` を渡す。名前に使えるのは英数字と `.` `_` `-` だけ（それ以外は設定の誤りで、終了コード 2）。書かない行の動きは変わらない。
   - `dev runner run` は、コンテナを起こす前に組織のランナーグループの一覧で有無を確かめる。無いとき、と一覧を読む権限が無いとき（401 / 403 / 404）は 78 で終わり（ユニットは起こし直さない）、API の 429・5xx や通信の失敗は 1（起こし直す）。登録の時点でグループが消えていた場合（`config.sh` が「Could not find any self-hosted runner group named」で失敗したとき）も 78。それ以外の `config.sh` の失敗は 1。既定のグループへは黙って入らない。
@@ -17,6 +29,14 @@ devhost（SSH で届く外部の機械で devcontainer を保つ道具。コマ�
 
 ### 移行
 - `dev self-update` で `dev.sh` を更新する。`group=` を書かない既存の `runners` は、そのまま動く。グループを使うには、GitHub 側でグループを作ってから、`runners` に `group=<名前>` を足してユニットを起こし直す。
+- **`docker=no` の既存のランナー（`lan=` を書いていないものを含む）は、`dev self-update` の後、出口の規則を入れるまで起動しなくなる。** 規則のスクリプトとユニットを入れて有効にする。
+  ```bash
+  dev runner net script | sudo install -m 755 /dev/stdin /usr/local/sbin/dev-runner-net
+  dev runner net unit | sudo install -m 644 /dev/stdin /etc/systemd/system/dev-runner-net.service
+  sudo systemctl daemon-reload && sudo systemctl enable --now dev-runner-net.service
+  ```
+- **LAN に頼るジョブ（LAN のプロキシ、社内のパッケージ置き場など）は、`lan=allow` にしない限り動かなくなる。** 該当するランナーの `runners` の行に `lan=allow` を足して、ユニットを起こし直す。
+- ジョブの中で名前が引けなくなった場合（上流の DNS が LAN の帯にある構成）は、`/etc/default/dev-runner-net` に `DEV_RUNNER_NET_ALLOW_DNS` を書いて、`dev-runner-net.service` を起こし直す。
 
 ## v0.2.0
 
