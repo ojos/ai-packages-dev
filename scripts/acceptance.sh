@@ -59,7 +59,7 @@ ran_any=1
 require_cmd shellcheck "install it with: sudo apt-get update && sudo apt-get install -y shellcheck"
 echo "[acceptance] (shell) shellcheck"
 # 出力書式を -f gcc に固定する理由: 既定の tty 書式は指摘箇所のソース行をそのまま
-# 出力する。bootstrap.sh / doctor.sh は日本語コメントが密で、ロケールが POSIX の
+# 出力する。配布する .sh（bootstrap.sh / doctor.sh ほか）は日本語コメントが密で、ロケールが POSIX の
 # この環境では shellcheck がその行をエンコードできず commitBuffer エラー
 # （終了コード 2）で落ち、指摘本文が読めなくなる（#252）。すり抜けは起きない
 # （非ゼロ終了で本スクリプトは set -e により落ちる）が、赤の理由が読めないまま
@@ -69,7 +69,14 @@ echo "[acceptance] (shell) shellcheck"
 # LC_ALL は立てない: 可搬なロケール名が環境ごとに違う（C.UTF-8 / en_US.UTF-8）ため、
 # どちらを書いても環境依存が残る。#236 の tests/test-generated-shellcheck.sh も
 # 同じ理由で -f gcc を選んでいる。指摘の所在は file:line:col で足りる。
-shellcheck -x -f gcc packages/devcontainer-bootstrap/bootstrap.sh packages/devcontainer-bootstrap/doctor.sh
+#
+# 対象は配布する .sh の全体（.ai-playbook/ と packages/ の配下をサブディレクトリまで。
+# packages/*/tests/ は配布しないので除く）。ファイル名は並べず一覧の取得で決める。
+# :(glob) を付けるのは、`**` を「任意の深さのディレクトリ」として解釈させるため。
+# 重大度は既定のまま（#589）。
+# ci.yml の Shellcheck ステップと同じ指定に保つ（tests/test-shellcheck-targets.sh が照合）。
+mapfile -t shellcheck_targets < <(git ls-files ':(glob).ai-playbook/**/*.sh' ':(glob)packages/**/*.sh' ':(exclude,glob)packages/*/tests/**')
+shellcheck -x -f gcc "${shellcheck_targets[@]}"
 
 # ── Hygiene checks（描画・展開するまで見えない壊れ方） ────────────────────────
 # CI のどのジョブもミラーしない。ci.yml にはまだ対応するジョブが無く、

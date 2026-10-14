@@ -666,12 +666,15 @@ runner_docker_sock() { printf '%s\n' "${DEV_RUNNER_DOCKER_SOCK:-/var/run/docker.
 runner_github_name() { printf '%s-%s\n' "${DEV_RUNNER_HOSTNAME:-${HOSTNAME:-host}}" "$1"; }
 
 load_runners() {
-  local file lineno=0 line name org kv key val i labels dock pat grp
+  local file dir lineno=0 line name org kv key val i labels dock pat grp
   file="$(runners_file)"
   if [[ ! -f "$file" ]]; then
     usage_error "設定ファイルがありません: $file
 [$PROG] 雛形（runners.example）を写して、名前と組織を 1 行ずつ書いてください。"
   fi
+  # 置き場所はループの前に決める。ループの中で dirname "$file" を呼ぶと、同じループが
+  # "$file" を入力に読むため、shellcheck が同じファイルの読み書き（SC2094）と誤認する（#589）。
+  dir="$(dirname "$file")"
   while IFS= read -r line || [[ -n "$line" ]]; do
     lineno=$((lineno + 1))
     line="${line%$'\r'}"
@@ -701,7 +704,7 @@ load_runners() {
       [[ "${R_NAMES[$i]}" == "$name" ]] && usage_error "$file:$lineno: 名前が重複しています: $name"
     done
     labels="" dock="no" lan="deny" grp=""
-    pat="$(dirname "$file")/runner-pat"
+    pat="$dir/runner-pat"
     for kv in "$@"; do
       if [[ "$kv" != *=* ]]; then
         usage_error "$file:$lineno: 3 つ目以降は キー=値 で書きます: $kv"

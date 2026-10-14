@@ -919,6 +919,7 @@ run_closed() { # 閉じ方 名前 -- [環境変数...] -- 引数...
       ${envs[@]+"${envs[@]}"} \
       "$BASH_BIN" "$DEV" "$@" </dev/null >&- 2>&- || true
   else
+    # shellcheck disable=SC2216 # sleep 0 は意図どおり stdin を読まない。読み手がすぐ閉じるパイプで EPIPE を起こすのが目的
     # 読み手（:）がすぐ終わるので、書き込みは SIGPIPE / EPIPE になる。標準エラーも同じパイプへ。
     { env -i HOME="$WORK/home" PATH="$FAKEBIN:$TOOLBIN" \
       DEV_PROJECTS_FILE="${T_CONF:-$CONF}" FAKE_LOG="$LOG" FAKE_STATE="$STATE" \
@@ -1665,6 +1666,7 @@ run 0 "help（引数なし）は使い方の一覧" -- -- help
 expect_out_line "^プロジェクトの一覧は $CONF から読む。\$"
 run 0 "help: 設定ファイルの既定のパスを展開して出す" -- XDG_CONFIG_HOME=/xdg DEV_PROJECTS_FILE= -- help
 expect_out_line '^プロジェクトの一覧は /xdg/dev/projects から読む。$'
+# shellcheck disable=SC2016 # 展開されない ${ がリテラルで出ていないことを見る検査なので、単一引用符が意図
 if grep -qF '${' "$OUT"; then ng "help の出力に未展開の \${...} があります"; fi
 expect_out_line '^  dev rebuild <名前> \[--pull\]$'
 expect_out_line '^  dev doctor <名前>$'
@@ -1691,6 +1693,7 @@ readme_check() {
   readme_set="$(sed -n 's/^### dev \([a-z][a-z-]*\)$/\1/p' "$readme" | sort -u)"
   if [[ -z "$help_set" || "$help_set" != "$readme_set" || "$help_set" != "$usage_set" ]]; then
     echo "サブコマンドの集合が違います" >&2
+    # shellcheck disable=SC2116,SC2086 # 改行区切りの集合を、語分割で 1 行にして出す意図（echo $x）
     printf '  help_ 関数: %s\n  usage:      %s\n  README:     %s\n' "$(echo $help_set)" "$(echo $usage_set)" "$(echo $readme_set)" >&2
     bad=1
   fi
@@ -1733,6 +1736,7 @@ sed 's/^終了コード: 0 = 作り直した/終了コード: 9 = 作り直し�
 if readme_check "$M" >/dev/null 2>&1; then ng "README の終了コードの行を書き換えても照合が通ります"; fi
 sed '/^### dev doctor$/d' "$README" >"$M"
 if readme_check "$M" >/dev/null 2>&1; then ng "README からサブコマンドの見出しを消しても照合が通ります"; fi
+# shellcheck disable=SC2016 # README へ足すのは展開しないリテラルのコードフェンス
 { cat "$README"; printf '\n### dev bogus\n\n```text\nx\n```\n'; } >"$M"
 if readme_check "$M" >/dev/null 2>&1; then ng "README へ dev に無いサブコマンドを足しても照合が通ります"; fi
 # 検査が元の README では通ること（変異のたびに通らなくなっただけ、を除く）。
@@ -1898,6 +1902,7 @@ cfg_want() {
 BASEARGS='--unattended --ephemeral --disableupdate --replace --url https://github.com/my-org --token <伏せ字>'
 rrun 0 "runner run: group=<名前> の行は、config.sh へ --runnergroup <名前> を渡す（ラベルがあるとき）" FAKE_CONFIG_MSG=ok FAKE_CONFIG_RC=0 -- runner run g2
 cfg_want "$BASEARGS --name h-g2 --labels devhost,x --runnergroup my-group "
+# shellcheck disable=SC2016 # 展開前の ${4:+...} をリテラルとして照合する
 log_has '\$\{4:\+--runnergroup "\$4"\}'
 log_has '\[runner\] \[https://github.com/my-org\] \[h-g2\] \[devhost,x\] \[my-group\]$'
 rrun 0 "runner run: group=<名前> の行は、ラベルが無くても 4 つ目の引数に名前が入る（3 つ目は空）" FAKE_CONFIG_MSG=ok FAKE_CONFIG_RC=0 -- runner run g1
@@ -1960,6 +1965,7 @@ rrun 0 "runner run: config.sh が成功すれば run.sh へ進んで 0" FAKE_CON
 rrun 0 "runner run: group を書かない行は、グループの一覧を引かない" -- runner run r1
 log_lacks 'runner-groups'
 T="$WORK/conf/runners-group"
+# shellcheck disable=SC2016 # 'a\$b' は「\$ を含む値」そのものを渡す試験で、展開させない
 for bad in 'a/b' 'a;b' '../x' 'a\$b'; do
   printf 'z my-org group=%s\n' "$bad" >"$T"
   run 2 "runners: group に許可外の文字（$bad）があれば設定の誤り" -- DEV_RUNNERS_FILE="$T" -- runner run z
@@ -2156,6 +2162,7 @@ GROUP_EXAMPLE="${DEV_RUNNERS_EXAMPLE:-$HERE/runners.example}"
 if ! grep -qE '^#   group=<名前>' "$GROUP_EXAMPLE"; then ng "runners.example に group=<名前> の説明がありません"; fi
 if ! grep -qE '^# [a-z0-9]+ +my-org +.*group=my-group' "$GROUP_EXAMPLE"; then ng "runners.example に group= を使った例の行がありません"; fi
 if ! grep -qF -- 'ラベルは安全の境界になりません' "$README"; then ng "README に「ラベルは安全の境界になりません」がありません"; fi
+# shellcheck disable=SC2016 # バッククォートは README の記法そのままのリテラル
 if ! grep -qF -- '`group=<名前>`' "$README"; then ng "README に group=<名前> の説明がありません"; fi
 run 0 "help runner: group= の説明がある" -- -- help runner
 expect_out_line 'group=名前 は登録先のランナーグループ'

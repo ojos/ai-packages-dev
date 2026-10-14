@@ -1224,7 +1224,7 @@ $PROMPT" --output-format json --json-schema "$SCHEMA_FILE")
     # codex は標準入力に流す（stdin_file は codex 以外のとき /dev/null のまま）。
     # codex は秘密の無い作業場所で、許可リストの環境変数だけを渡して起動する
     # （run_cwd / run_prefix。他のエンジンは現在の場所・そのまま）。
-    output="$(cd "$run_cwd" && ${run_prefix[@]+"${run_prefix[@]}"} $CLI "${args[@]}" <"$stdin_file" 2>"$stderr_file")" || {
+    output="$(cd "$run_cwd" && ${run_prefix[@]+"${run_prefix[@]}"} "$CLI" "${args[@]}" <"$stdin_file" 2>"$stderr_file")" || {
       echo "error: second opinion failed (engine=$ENGINE, run $run/$RUNS$( [[ "$chunk_count" -gt 1 ]] && echo ", chunk $chunk_idx/$chunk_count" ))" >&2
       cat "$stderr_file" >&2
       printf '%s\n' "$output" >&2
