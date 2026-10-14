@@ -499,7 +499,8 @@ extract_issue_refs() {
 #     フェンスの外の `acceptance:` は採る。フェンスの中の `acceptance:` は、同じフェンスの
 #     中でそれより前に行頭の `goal:` があったときだけ採る（intake の票は goal → … → acceptance の
 #     順で、フェンスの中に書く。goal: の無いフェンスは本文中のコード例とみなして採らない）。
-#     限界: goal: が acceptance: より後ろにある票は拾わない
+#     限界: goal: が acceptance: より後ろにある票、goal: と acceptance: を別々のフェンスに分けた
+#     票は拾わない。intake の雛形そのもの（goal: を含む）を引用したコード例は、本物として採る
 #   - Markdown の見出し: 文言が acceptance の見出し（# の数と大文字小文字は問わない）から、
 #     次の同じ深さ以上の見出しの手前まで。見出しの判定はコードのフェンス（```）の外に限る
 # macOS の awk でも動くよう、GNU 拡張（IGNORECASE・match の配列引数など）に頼らない。
@@ -544,7 +545,8 @@ extract_acceptance() {
       next
     }
     mode == 1 {
-      if ($0 ~ /^[A-Za-z_.]+:/ || $0 ~ /^```/) exit
+      # 節の終わりは、次のキーか、フェンスの行（``` と ~~~、0〜3 個の字下げを含む。fenceline と同じ判定）
+      if ($0 ~ /^[A-Za-z_.]+:/ || fenceline($0)) exit
       print; next
     }
     mode == 2 {

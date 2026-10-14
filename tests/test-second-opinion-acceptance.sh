@@ -107,6 +107,18 @@ for target in ".ai-playbook/templates/second-opinion-review.sh" "scripts/second-
   it "フェンスの外の acceptance: は goal: が無くても採る (#597)"
   out="$(printf 'text\nacceptance:\n  - a\n\nnext: 1\n' | extract_acceptance)"
   assert_eq "$out" $'acceptance:\n  - a' "outside fence"
+
+  it "~~~ のフェンスの票は、閉じの行で節を終える（後ろの本文を含めない） (#597)"
+  out="$(printf '~~~yaml\ngoal: g\nacceptance:\n  - a\n~~~\n\n本文の続き\n- x\n' | extract_acceptance)"
+  assert_eq "$out" $'acceptance:\n  - a' "tilde fence"
+
+  it "字下げした閉じのフェンスでも、節を終える (#597)"
+  out="$(printf '```yaml\ngoal: g\nacceptance:\n  - a\n  ```\nafter\n' | extract_acceptance)"
+  assert_eq "$out" $'acceptance:\n  - a' "indented closing fence"
+
+  it "goal: が acceptance: より後ろにある票は拾わない（既知の限界） (#597)"
+  out="$(printf '```yaml\nacceptance:\n  - a\ngoal: g\n```\n' | extract_acceptance)"
+  assert_eq "$out" "" "goal after acceptance"
 done
 
 exit_with_result
