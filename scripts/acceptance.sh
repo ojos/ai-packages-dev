@@ -70,11 +70,12 @@ echo "[acceptance] (shell) shellcheck"
 # どちらを書いても環境依存が残る。#236 の tests/test-generated-shellcheck.sh も
 # 同じ理由で -f gcc を選んでいる。指摘の所在は file:line:col で足りる。
 #
-# 対象は配布する .sh の全体（.ai-playbook/templates/*.sh と packages/*/*.sh。tests/ は
-# 配布しないので除く）。ファイル名は並べず一覧の取得で決める。:(glob) を付けるのは、
-# 素の `*` が `/` にも当たり packages/*/tests/ まで拾うため。重大度は既定のまま（#589）。
+# 対象は配布する .sh の全体（.ai-playbook/ と packages/ の配下をサブディレクトリまで。
+# packages/*/tests/ は配布しないので除く）。ファイル名は並べず一覧の取得で決める。
+# :(glob) を付けるのは、`**` を「任意の深さのディレクトリ」として解釈させるため。
+# 重大度は既定のまま（#589）。
 # ci.yml の Shellcheck ステップと同じ指定に保つ（tests/test-shellcheck-targets.sh が照合）。
-mapfile -t shellcheck_targets < <(git ls-files ':(glob).ai-playbook/templates/*.sh' ':(glob)packages/*/*.sh')
+mapfile -t shellcheck_targets < <(git ls-files ':(glob).ai-playbook/**/*.sh' ':(glob)packages/**/*.sh' ':(exclude,glob)packages/*/tests/**')
 shellcheck -x -f gcc "${shellcheck_targets[@]}"
 
 # ── Hygiene checks（描画・展開するまで見えない壊れ方） ────────────────────────

@@ -8,8 +8,10 @@
 # 決まった形で書き、その形が 2 か所で同じであることと、配布物の全体を覆うことを
 # 機械で担保する。
 #
-# 配布する .sh の定義: .ai-playbook/templates/*.sh と packages/*/*.sh（直下のみ）。
-# packages/*/tests/ は配布しないので含めない。
+# 配布する .sh の定義: .ai-playbook/ と packages/ の配下の .sh（サブディレクトリを含む。
+# リリースは .ai-playbook/ を丸ごと、devcontainer-host を git ls-files の全体で配る）。
+# packages/*/tests/ は配布しないので含めない。この定義は、照合する相手（対象指定）の
+# pathspec を使わずに求める。同じ指定で求めると、指定どうしを比べるだけになるため。
 
 set -uo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
@@ -19,10 +21,12 @@ echo "test-shellcheck-targets"
 CI="$REPO_ROOT/.github/workflows/ci.yml"
 ACCEPTANCE="$REPO_ROOT/scripts/acceptance.sh"
 
-# git ls-files に渡す pathspec を、shellcheck を呼ぶ行（とその前の mapfile 行）から
-# 取り出す。引用符つきの ':(glob)...' を出現順に並べ、集合として比べる。
+# git ls-files に渡す pathspec を、shellcheck へ渡す配列を作る mapfile の行だけから
+# 取り出す（同じファイルの別の git ls-files を拾わないため）。引用符つきの ':(...)...' を
+# 集合として比べる。
 extract_specs() {
-  grep -F 'git ls-files' "$1" | grep -F ':(glob)' | grep -o "':(glob)[^']*'" | tr -d "'" | sort -u
+  grep -E 'mapfile -t (targets|shellcheck_targets) < <\(git ls-files ' "$1" \
+    | grep -o "':([^)]*)[^']*'" | tr -d "'" | sort -u
 }
 
 CI_SPECS="$(extract_specs "$CI")"
@@ -55,7 +59,8 @@ fi
 # 配布する .sh（定義は冒頭）を実際に列挙し、対象指定が覆っていることを確かめる。
 # 指定の解釈は git 本体に任せる（自前でパターンを再実装しない）。
 mapfile -t DISTRIBUTED < <(
-  cd "$REPO_ROOT" && git ls-files ':(glob).ai-playbook/templates/*.sh' ':(glob)packages/*/*.sh'
+  cd "$REPO_ROOT" && git ls-files -- .ai-playbook packages \
+    | grep -E '\.sh$' | grep -Ev '^packages/[^/]+/tests/'
 )
 mapfile -t SPEC_ARGS <<<"$CI_SPECS"
 mapfile -t COVERED < <(cd "$REPO_ROOT" && git ls-files "${SPEC_ARGS[@]}")

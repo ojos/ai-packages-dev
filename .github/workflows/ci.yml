@@ -45,12 +45,12 @@ jobs:
         # -f gcc の理由は scripts/acceptance.sh の同じ呼び出しに置いたコメントを参照
         # （#252）。ここは CI 側のミラーで、書式を必ず追随させる。
         #
-        # 対象は配布する .sh の全体（.ai-playbook/templates/*.sh と packages/*/*.sh。
-        # tests/ は配布しないので除く）。ファイル名は並べず一覧の取得で決める。
-        # :(glob) を付けるのは、素の `*` が `/` にも当たり packages/*/tests/ まで
-        # 拾うため。重大度は既定のまま（利用側の受け入れ検査と同じ条件で通す。#589）。
+        # 対象は配布する .sh の全体（.ai-playbook/ と packages/ の配下をサブディレクトリまで。
+        # packages/*/tests/ は配布しないので除く）。ファイル名は並べず一覧の取得で決める。
+        # :(glob) を付けるのは、`**` を「任意の深さのディレクトリ」として解釈させるため。
+        # 重大度は既定のまま（利用側の受け入れ検査と同じ条件で通す。#589）。
         run: |
-          mapfile -t targets < <(git ls-files ':(glob).ai-playbook/templates/*.sh' ':(glob)packages/*/*.sh')
+          mapfile -t targets < <(git ls-files ':(glob).ai-playbook/**/*.sh' ':(glob)packages/**/*.sh' ':(exclude,glob)packages/*/tests/**')
           shellcheck -x -f gcc "${targets[@]}"
 
   self-devcontainer:

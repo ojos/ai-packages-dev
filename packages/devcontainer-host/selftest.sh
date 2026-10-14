@@ -1965,7 +1965,7 @@ rrun 0 "runner run: config.sh が成功すれば run.sh へ進んで 0" FAKE_CON
 rrun 0 "runner run: group を書かない行は、グループの一覧を引かない" -- runner run r1
 log_lacks 'runner-groups'
 T="$WORK/conf/runners-group"
-# shellcheck disable=SC2016 # バッククォートは README の記法そのままのリテラル
+# shellcheck disable=SC2016 # 'a\$b' は「\$ を含む値」そのものを渡す試験で、展開させない
 for bad in 'a/b' 'a;b' '../x' 'a\$b'; do
   printf 'z my-org group=%s\n' "$bad" >"$T"
   run 2 "runners: group に許可外の文字（$bad）があれば設定の誤り" -- DEV_RUNNERS_FILE="$T" -- runner run z
