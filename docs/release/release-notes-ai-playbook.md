@@ -6,6 +6,38 @@
 >
 > 同じ理由で、issue 参照は `ojos/ai-packages-dev#NNN` の形で書いてください。裸の `#NNN` は GitHub のオートリンクが**配布先リポジトリの issue** として解決するため、配布後は存在しない issue や無関係な issue を指します。
 
+## v0.11.0
+
+### Summary
+- **`second-opinion-review.sh` に `--base <rev>` を足した**（ojos/ai-packages-dev#563 / ojos/ai-packages-dev#585）。索引と `<rev>` の差（コミット済みとステージ済みの両方）をレビュー対象にする。`--range` とは併用できない。参照した issue は `<rev>..HEAD` のコミットメッセージから拾う。`second-opinion-record.sh save` の `--scope` は `base:<rev>+staged` を受け付ける（紐づけは `staged` と同じく索引のツリー）。
+  - devcontainer-bootstrap v0.21.0 の `loop-gate.sh` は、ステージ済みの差分があるとき既定ブランチとの分岐点を `--base` で渡し、第二意見の既定の対象を PR 全体にする。差分しか見えないエンジンに修正分だけの小さな差分を渡すと、差分に現れない既存のコードについて誤った前提を立てて落ちやすいため。入力が大きくなる分、トークンの消費が増える。
+- **第二意見の `codex` エンジンを、渡す環境変数・作業場所・ツールを最小にして起動するようにした**（ojos/ai-packages-dev#565）。
+  - `.env` を読み込む前の環境から、許可リストの変数（`HOME` / `CODEX_HOME` / `PATH` / ロケール / `TMPDIR` / `TERM` / プロキシ / 証明書の指定）だけを渡す。作業場所は使い捨てのディレクトリにする。`~/.codex/config.toml` は読まない（`--ignore-user-config`）。どのエンジンにもツールを使わせず、差分はプロンプトに埋め込んで渡す。
+  - **`.env` に書いたプロキシの設定と `OPENAI_API_KEY` は、codex に届かなくなる。** プロキシが要る環境では、スクリプトを起動するシェルの環境で指定する。認証は `codex login` で保存した資格情報を使う。
+  - 差分の外を読ませないので、小さな差分では誤検出が増えることがある（上の `--base` による PR 全体の対象で手当てする）。
+  - 渡す旗の名前は codex の版に依存し、受け付けない版では codex が失敗して止まる（通過にはならない）。codex-cli 0.162.1 で確かめた。
+- **旧名 `GEMINI_REVIEW_MODEL` のモデル名を、エンジンが `gemini` のときだけ引き継ぐようにした**（ojos/ai-packages-dev#544 / ojos/ai-packages-dev#570）。今までは `codex` / `antigravity` にも gemini 用のモデル名が渡り、第二意見が実行できなくなっていた。それらのエンジンでは、`SECOND_OPINION_MODEL` も `--model` も無ければ各エンジンの既定のモデルになる。
+- **`second-opinion-review.sh` が、参照した issue の acceptance を Markdown の見出しの形（深さを問わない「acceptance」の見出し）からも取り出すようにした**（ojos/ai-packages-dev#562 / ojos/ai-packages-dev#574）。行頭の `acceptance:`（YAML）は今までどおり。コードのフェンスの中の見出しは数えない。両方の形があるときは、本文で先に現れたほうを使う。
+- **`second-opinion-review.sh` が、パッケージが配置したファイルの追加行から issue / PR の参照（`#N`）を拾わないようにした**（ojos/ai-packages-dev#537 / ojos/ai-packages-dev#578）。パッケージの追従の差分では、配布物のコメントにある例示や上流の issue 番号が、利用側の無関係な issue / PR に結びついていた。
+  - 対象は、devcontainer-bootstrap の `.devcontainer/ORIGIN` に `hash:` の記録があり、`owned:` の記録が無いパス。`owned:` のファイル（`scripts/acceptance.sh` など）の `#N` は利用側の本物の参照なので拾う。
+  - ORIGIN が無い・読めないときは、今までどおりすべての追加行から拾う。コミットメッセージからの抽出も今までどおり。
+- **`second-opinion-gate.yml` の雛形が、pull_request の契機で記録の投稿を待つために眠らなくなった**（ojos/ai-packages-dev#559 / ojos/ai-packages-dev#568）。今までは PR の push のたびに 300 秒眠り、ランナーを約 5 分占有していた。
+  - 記録が在る PR・記録を求めない PR は、その場で判定する（今までどおり）。**記録が無い PR では、status を何も書かずに成功で終える。** 判定は、`second-opinion-record.sh post` が起こす手動実行と、`/land` のマージ直前の再判定が書く。PR の実行が確定の status を書き換えないので、手動実行が付けた判定を遅れた PR の実行が上書きすることがない。
+  - 導入の PR（既定ブランチにこのワークフローがまだ無い）だけは、今までどおり猶予のあいだ眠ってから判定する。
+  - **挙動の変化:** 記録を投稿しないまま放置した PR は、今までは 300 秒後に赤になったが、この版からは status が付かないままになる。手動実行（`/land` の再判定を含む）で、猶予を過ぎていれば赤になる。
+- **`/land` の雛形（`claude-skill-land.md`）の再判定の待ちを、自分のアカウントが起こした手動実行に絞った**（ojos/ai-packages-dev#555 / ojos/ai-packages-dev#564）。ほかの人が同じゲートの手動実行を起こして先に終わっても、自分の実行が現れる前に `unchanged` で打ち切らない。自分の login（`gh api user`）が得られなければ、実行を起こさず `REJUDGE_FAIL` で止まる。
+  - 限界: 同じアカウントの別のセッションが同時に起こした場合は、今までどおり `unchanged` で止まりうる。そのときは 1 回やり直す。
+- **ゲートのワークフローを無効にしていたときの復帰の手順を、`/land` の雛形に書いた**（ojos/ai-packages-dev#558 / ojos/ai-packages-dev#569）。有効へ戻しても PR の `opened` は再送されないので、PR を作る前に有効へ戻す。作った後で戻したときは、意味のある変更を 1 つ積んで別の SHA にする。
+  - `second-opinion-record.sh post` の手動実行が失敗したとき、ワークフローの状態を読み、無効なら「確認側のワークフローが無効（<state>）です。`gh workflow enable second-opinion-gate.yml` で有効にしてから、手で起こしてください」と出す。
+- **`/peers` の雛形（`claude-skill-peers.md`）の案内を、宛先名の新しい決め方に合わせた**（ojos/ai-packages-dev#561 / ojos/ai-packages-dev#577）。devcontainer-bootstrap v0.21.0 から、宛先名の末尾は会話の識別子の先頭 8 桁になり、会話を再開しても変わらない。最初の起動では PID の名前になりうること、先頭 8 桁が重なったときの扱いを書いた。
+- 雛形の種類は 17 種のまま。
+
+### 移行
+- **雛形から写したファイルに手を入れていなければ、規範の更新で置き換わる**（DCB で規範を配置している場合は `bootstrap.sh --upgrade --playbook-version v0.11.0` で追従する）。**devcontainer-bootstrap v0.21.0 は ai-playbook v0.11.0 以降を要求する**（`loop-gate.sh` が `--base` を渡すため。古い `second-opinion-review.sh` では、ステージ済みの差分があるときに第二意見が `unknown option: --base` で止まり、ゲートが `GATE_FAIL` になる）。手を入れたファイルは置き換わらないので、差分を手で取り込む。
+- 第二意見に `codex` を使っていて、`.env` にプロキシや `OPENAI_API_KEY` を書いていた場合は、プロキシは起動するシェルの環境へ移し、認証はコンテナの中で `codex login` を通す。`~/.codex/config.toml` に頼っていた設定は効かなくなる。
+- `second-opinion-gate.yml` を required check にしている利用側は、記録の無い PR に status が付かないままになることに注意する（記録を `post` するか、手動実行で判定を書かせる）。
+- `/land` / `/peers` のスキルを雛形から写している場合は、あわせて更新する。
+
 ## v0.10.0
 
 ### Summary
