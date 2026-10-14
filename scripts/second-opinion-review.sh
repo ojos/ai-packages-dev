@@ -247,17 +247,6 @@ if [[ -n "$RANGE" && -n "$BASE" ]]; then
   exit 1
 fi
 
-# エンジンの指定が無いまま既定の gemini で回るとき、ほかのエンジンの CLI が入っていれば
-# 知らせる。両方を入れた構成で、.env を写し忘れた作業ツリーなどが黙って gemini で回るのを
-# 気づけるようにするため。gemini だけの構成では出さない（ノイズを増やさない）。
-# 判定（終了コード・LGTM）は変えない。文面に `(engine=` の形を含めない（loop-gate.sh が
-# 出力の最初の `(engine=` からエンジン名を読んで記録に残すため）。
-if [[ "$ENGINE_SPECIFIED" -eq 0 && "$ENGINE" == "gemini" ]] \
-  && { command -v agy >/dev/null 2>&1 || command -v codex >/dev/null 2>&1; }; then
-  echo "[second-opinion] notice: エンジンの指定が無いので既定の gemini で回します。agy / codex の CLI が見つかっています。" >&2
-  echo "[second-opinion] notice: 別のエンジンで回すには --engine <gemini|antigravity|codex> か、.env の SECOND_OPINION_ENGINE で指定してください。" >&2
-fi
-
 # 旧名のモデル名は gemini のときだけ使う（上記）。--model / SECOND_OPINION_MODEL が
 # あればそちらが勝つ。codex / antigravity では空のまま、各エンジンの既定に任せる。
 if [[ -z "$MODEL" && "$ENGINE" == "gemini" ]]; then
@@ -290,6 +279,24 @@ ENGINE_JSON=0
 # 判定を JSON で行うエンジンが強制する回答の形。判定そのものはモデルに出させず、
 # category から下の BLOCKING_CATEGORIES を見てこのスクリプトが決める。
 SCHEMA_FILE="$__SCRIPT_DIR/second-opinion-schema.json"
+
+# エンジンの指定が無いまま既定の gemini を使うとき、ほかのエンジンの CLI が入っていれば
+# 知らせる。両方を入れた構成で、.env を写し忘れた作業ツリーなどが黙って gemini で回るのを
+# 気づけるようにするため。gemini だけの構成では出さない（ノイズを増やさない）。
+# 判定（終了コード・LGTM）は変えない。文面に `(engine=` の形を含めない（loop-gate.sh が
+# 出力の最初の `(engine=` からエンジン名を読んで記録に残すため）。
+#
+# 回数の検査の後、エンジンの検査の前に置く。回数の誤りで止まる実行では出さず、gemini の
+# CLI やキーが無くて止まる実行では、止まった理由（指定が無く gemini に落ちた）を先に示すため。
+if [[ "$ENGINE_SPECIFIED" -eq 0 && "$ENGINE" == "gemini" ]]; then
+  __other_clis=""
+  command -v agy >/dev/null 2>&1 && __other_clis="agy"
+  command -v codex >/dev/null 2>&1 && __other_clis="${__other_clis:+$__other_clis / }codex"
+  if [[ -n "$__other_clis" ]]; then
+    echo "[second-opinion] notice: エンジンの指定が無いので既定の gemini を使います（$__other_clis の CLI も見つかっています）。" >&2
+    echo "[second-opinion] notice: 別のエンジンで回すには --engine <gemini|antigravity|codex> か、.env の SECOND_OPINION_ENGINE で指定してください。" >&2
+  fi
+fi
 
 # エンジンの検査は CLI を呼ぶ前に済ませる。未知の値をそのまま先へ流すと、
 # 「コマンドが無い」というエンジン不在のエラーに化けて、綴り間違いだと分からない。

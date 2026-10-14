@@ -735,7 +735,7 @@ codex は、コマンドを読み取り専用などのサンドボックスの�
 `.env.example` が持つキー:
 
 - `GEMINI_API_KEY` — 第二意見レビュー（`scripts/second-opinion-review.sh`）が読みます。
-- `SECOND_OPINION_ENGINE` — 第二意見のエンジン（`--with-antigravity` / `--with-codex` を選んだときだけ出ます）。**`--with-gemini` を選ばず、antigravity か codex の片方だけを選んだ構成では、そのエンジンを記入済みで出します**（既定の gemini は CLI もキーも無く、設定するまで使えないため）。gemini と併用、または antigravity と codex の両方を選んだ構成は、どれを選ぶかが一意に決まらないので空のままです（空なら gemini）。**既存の `.env` は書き換えません。** `--upgrade` で変わるのは `.env.example` だけなので、すでに `.env` を持つ構成には効きません。
+- `SECOND_OPINION_ENGINE` — 第二意見のエンジン（`--with-antigravity` / `--with-codex` を選んだときだけ出ます）。**選んだエンジンから一意に決まるときは、記入済みで出します。** `--with-gemini` も選んだ構成では `gemini`（明示しておけば、`.env` を持つ作業ツリーでは下の通知が出ず、`.env` を写し忘れた作業ツリーでだけ出ます）、`--with-gemini` を選ばず antigravity か codex の片方だけを選んだ構成ではそのエンジンです（既定の gemini は CLI もキーも無く、設定するまで使えないため）。gemini を選ばず antigravity と codex の両方を選んだ構成は、どれを選ぶかが一意に決まらないので空のままです（空なら gemini）。**既存の `.env` は書き換えません。** `--upgrade` で変わるのは `.env.example` だけなので、すでに `.env` を持つ構成には効きません。
 - `GH_TOKEN` — GitHub の PAT。**上表の「コンテナ内でのログイン」に対する唯一の例外**です（下記「[GitHub 認証だけが例外である理由](#github-認証だけが例外である理由)」）。空にすれば従来どおり `gh auth login` の保存済み認証で動きます（**`GITHUB_TOKEN` も未設定であることが条件**。下記「[`GITHUB_TOKEN` は設定しない](#github_token-は設定しない)」）。
 - `GIT_IDENTITY_NAME` / `GIT_IDENTITY_EMAIL` — コミット identity。`scripts/setup-git-identity.sh` が local へ適用します。
   - `GIT_AUTHOR_NAME` / `GIT_AUTHOR_EMAIL` という名前を使わないのは、それが **git 自身の読む環境変数**だからです。環境に置くと local 設定を持たないリポジトリでも identity が解決でき、`user.useConfigOnly` による保護（未設定なら commit を止める）が無効になります。
