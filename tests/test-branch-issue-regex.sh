@@ -41,6 +41,8 @@ else
 fi
 
 # ブランチ名<TAB>期待する番号（空は取れない）
+# 末尾の 2 つは、日付を番号と読む既知の限界（second-opinion-review.sh の冒頭の説明）。
+# 両方の仕組みが同じく読むことを固定し、規則を締めるときに、どの形の扱いが変わるかを示す。
 SAMPLES=$'feat/123-x\t123
 123-x\t123
 issue-123\t123
@@ -56,7 +58,9 @@ feat/0123-x\t
 feat/1234567-x\t
 feat/123abc\t
 release-123\t
-fix/589-shellcheck\t589'
+fix/589-shellcheck\t589
+2026-10-14-hotfix\t2026
+user/alice/2026_q4\t2026'
 
 while IFS=$'\t' read -r branch expected; do
   it "枝 '$branch' はフックと第二意見（写し・雛形）で同じ番号 '${expected:-なし}' になる"

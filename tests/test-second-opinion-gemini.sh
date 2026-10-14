@@ -159,7 +159,8 @@ chmod +x "$ok_gh_bin/gh"
 
 review_on_branch() { # 枝名
   local b="$1" rc=0
-  git -C "$REPO" checkout -q -b "$b"
+  # 枝を作れなければ、前の枝のままレビューして誤った結果になるので、ここで失敗にする。
+  git -C "$REPO" checkout -q -b "$b" || return 99
   printf '%s\n' "$b" > "$REPO/branch-form.txt"
   git -C "$REPO" add branch-form.txt
   (
