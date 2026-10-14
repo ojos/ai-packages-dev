@@ -545,8 +545,14 @@ extract_acceptance() {
       next
     }
     mode == 1 {
-      # 節の終わりは、次のキーか、フェンスの行（``` と ~~~、0〜3 個の字下げを含む。fenceline と同じ判定）
-      if ($0 ~ /^[A-Za-z_.]+:/ || fenceline($0)) exit
+      # 節の終わりは、次のキーか、フェンスの行（``` と ~~~、0〜3 個の字下げを含む。fenceline と同じ判定）。
+      # 票がフェンスの中にあるときは、そのフェンスを閉じる行（track と同じ規則）でだけ終える。
+      # 別の記号や短い並びの行は閉じないので、acceptance の中身（`acceptance: |` の本文など）として残す
+      if ($0 ~ /^[A-Za-z_.]+:/) exit
+      if (fenceline($0)) {
+        if (fence == "") exit
+        if (fch == fence && flen >= fencelen && frest ~ /^[ \t]*$/) exit
+      }
       print; next
     }
     mode == 2 {

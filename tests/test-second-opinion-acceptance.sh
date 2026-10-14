@@ -116,6 +116,14 @@ for target in ".ai-playbook/templates/second-opinion-review.sh" "scripts/second-
   out="$(printf '```yaml\ngoal: g\nacceptance:\n  - a\n  ```\nafter\n' | extract_acceptance)"
   assert_eq "$out" $'acceptance:\n  - a' "indented closing fence"
 
+  it "票のフェンスを閉じない別の記号のフェンス行は、acceptance の中身として残す (#597)"
+  out="$(printf '```yaml\ngoal: g\nacceptance: |\n  前\n  ~~~\n  後\n```\nafter\n' | extract_acceptance)"
+  assert_eq "$out" $'acceptance: |\n  前\n  ~~~\n  後' "non-closing fence line inside ticket"
+
+  it "フェンスの外の acceptance: は、新しいフェンスが開く行で終える（今までどおり） (#597)"
+  out="$(printf 'acceptance:\n  - a\n~~~\ncode\n~~~\n' | extract_acceptance)"
+  assert_eq "$out" $'acceptance:\n  - a' "outside fence ends at fence"
+
   it "goal: が acceptance: より後ろにある票は拾わない（既知の限界） (#597)"
   out="$(printf '```yaml\nacceptance:\n  - a\ngoal: g\n```\n' | extract_acceptance)"
   assert_eq "$out" "" "goal after acceptance"
