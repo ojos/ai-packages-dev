@@ -1071,15 +1071,27 @@ mk_review_repo "$d"; mk_gemini_stub "$b" "F"; mk_cli_stub "$b" codex "L"
 out="$( cd "$d" && env -u SECOND_OPINION_ENGINE PATH="$b:$MIN_PATH" GEMINI_API_KEY=dummy bash scripts/second-opinion-review.sh 2>&1 )"; rc=$?
 if [[ "$rc" -eq 1 && "$out" == *"$NOTICE_MARK"* ]]; then pass; else fail "判定が変わった (exit $rc): $out"; fi
 
-it "通知が出る条件でも、loop-gate が出力から読むエンジン名は gemini のまま"
-# loop-gate.sh の record_second_opinion と同じ抽出式を使う。通知に `(engine=` が
-# 混ざると、最初の一致が通知になり、記録のエンジン名が狂う。
+it "通知が出る条件でも、loop-gate が残す記録のエンジン名は gemini になる"
+# 実物の reviewer の出力を、生成した loop-gate.sh の record_second_opinion へそのまま渡し、
+# 記録スクリプト（stub）が受け取った --engine を見る。抽出の式をここへ写すと、loop-gate 側の
+# 式が変わったときに追随せず、記録を実際に作らないまま通るため。loop-gate.sh は source では
+# ゲート本体を走らせない（source ガード）ので、関数だけを呼べる。
 run_notice_case codex
-engine_read="$(printf '%s\n' "$out" | sed -n 's/.*(engine=\([^,)]*\).*/\1/p' | head -1)"
-if [[ "$out" == *"$NOTICE_MARK"* ]]; then
-  assert_eq "$engine_read" "gemini" "記録のエンジン名"
-else
+cap="$(new_workdir)/capture.txt"; printf '%s\n' "$out" > "$cap"
+gen="$(new_workdir)/p"
+run_bootstrap "$gen" >/dev/null 2>&1
+cat > "$gen/scripts/second-opinion-record.sh" <<'STUB'
+#!/usr/bin/env bash
+echo "RECORD_SAVED:$*"
+cat >/dev/null
+STUB
+rec="$( . "$gen/scripts/loop-gate.sh" && record_second_opinion "$cap" "staged" 0 2>&1 )"
+if [[ "$out" != *"$NOTICE_MARK"* ]]; then
   fail "通知が出ていない前提が崩れた: $out"
+elif [[ "$rec" == *"RECORD_SAVED:"*"--engine gemini "* ]]; then
+  pass
+else
+  fail "記録のエンジン名が gemini でない、または記録が作られない: $rec"
 fi
 
 exit_with_result
