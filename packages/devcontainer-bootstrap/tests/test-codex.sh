@@ -194,9 +194,9 @@ else
   fail "post-rebuild-check.sh に codex の検査が無い"
 fi
 
-it "単独指定で .env.example に codex を含むエンジン選択欄が入る（gemini | codex）"
+it "単独指定（gemini なし）で .env.example に codex を含むエンジン選択欄が入り、codex が記入済みになる"
 env_cx="$OUT_CX/.env.example"
-if grep -q '^SECOND_OPINION_ENGINE=$' "$env_cx" 2>/dev/null \
+if grep -q '^SECOND_OPINION_ENGINE=codex$' "$env_cx" 2>/dev/null \
    && grep -q 'gemini | codex' "$env_cx" 2>/dev/null \
    && grep -q '^SECOND_OPINION_MODEL=$' "$env_cx" 2>/dev/null; then
   pass
@@ -224,6 +224,27 @@ if grep -q 'gemini | antigravity | codex' "$env_ac" 2>/dev/null; then
   pass
 else
   fail "3 エンジンの文面になっていない"
+fi
+
+it "antigravity + codex（gemini なし）では、どちらを選ぶか一意でないので SECOND_OPINION_ENGINE は空のまま"
+if grep -q '^SECOND_OPINION_ENGINE=$' "$env_ac" 2>/dev/null; then
+  pass
+else
+  fail "空のままになっていない: $(grep '^SECOND_OPINION_ENGINE=' "$env_ac" 2>/dev/null)"
+fi
+
+# gemini と併用したときは、既定の gemini のままにするので空のまま（#591）。
+OUT_GC="$(new_workdir)/p"
+run_bootstrap "$OUT_GC" --with-gemini --with-codex >/dev/null 2>&1
+OUT_GA="$(new_workdir)/p"
+run_bootstrap "$OUT_GA" --with-gemini --with-antigravity >/dev/null 2>&1
+
+it "gemini + codex / gemini + antigravity では SECOND_OPINION_ENGINE は空のまま"
+if grep -q '^SECOND_OPINION_ENGINE=$' "$OUT_GC/.env.example" 2>/dev/null \
+   && grep -q '^SECOND_OPINION_ENGINE=$' "$OUT_GA/.env.example" 2>/dev/null; then
+  pass
+else
+  fail "gemini 併用で記入済みになっている: $(grep -h '^SECOND_OPINION_ENGINE=' "$OUT_GC/.env.example" "$OUT_GA/.env.example" 2>/dev/null)"
 fi
 
 it "antigravity + codex では volume が重複しない（別名のまま 2 本）"

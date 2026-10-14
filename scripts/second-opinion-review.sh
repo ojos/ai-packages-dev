@@ -189,6 +189,10 @@ RANGE=""
 # --base <rev>: 索引と <rev> の差（コミット済みとステージ済みの両方）を対象にする。
 BASE=""
 ENGINE="${SECOND_OPINION_ENGINE:-gemini}"
+# エンジンが --engine / SECOND_OPINION_ENGINE のどちらでも指定されたか。既定の gemini に
+# 落ちたことを、ほかの CLI が入っている環境で知らせるために使う（下記）。
+ENGINE_SPECIFIED=0
+[[ -n "${SECOND_OPINION_ENGINE:-}" ]] && ENGINE_SPECIFIED=1
 MODEL="${SECOND_OPINION_MODEL:-}"
 RUNS="${SECOND_OPINION_RUNS:-${GEMINI_REVIEW_RUNS:-1}}"
 
@@ -229,7 +233,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --range)  need_value "$1" "${2-}"; RANGE="$2";  shift 2 ;;
     --base)   need_value "$1" "${2-}"; BASE="$2";   shift 2 ;;
-    --engine) need_value "$1" "${2-}"; ENGINE="$2"; shift 2 ;;
+    --engine) need_value "$1" "${2-}"; ENGINE="$2"; ENGINE_SPECIFIED=1; shift 2 ;;
     --model)  need_value "$1" "${2-}"; MODEL="$2";  shift 2 ;;
     --runs)   need_value "$1" "${2-}"; RUNS="$2";   shift 2 ;;
     -h|--help) usage; exit 0 ;;
@@ -241,6 +245,17 @@ if [[ -n "$RANGE" && -n "$BASE" ]]; then
   echo "error: --range と --base は併用できません" >&2
   usage >&2
   exit 1
+fi
+
+# エンジンの指定が無いまま既定の gemini で回るとき、ほかのエンジンの CLI が入っていれば
+# 知らせる。両方を入れた構成で、.env を写し忘れた作業ツリーなどが黙って gemini で回るのを
+# 気づけるようにするため。gemini だけの構成では出さない（ノイズを増やさない）。
+# 判定（終了コード・LGTM）は変えない。文面に `(engine=` の形を含めない（loop-gate.sh が
+# 出力の最初の `(engine=` からエンジン名を読んで記録に残すため）。
+if [[ "$ENGINE_SPECIFIED" -eq 0 && "$ENGINE" == "gemini" ]] \
+  && { command -v agy >/dev/null 2>&1 || command -v codex >/dev/null 2>&1; }; then
+  echo "[second-opinion] notice: エンジンの指定が無いので既定の gemini で回します。agy / codex の CLI が見つかっています。" >&2
+  echo "[second-opinion] notice: 別のエンジンで回すには --engine <gemini|antigravity|codex> か、.env の SECOND_OPINION_ENGINE で指定してください。" >&2
 fi
 
 # 旧名のモデル名は gemini のときだけ使う（上記）。--model / SECOND_OPINION_MODEL が

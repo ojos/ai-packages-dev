@@ -175,8 +175,8 @@ else
   fail "post-rebuild-check.sh に agy の検査が無い"
 fi
 
-it "単独指定で .env.example に SECOND_OPINION_ENGINE の記入欄が入る"
-if grep -q '^SECOND_OPINION_ENGINE=$' "$OUT_AG/.env.example" 2>/dev/null; then
+it "単独指定（gemini なし）で .env.example の SECOND_OPINION_ENGINE が antigravity で記入済みになる"
+if grep -q '^SECOND_OPINION_ENGINE=antigravity$' "$OUT_AG/.env.example" 2>/dev/null; then
   pass
 else
   fail ".env.example に記入欄が無い"

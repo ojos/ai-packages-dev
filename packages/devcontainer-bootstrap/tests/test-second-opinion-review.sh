@@ -1003,4 +1003,75 @@ else
   pass
 fi
 
+# ── #591: エンジン未指定で既定の gemini に落ちたときの通知 ────────────────────
+#
+# 両方のエンジンを入れた構成で、.env を写し忘れた作業ツリーが黙って gemini で回るのを
+# 気づけるようにする。判定は変えない。文面に `(engine=` を含めると loop-gate.sh が
+# 出力の最初の `(engine=` からエンジン名を読むため、記録が狂う。
+
+NOTICE_MARK="既定の gemini で回します"
+
+# 通知の検査用: gemini の stub と、指定した追加 CLI の stub を同じ bin に置いて実行する。
+# 引数: 追加 CLI 名（空なら置かない） / review.sh への追加引数...。出力は stdout+stderr、$rc に終了コード。
+run_notice_case() {
+  local extra="$1"; shift
+  local d b
+  d="$(new_workdir)/r"; b="$(new_workdir)/bin"
+  mk_review_repo "$d"; mk_gemini_stub "$b" "L"
+  [[ -z "$extra" ]] || mk_cli_stub "$b" "$extra" "L"
+  out="$( cd "$d" && env -u SECOND_OPINION_ENGINE PATH="$b:$MIN_PATH" GEMINI_API_KEY=dummy bash scripts/second-opinion-review.sh "$@" 2>&1 )"; rc=$?
+}
+
+
+it "未指定で codex の CLI があれば、既定の gemini で回す旨と指定方法を知らせる（終了コードは変わらない）"
+run_notice_case codex
+if [[ "$rc" -eq 0 ]] \
+   && [[ "$out" == *"[second-opinion] notice:"*"$NOTICE_MARK"* ]] \
+   && [[ "$out" == *"--engine"* && "$out" == *"SECOND_OPINION_ENGINE"* ]]; then
+  pass
+else
+  fail "通知が出ない、または終了コードが変わった (exit $rc): $out"
+fi
+
+it "未指定で agy の CLI があるときも知らせる"
+run_notice_case agy
+if [[ "$rc" -eq 0 && "$out" == *"$NOTICE_MARK"* ]]; then pass; else fail "agy で通知が出ない (exit $rc): $out"; fi
+
+it "ほかの CLI が無い（gemini だけ）なら知らせない"
+run_notice_case ""
+if [[ "$rc" -eq 0 && "$out" != *"$NOTICE_MARK"* ]]; then pass; else fail "gemini だけで通知が出た (exit $rc): $out"; fi
+
+it "--engine で指定していれば（gemini でも）知らせない"
+run_notice_case codex --engine gemini
+if [[ "$rc" -eq 0 && "$out" != *"$NOTICE_MARK"* ]]; then pass; else fail "--engine 指定で通知が出た (exit $rc): $out"; fi
+
+it "SECOND_OPINION_ENGINE で指定していれば知らせない"
+d="$(new_workdir)/r"; b="$(new_workdir)/bin"
+mk_review_repo "$d"; mk_gemini_stub "$b" "L"; mk_cli_stub "$b" codex "L"
+out="$( cd "$d" && PATH="$b:$MIN_PATH" GEMINI_API_KEY=dummy SECOND_OPINION_ENGINE=gemini bash scripts/second-opinion-review.sh 2>&1 )"; rc=$?
+if [[ "$rc" -eq 0 && "$out" != *"$NOTICE_MARK"* ]]; then pass; else fail "環境変数指定で通知が出た (exit $rc): $out"; fi
+
+it "SECOND_OPINION_ENGINE が空文字なら未指定扱いで知らせる"
+d="$(new_workdir)/r"; b="$(new_workdir)/bin"
+mk_review_repo "$d"; mk_gemini_stub "$b" "L"; mk_cli_stub "$b" codex "L"
+out="$( cd "$d" && PATH="$b:$MIN_PATH" GEMINI_API_KEY=dummy SECOND_OPINION_ENGINE= bash scripts/second-opinion-review.sh 2>&1 )"; rc=$?
+if [[ "$rc" -eq 0 && "$out" == *"$NOTICE_MARK"* ]]; then pass; else fail "空文字で通知が出ない (exit $rc): $out"; fi
+
+it "通知が出ても、指摘ありの判定（終了コード 1）は変わらない"
+d="$(new_workdir)/r"; b="$(new_workdir)/bin"
+mk_review_repo "$d"; mk_gemini_stub "$b" "F"; mk_cli_stub "$b" codex "L"
+out="$( cd "$d" && PATH="$b:$MIN_PATH" GEMINI_API_KEY=dummy bash scripts/second-opinion-review.sh 2>&1 )"; rc=$?
+if [[ "$rc" -eq 1 && "$out" == *"$NOTICE_MARK"* ]]; then pass; else fail "判定が変わった (exit $rc): $out"; fi
+
+it "通知が出る条件でも、loop-gate が出力から読むエンジン名は gemini のまま"
+# loop-gate.sh の record_second_opinion と同じ抽出式を使う。通知に `(engine=` が
+# 混ざると、最初の一致が通知になり、記録のエンジン名が狂う。
+run_notice_case codex
+engine_read="$(printf '%s\n' "$out" | sed -n 's/.*(engine=\([^,)]*\).*/\1/p' | head -1)"
+if [[ "$out" == *"$NOTICE_MARK"* ]]; then
+  assert_eq "$engine_read" "gemini" "記録のエンジン名"
+else
+  fail "通知が出ていない前提が崩れた: $out"
+fi
+
 exit_with_result
