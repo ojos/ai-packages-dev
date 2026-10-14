@@ -672,6 +672,7 @@ load_runners() {
     usage_error "設定ファイルがありません: $file
 [$PROG] 雛形（runners.example）を写して、名前と組織を 1 行ずつ書いてください。"
   fi
+  # shellcheck disable=SC2094 # $file は dirname の引数と末尾の入力にしか使わず、同じファイルへ書き込まない（誤検出）
   while IFS= read -r line || [[ -n "$line" ]]; do
     lineno=$((lineno + 1))
     line="${line%$'\r'}"
