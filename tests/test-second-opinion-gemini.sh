@@ -147,6 +147,60 @@ else
 fi
 git -C "$REPO" checkout -q -
 
+# 枝の名前の形ごとに、issue 番号を取って文脈つきでレビューする（#593）。
+# フックと同じ規則なので、123-x / issue-123 / gh-123_x も読む。番号の無い名前は読まない。
+ok_gh_bin="$WORK/ok-gh"
+mkdir -p "$ok_gh_bin"
+cat > "$ok_gh_bin/gh" <<'OKGH'
+#!/usr/bin/env bash
+printf '# issue stub\n'
+OKGH
+chmod +x "$ok_gh_bin/gh"
+
+review_on_branch() { # 枝名
+  local b="$1" rc=0
+  # 枝を作れなければ、前の枝のままレビューして誤った結果になるので、ここで失敗にする。
+  git -C "$REPO" checkout -q -b "$b" || return 99
+  printf '%s\n' "$b" > "$REPO/branch-form.txt"
+  git -C "$REPO" add branch-form.txt
+  (
+    cd "$REPO"
+    PATH="$ok_gh_bin:$FAKE_BIN:$PATH" \
+    GEMINI_API_KEY="dummy-for-selftest" \
+    FAKE_GEMINI_RECORD="$RECORD" \
+    FAKE_GEMINI_ANSWER='VERDICT: LGTM' \
+      bash "$REVIEW" --engine gemini > "$WORK/out" 2> "$WORK/err"
+  ) || rc=$?
+  git -C "$REPO" reset -q
+  rm -f "$REPO/branch-form.txt"
+  git -C "$REPO" checkout -q -
+  git -C "$REPO" branch -q -D "$b"
+  return "$rc"
+}
+
+for form in "123-x" "issue-123" "gh-123_x" "feat/123-x"; do
+  it "枝 '$form' から issue #123 を取り、文脈つきでレビューする"
+  rc=0
+  review_on_branch "$form" || rc=$?
+  if [[ "$rc" -eq 0 ]] && grep -q 'issue #123 の scope と acceptance を文脈に載せます' "$WORK/out"; then
+    pass
+  else
+    fail "exit=$rc, out: $(cat "$WORK/out"), err: $(cat "$WORK/err")"
+  fi
+done
+
+it "番号の無い枝では番号を取れず、読める形を示して文脈なしで続行する"
+rc=0
+review_on_branch "no-number-here" || rc=$?
+if [[ "$rc" -eq 0 ]] \
+  && grep -q '枝の名前から issue 番号を取れませんでした' "$WORK/err" \
+  && grep -q 'issue-123' "$WORK/err" \
+  && ! grep -q 'を文脈に載せます' "$WORK/out"; then
+  pass
+else
+  fail "exit=$rc, out: $(cat "$WORK/out"), err: $(cat "$WORK/err")"
+fi
+
 # ── --base <rev>: 索引と <rev> の差を対象にする（#563） ──────────────────────
 #
 # 差分の外を読めないエンジンへ、修正分だけの小さな差分を渡すと、前提を誤って落ちる。

@@ -126,8 +126,11 @@
 #   その行の有無で「判定に到達したか」を見るため、出さなければ記録も残らない。
 #
 # issue / PR の文脈:
-#   ブランチ名が issue 番号を含む形（`feat/123-...` 等）なら、その issue の本文
-#   （scope・acceptance を含む）をプロンプトへ載せる。加えて、差分の追加行と
+#   ブランチ名が issue 番号を含む形（`feat/123-x`・`123-x`・`issue-123`・`gh-123_x` 等。
+#   規則はセッション協調のフックと同じ BRANCH_ISSUE_RE）なら、その issue の本文
+#   （scope・acceptance を含む）をプロンプトへ載せる。**限界として、日付や版を含む名前
+#   （`2026-10-14-hotfix` など）も番号として読む。** その番号の issue があれば、関係の無い
+#   issue が文脈に載る（フックも同じ名前を同じく読む。規則を揃えることを優先した。#593）。加えて、差分の追加行と
 #   コミットメッセージが参照する `#番号`（リポジトリへの書き込み権を持つ人が作成したものに限り、
 #   上限件数まで）についても、状態と（issue なら）acceptance の節を取得して載せる。
 #   いずれも `gh` 経由で、取得できなくても止めない（ゲートではないため）。
@@ -411,23 +414,35 @@ fi
 # （黙って「文脈つきでレビューした」ことにしない）。
 issue_context=""
 branch_issue_num=""
+# ブランチ名から issue 番号を取る規則。セッション協調のフック（session-coord-hook.sh の
+# ISSUE_BRANCH_RE）と同じ規則にそろえてある。利用者がどちらの形で枝を切っても、2 つの
+# 仕組みが同じ番号を読むようにするため。番号は 3 つ目の括弧（BASH_REMATCH[3]）に入る。
+# 先頭は 0 を許さず 6 桁まで、直後は - か _ か末尾。複数箇所に一致するときは最初の一致を使う。
+BRANCH_ISSUE_RE='(^|/)(issue-|gh-)?([1-9][0-9]{0,5})([-_]|$)'
 resolve_issue_context() {
   local branch num body
   branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
-  # feat/123-... / fix/456-... のような形から数字を取る。枝の名前に数字が無ければ
-  # 何もしない（推測で別の issue を引かない）。
-  num="$(printf '%s' "$branch" | sed -n 's|^[a-z]*/\([0-9][0-9]*\)-.*|\1|p')"
+  # feat/123-x・123-x・issue-123・gh-123_x のような形から数字を取る。枝の名前に数字が
+  # 無ければ何もしない（推測で別の issue を引かない）。
+  num=""
+  if [[ "$branch" =~ $BRANCH_ISSUE_RE ]]; then
+    num="${BASH_REMATCH[3]}"
+  fi
   branch_issue_num="$num"
   if [[ -z "$num" ]]; then
-    echo "[second-opinion] 枝の名前から issue 番号を取れませんでした（文脈なしでレビューします）: $branch" >&2
+    echo "[second-opinion] 枝の名前から issue 番号を取れませんでした（文脈なしでレビューします）: $branch（feat/123-x・123-x・issue-123 のように番号を含めると読めます）" >&2
     return 0
   fi
+  # 引けなかったときは branch_issue_num を空に戻す。下の「参照された issue」は、この番号を
+  # 二重に載せないよう一覧から外すため、残したままだと、本文も状態も載らなくなる。
   if ! command -v gh >/dev/null 2>&1; then
     echo "[second-opinion] gh が無いため issue #$num を引けません（文脈なしでレビューします）" >&2
+    branch_issue_num=""
     return 0
   fi
   if ! body="$(gh issue view "$num" --json title,body --jq '"# issue #'"$num"' " + (.title // "") + "\n\n" + (.body // "")' 2>/dev/null)"; then
     echo "[second-opinion] issue #$num を引けませんでした（文脈なしでレビューします）" >&2
+    branch_issue_num=""
     return 0
   fi
   issue_context="$body"
