@@ -11,12 +11,13 @@
 |---|---|---|---|
 | devcontainer-bootstrap | `ojos/devcontainer-bootstrap` | v0.22.1 | GitHub Release + 資産 5 点（配布スクリプト 2: `bootstrap.sh` / `doctor.sh`、生成物 3: `SHA256SUMS` / `RELEASE-MANIFEST.json` / `PACKAGE_ARCHIVE.tar.gz`） |
 | ai-playbook | `ojos/ai-playbook` | v0.12.1 | git タグのみ |
-| devcontainer-host | `ojos/devcontainer-host` | v0.3.0 | GitHub Release + 資産 10 点（個別 7: `dev.sh` / `dev-up@.service` / `dev-runner@.service` / `runner.Dockerfile` / `install.sh` / `projects.example` / `runners.example`、生成物 3: `SHA256SUMS` / `RELEASE-MANIFEST.json` / `PACKAGE_ARCHIVE.tar.gz`） |
+| devcontainer-host | `ojos/devcontainer-host` | v0.4.0 | GitHub Release + 資産 10 点（個別 7: `dev.sh` / `dev-up@.service` / `dev-runner@.service` / `runner.Dockerfile` / `install.sh` / `projects.example` / `runners.example`、生成物 3: `SHA256SUMS` / `RELEASE-MANIFEST.json` / `PACKAGE_ARCHIVE.tar.gz`） |
 
 ### 新世代の版更新
 
 | パッケージ | 版 | 公開日 | 要点 |
 |---|---|---|---|
+| devcontainer-host | v0.4.0 | 2026-10-15 | **`dev doctor --runner` が、ランナーの版の期限を点検するようにした**（#604 / #606）。自動更新を止めたランナーは、新しい版が出てから 30 日を過ぎると GitHub からジョブを渡されなくなるため、イメージのラベル（`devhost.runner-version`。`dev runner build` が必ず付ける）の版を actions/runner の公開済みの版と比べ、期限内は WARN、期限切れは FAIL にする。**ランナーのイメージに展開の道具 `xz-utils`・`zstd`・`bzip2` を足した**（#603 / #605）。README の apt の一覧を `selftest.sh` が `runner.Dockerfile` と照合する。`dev.sh` と `selftest.sh` が既定の重大度の shellcheck を通るようにした（#589 / #590）。更新後は `dev runner build` でイメージを作り直す |
 | devcontainer-bootstrap | v0.22.1 | 2026-10-15 | **`check-doc-links.sh` が、作業ツリーで消した（未ステージの）追跡済み Markdown で止まらないようにした**（#599 / #600）。消したもの（`git ls-files --deleted`）は走査とリンク先の両方から外し、消した文書へのリンクは壊れたリンクになる。sparse-checkout / skip-worktree で置いていないだけのファイルはリンク先として残す。集計の行の形が変わった。勧める ai-playbook は v0.12.1。破壊的変更なし |
 | ai-playbook | v0.12.1 | 2026-10-15 | **`second-opinion-review.sh` が、issue 本文のコード例の中の `acceptance:` を本物として採らないようにした**（#597 / #598。フェンスの中では、同じフェンスでそれより前に `goal:` があるときだけ採る）。`~~~` や字下げした閉じのフェンスで、YAML の節が終わらない漏れも直した。破壊的変更なし。雛形は 17 種のまま |
 | devcontainer-bootstrap | v0.22.0 | 2026-10-14 | **`.env.example` の第二意見のエンジン（`SECOND_OPINION_ENGINE`）を、選んだエンジンから一意に決まるときは記入済みで出す**（#591 / #592）。`--with-gemini` も選べば `gemini`、gemini なしで codex か antigravity の片方だけならそのエンジン、gemini なしで両方なら空のまま。**既存の `.env` は書き換えない**。勧める ai-playbook は v0.12.0（v0.11.0 でも動く）。破壊的変更なし |

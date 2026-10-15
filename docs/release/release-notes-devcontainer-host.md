@@ -6,12 +6,17 @@ devhost（SSH で届く外部の機械で devcontainer を保つ道具。コマ�
 >
 > 同じ理由で、issue 参照は `ojos/ai-packages-dev#NNN` の形で書いてください。裸の `#NNN` は GitHub のオートリンクが**配布先リポジトリの issue** として解決するため、配布後は存在しない issue や無関係な issue を指します。
 
-## 次の版（未リリース）
+## v0.4.0
 
 ### Summary
 - **自前のランナーのイメージに、展開の道具 `xz-utils`・`zstd`・`bzip2` を足した**（ojos/ai-packages-dev#603）。GitHub がホストするランナーにはあり、公式のランナーのイメージには無い道具で、無いとワークフローが道具を `.tar.xz` などで落として展開する段（`curl ... | tar -xJ` など）が、自前のランナーでだけ `xz: Cannot exec` で落ちていた。`zstd` は actions/cache も使う（無いと gzip に落ちる）。README の「イメージ」に apt で入れるものの一覧を置き、`selftest.sh` が `runner.Dockerfile` の一覧と照合するようにした。**適用には `install.sh` で更新したあと、`dev runner build` でイメージを作り直し、ランナーのユニットを起こし直す。**
 - **`dev doctor --runner <名前>` が、ランナーの版の期限を点検するようにした**（ojos/ai-packages-dev#604）。自動更新を止めた自前のランナーは、新しい版が出てから 30 日を過ぎると GitHub からジョブを渡されなくなり、ユニットは動いたままジョブが待ち続ける。doctor はイメージのラベルの版を actions/runner の公開済みの版（プレリリースと下書きを除く。PAT は要らない）と比べ、新しい版なしは OK、期限内は WARN（期限の日付と残りの日数）、期限切れは FAIL、一覧を読めない・ラベル無しは WARN にする。これに合わせて `dev runner build` は、版を必ず確定させ（`DEV_RUNNER_VERSION` > `runners` の `runner_version=` > Dockerfile の既定値）、`--build-arg` とイメージのラベル（`devhost.runner-version`）の両方へ渡す。**既存のイメージはラベルを持たないので、更新後に `dev runner build` で作り直す。** 点検は自動では走らないので、定期に打つ。
 - **`dev.sh` と `selftest.sh` が、既定の重大度の shellcheck を通るようにした**（ojos/ai-packages-dev#589 / ojos/ai-packages-dev#590）。`dev.sh` は、ランナーの一覧を読むループの中で求めていた設定の置き場所（`dirname`）を、ループの前で求めるようにした（SC2094 の誤検出。挙動は変わらない）。`selftest.sh` の 13 件は意図した書き方なので、理由を書いて抑止した。開発リポジトリの CI で、配布する `.sh` の全体を既定の重大度の shellcheck に掛けるようにした。
+
+### 移行
+
+- **自前のランナーを使っている場合は、更新後に `dev runner build` でイメージを作り直し、ランナーのユニットを起こし直す**（`systemctl --user restart dev-runner@<名前>.service`）。作り直すまでは、イメージに展開の道具が入らず、`dev doctor --runner` は「版のラベルがありません」の WARN を出す。
+- 版の点検は `dev doctor --runner <名前>` を打ったときだけ行う（自動では走らない）。定期に（たとえば週に 1 回）打ち、WARN のうちに `runners` の `runner_version=` を上げる。
 
 ## v0.3.0
 
