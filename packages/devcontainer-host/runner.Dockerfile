@@ -32,6 +32,10 @@
 # 【利用側の acceptance.sh のために入れておくもの】配るワークフローには要らない。利用側の acceptance.sh
 # (プロジェクトが所有し、言語や検査で道具が変わる)が使うことが多いので残す: jq・shellcheck・curl・unzip・gawk。
 # このうち jq・curl・unzip は公式のイメージにもある。ここでの明示は、公式のイメージが外したときに困らないための保険。
+#
+# 【展開の道具】xz-utils・zstd・bzip2。GitHub がホストするランナーには最初からあり、公式のランナーのイメージには無い。
+# 無いと、ワークフローが道具を .tar.xz / .tar.zst / .tar.bz2 で落として展開する段（curl ... | tar -xJ など）が、
+# 自前のランナーでだけ「xz: Cannot exec」で落ちる。zstd は actions/cache も使う（無いと gzip に落ちて遅くなる）。
 # 足りない道具は、この Dockerfile を編集せず、利用側で用意する(編集は install.sh の更新で上書きされる)。
 ARG RUNNER_VERSION=2.338.0
 FROM ghcr.io/actions/actions-runner:${RUNNER_VERSION}
@@ -39,9 +43,10 @@ FROM ghcr.io/actions/actions-runner:${RUNNER_VERSION}
 USER root
 # 配るワークフローに要るもの: git（公式にもある。明示）と gh（下で公式の apt リポジトリから足す）
 # 利用側の acceptance.sh のために入れておくもの: jq・shellcheck・curl・unzip・gawk（ca-certificates・gnupg は gh の導入に使う）
+# 展開の道具: xz-utils・zstd・bzip2
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        ca-certificates curl gawk git gnupg jq shellcheck unzip \
+        bzip2 ca-certificates curl gawk git gnupg jq shellcheck unzip xz-utils zstd \
     && install -m 0755 -d /etc/apt/keyrings \
     && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o /etc/apt/keyrings/githubcli-archive-keyring.gpg \
     && chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg \
