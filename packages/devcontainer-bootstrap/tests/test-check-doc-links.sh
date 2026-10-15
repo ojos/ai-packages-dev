@@ -350,6 +350,92 @@ run_check "$repo"
 assert_fail "閉じていない ( の後ろのリンク" "docs/gone5.md"
 assert_fail "閉じていない ( の後ろのリンク（フラグメント）" "docs/gone6.md"
 
+# ── 作業ツリーで消した（未ステージの）追跡済み Markdown ─────────────────────
+
+it "追跡済みの Markdown を消しても（未ステージ）通過し、集計に実体なしの件数が出る"
+repo="$(new_repo)"
+add_doc "$repo" "docs/keep.md" '[ok](other.md)
+'
+add_doc "$repo" "docs/other.md" 'x
+'
+add_doc "$repo" "docs/del.md" '[gone](nowhere.md)
+'
+commit_repo "$repo" add-docs-for-delete
+rm "$repo/docs/del.md"
+run_check "$repo"
+if [[ "$CHECK_RC" -eq 0 ]] && printf '%s' "$CHECK_OUT" | grep 'DOC_LINKS_PASS' >/dev/null; then
+  pass
+else
+  fail "消した Markdown で止まった: $CHECK_OUT"
+fi
+if printf '%s' "$CHECK_OUT" | grep -F '実体なし 1 件' >/dev/null; then
+  pass
+else
+  fail "集計の行に実体なし 1 件が無い: $CHECK_OUT"
+fi
+
+it "消した文書へのリンクは壊れたリンクとして落ちる"
+repo="$(new_repo)"
+add_doc "$repo" "docs/a.md" '[b](b.md)
+'
+add_doc "$repo" "docs/b.md" 'x
+'
+commit_repo "$repo" add-a-b
+rm "$repo/docs/b.md"
+run_check "$repo"
+assert_fail "消した文書へのリンク" "docs/b.md"
+
+it "消した追跡ファイルへのリンクの診断は、綴りの誤りではなく消したことを示す"
+assert_fail "消した文書への診断の文言" "作業ツリーで消した追跡ファイル"
+
+it "skip-worktree で実体の無い追跡ファイルへのリンクは通過する"
+repo="$(new_repo)"
+add_doc "$repo" "docs/a.md" '[b](b.md)
+'
+add_doc "$repo" "docs/b.md" 'x
+'
+commit_repo "$repo" add-a-b-skip
+( cd "$repo" && git update-index --skip-worktree docs/b.md && rm docs/b.md ) >/dev/null 2>&1
+run_check "$repo"
+if [[ "$CHECK_RC" -eq 0 ]] && printf '%s' "$CHECK_OUT" | grep 'DOC_LINKS_PASS' >/dev/null; then
+  pass
+else
+  fail "skip-worktree のファイルを消したものとして扱った: $CHECK_OUT"
+fi
+
+it "作業ツリーに置いていない追跡 md の走査を飛ばしたことを、件数で報告する"
+if printf '%s' "$CHECK_OUT" | grep '作業ツリーに置いていない 1 件' >/dev/null; then
+  pass
+else
+  fail "飛ばした件数が集計に出ていない: $CHECK_OUT"
+fi
+
+it "改行を含む名前のファイルを消しても、実在する別のパスを消したものと取り違えない"
+# 消したファイルの名前の各行（docs/e / docs/foo.md / z.md）が、実在する docs/foo.md に
+# 一致しないこと。取り違えると docs/foo.md の走査が飛ばされ、壊れたリンクを見逃す。
+repo="$(new_repo)"
+add_doc "$repo" "docs/foo.md" '[x](missing.md)
+'
+add_doc "$repo" $'docs/e\ndocs/foo.md\nz.md' 'y
+'
+commit_repo "$repo" add-newline-name
+( cd "$repo" && rm -- $'docs/e\ndocs/foo.md\nz.md' ) >/dev/null 2>&1
+run_check "$repo"
+if [[ "$CHECK_RC" -ne 0 ]] && printf '%s' "$CHECK_OUT" | grep 'DOC_LINKS_FAIL' >/dev/null \
+   && printf '%s' "$CHECK_OUT" | grep 'missing.md' >/dev/null; then
+  pass
+else
+  fail "docs/foo.md の壊れたリンクを見逃した（消したものと取り違えた）: $CHECK_OUT"
+fi
+
+it "壊れたシンボリックリンクの追跡 Markdown は従来どおり落ちる"
+repo="$(new_repo)"
+mkdir -p "$repo/docs"
+ln -s no-such-target.md "$repo/docs/link.md"
+( cd "$repo" && git add -A && $GIT_AS commit -q -m add-broken-symlink ) >/dev/null 2>&1
+run_check "$repo"
+assert_fail "壊れたシンボリックリンク"
+
 # ── 検査が成立していないことを合格にしない ────────────────────────────────────
 
 it "git 管理外では落ちる（検査が成立していない）"
