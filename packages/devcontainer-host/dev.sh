@@ -12,7 +12,7 @@
 #   dev supervise <名前>        起こして止まるまで待つ（systemd のユニットから使う）
 #   dev rebuild <名前> [--pull] コンテナを作り直す（ユニットを止めて、作り直して、起こし直す）
 #   dev doctor <名前>           「動いているのに入れない」を見分ける（exec・pids・ゾンビ・OOM・ユニット）
-#   dev doctor --runner <名前>  自前のランナーの点検（イメージ・PAT ファイルの権限・ユニット）
+#   dev doctor --runner <名前>  自前のランナーの点検（イメージ・PAT ファイルの権限・ユニット・ランナーの版の期限）
 #   dev runner build            自前のランナーのイメージを作る
 #   dev runner run <名前>       使い捨てのランナーのコンテナを起こして、止まるまで待つ（ユニットから使う）
 #   dev restart <名前>          作り直さずに再起動する（ユニットを止めて、docker restart して、起こし直す。compose なら全体）
@@ -650,6 +650,12 @@ runners_file() {
   fi
 }
 
+# イメージに付ける、ランナーの版のラベルのキー。devhost 固有の名前にするのは、基底のイメージ（公式のランナー）が
+# org.opencontainers.image.* などを持つため、基底の版と取り違えないようにするため。
+RUNNER_VERSION_LABEL="devhost.runner-version"
+# 自動更新を止めたランナーは、新しい版が出てから 30 日を過ぎるとジョブを渡されなくなる（GitHub の仕様）。
+RUNNER_VERSION_GRACE_DAYS=30
+
 # ランナーのイメージの名前と、そのビルドに使う Dockerfile の置き場所。
 runner_image() { printf '%s\n' "${DEV_RUNNER_IMAGE:-dev-runner:local}"; }
 runner_dockerfile() {
@@ -900,18 +906,21 @@ cmd_runner_build() {
   df="$(runner_dockerfile)"
   [[ -f "$df" ]] || die "Dockerfile がありません: $df（install.sh が置きます。README.md の「自前のランナー」）"
   img="$(runner_image)"
-  # 公式のランナーの版。環境変数 > 設定ファイルの runner_version > Dockerfile の既定値。Dockerfile は編集させない。
-  local ver="${DEV_RUNNER_VERSION:-}" bargs=()
+  # 公式のランナーの版は必ず確定させる。環境変数 > 設定ファイルの runner_version > Dockerfile の ARG の既定値。
+  # Dockerfile は編集させない。確定した版は --build-arg とイメージのラベルの両方へ渡す。
+  # ラベルは dev doctor --runner が「作ったときの版」を読むためのもの（版の期限の点検。cmd_doctor_runner）。
+  local ver="${DEV_RUNNER_VERSION:-}"
   if [[ -z "$ver" && -f "$(runners_file)" ]]; then
     load_runners_version
     ver="$R_VERSION"
   fi
-  if [[ -n "$ver" ]]; then
-    [[ "$ver" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || usage_error "ランナーの版は X.Y.Z の形です: $ver"
-    bargs=(--build-arg "RUNNER_VERSION=$ver")
+  if [[ -z "$ver" ]]; then
+    ver="$(sed -n 's/^ARG RUNNER_VERSION=\([^[:space:]]*\).*$/\1/p' "$df" | head -n 1)"
+    [[ -n "$ver" ]] || die "ランナーの版を決められません: $df に ARG RUNNER_VERSION= の既定値がありません（DEV_RUNNER_VERSION か runners の runner_version= で指定する）"
   fi
-  echo "[$PROG] ランナーのイメージを作ります: $img（$df${ver:+、ランナーの版 $ver}）"
-  docker build ${bargs[@]+"${bargs[@]}"} -t "$img" - <"$df" || die "ランナーのイメージを作れませんでした: $img"
+  [[ "$ver" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || usage_error "ランナーの版は X.Y.Z の形です: $ver"
+  echo "[$PROG] ランナーのイメージを作ります: $img（$df、ランナーの版 $ver）"
+  docker build --build-arg "RUNNER_VERSION=$ver" --label "$RUNNER_VERSION_LABEL=$ver" -t "$img" - <"$df" || die "ランナーのイメージを作れませんでした: $img"
 }
 
 # 後始末が要るか。コンテナを起こしたあと、正常に終わらなかったとき（失敗・TERM / INT / HUP）だけ 1 にする。
@@ -1397,6 +1406,77 @@ doctor_runner_group() {
   esac
 }
 
+# actions/runner の公開済みの版の一覧を読む。公開 API なので PAT は使わない（付けない）。
+# 戻り値: 0 = 成功（本文を出す） / 11 = 失敗（通信・HTTP エラー）。
+runner_releases_api() {
+  local out code
+  out="$(curl -sSL -m 20 \
+    -H 'Accept: application/vnd.github+json' \
+    -H 'X-GitHub-Api-Version: 2022-11-28' \
+    -w '\n%{http_code}' \
+    "${DEV_GITHUB_API:-https://api.github.com}/repos/actions/runner/releases?per_page=100")" || return 11
+  code="${out##*$'\n'}"
+  [[ "$code" == 2?? ]] || return 11
+  printf '%s\n' "${out%$'\n'*}"
+}
+
+# ランナーの版の期限の点検。イメージのラベルの版が、公開済みの新しい版から 30 日を過ぎていないか見る。
+# OK = 新しい版なし / WARN = 期限内、一覧を読めない、ラベル無し / FAIL = 期限切れ。「今日」は DEV_TODAY（YYYY-MM-DD）で差し替えられる。
+# 使い方: doctor_runner_version <イメージ>
+doctor_runner_version() {
+  local img="$1" ver resp found pub tag deadline today left over pub_s now_s dl_s
+  local how="上げ方: runners の runner_version= を新しい版へ変え、dev runner build でイメージを作り直し、ユニットを起こし直す（systemctl --user restart dev-runner@<名前>.service）"
+  ver="$(docker image inspect --format "{{ index .Config.Labels \"$RUNNER_VERSION_LABEL\" }}" "$img" 2>/dev/null)" || ver=""
+  if [[ ! "$ver" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    doc_line WARN "ランナーの版: イメージ $img に版のラベル（$RUNNER_VERSION_LABEL）がありません。dev runner build で作り直すと版を点検できます"
+    return 0
+  fi
+  if ! command -v curl >/dev/null 2>&1 || ! command -v jq >/dev/null 2>&1; then
+    doc_line WARN "ランナーの版 $ver: curl か jq が無いので、公開済みの版と比べられません（入れてください）"
+    return 0
+  fi
+  if ! resp="$(runner_releases_api 2>/dev/null)"; then
+    doc_line WARN "ランナーの版 $ver: 公開済みの版の一覧を読めませんでした（actions/runner のリリース。通信の失敗か API の不調）"
+    return 0
+  fi
+  # 自分より新しい、公開済み（prerelease / draft を除く）の版のうち、最も早く公開されたもの。
+  # 読むのは新しい順の 1 ページ（100 件）だけ。版はおよそ月に 1 回なので、100 版より古いランナー（ページの外に最初の新しい版がある）は
+  # 想定しない（その場合は期限を実際より遅く見積もる）。
+  found="$(printf '%s\n' "$resp" | jq -r --arg v "$ver" '
+    def vn: ltrimstr("v") | split(".") | map(tonumber);
+    [.[] | select(.prerelease == false and .draft == false and (.tag_name | test("^v?[0-9]+\\.[0-9]+\\.[0-9]+$")))
+         | select((.tag_name | vn) > ($v | vn))]
+    | if length == 0 then "none" else (min_by(.published_at) | "\(.tag_name) \(.published_at)") end' 2>/dev/null)" || found=""
+  if [[ -z "$found" ]]; then
+    doc_line WARN "ランナーの版 $ver: 公開済みの版の一覧を解釈できませんでした"
+    return 0
+  fi
+  if [[ "$found" == "none" ]]; then
+    doc_line OK "ランナーの版 $ver は、公開済みの最新です"
+    return 0
+  fi
+  tag="${found% *}"
+  pub="${found#* }"
+  # 期限は公開の時刻から数える（日付だけで数えると、期限の当日の公開時刻を過ぎても WARN のままになる）。
+  # 時刻は 1 つずつ求めて数であることを確かめてから引く（不正な日付を $(( )) へ渡すと、算術の誤りで関数ごと抜けるため）。
+  # 「今日」は DEV_TODAY（date -d が読める形。日付だけなら UTC の 0 時）で差し替えられる。
+  today="${DEV_TODAY:-now}"
+  if ! pub_s="$(date -u -d "$pub" +%s 2>/dev/null)" || ! now_s="$(date -u -d "$today" +%s 2>/dev/null)" ||
+    [[ ! "$pub_s" =~ ^[0-9]+$ || ! "$now_s" =~ ^[0-9]+$ ]]; then
+    doc_line WARN "ランナーの版 $ver: 新しい版 $tag がありますが、期限の日付を計算できませんでした"
+    return 0
+  fi
+  dl_s=$((pub_s + RUNNER_VERSION_GRACE_DAYS * 86400))
+  deadline="$(date -u -d "@$dl_s" '+%F %H:%M UTC')"
+  if [[ "$now_s" -lt "$dl_s" ]]; then
+    left=$(((dl_s - now_s) / 86400))
+    doc_line WARN "ランナーの版 $ver: 新しい版 $tag が ${pub%%T*} に公開されています。期限は $deadline（残り $left 日）。過ぎるとジョブが渡されなくなります。$how"
+  else
+    over=$(((now_s - dl_s) / 86400))
+    doc_line FAIL "ランナーの版 $ver: 新しい版 $tag の公開（${pub%%T*}）から ${RUNNER_VERSION_GRACE_DAYS} 日を過ぎました（期限 $deadline。$over 日超過）。ユニットは動いていてもジョブが渡されません。$how"
+  fi
+}
+
 # dev doctor --runner <名前>: ランナーの点検。1 つでも FAIL なら 1、WARN だけなら 3、無ければ 0。
 cmd_doctor_runner() {
   [[ $# -eq 1 ]] || usage_error "使い方: dev doctor --runner <名前>"
@@ -1409,6 +1489,7 @@ cmd_doctor_runner() {
 
   if docker image inspect "$img" >/dev/null 2>&1; then
     doc_line OK "イメージ $img があります"
+    doctor_runner_version "$img"
   else
     doc_line FAIL "イメージ $img がありません（dev runner build で作る）"
   fi
@@ -2029,8 +2110,11 @@ TERM を送っても止まらないときは、さらに 5 秒（DEV_EXEC_KILL_G
 
 --runner は自前のランナー（dev runner、設定ファイル runners の名前）の点検。プロジェクトの設定ファイルは読まない。
   FAIL  ランナーのイメージが無い / PAT ファイルが無い・group / other に権限がある・読めない /
-        docker=yes なのに Docker のソケットが無い
-  WARN  ユニット dev-runner@<名前> が active でも activating でもない
+        docker=yes なのに Docker のソケットが無い /
+        ランナーの版に新しい版が出てから 30 日を過ぎた（GitHub がジョブを渡さなくなる）
+  WARN  ユニット dev-runner@<名前> が active でも activating でもない /
+        ランナーの版に新しい版が出ている（期限の日付と残りの日数を出す） /
+        公開済みの版の一覧を読めない / イメージに版のラベルが無い（dev runner build で作り直す）
   （docker=yes の設定は、危険を知らせる INFO を出す。PAT の値は出さない）
 EOF
 }
@@ -2046,7 +2130,11 @@ dev runner — GitHub Actions の自前のランナーを、使い捨てのコ�
 
 build: ランナーのイメージ（公式のランナーのイメージに道具を足した runner.Dockerfile）を作る。
   Dockerfile は標準入力から渡す（ビルドの文脈を作らない）。Dockerfile は編集しない。公式のランナーの版を上げるときは、
-  環境変数 DEV_RUNNER_VERSION か、設定ファイルの `runner_version=X.Y.Z` の行で指定する（--build-arg で渡す。未指定なら Dockerfile の既定値）。
+  環境変数 DEV_RUNNER_VERSION か、設定ファイルの `runner_version=X.Y.Z` の行で指定する（未指定なら Dockerfile の ARG の既定値）。
+  確定した版は --build-arg とイメージのラベル（devhost.runner-version）の両方へ渡す。
+  自動更新を止めたランナーは、新しい版が出てから 30 日を過ぎるとジョブを渡されなくなる。dev doctor --runner <名前> がラベルの版を
+  公開済みの版（actions/runner）と比べて期限を知らせる（新しい版なし=OK / 期限内=WARN / 期限切れ=FAIL。「今日」は DEV_TODAY で差し替え可）。
+  上げ方: runner_version= を新しい版へ変える → dev runner build → ユニットを起こし直す。
 run: ユニット dev-runner@<名前>.service の ExecStart。1 回の起動で次をする。
   0. 同じ名前のランナーがすでに動いていれば（ロックが取れなければ）、何も消さずに 75 で終わる
   1. 設定ファイル runners の PAT のファイルを調べる（group / other に権限があれば、読まずに拒んで 78 で終わる）

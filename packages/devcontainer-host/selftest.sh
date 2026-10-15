@@ -285,12 +285,20 @@ case "$sub" in
     done
     ;;
   image)
+    # `image inspect <イメージ>`（存在確認）と、`image inspect --format <書式> <イメージ>`（ラベルの読み出し）だけを受ける。
+    fmt=""
+    if [[ $# -eq 4 && "$1" == "inspect" && "$2" == "--format" ]]; then fmt="$3"; set -- "$1" "$4"; fi
     [[ $# -eq 2 && "$1" == "inspect" ]] || { echo "fake docker: 想定外の image の引数: $*" >&2; exit 2; }
     [[ "${FAKE_IMAGE_MISSING:-0}" != "1" ]] || { echo "Error: No such image: $2" >&2; exit 1; }
     [[ "${FAKE_IMAGE_MISSING:-0}" != "daemon" ]] || { echo "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?" >&2; exit 1; }
+    if [[ -n "$fmt" ]]; then
+      [[ "$fmt" == '{{ index .Config.Labels "devhost.runner-version" }}' ]] || { echo "fake docker: 想定外の image inspect の書式: $fmt" >&2; exit 2; }
+      # FAKE_IMAGE_LABEL: イメージのラベルの版（既定は 2.338.0。空文字ならラベル無し＝本物の docker と同じく空を出す）
+      printf '%s\n' "${FAKE_IMAGE_LABEL-2.338.0}"
+    fi
     ;;
   build)
-    if [[ "${1:-}" == "--build-arg" ]]; then shift 2; fi
+    while [[ "${1:-}" == "--build-arg" || "${1:-}" == "--label" ]]; do shift 2; done
     [[ $# -eq 3 && "$1" == "-t" && "$3" == "-" ]] || { echo "fake docker: 想定外の build の引数: $*" >&2; exit 2; }
     cat >"$FAKE_STATE/build-stdin"
     ;;
@@ -535,6 +543,22 @@ set -euo pipefail
 EOF
 cat >>"$FAKEBIN/curl" <<'EOF'
 log_call curl "$@"
+if [[ "${*: -1}" == "https://api.github.com/repos/actions/runner/releases?per_page=100" ]]; then
+  # 公開の API（PAT を付けない。-K を使わない）。FAKE_RELEASES は JSON の配列（既定は 2.338.0 だけ）。
+  # FAKE_RELEASES_FAIL=500 は HTTP エラー。FAKE_API_NETFAIL=1 は通信の失敗。
+  [[ "$*" != *Authorization* ]] || { echo "fake curl: 公開 API に認証を付けてはなりません: $*" >&2; exit 2; }
+  if [[ "${FAKE_API_NETFAIL:-}" == "1" ]]; then
+    echo "curl: (6) Could not resolve host: api.github.com" >&2
+    exit 6
+  fi
+  if [[ -n "${FAKE_RELEASES_FAIL:-}" ]]; then
+    printf '%s\n%s' '{"message":"error"}' "$FAKE_RELEASES_FAIL"
+    exit 0
+  fi
+  default_releases='[{"tag_name":"v2.338.0","published_at":"2026-10-06T10:00:00Z","prerelease":false,"draft":false}]'
+  printf '%s\n%s' "${FAKE_RELEASES:-$default_releases}" 200
+  exit 0
+fi
 if [[ "${2:-}" == "-K" ]]; then
   # API。設定（PAT のヘッダ）は標準入力から来る。本物の `-w '\n%{http_code}'` に合わせ、本文の後に HTTP ステータスを出す
   # （-f を付けないので、HTTP エラーでも curl 自身は 0 で抜ける）。
@@ -599,7 +623,7 @@ cp "$FAKE_CURL_DIR/${2##*/}" "$4"
 EOF
 
 chmod +x "$FAKEBIN/devcontainer" "$FAKEBIN/docker" "$FAKEBIN/tmux" "$FAKEBIN/systemctl" "$FAKEBIN/git" "$FAKEBIN/ps" "$FAKEBIN/journalctl" "$FAKEBIN/codex" "$FAKEBIN/curl" "$FAKEBIN/iptables" "$FAKEBIN/iptables-restore"
-for t in cut cksum mv jq tar gzip cp chmod cmp dirname; do
+for t in cut cksum mv jq tar gzip cp chmod cmp dirname date; do
   p="$(command -v "$t")" || { echo "[devhost-selftest] $t が見つかりません" >&2; exit 1; }
   ln -s "$p" "$TOOLBIN/$t"
 done
@@ -2098,14 +2122,14 @@ expect_err "設定ファイルがありません"
 expect_no_calls
 
 cp "$HERE/runner.Dockerfile" "$WORK/conf/runner.Dockerfile"
-rrun 0 "runner build: Dockerfile を標準入力で渡す（ビルドの文脈を作らない）" DEV_RUNNER_DOCKERFILE="$WORK/conf/runner.Dockerfile" -- runner build
-expect_calls 'docker [build] [-t] [dev-runner:local] [-]'
+rrun 0 "runner build: 版を決めなければ Dockerfile の ARG の既定値を --build-arg とラベルの両方へ渡す。Dockerfile を標準入力で渡す（ビルドの文脈を作らない）" DEV_RUNNER_DOCKERFILE="$WORK/conf/runner.Dockerfile" -- runner build
+expect_calls 'docker [build] [--build-arg] [RUNNER_VERSION=2.338.0] [--label] [devhost.runner-version=2.338.0] [-t] [dev-runner:local] [-]'
 cmp -s "$WORK/conf/runner.Dockerfile" "$STATE/build-stdin" || ng "$CUR: Dockerfile が標準入力で渡っていません"
 rrun 0 "runner build: 環境変数の版を --build-arg で渡す（Dockerfile は編集しない）" DEV_RUNNER_DOCKERFILE="$WORK/conf/runner.Dockerfile" DEV_RUNNER_VERSION=2.999.0 -- runner build
-expect_calls 'docker [build] [--build-arg] [RUNNER_VERSION=2.999.0] [-t] [dev-runner:local] [-]'
+expect_calls 'docker [build] [--build-arg] [RUNNER_VERSION=2.999.0] [--label] [devhost.runner-version=2.999.0] [-t] [dev-runner:local] [-]'
 printf 'runner_version=2.888.1\nz my-org\n' >"$T"
 run 0 "runner build: 設定ファイルの runner_version を --build-arg で渡す" -- DEV_RUNNERS_FILE="$T" DEV_RUNNER_DOCKERFILE="$WORK/conf/runner.Dockerfile" -- runner build
-expect_calls 'docker [build] [--build-arg] [RUNNER_VERSION=2.888.1] [-t] [dev-runner:local] [-]'
+expect_calls 'docker [build] [--build-arg] [RUNNER_VERSION=2.888.1] [--label] [devhost.runner-version=2.888.1] [-t] [dev-runner:local] [-]'
 printf 'runner_version=latest\nz my-org\n' >"$T"
 run 2 "runner build: runner_version が X.Y.Z でなければ拒む" -- DEV_RUNNERS_FILE="$T" DEV_RUNNER_DOCKERFILE="$WORK/conf/runner.Dockerfile" -- runner build
 expect_no_calls
@@ -2150,6 +2174,37 @@ expect_out_line '\[WARN\] ランナーグループ my-group'
 no_pat_leak
 rrun 0 "doctor --runner: group を書かないランナーは、グループの一覧を引かない" FAKE_ACTIVE_UNITS=dev-runner@r1.service -- doctor --runner r1
 log_lacks 'runner-groups'
+# ランナーの版の期限（自動更新を止めたランナーは、新しい版の公開から 30 日で止まる）。「今日」は DEV_TODAY で固定する。
+REL_NEW='[{"tag_name":"v2.339.0","published_at":"2026-10-20T10:00:00Z","prerelease":false,"draft":false},{"tag_name":"v2.338.0","published_at":"2026-10-06T10:00:00Z","prerelease":false,"draft":false}]'
+rrun 0 "doctor --runner: ランナーの版に新しい版が無ければ OK" DEV_TODAY=2026-11-30 FAKE_ACTIVE_UNITS=dev-runner@r1.service -- doctor --runner r1
+expect_out_line '\[OK  \] ランナーの版 2.338.0 は、公開済みの最新です'
+log_has '^curl \[-sSL\] \[-m\] \[20\] .*\[https://api.github.com/repos/actions/runner/releases\?per_page=100\]$'
+log_lacks 'Bearer'
+rrun 3 "doctor --runner: 新しい版が出て期限内なら WARN（期限の日付と残り日数）" DEV_TODAY=2026-11-01 FAKE_RELEASES="$REL_NEW" FAKE_ACTIVE_UNITS=dev-runner@r1.service -- doctor --runner r1
+expect_out_line '\[WARN\] ランナーの版 2.338.0: 新しい版 v2.339.0 が 2026-10-20 に公開されています。期限は 2026-11-19 10:00 UTC（残り 18 日）'
+expect_out_line 'runner_version= を新しい版へ変え、dev runner build'
+rrun 3 "doctor --runner: 「今日」が日付として読めなければ、期限を計算できない WARN（関数ごと抜けない）" DEV_TODAY=not-a-date FAKE_RELEASES="$REL_NEW" FAKE_ACTIVE_UNITS=dev-runner@r1.service -- doctor --runner r1
+expect_out_line '\[WARN\] ランナーの版 2.338.0: 新しい版 v2.339.0 がありますが、期限の日付を計算できませんでした'
+expect_out_line 'ユニット dev-runner@r1.service: active'
+rrun 3 "doctor --runner: 期限の当日でも、公開の時刻の前なら WARN（残り 0 日）" DEV_TODAY=2026-11-19 FAKE_RELEASES="$REL_NEW" FAKE_ACTIVE_UNITS=dev-runner@r1.service -- doctor --runner r1
+expect_out_line '\[WARN\] ランナーの版 2.338.0: .*期限は 2026-11-19 10:00 UTC（残り 0 日）'
+rrun 1 "doctor --runner: 期限の当日でも、公開の時刻を過ぎれば FAIL" DEV_TODAY='2026-11-19 12:00' FAKE_RELEASES="$REL_NEW" FAKE_ACTIVE_UNITS=dev-runner@r1.service -- doctor --runner r1
+expect_out_line '\[FAIL\] ランナーの版 2.338.0: .*（期限 2026-11-19 10:00 UTC。0 日超過）'
+rrun 1 "doctor --runner: 期限を過ぎていれば FAIL" DEV_TODAY=2026-11-21 FAKE_RELEASES="$REL_NEW" FAKE_ACTIVE_UNITS=dev-runner@r1.service -- doctor --runner r1
+expect_out_line '\[FAIL\] ランナーの版 2.338.0: 新しい版 v2.339.0 の公開（2026-10-20）から 30 日を過ぎました（期限 2026-11-19 10:00 UTC。1 日超過）'
+rrun 3 "doctor --runner: 版の一覧を HTTP エラーで読めなければ WARN" FAKE_RELEASES_FAIL=500 FAKE_ACTIVE_UNITS=dev-runner@r1.service -- doctor --runner r1
+expect_out_line '\[WARN\] ランナーの版 2.338.0: 公開済みの版の一覧を読めませんでした'
+rrun 3 "doctor --runner: 通信の失敗で版の一覧を読めなければ WARN" FAKE_API_NETFAIL=1 FAKE_ACTIVE_UNITS=dev-runner@r1.service -- doctor --runner r1
+expect_out_line '\[WARN\] ランナーの版 2.338.0: 公開済みの版の一覧を読めませんでした'
+rrun 3 "doctor --runner: ラベルの無いイメージは WARN（作り直しを案内）" FAKE_IMAGE_LABEL= FAKE_ACTIVE_UNITS=dev-runner@r1.service -- doctor --runner r1
+expect_out_line '\[WARN\] ランナーの版: イメージ dev-runner:local に版のラベル.*dev runner build で作り直す'
+log_lacks 'actions/runner/releases'
+rrun 0 "doctor --runner: プレリリースと下書きだけが新しいなら OK" DEV_TODAY=2026-12-31 FAKE_RELEASES='[{"tag_name":"v2.340.0","published_at":"2026-10-01T00:00:00Z","prerelease":true,"draft":false},{"tag_name":"v2.341.0","published_at":"2026-10-01T00:00:00Z","prerelease":false,"draft":true},{"tag_name":"v2.338.0","published_at":"2026-10-06T10:00:00Z","prerelease":false,"draft":false}]' FAKE_ACTIVE_UNITS=dev-runner@r1.service -- doctor --runner r1
+expect_out_line '\[OK  \] ランナーの版 2.338.0 は、公開済みの最新です'
+rrun 3 "doctor --runner: 新しい版が複数あれば、最も早い公開日から数える" DEV_TODAY=2026-11-01 FAKE_RELEASES='[{"tag_name":"v2.340.0","published_at":"2026-10-30T00:00:00Z","prerelease":false,"draft":false},{"tag_name":"v2.339.0","published_at":"2026-10-20T10:00:00Z","prerelease":false,"draft":false}]' FAKE_ACTIVE_UNITS=dev-runner@r1.service -- doctor --runner r1
+expect_out_line '新しい版 v2.339.0 が 2026-10-20 に公開されています。期限は 2026-11-19 10:00 UTC（残り 18 日）'
+no_pat_leak
+
 rrun 2 "doctor --runner: 名前が無い" -- doctor --runner
 expect_no_calls
 rrun 2 "doctor --runner: 未登録の名前" -- doctor --runner nope
