@@ -347,17 +347,26 @@ git ls-files -z --deleted > "$ABSENT" \
 absent_count="$(tr -cd '\000' < "$ABSENT" | wc -c | tr -d ' ')"
 absent_count="${absent_count:-0}"
 NL=$'\n'
+# パスの中の \ と改行を書き換える（\ → \\、改行 → \n）。改行区切りの文字列で集合を持つので、
+# 書き換えないと、改行を含む名前（例: `x<改行>foo.md<改行>y`）が、実在する別のパス（`foo.md`）を
+# 消したものに見せてしまう。比べる側も同じ規則で書き換える。
+esc_path() {
+  local s="${1//\\/\\\\}"
+  printf '%s' "${s//$NL/\\n}"
+}
 absent_nl=""
 if [ "$absent_count" -gt 0 ]; then
-  # 所属判定を bash の組み込みだけで行うため、改行区切りの文字列にして持つ。
-  absent_nl="$NL$(tr '\000' '\n' < "$ABSENT")"
+  # 所属判定を bash の組み込みだけで行うため、書き換えたパスを改行区切りの文字列にして持つ。
+  while IFS= read -r -d '' path; do
+    absent_nl="$absent_nl$NL$(esc_path "$path")"
+  done < "$ABSENT"
 fi
 
 # 消した（--deleted の）パスか。判定をここ 1 か所にする。
 is_absent() {
   [ -n "$absent_nl" ] || return 1
   case "$absent_nl$NL" in
-    *"$NL$1$NL"*) return 0 ;;
+    *"$NL$(esc_path "$1")$NL"*) return 0 ;;
   esac
   return 1
 }

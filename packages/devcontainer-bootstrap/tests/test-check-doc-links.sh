@@ -410,6 +410,24 @@ else
   fail "飛ばした件数が集計に出ていない: $CHECK_OUT"
 fi
 
+it "改行を含む名前のファイルを消しても、実在する別のパスを消したものと取り違えない"
+# 消したファイルの名前の各行（docs/e / docs/foo.md / z.md）が、実在する docs/foo.md に
+# 一致しないこと。取り違えると docs/foo.md の走査が飛ばされ、壊れたリンクを見逃す。
+repo="$(new_repo)"
+add_doc "$repo" "docs/foo.md" '[x](missing.md)
+'
+add_doc "$repo" $'docs/e\ndocs/foo.md\nz.md' 'y
+'
+commit_repo "$repo" add-newline-name
+( cd "$repo" && rm -- $'docs/e\ndocs/foo.md\nz.md' ) >/dev/null 2>&1
+run_check "$repo"
+if [[ "$CHECK_RC" -ne 0 ]] && printf '%s' "$CHECK_OUT" | grep 'DOC_LINKS_FAIL' >/dev/null \
+   && printf '%s' "$CHECK_OUT" | grep 'missing.md' >/dev/null; then
+  pass
+else
+  fail "docs/foo.md の壊れたリンクを見逃した（消したものと取り違えた）: $CHECK_OUT"
+fi
+
 it "壊れたシンボリックリンクの追跡 Markdown は従来どおり落ちる"
 repo="$(new_repo)"
 mkdir -p "$repo/docs"
