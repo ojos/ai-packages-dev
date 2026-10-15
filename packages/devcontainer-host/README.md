@@ -330,6 +330,15 @@ journalctl --user -u dev-runner@<名前>.service -n 20
     グループ名かグループ側の設定を直してから `start` し直します。
   - `dev doctor --runner <名前>` は、`group=` を書いたランナーについて、組織のランナーグループの一覧（PAT の「Self-hosted runners: Read」で読めます）を引き、
     あれば OK、無ければ FAIL、読めなければ WARN（理由を出します。PAT の値は出しません）にします。
+- **版の期限。** 自動更新を止めたランナー（`--disableupdate`）は、新しい版（メジャー・マイナー・パッチのいずれも）が公開されてから
+  30 日以内に上げないと、GitHub がジョブを渡さなくなります。ユニットは動き続けるので、ジョブが待ち続ける「生きているのに仕事をしない」状態になります。
+  `dev runner build` は版を必ず確定させ（`DEV_RUNNER_VERSION` > `runners` の `runner_version=` > Dockerfile の既定値）、
+  `--build-arg` とイメージのラベル（`devhost.runner-version`）の両方へ渡します。`dev doctor --runner <名前>` はラベルの版を、actions/runner の
+  公開済みの版（プレリリースと下書きを除く。公開の API なので PAT は要りません）と比べ、新しい版が無ければ OK、期限内なら WARN（期限の日付と残りの日数）、
+  期限を過ぎていれば FAIL、一覧を読めないときとラベルの無いイメージ（`dev runner build` で作り直します）は WARN にします。
+  **点検は `dev doctor` を打ったときだけ行い、自動では走りません。** 定期に（たとえば週に 1 回）打ち、WARN のうちに上げます。
+  上げ方は、`runners` の `runner_version=` を新しい版へ変え、`dev runner build` でイメージを作り直し、ユニットを起こし直します
+  （`systemctl --user restart dev-runner@<名前>.service`）。
 - **イメージ。** 公式のランナーのイメージ（`ghcr.io/actions/actions-runner`）に、配るワークフローが使う道具（git・gh・jq・shellcheck など）を
   足したものです（`runner.Dockerfile`）。**公式のイメージの版は固定しています**（`ARG RUNNER_VERSION`）。コンテナが使い捨てなので
   ランナーの自動更新は効かず、古すぎる版は GitHub が受け付けなくなります。版を上げるのは手で行います。**`runner.Dockerfile` は編集しません**
@@ -533,8 +542,11 @@ TERM を送っても止まらないときは、さらに 5 秒（DEV_EXEC_KILL_G
 
 --runner は自前のランナー（dev runner、設定ファイル runners の名前）の点検。プロジェクトの設定ファイルは読まない。
   FAIL  ランナーのイメージが無い / PAT ファイルが無い・group / other に権限がある・読めない /
-        docker=yes なのに Docker のソケットが無い
-  WARN  ユニット dev-runner@<名前> が active でも activating でもない
+        docker=yes なのに Docker のソケットが無い /
+        ランナーの版に新しい版が出てから 30 日を過ぎた（GitHub がジョブを渡さなくなる）
+  WARN  ユニット dev-runner@<名前> が active でも activating でもない /
+        ランナーの版に新しい版が出ている（期限の日付と残りの日数を出す） /
+        公開済みの版の一覧を読めない / イメージに版のラベルが無い（dev runner build で作り直す）
   （docker=yes の設定は、危険を知らせる INFO を出す。PAT の値は出さない）
 ```
 
@@ -550,7 +562,11 @@ dev runner — GitHub Actions の自前のランナーを、使い捨てのコ�
 
 build: ランナーのイメージ（公式のランナーのイメージに道具を足した runner.Dockerfile）を作る。
   Dockerfile は標準入力から渡す（ビルドの文脈を作らない）。Dockerfile は編集しない。公式のランナーの版を上げるときは、
-  環境変数 DEV_RUNNER_VERSION か、設定ファイルの `runner_version=X.Y.Z` の行で指定する（--build-arg で渡す。未指定なら Dockerfile の既定値）。
+  環境変数 DEV_RUNNER_VERSION か、設定ファイルの `runner_version=X.Y.Z` の行で指定する（未指定なら Dockerfile の ARG の既定値）。
+  確定した版は --build-arg とイメージのラベル（devhost.runner-version）の両方へ渡す。
+  自動更新を止めたランナーは、新しい版が出てから 30 日を過ぎるとジョブを渡されなくなる。dev doctor --runner <名前> がラベルの版を
+  公開済みの版（actions/runner）と比べて期限を知らせる（新しい版なし=OK / 期限内=WARN / 期限切れ=FAIL。「今日」は DEV_TODAY で差し替え可）。
+  上げ方: runner_version= を新しい版へ変える → dev runner build → ユニットを起こし直す。
 run: ユニット dev-runner@<名前>.service の ExecStart。1 回の起動で次をする。
   0. 同じ名前のランナーがすでに動いていれば（ロックが取れなければ）、何も消さずに 75 で終わる
   1. 設定ファイル runners の PAT のファイルを調べる（group / other に権限があれば、読まずに拒んで 78 で終わる）
