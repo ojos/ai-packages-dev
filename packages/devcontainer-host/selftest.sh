@@ -2317,6 +2317,37 @@ grep -qE '^FROM ghcr\.io/actions/actions-runner:\$\{RUNNER_VERSION\}$' "$DF" || 
 grep -qE '^ARG RUNNER_VERSION=[0-9]+\.[0-9]+\.[0-9]+$' "$DF" || ng "Dockerfile のランナーの版が固定されていません（ARG RUNNER_VERSION=X.Y.Z）"
 if grep -qF 'download.docker.com' "$DF"; then ng "Dockerfile が Docker のリポジトリを足しています（公式のイメージが docker の CLI と buildx を持つ）"; fi
 if grep -qE '^(COPY|ADD) ' "$DF"; then ng "Dockerfile が COPY / ADD を使っています（ビルドの文脈は渡さない）"; fi
+# Dockerfile の apt の一覧と、README の「イメージ」の列挙（runner-apt の印の間）が一致すること。
+# README は一覧の写しなので、片方だけに道具を足すと食い違う。その食い違いをここで落とす。
+# 使い方: apt_list_check <Dockerfile> <README>。食い違えば理由を標準エラーへ出して 1 を返す。
+apt_list_check() {
+  local df="$1" readme="$2" df_set readme_set
+  # Dockerfile: 継続行（\ で終わる行）をつないで && で区切り、apt-get install の区切りごとに、オプション（- で始まる語）を除いた語を取る。
+  # 区切りの数・オプションの順番・パッケージの並びに依らない。
+  df_set="$(sed -e ':a' -e '/\\$/{N;s/\\\n/ /;ba' -e '}' "$df" | sed 's/&&/\n/g' |
+    awk '{ for (i = 1; i < NF; i++) if ($i == "apt-get" && $(i + 1) == "install") { for (j = i + 2; j <= NF; j++) if ($j !~ /^-/) print $j } }' | sort -u)"
+  # README: 印の間を、改行をまたいでも読む。
+  readme_set="$(tr '\n' ' ' <"$readme" | sed -n 's/.*<!-- runner-apt:begin -->\(.*\)<!-- runner-apt:end -->.*/\1/p' | tr -d '`' | tr ' ' '\n' | sed '/^$/d' | sort -u)"
+  if [[ -z "$df_set" || -z "$readme_set" ]]; then
+    echo "apt の一覧を取り出せません（Dockerfile の apt-get install、または README の runner-apt の印が見つかりません）" >&2
+    return 1
+  fi
+  if [[ "$df_set" != "$readme_set" ]]; then
+    # shellcheck disable=SC2116,SC2086 # 改行区切りの集合を、語分割で 1 行にして出す意図（echo $x）
+    printf 'apt の一覧が違います\n  Dockerfile: %s\n  README:     %s\n' "$(echo $df_set)" "$(echo $readme_set)" >&2
+    return 1
+  fi
+}
+apt_list_check "$DF" "$README" || ng "Dockerfile の apt の一覧と README の列挙（runner-apt）が違います"
+# 照合が、片方だけに足した道具で落ちることも確かめる（照合が常に通る形に壊れていないこと）。
+# 足す位置は、一覧の並びに依らない所（最初の apt-get install の直後 / 終わりの印の直前）にする。
+sed '0,/apt-get install /s//apt-get install extra-tool /' "$DF" >"$WORK/apt.Dockerfile"
+grep -qF 'extra-tool' "$WORK/apt.Dockerfile" || ng "照合の試験の前提: Dockerfile の apt-get install を書き換えられません"
+if apt_list_check "$WORK/apt.Dockerfile" "$README" 2>/dev/null; then ng "Dockerfile だけに足した道具を、照合が見逃しました"; fi
+# shellcheck disable=SC2016 # バッククォートは Markdown の文字で、展開する意図は無い
+sed 's/<!-- runner-apt:end -->/ `extra-tool`<!-- runner-apt:end -->/' "$README" >"$WORK/apt.README.md"
+grep -qF 'extra-tool' "$WORK/apt.README.md" || ng "照合の試験の前提: README の列挙を書き換えられません"
+if apt_list_check "$DF" "$WORK/apt.README.md" 2>/dev/null; then ng "README だけに足した道具を、照合が見逃しました"; fi
 
 if [[ "$fail" -ne 0 ]]; then
   echo "DEVHOST_SELFTEST_FAIL" >&2

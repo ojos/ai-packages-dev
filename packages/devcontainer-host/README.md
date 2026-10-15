@@ -337,7 +337,11 @@ journalctl --user -u dev-runner@<名前>.service -n 20
   `dev runner build` をやり直し(`--build-arg` で渡します。未指定なら Dockerfile の既定値)、ユニットを起こし直します。公式のイメージは docker の CLI と buildx を
   最初から持つので、`runner.Dockerfile` は足しません。入れる道具の一覧は、devcontainer-bootstrap の README の「配るワークフローの実行先（ACTIONS_RUNS_ON）」の一覧が前提です
   （配るワークフローが自前のランナーに要る bash・git・gh・GNU coreutils 相当・sed・grep）。jq・shellcheck・curl・unzip・gawk は、
-  利用側の `acceptance.sh` が使うことが多いので、配るワークフローには要らないが入れてあります。
+  利用側の `acceptance.sh` が使うことが多いので、配るワークフローには要らないが入れてあります。xz-utils・zstd・bzip2 は、
+  GitHub がホストするランナーにはあって公式のランナーのイメージには無い展開の道具です。無いと、道具を `.tar.xz` などで落として
+  展開する段が、自前のランナーでだけ落ちます。apt で入れるもの（`selftest.sh` が `runner.Dockerfile` と照合します）:
+  <!-- runner-apt:begin -->`bzip2` `ca-certificates` `curl` `gawk` `gh` `git` `gnupg` `jq` `shellcheck` `unzip` `xz-utils` `zstd`<!-- runner-apt:end -->
+  （`gh` は GitHub CLI の公式の apt リポジトリから入れ、`ca-certificates`・`gnupg` はその導入に使います）。
 - **更新。** 新しい版へは `install.sh` を再実行します（`runner.Dockerfile` が変わったら、`dev runner build` でイメージを作り直します）。
   `dev self-update` はユニットや `runner.Dockerfile` を書き換えず、古いときに案内だけを出します。
 

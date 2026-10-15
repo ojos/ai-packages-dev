@@ -9,6 +9,7 @@ devhost（SSH で届く外部の機械で devcontainer を保つ道具。コマ�
 ## 次の版（未リリース）
 
 ### Summary
+- **自前のランナーのイメージに、展開の道具 `xz-utils`・`zstd`・`bzip2` を足した**（ojos/ai-packages-dev#603）。GitHub がホストするランナーにはあり、公式のランナーのイメージには無い道具で、無いとワークフローが道具を `.tar.xz` などで落として展開する段（`curl ... | tar -xJ` など）が、自前のランナーでだけ `xz: Cannot exec` で落ちていた。`zstd` は actions/cache も使う（無いと gzip に落ちる）。README の「イメージ」に apt で入れるものの一覧を置き、`selftest.sh` が `runner.Dockerfile` の一覧と照合するようにした。**適用には `install.sh` で更新したあと、`dev runner build` でイメージを作り直し、ランナーのユニットを起こし直す。**
 - **`dev.sh` と `selftest.sh` が、既定の重大度の shellcheck を通るようにした**（ojos/ai-packages-dev#589 / ojos/ai-packages-dev#590）。`dev.sh` は、ランナーの一覧を読むループの中で求めていた設定の置き場所（`dirname`）を、ループの前で求めるようにした（SC2094 の誤検出。挙動は変わらない）。`selftest.sh` の 13 件は意図した書き方なので、理由を書いて抑止した。開発リポジトリの CI で、配布する `.sh` の全体を既定の重大度の shellcheck に掛けるようにした。
 
 ## v0.3.0
