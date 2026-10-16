@@ -335,7 +335,9 @@ while [[ $# -gt 0 ]]; do
       ;;
     --no-gitignore)     MANAGE_GITIGNORE="false"; MANAGE_GITIGNORE_EXPLICIT="true"; shift ;;
     --gitignore-targets)   GITIGNORE_TARGETS="$2"; GITIGNORE_TARGETS_EXPLICIT="true"; shift 2 ;;
-    --second-opinion-engine) SECOND_OPINION_ENGINE_OPT="${2-}"; SECOND_OPINION_ENGINE_EXPLICIT="true"; shift 2 ;;
+    --second-opinion-engine)
+      [[ $# -ge 2 ]] || { echo "error: --second-opinion-engine には値（gemini / antigravity / codex）が必要です。" >&2; exit 1; }
+      SECOND_OPINION_ENGINE_OPT="$2"; SECOND_OPINION_ENGINE_EXPLICIT="true"; shift 2 ;;
     --with-playbook)    WITH_PLAYBOOK="true"; shift ;;
     --without-playbook) WITH_PLAYBOOK="false"; shift ;;
     --playbook-from)    PLAYBOOK_FROM="$2"; shift 2 ;;
@@ -687,28 +689,54 @@ for lang in "${LANGUAGES[@]}"; do
     *) echo "error: unsupported language: $lang (supported: node, go, python, php, rust, ruby)" >&2; exit 1 ;;
   esac
 done
-# --second-opinion-engine は、生成の前（何も書く前）に検証する。--upgrade では記録から
-# 引き継いだ値も同じ検査に通す（--without-<エンジン> で外した場合に、選んでいないエンジンが残らない）。
-# 空文字の明示（--second-opinion-engine ""）は未指定とは扱わず、値の誤りとして止める。
+# --with-* で選択された装備に含まれるか。has_language と対になる述語。
+# --second-opinion-engine の検証（下）が使うため、ここ（引数解析の直後）で定義する。
+# WITH_SET は空になり得るため、未束縛展開を避けて空配列を安全に扱う。
+has_with() {
+  local target="$1" w
+  for w in ${WITH_SET[@]+"${WITH_SET[@]}"}; do [[ "$w" == "$target" ]] && return 0; done
+  return 1
+}
+
+# --second-opinion-engine は、生成の前（何も書く前）に検証する。
+# 利用者が明示した値が不正なら止める。--upgrade で ORIGIN から引き継いだ値は、
+# 未知の値なら ORIGIN の破損として止め、選んでいない・記入欄が出ない構成のために
+# 使えなくなっただけなら、警告して空に戻す（そうしないと --without-<エンジン> のあと
+# どの引数でも --upgrade が通らなくなる）。空文字の明示は値の誤りとして止める。
 if [[ "$SECOND_OPINION_ENGINE_EXPLICIT" == "true" && -z "$SECOND_OPINION_ENGINE_OPT" ]]; then
   echo "error: --second-opinion-engine には gemini / antigravity / codex のいずれかが必要です。" >&2
   exit 1
 fi
 if [[ -n "$SECOND_OPINION_ENGINE_OPT" ]]; then
-  # has_with はこの後で定義されるため、ここでは WITH_SET を直接引く。
-  soe_has() { local w; for w in ${WITH_SET[@]+"${WITH_SET[@]}"}; do [[ "$w" == "$1" ]] && return 0; done; return 1; }
+  if [[ "$SECOND_OPINION_ENGINE_EXPLICIT" == "true" ]]; then
+    soe_label="--second-opinion-engine $SECOND_OPINION_ENGINE_OPT"
+  else
+    soe_label="ORIGIN の input:second-opinion-engine=$SECOND_OPINION_ENGINE_OPT"
+  fi
   case "$SECOND_OPINION_ENGINE_OPT" in
     gemini|antigravity|codex) ;;
-    *) echo "error: --second-opinion-engine must be one of: gemini, antigravity, codex（指定: $SECOND_OPINION_ENGINE_OPT）" >&2; exit 1 ;;
+    *)
+      if [[ "$SECOND_OPINION_ENGINE_EXPLICIT" == "true" ]]; then
+        echo "error: --second-opinion-engine must be one of: gemini, antigravity, codex（指定: $SECOND_OPINION_ENGINE_OPT）" >&2
+      else
+        echo "error: ORIGIN の input:second-opinion-engine の値が不正です（$SECOND_OPINION_ENGINE_OPT。gemini / antigravity / codex のいずれかのはず）。ORIGIN の破損の可能性があるため止めます。" >&2
+      fi
+      exit 1
+      ;;
   esac
-  if ! soe_has antigravity && ! soe_has codex; then
-    echo "error: --second-opinion-engine は、--with-antigravity か --with-codex を選んだ構成でだけ指定できます。" >&2
-    echo "       この構成では .env.example に SECOND_OPINION_ENGINE の記入欄を出さないため、指定の行き先がありません。" >&2
-    exit 1
+  soe_problem=""
+  if ! has_with antigravity && ! has_with codex; then
+    soe_problem="--with-antigravity も --with-codex も選んでいない構成では、.env.example に SECOND_OPINION_ENGINE の記入欄を出さず、指定の行き先がありません"
+  elif ! has_with "$SECOND_OPINION_ENGINE_OPT"; then
+    soe_problem="--with-$SECOND_OPINION_ENGINE_OPT で選んでいないエンジンは指定できません"
   fi
-  if ! soe_has "$SECOND_OPINION_ENGINE_OPT"; then
-    echo "error: --second-opinion-engine $SECOND_OPINION_ENGINE_OPT には --with-$SECOND_OPINION_ENGINE_OPT が必要です（選んでいないエンジンは指定できません）。" >&2
-    exit 1
+  if [[ -n "$soe_problem" ]]; then
+    if [[ "$SECOND_OPINION_ENGINE_EXPLICIT" == "true" ]]; then
+      echo "error: $soe_label: $soe_problem。" >&2
+      exit 1
+    fi
+    echo "warning: $soe_label は、今回の構成では使えません（$soe_problem）。ORIGIN の記録を外し、指定が無いときの決め方に戻します。" >&2
+    SECOND_OPINION_ENGINE_OPT=""
   fi
 fi
 case "$PLAYBOOK_CONFLICT_POLICY" in
@@ -9879,14 +9907,6 @@ has_language() {
   return 1
 }
 
-# --with-* で選択された装備に含まれるか。has_language と対になる述語。
-# WITH_SET は空になり得るため、未束縛展開を避けて空配列を安全に扱う。
-has_with() {
-  local target="$1" w
-  for w in ${WITH_SET[@]+"${WITH_SET[@]}"}; do [[ "$w" == "$target" ]] && return 0; done
-  return 1
-}
-
 # with-feature（devcontainer feature）の path を返す。cloud CLI と Terraform。
 with_feature_path() {
   case "$1" in
@@ -10448,6 +10468,7 @@ build_second_opinion_engine_block() {
 
 # 第二意見レビューのエンジン（gemini | antigravity | codex）。空なら gemini。
 # gemini も選んで生成した構成では gemini を記入済みで出す。
+# 生成時に --second-opinion-engine で明示した場合は、その値になる。
 #
 # antigravity（Antigravity CLI）は Google アカウントの OAuth 認証で、API キーに
 # 対応しない。初回は対話で `agy` を起動してログインすること。
@@ -10468,6 +10489,7 @@ ENGTMPL
 
 # 第二意見レビューのエンジン（gemini | codex）。空なら gemini。
 # 生成時に選んだエンジン（gemini を選んでいれば gemini、codex だけなら codex）を記入済みで出す。
+# 生成時に --second-opinion-engine で明示した場合は、その値になる。
 #
 # codex（Codex CLI）は ChatGPT アカウントの OAuth 認証（または API キー）。初回は
 # 対話で `codex login` を通すこと。GEMINI_API_KEY は使わない。
@@ -10482,6 +10504,7 @@ ENGTMPL
 
 # 第二意見レビューのエンジン（gemini | antigravity）。空なら gemini。
 # 生成時に選んだエンジン（gemini を選んでいれば gemini、antigravity だけなら antigravity）を記入済みで出す。
+# 生成時に --second-opinion-engine で明示した場合は、その値になる。
 #
 # antigravity（Antigravity CLI）は Google アカウントの OAuth 認証で、API キーに
 # 対応しない。初回は対話で `agy` を起動してログインすること。GEMINI_API_KEY は

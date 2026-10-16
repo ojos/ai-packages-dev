@@ -39,10 +39,37 @@ it "--upgrade --second-opinion-engine gemini で上書きできる"
 if bash "$BOOTSTRAP" --upgrade --output-dir "$OUT_C" --second-opinion-engine gemini >/dev/null 2>&1 \
    && [[ "$(engine_of "$OUT_C")" == "SECOND_OPINION_ENGINE=gemini" ]]; then pass; else fail "上書きできていない: $(engine_of "$OUT_C")"; fi
 
-it "記録したエンジンを --without で外す --upgrade は、書く前に止まる"
-before="$(cat "$OUT_C/.env.example")"
-if ! bash "$BOOTSTRAP" --upgrade --output-dir "$OUT_C" --second-opinion-engine codex --without-codex >/dev/null 2>&1 \
-   && [[ "$(cat "$OUT_C/.env.example")" == "$before" ]]; then pass; else fail "止まっていない、または書き換わった"; fi
+it "記録したエンジンを --without で外す --upgrade は、警告して記録を外し、既定の決め方に戻る"
+OUT_W="$(new_workdir)/p"
+run_bootstrap "$OUT_W" --with-gemini --with-codex --second-opinion-engine codex >/dev/null 2>&1
+w_err="$(bash "$BOOTSTRAP" --upgrade --output-dir "$OUT_W" --without-codex 2>&1 >/dev/null)"; w_rc=$?
+if [[ "$w_rc" == 0 && "$w_err" == *warning:*ORIGIN* ]] \
+   && [[ "$(engine_of "$OUT_W")" == "" ]] \
+   && ! grep -q 'input:second-opinion-engine' "$OUT_W/.devcontainer/ORIGIN"; then pass; else fail "rc=$w_rc 値=$(engine_of "$OUT_W") err=$w_err"; fi
+
+it "gemini + antigravity を残して codex を外すと、既定（gemini）に戻る"
+OUT_W2="$(new_workdir)/p"
+run_bootstrap "$OUT_W2" --with-gemini --with-antigravity --with-codex --second-opinion-engine codex >/dev/null 2>&1
+bash "$BOOTSTRAP" --upgrade --output-dir "$OUT_W2" --without-codex >/dev/null 2>&1
+if [[ "$(engine_of "$OUT_W2")" == "SECOND_OPINION_ENGINE=gemini" ]]; then pass; else fail "$(engine_of "$OUT_W2")"; fi
+
+it "明示した値が選んでいないエンジンなら、--upgrade でも止まる"
+if ! bash "$BOOTSTRAP" --upgrade --output-dir "$OUT_W2" --second-opinion-engine codex >/dev/null 2>&1; then pass; else fail "止まっていない"; fi
+
+it "ORIGIN の値が未知なら、ORIGIN の破損として止まる"
+OUT_B="$(new_workdir)/p"
+run_bootstrap "$OUT_B" --with-codex --second-opinion-engine codex >/dev/null 2>&1
+sed 's|^input:second-opinion-engine=.*|input:second-opinion-engine=foo|' "$OUT_B/.devcontainer/ORIGIN" > "$OUT_B/o.tmp" && mv "$OUT_B/o.tmp" "$OUT_B/.devcontainer/ORIGIN"
+b_err="$(bash "$BOOTSTRAP" --upgrade --output-dir "$OUT_B" 2>&1 >/dev/null)"; b_rc=$?
+if [[ "$b_rc" != 0 && "$b_err" == *ORIGIN* ]]; then pass; else fail "rc=$b_rc err=$b_err"; fi
+
+it "doctor は ORIGIN の不正なエンジン値を検出する"
+d_out="$(bash "$(dirname "$BOOTSTRAP")/doctor.sh" --target-dir "$OUT_B" 2>&1)"
+if [[ "$d_out" == *"input:second-opinion-engine が"* ]]; then pass; else fail "検出していない: $d_out"; fi
+
+it "--second-opinion-engine が最後の引数で値が無いときは、メッセージを出して止まる"
+v_err="$(bash "$BOOTSTRAP" --project-name t --languages node --with-codex --second-opinion-engine 2>&1 >/dev/null)"; v_rc=$?
+if [[ "$v_rc" != 0 && "$v_err" == *"--second-opinion-engine"* ]]; then pass; else fail "rc=$v_rc err=$v_err"; fi
 
 # ── 未指定の出力が不変 ───────────────────────────────────────────────────────
 it "未指定の出力は、既定と同じ値を明示した場合と同一（gemini + codex は gemini のまま）"
