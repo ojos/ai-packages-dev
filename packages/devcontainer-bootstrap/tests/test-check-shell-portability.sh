@@ -375,6 +375,25 @@ rule_case readlink-f 'readlink -f "$path"'                                  # bs
 rule_case base64-w   'base64 -w 0 f'                                        # bsd-ok: フィクスチャ
 rule_case find-printf 'find . -printf "%p\n"'                               # bsd-ok: フィクスチャ
 rule_case xargs-r    'printf "" | xargs -r echo'                            # bsd-ok: フィクスチャ
+rule_case xargs-0r   'printf "" | xargs -0r echo'                           # bsd-ok: フィクスチャ
+rule_case xargs-0-r  'printf "" | xargs -0 -r echo'                         # bsd-ok: フィクスチャ
+rule_case xargs-r0   'printf "" | xargs -r0 echo'                           # bsd-ok: フィクスチャ
+
+# xargs の後ろの引数の途中にある -r（パスの image-replace、長いオプション）は、
+# xargs のオプションではないので通す（#613）。
+xargs_clean_case() {
+  local label="$1" body="$2"
+  it "規則表: xargs の引数の途中の -r（$label）は検出しない（陰性）"
+  {
+    printf '%s\n' 'set -euo pipefail'
+    printf '%s\n' "$body"
+  } > "$FIXBODY"
+  probe "rule-xargs-clean-$label"
+  assert_clean "xargs $label"
+}
+
+xargs_clean_case path      'find . -print0 | xargs -0 node ./tools/image-replace/run.mjs'
+xargs_clean_case long-opt  'find . -print0 | xargs -0 cmd --recursive'
 rule_case head-neg   'head -n -1 f'                                         # bsd-ok: フィクスチャ
 rule_case tac        'tac f > g'                                            # bsd-ok: フィクスチャ
 rule_case ignorecase 'awk "BEGIN { IGNORECASE = 1 }" f'                     # bsd-ok: フィクスチャ
