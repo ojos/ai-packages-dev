@@ -111,7 +111,7 @@ check_origin_format() {
     case "$line" in
       '#'*) ;;
       version=*|flags=*|inputs-format=*) ;;
-      input:project-name=*|input:languages=*|input:base-image-mode=*|input:base-image=*|input:manage-gitignore=*|input:gitignore-targets=*|input:playbook=*|input:playbook-source=*|input:playbook-ref=*) ;;
+      input:project-name=*|input:languages=*|input:base-image-mode=*|input:base-image=*|input:manage-gitignore=*|input:gitignore-targets=*|input:second-opinion-engine=*|input:playbook=*|input:playbook-source=*|input:playbook-ref=*) ;;
       input:*) bad="$bad [認識できない入力の行: ${line%%=*}]" ;;
       hash:?*=*)
         # sha256 に = は入らないが、パスには入りうる。最後の = で区切る。
