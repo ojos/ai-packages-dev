@@ -272,7 +272,7 @@ dcb_origin_load_inputs() {
   local file="$1" mode
   ORIGIN_IN_PROJECT_NAME="" ORIGIN_IN_LANGUAGES="" ORIGIN_IN_FLAGS=""
   ORIGIN_IN_BASE_IMAGE_MODE="" ORIGIN_IN_BASE_IMAGE=""
-  ORIGIN_IN_MANAGE_GITIGNORE="" ORIGIN_IN_GITIGNORE_TARGETS="" ORIGIN_IN_SECOND_OPINION_ENGINE="" ORIGIN_IN_CLAUDE_REMOTE_CONTROL=""
+  ORIGIN_IN_MANAGE_GITIGNORE="" ORIGIN_IN_GITIGNORE_TARGETS="" ORIGIN_IN_SECOND_OPINION_ENGINE="" ORIGIN_IN_CLAUDE_REMOTE_CONTROL="" ORIGIN_IN_CLAUDE_REMOTE_CONTROL_SET=""
   ORIGIN_IN_PLAYBOOK="" ORIGIN_IN_PLAYBOOK_SOURCE="" ORIGIN_IN_PLAYBOOK_REF=""
   [[ -f "$file" ]] || return 1
   # 値が 1 でなければ、この版が読めない書式として 1 を返す（doctor.sh と揃える）。
@@ -289,7 +289,12 @@ dcb_origin_load_inputs() {
   ORIGIN_IN_GITIGNORE_TARGETS="$(dcb_origin_get "$file" input:gitignore-targets)" || return 1
   # 任意の入力。古い ORIGIN や未指定のときは行が無いので、無いことを失敗にしない。
   ORIGIN_IN_SECOND_OPINION_ENGINE="$(dcb_origin_get "$file" input:second-opinion-engine)" || ORIGIN_IN_SECOND_OPINION_ENGINE=""
-  ORIGIN_IN_CLAUDE_REMOTE_CONTROL="$(dcb_origin_get "$file" input:claude-remote-control)" || ORIGIN_IN_CLAUDE_REMOTE_CONTROL=""
+  # 行が無い（未指定・古い ORIGIN）と、値が空の行（破損）を区別するため、行の有無を別に持つ。
+  if ORIGIN_IN_CLAUDE_REMOTE_CONTROL="$(dcb_origin_get "$file" input:claude-remote-control)"; then
+    ORIGIN_IN_CLAUDE_REMOTE_CONTROL_SET="true"
+  else
+    ORIGIN_IN_CLAUDE_REMOTE_CONTROL=""
+  fi
   ORIGIN_IN_PLAYBOOK="$(dcb_origin_get "$file" input:playbook)" || return 1
   if [[ "$ORIGIN_IN_PLAYBOOK" == "installed" ]]; then
     ORIGIN_IN_PLAYBOOK_SOURCE="$(dcb_origin_get "$file" input:playbook-source)" || return 1
@@ -833,7 +838,7 @@ upgrade_merge_inputs() {
   fi
   # 引き継ぐのは、明示も --no-claude-remote-control も無いときだけ。記録が true 以外なら
   # ORIGIN の破損として止める（黙って未指定として扱うと、次の生成で行が消える）。
-  if [[ "$CLAUDE_REMOTE_CONTROL_EXPLICIT" != "true" && "$NO_CLAUDE_REMOTE_CONTROL" != "true" && -n "$ORIGIN_IN_CLAUDE_REMOTE_CONTROL" ]]; then
+  if [[ "$CLAUDE_REMOTE_CONTROL_EXPLICIT" != "true" && "$NO_CLAUDE_REMOTE_CONTROL" != "true" && "$ORIGIN_IN_CLAUDE_REMOTE_CONTROL_SET" == "true" ]]; then
     if [[ "$ORIGIN_IN_CLAUDE_REMOTE_CONTROL" != "true" ]]; then
       echo "error: ORIGIN の input:claude-remote-control の値が不正です（$ORIGIN_IN_CLAUDE_REMOTE_CONTROL。true のはず）。ORIGIN の破損の可能性があるため止めます。記録を外すなら --no-claude-remote-control を指定してください。" >&2
       exit 1
@@ -10844,14 +10849,20 @@ enable_claude_remote_control() {
 
   mode=""
   if [[ -f "$CLAUDE_USER_SETTINGS" ]]; then
-    # 壊れた JSON、またはオブジェクトでない JSON を黙って置き換えない。
-    if ! jq -e 'type == "object"' "$CLAUDE_USER_SETTINGS" >/dev/null 2>&1; then
+    # 壊れた JSON、オブジェクトでない JSON、複数の値を連結した JSON を黙って置き換えない
+    # （-s で全体を配列として読み、値がちょうど 1 つのオブジェクトであることを確かめる）。
+    if ! jq -e -s 'length == 1 and (.[0] | type == "object")' "$CLAUDE_USER_SETTINGS" >/dev/null 2>&1; then
       echo "[install-ai-tools] warning: JSON のオブジェクトとして読めないため Remote Control の設定を飛ばします: $CLAUDE_USER_SETTINGS" >&2
       return 0
     fi
     # 冪等。キーがあれば（false でも）触らない。
     if jq -e 'has("remoteControlAtStartup")' "$CLAUDE_USER_SETTINGS" >/dev/null 2>&1; then
       echo "[install-ai-tools] remoteControlAtStartup already set, skipping"
+      return 0
+    fi
+    # 利用者が読み取り専用にしたファイルは、親ディレクトリに書けても mv で置き換えない。
+    if [[ ! -w "$CLAUDE_USER_SETTINGS" ]]; then
+      echo "[install-ai-tools] warning: 書き込めないため Remote Control の設定を飛ばします: $CLAUDE_USER_SETTINGS" >&2
       return 0
     fi
     # 既存のファイルは元の権限を保つ（stat は GNU / BSD で書式が違う）。

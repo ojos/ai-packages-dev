@@ -67,6 +67,12 @@ H="$(new_home)"; mkdir -p "$H/.claude"; printf '{broken' > "$H/.claude/settings.
 o="$(run_install "$INSTALL" "$H")"; rc="$(rc_of "$INSTALL" "$H")"
 if [[ "$rc" == 0 && "$o" == *warning:* && "$(cat "$H/.claude/settings.json")" == '{broken' ]]; then pass; else fail "rc=$rc $o"; fi
 
+it "複数の JSON 値を連結した settings.json は、警告して 0 で終わり、ファイルを変えない"
+H="$(new_home)"; mkdir -p "$H/.claude"; printf '{"remoteControlAtStartup": false}\n{"a": 1}\n' > "$H/.claude/settings.json"
+before="$(cat "$H/.claude/settings.json")"
+o="$(run_install "$INSTALL" "$H")"; rc="$(rc_of "$INSTALL" "$H")"
+if [[ "$rc" == 0 && "$o" == *warning:* && "$(cat "$H/.claude/settings.json")" == "$before" ]]; then pass; else fail "rc=$rc $o"; fi
+
 it "jq が無ければ警告を出して 0 で終わり、ファイルを作らない"
 H="$(new_home)"
 o="$(run_install "$INSTALL" "$H" "$NOJQ")"; rc="$(rc_of "$INSTALL" "$H" "$NOJQ")"
@@ -142,6 +148,18 @@ PY
 t_err="$(bash "$BOOTSTRAP" --upgrade --output-dir "$OUT_T" 2>&1 >/dev/null)"; t_rc=$?
 if [[ "$t_rc" != 0 && "$t_err" == *ORIGIN*input:claude-remote-control* ]]; then pass; else fail "rc=$t_rc err=$t_err"; fi
 
+it "ORIGIN の値が空（input:claude-remote-control=）でも、--upgrade は ORIGIN の破損として止まる"
+OUT_E="$(new_workdir)/p"
+run_bootstrap "$OUT_E" --with-claude --claude-remote-control >/dev/null 2>&1
+python3 - "$OUT_E/.devcontainer/ORIGIN" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p).read().replace("input:claude-remote-control=true", "input:claude-remote-control=")
+open(p, "w").write(s)
+PY
+e_err="$(bash "$BOOTSTRAP" --upgrade --output-dir "$OUT_E" 2>&1 >/dev/null)"; e_rc=$?
+if [[ "$e_rc" != 0 && "$e_err" == *ORIGIN*input:claude-remote-control* ]]; then pass; else fail "rc=$e_rc err=$e_err"; fi
+
 it "--upgrade --no-claude-remote-control は、破損した値があっても記録を外して生成できる"
 if bash "$BOOTSTRAP" --upgrade --output-dir "$OUT_T" --no-claude-remote-control >/dev/null 2>&1 \
    && ! grep -q 'claude-remote-control' "$OUT_T/.devcontainer/ORIGIN"; then pass; else fail "外せない"; fi
@@ -207,6 +225,16 @@ else
   o="$(run_install "$INSTALL" "$H")"; rc="$(rc_of "$INSTALL" "$H")"
   chmod 700 "$H"
   if [[ "$rc" == 0 && "$o" == *warning:* ]]; then pass; else fail "rc=$rc $o"; fi
+fi
+
+it "読み取り専用の settings.json は、親ディレクトリに書けても置き換えず、警告して 0 で終わる"
+if [[ "$(id -u)" == 0 ]]; then
+  pass  # root は権限で拒否されないので検査できない
+else
+  H="$(new_home)"; mkdir -p "$H/.claude"; printf '{"a": 1}\n' > "$H/.claude/settings.json"; chmod 400 "$H/.claude/settings.json"
+  o="$(run_install "$INSTALL" "$H")"; rc="$(rc_of "$INSTALL" "$H")"
+  if [[ "$rc" == 0 && "$o" == *warning:* && "$(cat "$H/.claude/settings.json")" == '{"a": 1}' ]]; then pass; else fail "rc=$rc $o"; fi
+  chmod 600 "$H/.claude/settings.json"
 fi
 
 it "settings.json がシンボリックリンクなら書き換えず、警告して 0 で終わる"
