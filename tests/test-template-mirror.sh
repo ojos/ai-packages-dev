@@ -190,6 +190,12 @@ scripts/post-rebuild-check.sh'
 #                         写しが無いので追随漏れは起き得ず、MIRRORED にはできない
 #                         （一致相手が無い）。
 #
+#   update-check.sh       DCB と ai-playbook の新しい版の確認と追従（ORIGIN の版を GitHub の
+#                         最新の安定版と比べる）。**このリポジトリ自身は DCB の生成物ではなく
+#                         ORIGIN を持たない**（リリースから取得した版が無い）ため、置いても
+#                         常に「何もしない」で終わり、起動役の on-attach.sh と rc の注入も
+#                         呼ばない。写しが無いので追随漏れは起き得ず、MIRRORED にはできない。
+#
 #   check-deps-installed.sh  npm の導入記録と package-lock.json の照合（--languages に
 #                         node を選んだ構成へ配る）。**このリポジトリに package.json は
 #                         無い。** 写しを置いても毎回「対象が無い」で飛ばすだけになり、
@@ -197,7 +203,8 @@ scripts/post-rebuild-check.sh'
 #                         **このリポジトリが node を導入したら、写しを置いて MIRRORED へ
 #                         移す判断が要る**（下の不変条件がその判断を促す）。
 EXCLUDED_NO_COPY_RELS='scripts/acceptance-remote.sh
-scripts/check-deps-installed.sh'
+scripts/check-deps-installed.sh
+scripts/update-check.sh'
 
 # get_template_content() の case ラベルから、指定パスのヒアドキュメント本文を取り出す。
 # シングルクォートは awk へ変数で渡す（awk のプログラム自体をシングルクォートで
