@@ -2129,6 +2129,25 @@ cmd_runner_route() {
       return 0
     fi
   fi
+  # ロックの外で読んでからここまでにグループが変わっていることがあるので、ロックを取ったあとに対象の一覧を読み直す
+  # （外したリポジトリを向けたり、足したリポジトリを落としたりしないため）。online の判定と読み直しの待ちはロックの外のまま。
+  # 読み直せなければ、ロックの外で読んだ一覧は使わない: up・sync は何も書かずに 1、down は今までどおりキャッシュで戻す。
+  if [[ "$readable" -eq 1 ]]; then
+    local rtrc=0
+    route_targets_load "$org" "$grp" || rtrc=$?
+    if [[ "$rtrc" -eq 0 ]]; then
+      if [[ "$repos" != "$ROUTE_REPOS" ]]; then
+        echo "[$PROG] route $label: ロックを取るまでにグループの対象が変わったので、読み直した一覧で書きます"
+      fi
+      repos="$ROUTE_REPOS"
+    elif [[ "$sub" != "down" ]]; then
+      die "$label: ロックを取った後に対象の一覧を読み直せないので、$sub では何も書きません（古い一覧で向け直さないため）"
+    elif [[ "$rtrc" -eq 2 ]]; then
+      cfgerr=1 readable=0
+    else
+      readable=0
+    fi
+  fi
   if [[ "$readable" -eq 1 ]]; then
     if cache="$(route_cache_read "$org.$label" 2>/dev/null)"; then
       removed="$(route_list_minus "$cache" "$repos")"

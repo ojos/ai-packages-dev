@@ -328,6 +328,36 @@ main() {
       die "RELEASE-MANIFEST.json に dev-route@.service のハッシュがありません（ほかの dev-route の資産はあります）。何も置いていません。"
     fi
     has_route=0
+    # dev-route を持たない版（古い dev は route を知らない）を、dev-route のユニットが有効・動作中のまま入れると、
+    # 停止の処理（ExecStopPost の dev runner route down）が失敗して、変数をラベルに残す。何も置かずに止める。
+    # systemctl が無い機械では、*.wants/ のリンクだけで判定する。
+    # 利用者の機械の状態を勝手に変えないため、止めるのは利用者に任せる（迂回のオプションは持たない）。
+    local route_active="" ru q1 q2 qrc=0 wl wants_dir="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+    if command -v systemctl >/dev/null 2>&1; then
+      q1="$(systemctl --user list-unit-files --no-legend --plain --state=enabled,enabled-runtime 'dev-route@*.service' 'dev-route-sync@*.timer' 2>/dev/null)" || qrc=1
+      q2="$(systemctl --user list-units --no-legend --plain --state=active,activating,reloading,deactivating 'dev-route@*.service' 'dev-route-sync@*.timer' 2>/dev/null)" || qrc=1
+      # 問い合わせに失敗した（ユーザーのセッションのバスに届かない等）ときは、動作中のユニットを見落としうる。
+      # dev-route のユニットのファイルが置いてある機械では、確かめられないので止める（置いていなければ使っていない）。
+      if [[ "$qrc" -ne 0 && -e "$wants_dir/dev-route@.service" ]]; then
+        echo "[$PROG] systemctl --user に問い合わせられず、dev-route のユニットが動いていないことを確かめられません。何も置いていません。" >&2
+        echo "[$PROG] ユーザーのセッションで（ssh なら XDG_RUNTIME_DIR=/run/user/\$(id -u) を付けて）入れ直すか、dev-route のユニットを止めてから入れ直してください。" >&2
+        exit 1
+      fi
+      route_active="$(printf '%s\n%s\n' "$q1" "$q2" | awk '{print $1}' | grep -E '^(dev-route@.+\.service|dev-route-sync@.+\.timer)$' | sort -u || true)"
+    fi
+    # 有効にしたインスタンスは、*.wants/ のリンクとしても残る。systemd の版によって list-unit-files が
+    # テンプレートのインスタンスを列挙しないことがあるので、リンクも見る（systemctl が無い機械でも見る）。
+    for wl in "$wants_dir"/*.wants/dev-route@?*.service "$wants_dir"/*.wants/dev-route-sync@?*.timer; do
+      [[ -e "$wl" || -L "$wl" ]] || continue
+      route_active="$(printf '%s\n%s\n' "$route_active" "${wl##*/}" | grep -v '^$' | sort -u)"
+    done
+    if [[ -n "$route_active" ]]; then
+      echo "[$PROG] この版には dev-route（変数の切り替え）が無いのに、次のユニットが有効か動いています:" >&2
+      while IFS= read -r ru; do echo "[$PROG]   $ru" >&2; done <<<"$route_active"
+      echo "[$PROG] このまま入れると、古い dev は route を知らず、停止の処理が失敗して変数をラベルに残します。何も置いていません。" >&2
+      echo "[$PROG] 先に止めてから入れ直してください: systemctl --user disable --now dev-route@<ラベル>.service dev-route-sync@<ラベル>.timer" >&2
+      exit 1
+    fi
   fi
   names="dev.sh dev-up@.service dev-runner@.service runner.Dockerfile projects.example runners.example"
   [[ "$has_route" -eq 0 ]] || names="$names dev-route@.service dev-route-sync@.service dev-route-sync@.timer routes.example"

@@ -16,6 +16,7 @@ devhost（SSH で届く外部の機械で devcontainer を保つ道具。コマ�
   - PAT はランナーの登録用とは別にする（Variables: Read and write と、組織の Self-hosted runners: Read だけ）。引数にも出力にも出さない。
   - `dev doctor --runner <名前>` が、`routes` にそのランナーのラベルの行があれば、その行の PAT・グループ・ユニットとタイマー・`runners` との一致も点検する。
   - 新しいファイル `dev-route@.service`・`dev-route-sync@.service`・`dev-route-sync@.timer`・`routes.example` は個別の資産として添付され、`install.sh` が置く（`routes` は作らず、雛形を `routes.example` の名前で置く）。`dev self-update` はユニットの差を案内するだけで、書き換えない。
+- **`dev runner route` の端のケースを 2 つ塞いだ**（ojos/ai-packages-dev#623）。(1) 対象の一覧をロックの外で読んでから書くまでにグループが変わると、古い一覧で書いていた。ロックを取ったあと（そろえ直しは active の再確認のあと）に読み直し、違えば読み直した一覧で書く。読み直せなければ、起動・そろえ直しは何も書かず 1、停止は今までどおりキャッシュで戻す。online の判定と読み直しの待ちはロックの外のまま。(2) dev-route を持たない版（v0.4.0 以前）を `install.sh` で入れると、置いてある dev-route のユニットが残り、route を知らない古い `dev` で停止の処理が失敗して変数をラベルに残していた。`install.sh` は、そのような版を入れるとき `dev-route@*.service` か `dev-route-sync@*.timer` が enabled か、動作中（停止の途中を含む）なら、何も置かずに非 0 で止まり、先に `systemctl --user disable --now dev-route@<ラベル>.service dev-route-sync@<ラベル>.timer` で止める手順を案内する（`systemctl` の一覧に加えて `*.wants/` の有効のリンクも見る。dev-route のユニットのファイルがあるのに `systemctl --user` に問い合わせられないときも止まる。迂回のオプションは無い）。
 
 ### 移行
 
