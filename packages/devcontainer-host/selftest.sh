@@ -44,6 +44,15 @@
 # - curl（API）: `-sSL -K - -X <メソッド> -H ... -w <書式> <URL>` の形だけ。**標準入力の設定を $FAKE_STATE/curl-config へ書き**
 #   （PAT が引数でなく標準入力で渡ることを見る）、FAKE_PAT_EXPECT を含まなければ 401 相当（22）で落とす。
 #   組織の登録用トークン（POST）・ランナーの一覧（GET、page 付き。FAKE_REGISTERED_NAME のランナーを 1 つ返す。FAKE_PAGES=2 なら 1 ページ目は 100 件の別のランナーで、自分は 2 ページ目）・登録の削除（DELETE）だけ
+# - curl（API、dev runner route 用）: 上の API の偽物に、次を足す。変数 ACTIONS_RUNS_ON は $FAKE_VARS_DIR/<リポジトリ>（ファイルがあれば設定済み。中身が値）で持つ。
+#   `GET /repos/<組織>/<リポジトリ>/actions/variables/ACTIONS_RUNS_ON`（無ければ 404）、`PATCH` 同上（204）、`POST /repos/.../actions/variables`（201。既にあれば 409）。
+#   本文は `-d` で受け、書いた内容を $FAKE_STATE/writes へ「メソッド リポジトリ 値」で足す。失敗の注入: FAKE_WRITE_FAIL（書き込みが常に 500 のリポジトリ。カンマ区切り）/
+#   FAKE_WRITE_FAIL_ONCE（最初の書き込みだけ 500）/ FAKE_VAR_FAIL（読み取りが 500）/ FAKE_VAR_403（読み取りが 403）。
+#   `GET .../runner-groups/<id>/repositories`（FAKE_GROUP_REPOS のカンマ区切り。既定 r-a,r-b,r-c。FAKE_GROUP_REPOS_GEN=N なら gen-1..gen-N。FAKE_API_FAIL=group-repos で失敗）、
+#   グループの一覧は visibility を持つ（FAKE_GROUP_VIS。既定 selected）。FAKE_GROUPS_PAD=N は、名前の違うグループ N 件を前に並べて対象を 2 ページ目へ送る。
+#   ランナーの一覧は FAKE_RUNNERS（「名前:状態:ラベル+ラベル」のカンマ区切り）で差し替えられる（FAKE_RUNNERS_FIRST は 1 回目の読み取りだけ。FAKE_RUNNERS_PAGES=2 は 1 ページ目を 100 件の別のランナーで埋める。FAKE_API_FAIL=runners で失敗）。
+#   FAKE_PAR_TRACK=1 は、変数の読み取りを 0.3 秒止めて、同時に走っている数を $FAKE_STATE/par へ足す（並列の上限を見る）。
+#   `sleep` は、route の試験だけ PATH の先頭に置いた偽物（呼ばれた引数を記録して、待たずに返る）に差し替える。
 # - /proc と cgroup は偽の木（$WORK/proc と $WORK/cg）を DEV_PROC_ROOT / DEV_CGROUP_ROOT で渡す。
 #   cgroup v2 の形に合わせる（/proc/<PID>/cgroup は `0::/パス` の 1 行、pids.current / pids.max は
 #   数か `max`、pids.events は `max N`、memory.events は 1 行 1 キー）
@@ -536,10 +545,12 @@ EOF
 
 # curl: ネットワークに出ない。`-fsSL <URL> -o <出力先>` だけを受け、URL の末尾のファイル名で
 # $FAKE_CURL_DIR のファイルを写す（URL がリリースの取得先でなければ落とす）。FAKE_CURL_FAIL=1 は HTTP 404 相当（-f で 22）。
+REAL_SLEEP_PATH="$(command -v sleep)"
 cat >"$FAKEBIN/curl" <<EOF
 #!$BASH_BIN
 set -euo pipefail
 . "$FAKEBIN/_log"
+REAL_SLEEP="$REAL_SLEEP_PATH"
 EOF
 cat >>"$FAKEBIN/curl" <<'EOF'
 log_call curl "$@"
@@ -584,9 +595,24 @@ if [[ "${2:-}" == "-K" ]]; then
           body='{"token":"REGTOKEN123","expires_at":"2099-01-01T00:00:00Z"}'
         fi
         ;;
-      "GET https://api.github.com/orgs/"*"/actions/runners?per_page=100&page="*)
+      "GET https://api.github.com/orgs/"*"/actions/runners?per_page=100&page="* | "GET https://api.github.com/orgs/"*"/actions/runner-groups/"*"/runners?per_page=100&page="*)
+        # 組織のランナーの一覧と、グループのランナーの一覧（dev runner route が数える）を同じ FAKE_RUNNERS で返す。
         page="${url##*page=}"
-        if [[ "${FAKE_PAGES:-1}" == "2" && "$page" == "1" ]]; then
+        if [[ "${FAKE_API_FAIL:-}" == "runners" ]]; then
+          body='{"message":"error"}' code="${FAKE_API_CODE:-500}"
+        elif [[ -n "${FAKE_RUNNERS:-}${FAKE_RUNNERS_FIRST:-}" ]]; then
+          spec="${FAKE_RUNNERS:-}"
+          if [[ "${FAKE_RUNNERS_PAGES:-1}" == "2" && "$page" == "1" ]]; then
+            spec=""
+            body="$(jq -nc '{total_count: 101, runners: [range(100) | {id: (2000 + .), name: "filler-\(.)", status: "offline", labels: []}]}')"
+          else
+            if [[ -n "${FAKE_RUNNERS_FIRST:-}" && ! -e "$FAKE_STATE/runners-first-done" ]]; then
+              spec="$FAKE_RUNNERS_FIRST"
+              : >"$FAKE_STATE/runners-first-done"
+            fi
+            body="$(jq -nc --arg s "$spec" '{runners: [$s | split(",")[] | select(length > 0) | split(":") | {id: 5, name: .[0], status: .[1], labels: [(.[2] // "") | split("+")[] | select(length > 0) | {name: .}]}], total_count: 1}')"
+          fi
+        elif [[ "${FAKE_PAGES:-1}" == "2" && "$page" == "1" ]]; then
           # 1 ページ目は 100 件で埋まり、自分のランナーは 2 ページ目にいる。
           body="$(jq -nc '{total_count: 101, runners: [range(100) | {id: (1000 + .), name: "filler-\(.)"}]}')"
         elif [[ -n "${FAKE_REGISTERED_NAME:-}" ]]; then
@@ -601,7 +627,86 @@ if [[ "${2:-}" == "-K" ]]; then
         if [[ "${FAKE_API_FAIL:-}" == "groups" ]]; then
           body='{"message":"error"}' code="${FAKE_API_CODE:-403}"
         else
-          body="$(jq -nc --arg g "${FAKE_GROUPS:-Default,my-group}" '{total_count: ($g | split(",") | length), runner_groups: [$g | split(",")[] | {id: 1, name: .}]}')"
+          # 名前の前に visibility を置かない並び（キーの並び順に頼らない）。FAKE_GROUPS_PAD は前に N 件並べる。ページは 100 件ごと。
+          page="${url##*page=}"
+          body="$(jq -nc --arg g "${FAKE_GROUPS:-Default,my-group}" --arg vis "${FAKE_GROUP_VIS:-selected}" --argjson pad "${FAKE_GROUPS_PAD:-0}" --argjson page "$page" '
+            ([range($pad) | "pad-\(.)"] + ($g | split(","))) as $all
+            | {runner_groups: [$all | to_entries[] | {name: .value, id: (.key + 1), visibility: $vis}][(($page - 1) * 100):($page * 100)], total_count: ($all | length)}')"
+        fi
+        ;;
+      "GET https://api.github.com/orgs/"*"/actions/runner-groups/"*"/repositories?per_page=100&page="*)
+        if [[ "${FAKE_API_FAIL:-}" == "group-repos" ]]; then
+          body='{"message":"error"}' code="${FAKE_API_CODE:-500}"
+        elif [[ "${FAKE_API_BADBODY:-}" == "group-repos" ]]; then
+          # 2xx だが、配列のキー（repositories）が無い応答。
+          body='{"message":"ok"}'
+        elif [[ "${FAKE_API_BADBODY:-}" == "group-repos-item" ]]; then
+          # 2xx で配列はあるが、名前の無い要素が混ざる応答。
+          body='{"total_count":2,"repositories":[{"name":"r-a"},{"id":9}]}'
+        else
+          page="${url##*page=}"
+          body="$(jq -nc --arg r "${FAKE_GROUP_REPOS-r-a,r-b,r-c}" --argjson gen "${FAKE_GROUP_REPOS_GEN:-0}" --argjson page "$page" '
+            (if $gen > 0 then [range($gen) | "gen-\(. + 1)"] else ($r | split(",") | map(select(length > 0))) end) as $all
+            | {total_count: ($all | length), repositories: [$all[] | {full_name: ("my-org/" + .), name: .}][(($page - 1) * 100):($page * 100)]}')"
+        fi
+        ;;
+      "GET https://api.github.com/repos/"*"/actions/variables/ACTIONS_RUNS_ON" | "PATCH https://api.github.com/repos/"*"/actions/variables/ACTIONS_RUNS_ON" | "POST https://api.github.com/repos/"*"/actions/variables")
+        rp="${url#https://api.github.com/repos/}"
+        rp="${rp%%/actions/*}"
+        repo="${rp#*/}"
+        vf="$FAKE_VARS_DIR/$repo"
+        # 本文（-d の次の引数）
+        reqbody=""
+        prev=""
+        for arg in "$@"; do
+          [[ "$prev" == "-d" ]] && reqbody="$arg"
+          prev="$arg"
+        done
+        in_list() { case ",$2," in *",$1,"*) return 0 ;; esac; return 1; }
+        if [[ "$method" == "GET" ]]; then
+          if [[ "${FAKE_PAR_TRACK:-}" == "1" ]]; then
+            mkdir -p "$FAKE_STATE/inflight"
+            : >"$FAKE_STATE/inflight/$$"
+            set -- "$FAKE_STATE"/inflight/*
+            echo "$#" >>"$FAKE_STATE/par"
+            "$REAL_SLEEP" 0.3
+            rm -f "$FAKE_STATE/inflight/$$"
+          fi
+          if in_list "$repo" "${FAKE_VAR_FAIL:-}"; then
+            body='{"message":"error"}' code=500
+          elif in_list "$repo" "${FAKE_VAR_403:-}"; then
+            body='{"message":"Resource not accessible by personal access token"}' code=403
+          elif [[ -f "$vf" ]]; then
+            body="$(jq -nc --rawfile v "$vf" '{value: $v, name: "ACTIONS_RUNS_ON"}')"
+          else
+            body='{"message":"Not Found"}' code=404
+          fi
+        else
+          if in_list "$repo" "${FAKE_WRITE_FAIL:-}"; then
+            body='{"message":"error"}' code=500
+          elif in_list "$repo" "${FAKE_WRITE_FAIL_ONCE:-}" && [[ ! -e "$FAKE_STATE/once-$repo" ]]; then
+            : >"$FAKE_STATE/once-$repo"
+            body='{"message":"error"}' code=500
+          elif [[ "$method" == "POST" ]]; then
+            # POST は、変数の名前を本文の name から取る。既にあれば 409（空の値の既存の変数を未設定と取り違えると、ここで失敗する）。
+            repo="${rp#*/}"
+            vf="$FAKE_VARS_DIR/$repo"
+            if [[ -f "$vf" ]]; then
+              body='{"message":"Already exists"}' code=409
+            else
+              printf '%s' "$(printf '%s' "$reqbody" | jq -r '.value')" >"$vf"
+              printf 'POST %s %s\n' "$repo" "$(printf '%s' "$reqbody" | jq -r '.value')" >>"$FAKE_STATE/writes"
+              body='{}' code=201
+            fi
+          else
+            if [[ -f "$vf" ]]; then
+              printf '%s' "$(printf '%s' "$reqbody" | jq -r '.value')" >"$vf"
+              printf 'PATCH %s %s\n' "$repo" "$(printf '%s' "$reqbody" | jq -r '.value')" >>"$FAKE_STATE/writes"
+              body='' code=204
+            else
+              body='{"message":"Not Found"}' code=404
+            fi
+          fi
         fi
         ;;
       *) echo "fake curl: 想定外の API: $method $url" >&2; exit 2 ;;
@@ -621,6 +726,18 @@ if [[ "${FAKE_CURL_FAIL:-0}" == "1" ]]; then
 fi
 cp "$FAKE_CURL_DIR/${2##*/}" "$4"
 EOF
+
+# route の試験でだけ PATH の先頭に置く偽の sleep（待たずに返り、引数を記録する）。ほかの試験の呼び出しの記録には現れない。
+ROUTEBIN="$WORK/routebin"
+mkdir -p "$ROUTEBIN"
+cat >"$ROUTEBIN/sleep" <<EOF
+#!$BASH_BIN
+. "$FAKEBIN/_log"
+EOF
+cat >>"$ROUTEBIN/sleep" <<'EOF'
+log_call sleep "$@"
+EOF
+chmod +x "$ROUTEBIN/sleep"
 
 chmod +x "$FAKEBIN/devcontainer" "$FAKEBIN/docker" "$FAKEBIN/tmux" "$FAKEBIN/systemctl" "$FAKEBIN/git" "$FAKEBIN/ps" "$FAKEBIN/journalctl" "$FAKEBIN/codex" "$FAKEBIN/curl" "$FAKEBIN/iptables" "$FAKEBIN/iptables-restore"
 for t in cut cksum mv jq tar gzip cp chmod cmp dirname date; do
@@ -2403,6 +2520,611 @@ if apt_list_check "$WORK/apt.Dockerfile" "$README" 2>/dev/null; then ng "Dockerf
 sed 's/<!-- runner-apt:end -->/ `extra-tool`<!-- runner-apt:end -->/' "$README" >"$WORK/apt.README.md"
 grep -qF 'extra-tool' "$WORK/apt.README.md" || ng "照合の試験の前提: README の列挙を書き換えられません"
 if apt_list_check "$DF" "$WORK/apt.README.md" 2>/dev/null; then ng "README だけに足した道具を、照合が見逃しました"; fi
+
+# ── 6g. runner route（ACTIONS_RUNS_ON をランナーのラベルへ向ける）────────────────
+# 偽の curl（変数・ランナーグループ・ランナーの一覧）と偽の systemctl で、ネットワークを使わずに見る。
+# 変数は $WORK/fakevars に、キャッシュとロックは $WORK/routestate に置く（呼び出しをまたいで持ち越す試験は RT_KEEP=1）。
+ROUTES="$WORK/conf/routes"
+cp "$WORK/conf/runner-pat" "$WORK/conf/route-pat"
+chmod 600 "$WORK/conf/route-pat"
+cat >"$ROUTES" <<EOF
+# 試験の routes
+rt1  my-org  group=my-group      # 行末のコメント
+rt2  my-org  group=grp2  pat_file=$WORK/conf/pat-ro
+rt3  my-org  group=my-group  pat_file=$WORK/conf/pat-loose
+rt4  my-org  group=my-group  pat_file=$WORK/conf/no-such-pat
+EOF
+ROUTE_RCONF="$WORK/conf/runners-route"
+cat >"$ROUTE_RCONF" <<EOF
+q1  my-org  labels=devhost,rt1  group=my-group
+q2  my-org  labels=rt2  group=other-group
+q3  my-org  labels=rt3  group=my-group
+q4  my-org  labels=rt4  group=my-group
+q5  other-org  labels=rt1  group=my-group
+EOF
+mkdir -p "$WORK/fakevars"
+# flock だけを外した道具の置き場（flock が無い機械の動き）
+mkdir -p "$WORK/toolbin-noflock"
+for tool in "$TOOLBIN"/*; do
+  [[ "${tool##*/}" == "flock" ]] || ln -s "$(readlink "$tool")" "$WORK/toolbin-noflock/${tool##*/}"
+done
+
+RT_VARS="" RT_KEEP=0 RT_CACHE=""
+# rt <期待する終了コード> <名前> [VAR=値 ...] -- dev の引数 ...
+# 直前に RT_VARS="リポジトリ=値 ..."（初期の変数）、RT_CACHE="a,b"（rt1 のキャッシュ。EMPTY なら空のファイル）、RT_KEEP=1（前の呼び出しの変数・キャッシュを持ち越す）を置ける。
+rt() {
+  local want="$1" rname="$2" ev=() kv
+  shift 2
+  while [[ $# -gt 0 && "$1" != "--" ]]; do ev+=("$1"); shift; done
+  [[ $# -gt 0 ]] && shift
+  if [[ "$RT_KEEP" -ne 1 ]]; then
+    rm -rf "$WORK/fakevars" "$WORK/routestate"
+    mkdir -p "$WORK/fakevars"
+    for kv in $RT_VARS; do printf '%s' "${kv#*=}" >"$WORK/fakevars/${kv%%=*}"; done
+    if [[ "$RT_CACHE" == "EMPTY" ]]; then
+      mkdir -m 700 "$WORK/routestate"
+      : >"$WORK/routestate/route-my-org.rt1"
+    elif [[ -n "$RT_CACHE" ]]; then
+      mkdir -m 700 "$WORK/routestate"
+      printf '%s\n' "$RT_CACHE" | tr ',' '\n' >"$WORK/routestate/route-my-org.rt1"
+    fi
+  fi
+  RT_VARS="" RT_KEEP=0 RT_CACHE=""
+  reset_state
+  run "$want" "$rname" -- PATH="$ROUTEBIN:$FAKEBIN:$TOOLBIN" DEV_ROUTES_FILE="$ROUTES" DEV_RUNNERS_FILE="$ROUTE_RCONF" DEV_ROUTE_STATE_DIR="$WORK/routestate" \
+    DEV_RUNNER_HOSTNAME=h FAKE_VARS_DIR="$WORK/fakevars" FAKE_PAT_EXPECT="$PATV" DEV_ROUTE_RECHECK_WAIT=0 ${ev[@]+"${ev[@]}"} -- "$@"
+}
+writes_has() { grep -qxF -- "$1" "$STATE/writes" 2>/dev/null || { ng "$CUR: 書き込みの記録に「$1」がありません"; sed 's/^/    /' "$STATE/writes" 2>/dev/null >&2 || true; }; }
+writes_lack() { if grep -qE -- "$1" "$STATE/writes" 2>/dev/null; then ng "$CUR: 書き込みの記録に /$1/ があってはなりません"; sed 's/^/    /' "$STATE/writes" >&2; fi; }
+no_writes() { if [[ -s "$STATE/writes" ]]; then ng "$CUR: 書かないはずが書いています"; sed 's/^/    /' "$STATE/writes" >&2; fi; }
+var_is() {
+  local f="$WORK/fakevars/$1"
+  if [[ ! -f "$f" ]]; then ng "$CUR: 変数 $1 が未設定です（期待: $2）"; return; fi
+  [[ "$(cat "$f")" == "$2" ]] || ng "$CUR: 変数 $1 の値が違います（期待: $2、実際: $(cat "$f")）"
+}
+var_unset() { if [[ -e "$WORK/fakevars/$1" ]]; then ng "$CUR: 変数 $1 は未設定のままのはずが、作られています"; fi; }
+cache_is() {
+  local got
+  got="$(tr '\n' ' ' <"$WORK/routestate/route-my-org.rt1" 2>/dev/null || echo '(無し)')"
+  [[ "$got" == "$1" ]] || ng "$CUR: キャッシュの中身が違います（期待: [$1]、実際: [$got]）"
+}
+# 変数 ACTIONS_RUNS_ON の読み取り（GET）が、そのリポジトリに何回あったか。
+var_gets() { grep -cE "\[GET\].*repos/my-org/$1/actions/variables/ACTIONS_RUNS_ON\]\$" "$LOG" || true; }
+
+# ── 設定の誤りは API を呼ばずに 2 ──
+rt 2 "route: 引数なし" -- runner route
+expect_err "使い方: dev runner route up|down|sync|show"
+expect_no_calls
+rt 2 "route: 知らないサブコマンド" -- runner route bogus rt1
+expect_err "知らない route のサブコマンドです"
+expect_no_calls
+rt 2 "route: ラベルが無い" -- runner route up
+expect_err "使い方: dev runner route up"
+expect_no_calls
+rt 2 "route: 余分な引数" -- runner route up rt1 rt2
+expect_err "ラベルは 1 つだけ指定します"
+expect_no_calls
+rt 2 "route: routes に無いラベル" -- runner route up nope
+expect_err "routes に無いラベルです: nope（登録済み: rt1 rt2 rt3 rt4）"
+expect_no_calls
+rt 2 "route: routes が無い" DEV_ROUTES_FILE="$WORK/conf/none" -- runner route up rt1
+expect_err "設定ファイルがありません"
+expect_no_calls
+rt 2 "route: --retries が整数でない" -- runner route up rt1 --retries abc
+expect_err "--retries には 0 から 10 の整数が要ります"
+expect_no_calls
+rt 2 "route: --retries が大きすぎる" -- runner route up rt1 --retries 11
+expect_no_calls
+rt 2 "route: --retry-wait が負" -- runner route up rt1 --retry-wait -1
+expect_no_calls
+rt 2 "route: --retry-wait に値が無い" -- runner route up rt1 --retry-wait
+expect_no_calls
+rt 2 "route: 知らないオプション" -- runner route up rt1 --bogus
+expect_err "知らないオプションです"
+expect_no_calls
+rt 2 "route: show はオプションを取らない（書かないので）" -- runner route show rt1 --retries 1
+expect_no_calls
+rt 2 "route: DEV_ROUTE_PARALLEL が 0" DEV_ROUTE_PARALLEL=0 -- runner route up rt1
+expect_err "DEV_ROUTE_PARALLEL は 1 から 32"
+expect_no_calls
+rt 2 "route: DEV_ROUTE_PARALLEL が 33" DEV_ROUTE_PARALLEL=33 -- runner route up rt1
+expect_no_calls
+rt 2 "route: DEV_ROUTE_RECHECK_WAIT が整数でない" DEV_ROUTE_RECHECK_WAIT=x -- runner route sync rt1
+expect_err "DEV_ROUTE_RECHECK_WAIT"
+expect_no_calls
+T="$WORK/conf/routes.bad"
+printf 'x my-org group=g bogus=1\n' >"$T"
+rt 2 "routes: 知らないキーは設定の誤り" DEV_ROUTES_FILE="$T" -- runner route up x
+expect_err "知らないキーです（group / pat_file）"
+printf 'x my-org\n' >"$T"
+rt 2 "routes: group の無い行は設定の誤り" DEV_ROUTES_FILE="$T" -- runner route up x
+expect_err "「ラベル 組織 group=<名前>」の 3 つが要ります"
+printf 'x my-org pat_file=/p\n' >"$T"
+rt 2 "routes: group= が無い（pat_file だけ）行は設定の誤り" DEV_ROUTES_FILE="$T" -- runner route up x
+expect_err "group=<名前> は必須です"
+printf 'x my-org group=g pat_file=rel/path\n' >"$T"
+rt 2 "routes: pat_file が相対パスなら設定の誤り" DEV_ROUTES_FILE="$T" -- runner route up x
+expect_err "pat_file は絶対パスで書きます"
+printf 'x my-org group=\n' >"$T"
+rt 2 "routes: 値が空なら設定の誤り" DEV_ROUTES_FILE="$T" -- runner route up x
+expect_err "値が空です"
+printf 'x my-org group=a/b\n' >"$T"
+rt 2 "routes: group に許可外の文字があれば設定の誤り" DEV_ROUTES_FILE="$T" -- runner route up x
+expect_err "group に使えるのは"
+printf 'x my-org g\n' >"$T"
+rt 2 "routes: 3 つ目が キー=値 でなければ設定の誤り" DEV_ROUTES_FILE="$T" -- runner route up x
+expect_err "キー=値 で書きます"
+# shellcheck disable=SC2016 # 展開しない文字列として渡す
+for bad in 'a/b' 'a b' '-x' '.x' 'a$b' 'a"b'; do
+  printf '%s my-org group=g\n' "$bad" >"$T"
+  rt 2 "routes: ラベルに許可外の文字（$bad）があれば設定の誤り" DEV_ROUTES_FILE="$T" -- runner route up x
+done
+printf 'x bad_org group=g\n' >"$T"
+rt 2 "routes: 組織名に許可外の文字があれば設定の誤り" DEV_ROUTES_FILE="$T" -- runner route up x
+expect_err "組織名に使えるのは"
+printf 'x my-org group=g\nx my-org group=g\n' >"$T"
+rt 2 "routes: ラベルの重複" DEV_ROUTES_FILE="$T" -- runner route up x
+expect_err "ラベルが重複しています"
+printf '# だけ\n' >"$T"
+rt 2 "routes: 行が 1 つも無い" DEV_ROUTES_FILE="$T" -- runner route up x
+expect_err "行が 1 つもありません"
+expect_no_calls
+rt 2 "route: PAT の権限が緩ければ（644）API を呼ばずに 2" -- runner route up rt3
+expect_err "PAT ファイルの権限が緩すぎます"
+expect_no_calls
+no_pat_leak
+rt 2 "route: PAT のファイルが無ければ 2" -- runner route up rt4
+expect_err "PAT ファイルがありません"
+expect_no_calls
+rt 2 "route: show でも、PAT の権限が緩ければ 2" -- runner route show rt3
+expect_no_calls
+
+# ── up: 混在からそろえる・冪等 ──
+RT_VARS="r-a=ubuntu-latest r-c=rt1"
+rt 0 "route up: 混在（更新・作成・変更なし）から、ラベルへそろえる" -- runner route up rt1
+writes_has "PATCH r-a rt1"
+writes_has "POST r-b rt1"
+writes_lack " r-c "
+var_is r-a rt1
+var_is r-b rt1
+var_is r-c rt1
+expect_out_line 'r-a: rt1 へ更新しました'
+expect_out_line 'r-b: rt1 で作りました'
+expect_out_line 'r-c: 変更なし（rt1）'
+log_has '^curl \[-sSL\] \[-K\] \[-\] \[-X\] \[PATCH\] .*\[-d\] \[\{"name":"ACTIONS_RUNS_ON","value":"rt1"\}\] .*repos/my-org/r-a/actions/variables/ACTIONS_RUNS_ON\]$'
+log_has '^curl \[-sSL\] \[-K\] \[-\] \[-X\] \[POST\] .*\[-d\] \[\{"name":"ACTIONS_RUNS_ON","value":"rt1"\}\] .*repos/my-org/r-b/actions/variables\]$'
+grep -qF "Bearer $PATV" "$STATE/curl-config" || ng "$CUR: PAT が curl の標準入力の設定で渡っていません"
+no_pat_leak
+cache_is "r-a r-b r-c "
+mode="$(stat -c %a "$WORK/routestate/route-my-org.rt1" 2>/dev/null || stat -f %Lp "$WORK/routestate/route-my-org.rt1")"
+[[ "$mode" == "600" ]] || ng "$CUR: キャッシュの権限が 600 ではありません（$mode）"
+mode="$(stat -c %a "$WORK/routestate" 2>/dev/null || stat -f %Lp "$WORK/routestate")"
+[[ "$mode" == "700" ]] || ng "$CUR: 状態のディレクトリの権限が 700 ではありません（$mode）"
+RT_KEEP=1 rt 0 "route up: 2 回目は冪等（もう揃っているので何も書かない）" -- runner route up rt1
+no_writes
+log_lacks '\[PATCH\]'
+log_lacks '\[POST\]'
+RT_VARS="r-a= r-b=rt1 r-c=rt1"
+rt 0 "route up: 値が空の既存の変数は設定済みとして扱う（POST でなく PATCH）" -- runner route up rt1
+writes_has "PATCH r-a rt1"
+writes_lack '^POST'
+var_is r-a rt1
+printf 'x.y_z-1 my-org group=my-group\n' >"$WORK/conf/routes-dots"
+RT_VARS="r-a=ubuntu-latest r-b=ubuntu-latest r-c=ubuntu-latest"
+rt 0 "route up: ラベルに . _ - を含む値もそのまま書く" DEV_ROUTES_FILE="$WORK/conf/routes-dots" -- runner route up x.y_z-1
+writes_has "PATCH r-a x.y_z-1"
+
+# ── 一部の失敗・やり直し ──
+RT_VARS="r-a=ubuntu-latest r-b=ubuntu-latest r-c=ubuntu-latest"
+rt 1 "route up: 一部が失敗しても、残りは続けて書き、失敗が残れば 1" FAKE_WRITE_FAIL=r-b -- runner route up rt1 --retries 0
+writes_has "PATCH r-a rt1"
+writes_has "PATCH r-c rt1"
+writes_lack ' r-b '
+var_is r-b ubuntu-latest
+expect_err "r-b: 失敗しました"
+RT_VARS="r-a=ubuntu-latest r-b=ubuntu-latest r-c=ubuntu-latest"
+rt 0 "route up: 失敗した分だけやり直し（成功した分は読み直さない）、直れば 0" FAKE_WRITE_FAIL_ONCE=r-b -- runner route up rt1 --retries 2 --retry-wait 5
+var_is r-b rt1
+[[ "$(var_gets r-a)" == "1" ]] || ng "$CUR: 成功した r-a を読み直しています（GET が $(var_gets r-a) 回）"
+[[ "$(var_gets r-b)" == "2" ]] || ng "$CUR: r-b は 2 回読むはずです（GET が $(var_gets r-b) 回）"
+log_has '^sleep \[5\]$'
+expect_err "失敗が 1 件あります。5 秒後にやり直します（1/2）"
+RT_VARS="r-a=ubuntu-latest r-b=ubuntu-latest r-c=ubuntu-latest"
+rt 1 "route up: やり直しの回数を使い切ったら 1" FAKE_WRITE_FAIL=r-b -- runner route up rt1 --retries 2 --retry-wait 7
+[[ "$(var_gets r-b)" == "3" ]] || ng "$CUR: r-b は 1 回 + やり直し 2 回の 3 回読むはずです（GET が $(var_gets r-b) 回）"
+[[ "$(var_gets r-a)" == "1" ]] || ng "$CUR: 成功した r-a を読み直しています"
+[[ "$(grep -c '^sleep \[7\]$' "$LOG")" == "2" ]] || ng "$CUR: 待ちが 2 回のはずです"
+RT_VARS="r-a=ubuntu-latest r-b=ubuntu-latest r-c=ubuntu-latest"
+rt 1 "route up: 読み取りが 403 のリポジトリは失敗として数え、残りは続ける" FAKE_VAR_403=r-a -- runner route up rt1 --retries 0
+writes_has "PATCH r-b rt1"
+writes_has "PATCH r-c rt1"
+RT_VARS="r-a=ubuntu-latest r-b=ubuntu-latest r-c=ubuntu-latest"
+rt 1 "route up: 読み取りが 500 のリポジトリは失敗として数える" FAKE_VAR_FAIL=r-c -- runner route up rt1 --retries 0
+writes_has "PATCH r-a rt1"
+RT_VARS="r-a=ubuntu-latest r-b=ubuntu-latest r-c=ubuntu-latest"
+rt 1 "route up: 通信の失敗は 1（PAT を出さない）" FAKE_API_NETFAIL=1 -- runner route up rt1 --retries 0
+no_writes
+no_pat_leak
+
+# ── 対象の読み方（グループ・ページ送り・空・selected 以外）──
+RT_VARS=""
+rt 0 "route up: グループの一覧が複数ページでも、2 ページ目のグループを引く" FAKE_GROUPS_PAD=100 -- runner route up rt1
+log_has 'runner-groups\?per_page=100&page=1\]$'
+log_has 'runner-groups\?per_page=100&page=2\]$'
+writes_has "POST r-a rt1"
+rt 0 "route up: 対象が複数ページ（105 件）でも全件を書く" FAKE_GROUP_REPOS_GEN=105 DEV_ROUTE_PARALLEL=16 -- runner route up rt1 --retries 0
+log_has 'runner-groups/[0-9]+/repositories\?per_page=100&page=2\]$'
+[[ "$(grep -c '^POST ' "$STATE/writes")" == "105" ]] || ng "$CUR: 105 件を作るはずが $(grep -c '^POST ' "$STATE/writes") 件です"
+writes_has "POST gen-105 rt1"
+rt 0 "route up: 0 件のグループは失敗でなく正しい空の一覧（何も書かず、キャッシュも空）" FAKE_GROUP_REPOS= -- runner route up rt1
+no_writes
+log_lacks 'actions/variables'
+cache_is ""
+rt 2 "route up: 使えるリポジトリが selected でなければ設定の誤り(2)。何も書かない" FAKE_GROUP_VIS=all -- runner route up rt1
+expect_err "selected ではありません（all）"
+log_lacks 'actions/variables'
+log_lacks 'repositories'
+rt 2 "route up: グループが無ければ設定の誤り(2)" FAKE_GROUPS=Default -- runner route up rt1
+expect_err "ランナーグループ my-group が組織 my-org にありません"
+log_lacks 'actions/variables'
+RT_VARS="r-a=rt1" RT_CACHE="r-a"
+rt 2 "route down: グループが無くても、前回の一覧で戻してから設定の誤り(2)（ラベルを指したまま残さない）" FAKE_GROUPS=Default -- runner route down rt1
+writes_has "PATCH r-a ubuntu-latest"
+expect_err "routes かグループの設定を直してください"
+RT_VARS="r-a=rt1" RT_CACHE="r-a"
+rt 2 "route down: selected でなくても、前回の一覧で戻してから 2" FAKE_GROUP_VIS=all -- runner route down rt1
+writes_has "PATCH r-a ubuntu-latest"
+rt 2 "route down: グループが無く、前回の一覧も無ければ、何も書かず 2" FAKE_GROUPS=Default -- runner route down rt1
+no_writes
+for code in 403 500; do
+  rt 1 "route up: グループの一覧が HTTP $code で読めなければ、何も書かず 1" FAKE_API_FAIL=groups FAKE_API_CODE=$code -- runner route up rt1
+  expect_err "対象の一覧を読めないので、up では何も書きません"
+  log_lacks 'actions/variables'
+done
+rt 1 "route up: 対象のリポジトリの一覧を読めなければ、何も書かず 1" FAKE_API_FAIL=group-repos -- runner route up rt1
+log_lacks 'actions/variables'
+
+# ── グループから外したリポジトリの扱い・キャッシュ ──
+RT_CACHE="r-a,r-b,r-x" RT_VARS="r-a=rt1 r-b=rt1 r-c=rt1 r-x=rt1"
+rt 0 "route up: キャッシュにあってグループに無い（外した）リポジトリは ubuntu-latest へ戻す" -- runner route up rt1
+writes_has "PATCH r-x ubuntu-latest"
+var_is r-x ubuntu-latest
+cache_is "r-a r-b r-c "
+RT_KEEP=1 rt 0 "route up: 戻したあとの 2 回目は、外したリポジトリに触らない" -- runner route up rt1
+no_writes
+[[ "$(var_gets r-x)" == "0" ]] || ng "$CUR: 外したあとの r-x を読んでいます"
+RT_CACHE="r-a,r-x" RT_VARS="r-a=rt1 r-b=rt1 r-c=rt1 r-x=rt1"
+rt 0 "route up: 外したリポジトリが自分のラベルを指していれば ubuntu-latest へ戻す" -- runner route up rt1
+writes_has "PATCH r-x ubuntu-latest"
+RT_CACHE="r-a,r-x" RT_VARS="r-a=rt1 r-b=rt1 r-c=rt1 r-x=custom-value"
+rt 0 "route up: 外したリポジトリが別の値（ほかの切り替え・手の設定）なら触らない" -- runner route up rt1
+var_is r-x custom-value
+expect_out_line 'r-x: 別の値を指しているので触りません'
+cache_is "r-a r-b r-c "
+RT_CACHE="r-a,r-x" RT_VARS="r-a=rt1 r-b=rt1 r-c=rt1"
+rt 0 "route up: 外したリポジトリの変数が未設定なら、作らずに済ませる" -- runner route up rt1
+var_unset r-x
+cache_is "r-a r-b r-c "
+RT_CACHE="r-a,r-x" RT_VARS="r-a=rt1 r-b=rt1 r-c=rt1 r-x=rt1"
+rt 1 "route up: 戻せなかった外したリポジトリはキャッシュに残し、1" FAKE_WRITE_FAIL=r-x -- runner route up rt1 --retries 0
+cache_is "r-a r-b r-c r-x "
+RT_KEEP=1 rt 0 "route up: 持ち越したものを、次の実行で戻す" -- runner route up rt1
+writes_has "PATCH r-x ubuntu-latest"
+cache_is "r-a r-b r-c "
+RT_CACHE="r-a" RT_VARS="r-a=ubuntu-latest r-b=ubuntu-latest r-c=ubuntu-latest"
+rt 1 "route up: 一部が失敗しても、読めた一覧はキャッシュへ足す（途中で切れても戻し先を失わない）" FAKE_WRITE_FAIL=r-b -- runner route up rt1 --retries 0
+cache_is "r-a r-b r-c "
+
+# ── 読めないときの向き ──
+RT_CACHE="r-a,r-b" RT_VARS="r-a=rt1 r-b=rt1 r-c=rt1"
+rt 0 "route down: グループを読めなければ、キャッシュの一覧で ubuntu-latest へ戻す" FAKE_API_FAIL=groups -- runner route down rt1
+writes_has "PATCH r-a ubuntu-latest"
+writes_has "PATCH r-b ubuntu-latest"
+writes_lack ' r-c '
+expect_err "キャッシュ"
+var_is r-c rt1
+cache_is "r-a r-b "
+RT_CACHE="r-a,r-b" RT_VARS="r-a=ubuntu-latest r-b=ubuntu-latest"
+rt 1 "route up: グループを読めなければ、キャッシュがあっても何も書かず 1（古い一覧で向け直さない）" FAKE_API_FAIL=groups -- runner route up rt1
+no_writes
+log_lacks 'actions/variables'
+rt 1 "route down: グループを読めず、キャッシュも無ければ 1" FAKE_API_FAIL=groups -- runner route down rt1
+expect_err "キャッシュも無い"
+log_lacks 'actions/variables'
+RT_CACHE="r-a,r-b" RT_VARS="r-a=ubuntu-latest r-b=ubuntu-latest"
+rt 1 "route sync: グループを読めなければ、キャッシュがあっても何も書かず 1" FAKE_API_FAIL=groups FAKE_ACTIVE_UNITS=dev-route@rt1.service FAKE_RUNNERS=h-q1:online:rt1 -- runner route sync rt1
+no_writes
+log_lacks 'actions/variables'
+RT_CACHE=EMPTY RT_VARS=""
+rt 0 "route down: 前回が 0 件(空のキャッシュ)なら、グループを読めなくても何も書かず 0" FAKE_API_FAIL=group-repos -- runner route down rt1
+log_lacks 'actions/variables'
+rt 0 "route up: 既定の置き場所は XDG_CACHE_HOME の下の dev（権限 700）" DEV_ROUTE_STATE_DIR= XDG_CACHE_HOME="$WORK/xdgc" -- runner route up rt1
+[[ -f "$WORK/xdgc/dev/route-my-org.rt1" ]] || ng "$CUR: キャッシュが既定の置き場所にありません"
+mode="$(stat -c %a "$WORK/xdgc/dev" 2>/dev/null || stat -f %Lp "$WORK/xdgc/dev")"
+[[ "$mode" == "700" ]] || ng "$CUR: 既定の置き場所の権限が 700 ではありません（$mode）"
+mkdir -p "$WORK/loose-state"
+chmod 777 "$WORK/loose-state"
+# キャッシュを書けない（状態のディレクトリに書き込めない）ときは、ラベルへ向けない。ロックのファイルは先に置いておく。
+rm -rf "$WORK/ro-state"; mkdir -m 700 "$WORK/ro-state"; : >"$WORK/ro-state/route-rt1.lock"; chmod 500 "$WORK/ro-state"
+if [[ -w "$WORK/ro-state" ]]; then
+  echo "[devhost-selftest] キャッシュを書けない試験は、書き込み権限を外せない環境（root など）なので飛ばします"
+else
+  RT_VARS="r-a=ubuntu-latest r-b=ubuntu-latest r-c=ubuntu-latest"
+  rt 1 "route up: キャッシュを書けなければ、ラベルへ向けずに 1（停止のときに戻す対象を失わないため）" DEV_ROUTE_STATE_DIR="$WORK/ro-state" -- runner route up rt1
+  no_writes
+  expect_err "キャッシュを書けないので、rt1 へは向けません"
+fi
+chmod 700 "$WORK/ro-state"
+RT_CACHE="r-a,r-b,r-c" RT_VARS="r-a=rt1 r-b=rt1 r-c=rt1"
+rt 1 "route up: 対象の一覧の応答に配列のキーが無ければ、0 件と読まず 1（キャッシュの全件を外れたものとして戻さない）" FAKE_API_BADBODY=group-repos -- runner route up rt1
+no_writes
+cache_is "r-a r-b r-c "
+RT_CACHE="r-a,r-b,r-c" RT_VARS="r-a=rt1 r-b=rt1 r-c=rt1"
+rt 1 "route up: 対象の一覧に名前の無い要素が混ざれば、欠けた一覧と読まず 1（欠けたものを外れたとして戻さない）" FAKE_API_BADBODY=group-repos-item -- runner route up rt1
+no_writes
+cache_is "r-a r-b r-c "
+expect_err "名前を読めない要素があります"
+# キャッシュは組織ごと。同じラベルでも、別の組織のキャッシュにあるリポジトリは「外れた」として扱わない。
+rm -rf "$WORK/fakevars" "$WORK/routestate"; mkdir -p "$WORK/fakevars"; mkdir -m 700 "$WORK/routestate"
+for kv in r-a=rt1 r-b=rt1 r-c=rt1 r-x=rt1; do printf '%s' "${kv#*=}" >"$WORK/fakevars/${kv%%=*}"; done
+printf 'r-x\n' >"$WORK/routestate/route-old-org.rt1"; chmod 600 "$WORK/routestate/route-old-org.rt1"
+RT_KEEP=1 rt 0 "route up: 別の組織のキャッシュ（route-<組織>.<ラベル>）は混ぜない" -- runner route up rt1
+var_is r-x rt1
+cache_is "r-a r-b r-c "
+rt 2 "route up: 状態のディレクトリに group / other の書き込み権限があれば 2" DEV_ROUTE_STATE_DIR="$WORK/loose-state" -- runner route up rt1
+expect_err "group / other の書き込み権限があります"
+expect_no_calls
+rm -rf "$WORK/loose-state"
+
+# ── down ──
+RT_VARS="r-a=rt1 r-b=rt1 r-c=rt1"
+rt 0 "route down: 対象を ubuntu-latest へ戻す" -- runner route down rt1
+writes_has "PATCH r-a ubuntu-latest"
+writes_has "PATCH r-b ubuntu-latest"
+writes_has "PATCH r-c ubuntu-latest"
+no_pat_leak
+RT_VARS="r-a=rt1 r-b=rt1 r-c=rt1"
+rt 0 "route down: ほかの機械（名前の先頭のホスト名が違う）の同じラベルのランナーが online なら戻さない" FAKE_RUNNERS=other-q1:online:rt1+devhost -- runner route down rt1
+no_writes
+expect_out_line 'ほかの機械のランナーが online（1 台）なので、ubuntu-latest へは戻しません'
+RT_VARS="r-a=rt1 r-b=rt1 r-c=rt1"
+rt 0 "route down: ほかの機械のランナーが offline なら戻す" FAKE_RUNNERS=other-q1:offline:rt1 -- runner route down rt1
+writes_has "PATCH r-a ubuntu-latest"
+RT_VARS="r-a=rt1 r-b=rt1 r-c=rt1"
+rt 0 "route down: online なのがこの機械のランナーだけなら戻す（止まる側の機械なので）" FAKE_RUNNERS=h-q1:online:rt1 -- runner route down rt1
+writes_has "PATCH r-a ubuntu-latest"
+RT_VARS="r-a=rt1 r-b=rt1 r-c=rt1"
+rt 0 "route down: ホスト名が前方一致するほかの機械（h-x）のランナーは、この機械のものと取り違えず戻さない" FAKE_RUNNERS=h-x-q1:online:rt1 -- runner route down rt1
+no_writes
+expect_out_line 'ほかの機械のランナーが online（1 台）なので'
+RT_VARS="r-a=rt1 r-b=rt1 r-c=rt1"
+rt 0 "route down: ほかの機械のランナーでも、ラベルが違えば戻す" FAKE_RUNNERS=other-q1:online:devhost -- runner route down rt1
+writes_has "PATCH r-a ubuntu-latest"
+RT_VARS="r-a=rt1 r-b=rt1 r-c=rt1"
+rt 0 "route down: ランナーの一覧を読めなければ戻す" FAKE_API_FAIL=runners -- runner route down rt1
+writes_has "PATCH r-a ubuntu-latest"
+RT_VARS="r-a=rt1 r-b=rt1 r-c=rt1"
+rt 0 "route down: ランナーの一覧が複数ページでも、2 ページ目のほかの機械のランナーを見つけて戻さない" FAKE_RUNNERS=other-q1:online:rt1 FAKE_RUNNERS_PAGES=2 -- runner route down rt1
+no_writes
+log_has 'runner-groups/[0-9]+/runners\?per_page=100&page=2\]$'
+RT_CACHE="r-a,r-x" RT_VARS="r-a=rt1 r-b=rt1 r-c=rt1 r-x=rt1"
+rt 0 "route down: ほかの機械のランナーが online でも、グループから外れたものは戻す" FAKE_RUNNERS=other-q1:online:rt1 -- runner route down rt1
+writes_has "PATCH r-x ubuntu-latest"
+writes_lack ' r-a '
+
+# ── sync ──
+RT_VARS="r-a=ubuntu-latest r-b=ubuntu-latest r-c=ubuntu-latest"
+rt 0 "route sync: ユニットが active でなければ、API を呼ばずに 0" FAKE_RUNNERS=h-q1:online:rt1 -- runner route sync rt1
+log_lacks '^curl '
+no_writes
+expect_out_line 'dev-route@rt1.service が active ではない'
+RT_VARS="r-a=ubuntu-latest r-b=ubuntu-latest r-c=ubuntu-latest"
+rt 0 "route sync: ユニットが activating のときも書かない（active のときだけ）" FAKE_ACTIVATING_UNITS=dev-route@rt1.service FAKE_RUNNERS=h-q1:online:rt1 -- runner route sync rt1
+log_lacks '^curl '
+RT_VARS="r-a=ubuntu-latest r-b=ubuntu-latest r-c=ubuntu-latest"
+rt 0 "route sync: active で、online のランナーが居ればラベルへそろえる" FAKE_ACTIVE_UNITS=dev-route@rt1.service FAKE_RUNNERS=h-q1:online:rt1+devhost -- runner route sync rt1
+writes_has "PATCH r-a rt1"
+writes_has "PATCH r-b rt1"
+writes_has "PATCH r-c rt1"
+log_lacks '^sleep '
+RT_VARS="r-a=rt1 r-b=rt1 r-c=rt1"
+rt 0 "route sync: active で、ランナーが居なければ（読み直しても居ない）ubuntu-latest へ戻す" FAKE_ACTIVE_UNITS=dev-route@rt1.service FAKE_RUNNERS=h-q1:offline:rt1 -- runner route sync rt1
+writes_has "PATCH r-a ubuntu-latest"
+[[ "$(grep -c '/runners?per_page' "$LOG")" == "2" ]] || ng "$CUR: ランナーの一覧を 2 回（1 回目と読み直し）読むはずです"
+expect_out_line 'online のランナーが居ません。0 秒後に読み直します'
+RT_VARS="r-a=rt1 r-b=rt1 r-c=rt1"
+rt 0 "route sync: 読み直すまでの待ちの既定は 60 秒" DEV_ROUTE_RECHECK_WAIT= FAKE_ACTIVE_UNITS=dev-route@rt1.service FAKE_RUNNERS=h-q1:offline:rt1 -- runner route sync rt1
+log_has '^sleep \[60\]$'
+RT_VARS="r-a=ubuntu-latest r-b=ubuntu-latest r-c=ubuntu-latest"
+rt 0 "route sync: ジョブの切れ目（1 回目は 0 台、読み直しで 1 台）なら、戻さずラベルへそろえる" FAKE_ACTIVE_UNITS=dev-route@rt1.service FAKE_RUNNERS_FIRST=none:offline: FAKE_RUNNERS=h-q1:online:rt1 -- runner route sync rt1
+writes_has "PATCH r-a rt1"
+writes_lack 'ubuntu-latest'
+RT_VARS="r-a=rt1 r-b=rt1 r-c=rt1"
+rt 0 "route sync: 1 回目に居れば読み直さない（待たない）" FAKE_ACTIVE_UNITS=dev-route@rt1.service FAKE_RUNNERS=h-q1:online:rt1 -- runner route sync rt1
+log_lacks '^sleep '
+no_writes
+RT_VARS="r-a=ubuntu-latest r-b=ubuntu-latest r-c=ubuntu-latest"
+rt 0 "route sync: ほかの機械のランナーだけが online でも、ラベルへそろえる" FAKE_ACTIVE_UNITS=dev-route@rt1.service FAKE_RUNNERS=other-q1:online:rt1 -- runner route sync rt1
+writes_has "PATCH r-a rt1"
+RT_VARS="r-a=rt1 r-b=rt1 r-c=rt1"
+rt 0 "route sync: online でもラベルが違うランナーは数えない" FAKE_ACTIVE_UNITS=dev-route@rt1.service FAKE_RUNNERS=h-q9:online:devhost -- runner route sync rt1
+writes_has "PATCH r-a ubuntu-latest"
+RT_VARS="r-a=ubuntu-latest r-b=ubuntu-latest r-c=ubuntu-latest"
+rt 1 "route sync: ランナーの一覧を読めなければ、判定できないので何も書かず 1" FAKE_ACTIVE_UNITS=dev-route@rt1.service FAKE_API_FAIL=runners -- runner route sync rt1
+no_writes
+RT_VARS="r-a=ubuntu-latest r-b=ubuntu-latest r-c=ubuntu-latest"
+rt 1 "route sync: 読み直しで一覧を読めなければ、何も書かず 1" FAKE_ACTIVE_UNITS=dev-route@rt1.service FAKE_RUNNERS_FIRST=none:offline: FAKE_API_FAIL=runners -- runner route sync rt1
+no_writes
+RT_VARS="r-a=ubuntu-latest r-b=ubuntu-latest r-c=ubuntu-latest"
+rt 1 "route sync: flock が無ければ書かない" PATH="$ROUTEBIN:$FAKEBIN:$WORK/toolbin-noflock" FAKE_ACTIVE_UNITS=dev-route@rt1.service FAKE_RUNNERS=h-q1:online:rt1 -- runner route sync rt1
+expect_err "flock（util-linux）が無い"
+no_writes
+log_lacks 'actions/variables'
+RT_VARS="r-a=rt1 r-b=rt1 r-c=rt1"
+rt 0 "route down: flock が無ければ、警告してロックなしで進める" PATH="$ROUTEBIN:$FAKEBIN:$WORK/toolbin-noflock" -- runner route down rt1
+expect_err "flock が無いので、ロックなしで進めます"
+writes_has "PATCH r-a ubuntu-latest"
+
+# ── ロック: sync も up / down も、ラベルごとの同じロックを取る ──
+RT_VARS="r-a=ubuntu-latest r-b=ubuntu-latest r-c=ubuntu-latest"
+rt 0 "route: 準備（ロックのファイルを作る）" FAKE_ACTIVE_UNITS=dev-route@rt1.service FAKE_RUNNERS=h-q1:online:rt1 -- runner route sync rt1
+exec 7>>"$WORK/routestate/route-rt1.lock"
+flock -n 7 || ng "試験の前提: ロックを取れません"
+RT_KEEP=1 rt 1 "route sync: 停止の処理（ロックの保持者）が動いているあいだは、ロックを取れず書かない" DEV_ROUTE_LOCK_WAIT=0 FAKE_ACTIVE_UNITS=dev-route@rt1.service FAKE_RUNNERS=h-q1:online:rt1 -- runner route sync rt1
+expect_err "ロックを 0 秒待ちましたが取れませんでした"
+log_lacks 'actions/variables'
+RT_KEEP=1 rt 1 "route down: 同じロックを取る（保持者が居れば取れない）" DEV_ROUTE_LOCK_WAIT=0 -- runner route down rt1
+expect_err "ロックを 0 秒待ちましたが取れませんでした"
+RT_KEEP=1 rt 1 "route up: 同じロックを取る（保持者が居れば取れない）" DEV_ROUTE_LOCK_WAIT=0 -- runner route up rt1
+log_lacks 'actions/variables'
+RT_KEEP=1 rt 0 "route: 別のラベルのロックは邪魔しない" DEV_ROUTE_LOCK_WAIT=0 FAKE_GROUPS=Default,grp2 -- runner route up rt2
+writes_has "PATCH r-a rt2"
+flock -u 7
+exec 7>&-
+RT_KEEP=1 rt 0 "route sync: ロックが外れれば書ける" DEV_ROUTE_LOCK_WAIT=0 FAKE_ACTIVE_UNITS=dev-route@rt1.service FAKE_RUNNERS=h-q1:online:rt1 -- runner route sync rt1
+writes_has "PATCH r-a rt1"
+
+# ── 並列の上限 ──
+par_max() { awk 'BEGIN { m = 0 } { if ($1 + 0 > m) m = $1 + 0 } END { print m }' "$STATE/par" 2>/dev/null || echo 0; }
+RT_VARS=""
+rt 0 "route up: リポジトリごとに並列で書き、同時に走る数は上限（DEV_ROUTE_PARALLEL=3）を超えない" DEV_ROUTE_PARALLEL=3 FAKE_PAR_TRACK=1 FAKE_GROUP_REPOS=p1,p2,p3,p4,p5,p6,p7 -- runner route up rt1
+pm="$(par_max)"
+if [[ "$pm" -gt 3 || "$pm" -lt 2 ]]; then ng "$CUR: 同時に走った最大が 2 から 3 のはずが $pm です"; fi
+[[ "$(grep -c '^POST ' "$STATE/writes")" == "7" ]] || ng "$CUR: 7 件を作るはずです"
+RT_VARS=""
+rt 0 "route up: DEV_ROUTE_PARALLEL=1 なら 1 つずつ" DEV_ROUTE_PARALLEL=1 FAKE_PAR_TRACK=1 FAKE_GROUP_REPOS=p1,p2,p3 -- runner route up rt1
+[[ "$(par_max)" == "1" ]] || ng "$CUR: 同時に走った最大が 1 のはずが $(par_max) です"
+
+# ── show: 書かない ──
+RT_VARS="r-a=ubuntu-latest r-c=rt1"
+rt 0 "route show: 対象ごとの今の値を出し、何も書かない（未設定も示す）" -- runner route show rt1
+no_writes
+log_lacks '\[PATCH\]'
+log_lacks '\[POST\]'
+expect_out_line 'r-a[[:space:]]+ubuntu-latest'
+expect_out_line 'r-b[[:space:]]+\(未設定\)'
+expect_out_line 'r-c[[:space:]]+rt1'
+[[ ! -e "$WORK/routestate/route-my-org.rt1" ]] || ng "$CUR: show がキャッシュを書いています"
+no_pat_leak
+printf 'x\033[31mred' >"$WORK/fakevars/r-a"
+printf 'a b' >"$WORK/fakevars/r-b"
+# shellcheck disable=SC2016 # 展開されない文字列を値に書く
+printf '$(touch /tmp/x)' >"$WORK/fakevars/r-c"
+RT_KEEP=1 rt 0 "route show: 変数の値は制御文字をエスケープして出す（端末へそのまま出さない）" -- runner route show rt1
+if grep -q "$(printf '\033')" "$OUT"; then ng "$CUR: ESC がそのまま出ています"; fi
+esc_pat='r-a[[:space:]]+\$'"'"'x\\[Ee]\[31mred'"'"
+grep -qE -- "$esc_pat" "$OUT" || { ng "$CUR: ESC がエスケープされて出ていません"; sed 's/^/    /' "$OUT" >&2; }
+expect_out_line 'r-b[[:space:]]+a\\ b'
+expect_out_line 'r-c[[:space:]]+\\\$\\\(touch\\ /tmp/x\\\)'
+RT_CACHE="r-a,r-x" RT_VARS="r-a=rt1 r-b=rt1 r-c=rt1"
+rt 0 "route show: グループから外れて、次に戻す対象も示す（書かない）" -- runner route show rt1
+expect_out_line 'グループから外れていて、次の up / down / sync で ubuntu-latest へ戻す対象'
+expect_out_line '^  r-x$'
+no_writes
+RT_VARS="r-a=rt1 r-b=rt1 r-c=rt1"
+rt 1 "route show: 変数を読めないリポジトリがあれば 1（読めた分は出す）" FAKE_VAR_FAIL=r-b -- runner route show rt1
+expect_out_line 'r-a[[:space:]]+rt1'
+expect_out_line 'r-b[[:space:]]+\(読めません\)'
+rt 2 "route show: selected でなければ 2" FAKE_GROUP_VIS=private -- runner route show rt1
+rt 1 "route show: グループを読めなければ 1" FAKE_API_FAIL=groups -- runner route show rt1
+no_pat_leak
+
+# ── ユニット・タイマー ──
+RUNIT_ROUTE="${DEV_ROUTE_UNIT:-$HERE/dev-route@.service}"
+SUNIT_ROUTE="${DEV_ROUTE_SYNC_UNIT:-$HERE/dev-route-sync@.service}"
+TIMER_ROUTE="${DEV_ROUTE_TIMER:-$HERE/dev-route-sync@.timer}"
+CUR="切り替えのユニット"
+runit_has() { grep -qxF -- "$1" "$RUNIT_ROUTE" || ng "切り替えのユニットに「$1」の行がありません（$2）"; }
+runit_has 'Type=oneshot' "ExecStart で書いて終わる"
+runit_has 'RemainAfterExit=yes' "書いた状態を active で持つ（停止で戻す）"
+runit_has 'ExecStart=%h/.local/bin/dev runner route up %i' "起動でラベルへ向ける。%I は - を / へ戻すので使わない"
+runit_has 'ExecStopPost=%h/.local/bin/dev runner route down %i --retries 2 --retry-wait 5' "停止で ubuntu-latest へ戻す。起動に失敗したときも動く ExecStopPost にする"
+runit_has 'TimeoutStopSec=300' "停止で戻す時間（ロックの待ち・読み取り・やり直し）"
+runit_has 'Restart=on-failure' "一時的な失敗（起動直後のネットワーク）はやり直す"
+runit_has 'RestartSec=30' "やり直しの間隔"
+runit_has 'StartLimitIntervalSec=0' "回線の立ち上がりが遅い日に諦めない"
+runit_has 'RestartPreventExitStatus=2' "設定の誤り（2）は起こし直さない"
+runit_has 'WantedBy=default.target' "ユーザーのマネージャの起動に付く"
+grep -qE '^TimeoutStopSec=[0-9]+' "$RUNIT_ROUTE" || ng "切り替えのユニットに TimeoutStopSec がありません（止めるときに全対象を戻す時間）"
+if grep -qE '^[^#]*%I' "$RUNIT_ROUTE"; then ng "切り替えのユニットが %I を使っています（ラベルの - が / に化ける）"; fi
+if grep -qE '^ExecStop=' "$RUNIT_ROUTE"; then ng "切り替えのユニットが ExecStop で戻しています（起動に失敗したときは動かない。ExecStopPost にする）"; fi
+rpes="$(sed -n 's/^RestartPreventExitStatus=//p' "$RUNIT_ROUTE")"
+case " $rpes " in *" 1 "*) ng "切り替えのユニットが 1（一時的な失敗）で起こし直さない設定になっています" ;; esac
+CUR="切り替えのそろえ直しのユニット"
+sunit_has() { grep -qxF -- "$1" "$SUNIT_ROUTE" || ng "そろえ直しのユニットに「$1」の行がありません（$2）"; }
+sunit_has 'Type=oneshot' "タイマーが起こす度に 1 回そろえて終わる"
+sunit_has 'ExecStart=%h/.local/bin/dev runner route sync %i' "そろえ直しの口。%I は使わない"
+if grep -qE '^\[Install\]' "$SUNIT_ROUTE"; then ng "そろえ直しのユニットが [Install] を持っています（単独で有効にせず、タイマーが起こす）"; fi
+if grep -qE '^[^#]*%I' "$SUNIT_ROUTE"; then ng "そろえ直しのユニットが %I を使っています"; fi
+CUR="切り替えのそろえ直しのタイマー"
+timer_has() { grep -qxF -- "$1" "$TIMER_ROUTE" || ng "タイマーに「$1」の行がありません（$2）"; }
+timer_has 'OnBootSec=3min' "起動の 3 分後（ランナーが online になるのを待つ）"
+timer_has 'OnUnitActiveSec=10min' "10 分おき"
+timer_has 'WantedBy=timers.target' "タイマーとして有効にできる"
+if grep -qE '^[^#]*%I' "$TIMER_ROUTE"; then ng "タイマーが %I を使っています"; fi
+
+# ── dev doctor --runner の routes の点検 ──
+ALL_UNITS="dev-runner@q1.service dev-route@rt1.service dev-route-sync@rt1.timer"
+rt 0 "doctor --runner: routes の行（PAT・グループ・一致・ユニット・タイマー）が全部 OK なら 0" FAKE_ACTIVE_UNITS="$ALL_UNITS" -- doctor --runner q1
+expect_out_line '\[OK  \] route rt1: PAT ファイル .*/route-pat（権限 600）'
+expect_out_line '\[OK  \] route rt1: グループ my-group を読めて、使えるリポジトリは selected です（対象 3 件）'
+expect_out_line '\[OK  \] route rt1: ランナー q1 の組織・group= が routes と一致します'
+expect_out_line '\[OK  \] ユニット dev-route@rt1.service: active'
+expect_out_line '\[OK  \] タイマー dev-route-sync@rt1.timer: active'
+no_pat_leak
+rt 3 "doctor --runner: 起動・停止のユニットとタイマーが active でなければ WARN" FAKE_ACTIVE_UNITS="dev-runner@q1.service" -- doctor --runner q1
+expect_out_line '\[WARN\] ユニット dev-route@rt1.service: inactive'
+expect_out_line '\[WARN\] タイマー dev-route-sync@rt1.timer: inactive'
+rt 3 "doctor --runner: タイマーだけ止まっていれば WARN" FAKE_ACTIVE_UNITS="dev-runner@q1.service dev-route@rt1.service" -- doctor --runner q1
+expect_out_line '\[WARN\] タイマー dev-route-sync@rt1.timer: inactive'
+rt 1 "doctor --runner: route の PAT の権限が緩ければ FAIL" FAKE_ACTIVE_UNITS="dev-runner@q3.service dev-route@rt3.service dev-route-sync@rt3.timer" -- doctor --runner q3
+expect_out_line '\[FAIL\] route rt3: PAT ファイルの権限が緩すぎます'
+expect_out_line 'route rt3: PAT を使えないため、グループを確かめられません'
+no_pat_leak
+rt 1 "doctor --runner: route の PAT のファイルが無ければ FAIL" FAKE_ACTIVE_UNITS="dev-runner@q4.service dev-route@rt4.service dev-route-sync@rt4.timer" -- doctor --runner q4
+expect_out_line '\[FAIL\] route rt4: PAT ファイルがありません'
+rt 1 "doctor --runner: グループの使えるリポジトリが selected でなければ FAIL" FAKE_GROUP_VIS=all FAKE_ACTIVE_UNITS="$ALL_UNITS" -- doctor --runner q1
+expect_out_line '\[FAIL\] route rt1: グループ my-group の使えるリポジトリが selected ではありません（all）'
+rt 1 "doctor --runner: グループが無ければ FAIL" FAKE_GROUPS=Default FAKE_ACTIVE_UNITS="$ALL_UNITS" -- doctor --runner q1
+expect_out_line '\[FAIL\] route rt1: ランナーグループ my-group が組織 my-org にありません'
+rt 3 "doctor --runner: グループの一覧を読めなければ WARN" FAKE_API_FAIL=groups FAKE_ACTIVE_UNITS="$ALL_UNITS" -- doctor --runner q1
+expect_out_line '\[WARN\] route rt1: グループの一覧を読めませんでした'
+rt 1 "doctor --runner: ランナーの group= が routes の行と違えば FAIL" FAKE_GROUPS=Default,other-group,grp2 FAKE_ACTIVE_UNITS="dev-runner@q2.service dev-route@rt2.service dev-route-sync@rt2.timer" -- doctor --runner q2
+expect_out_line '\[FAIL\] route rt2: ランナー q2 の組織（my-org）・group=（other-group）が routes の組織（my-org）・group=（grp2）と違います'
+rt 1 "doctor --runner: ランナーの組織が routes の行と違えば FAIL" FAKE_ACTIVE_UNITS="dev-runner@q5.service dev-route@rt1.service dev-route-sync@rt1.timer" -- doctor --runner q5
+expect_out_line '\[FAIL\] route rt1: ランナー q5 の組織'
+printf 'rt1 my-org group=my-group\nrt9 my-org group=my-group\n' >"$WORK/conf/routes-orphan"
+rt 3 "doctor --runner: どのランナーも持たないラベルの行は WARN（1 行）" DEV_ROUTES_FILE="$WORK/conf/routes-orphan" FAKE_ACTIVE_UNITS="$ALL_UNITS" -- doctor --runner q1
+expect_out_line '\[WARN\] route rt9: runners にこのラベルを持つランナーがありません'
+printf 'rt1 my-org group=my-group bogus=1\n' >"$WORK/conf/routes-broken"
+rt 1 "doctor --runner: routes を読めなければ FAIL（doctor は止まらず、ほかの点検も出す）" DEV_ROUTES_FILE="$WORK/conf/routes-broken" FAKE_ACTIVE_UNITS="$ALL_UNITS" -- doctor --runner q1
+expect_out_line '\[FAIL\] routes を読めません: .*知らないキーです'
+expect_out_line '\[OK  \] イメージ dev-runner:local があります'
+rt 0 "doctor --runner: routes が無い機械では routes の点検を出さない（従来どおり。0）" DEV_ROUTES_FILE="$WORK/conf/no-such-routes" FAKE_ACTIVE_UNITS="dev-runner@q1.service" -- doctor --runner q1
+if grep -q 'route ' "$OUT"; then ng "$CUR: routes が無いのに route の行が出ています"; fi
+
+# ── help ──
+run 0 "help runner: route の説明がある" -- -- help runner
+expect_out_line '^  dev runner route up[|]down[|]sync[|]show <ラベル>'
+expect_out_line 'ACTIONS_RUNS_ON'
+expect_out_line 'RestartPreventExitStatus=2'
+run 2 "runner: route の引数なしは使い方の誤り" -- -- runner route
+expect_err "使い方: dev runner route"
+expect_no_calls
+
+# ── self-update: 切り替えのユニットがリリースと違えば、install.sh の再実行を案内する ──
+mk_self
+printf '[Unit]\nDescription=リリースの切り替えのユニット\n' >"$REL/dev-route@.service"
+route_unit_sum="$($sum_cmd "$REL/dev-route@.service" | awk '{ print $1 }')"
+printf '{\n  "package": "devcontainer-host",\n  "version": "0.0.0",\n  "checksums": {\n    "dev.sh": "%s",\n    "dev-route@.service": "%s"\n  }\n}\n' "$good_sum" "$route_unit_sum" >"$REL/RELEASE-MANIFEST.json"
+mkdir -p "$WORK/home/.config/systemd/user"
+printf '[Unit]\nDescription=古い切り替えのユニット\n' >"$WORK/home/.config/systemd/user/dev-route@.service"
+run 0 "self-update: 切り替えのユニットがリリースと違えば、install.sh の再実行を案内する（書き換えない）" -- DEV_SELF_PATH="$SELF" FAKE_CURL_DIR="$REL" -- self-update
+expect_out_line '置いてある切り替えのユニット（.*dev-route@.service）が、リリース（v0.0.0）の dev-route@.service と違います'
+expect_out_line 'install.sh を再実行して切り替えのユニットを更新してください'
+[[ "$(cat "$WORK/home/.config/systemd/user/dev-route@.service")" == "$(printf '[Unit]\nDescription=古い切り替えのユニット')" ]] || ng "$CUR: 切り替えのユニットが書き換わっています"
+rm -f "$WORK/home/.config/systemd/user/dev-route@.service" "$REL/dev-route@.service"
+write_manifest "$good_sum"
 
 if [[ "$fail" -ne 0 ]]; then
   echo "DEVHOST_SELFTEST_FAIL" >&2

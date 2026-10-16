@@ -1,0 +1,44 @@
+# dev-route@<ラベル>.service — 自前のランナーが動けるあいだだけ、ワークフローが読む Actions 変数 ACTIONS_RUNS_ON をランナーのラベルへ向ける。
+#
+# **ユーザーのユニットとして置く**（~/.config/systemd/user/。dev-runner@.service と同じ作り）。
+# ログインしていない間も動かすには `loginctl enable-linger` が要る。導入の順序は README.md の「自前のランナー」の「変数の切り替え」。
+# **変数をまず ubuntu-latest に逃がし、ランナーを起こして確かめてから、このユニットを有効にする**（逆にすると、
+# 変数が指すラベルのランナーがまだ居ないので、ジョブが待ちのまま止まる）。
+#
+# <ラベル> は dev の設定ファイル（routes）に書いたラベルで、ここには何も書かない。
+# **%i を使い %I を使わない**（%I はインスタンス名の - を / へ戻すので、ラベルに - を含むと別の名前になる）。
+#
+# 起動で `dev runner route up`（対象をラベルへ）、停止で `dev runner route down`（対象を ubuntu-latest へ）。
+# **戻すのは ExecStop ではなく ExecStopPost にする**: ExecStop は起動に失敗したときは動かないが、ExecStopPost は
+# 起動の失敗でも動く。ラベルへ向ける途中で失敗したとき（一部の書き込みだけ通ったとき）も戻せる。
+# 機械のシャットダウンでは、ユーザーのユニットの停止の時点でネットワークが生きていて、書けることを実機で確かめている。
+# 起動の直後はネットワークがまだ無いことがある。そのときは up が失敗し、RestartSec の後にやり直す。
+# 起動が失敗しても、その間は ExecStopPost の down が走って ubuntu-latest へ戻す（ラベルへ向けたまま取り残さない）。
+
+[Unit]
+Description=ACTIONS_RUNS_ON を自前のランナーのラベルへ向ける（%i）
+# 起動の直後はネットワークが無いことがある。そのときは失敗し、RestartSec の後にやり直す。
+# 回数の上限を設けないのは、回線の立ち上がりが遅い日に上限へ当たって諦めるのを避けるため。
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=%h/.local/bin/dev runner route up %i
+# 停止の処理は Restart= でやり直されないので、失敗した分は中でやり直す（5 秒おきに 2 回まで）。
+ExecStopPost=%h/.local/bin/dev runner route down %i --retries 2 --retry-wait 5
+Restart=on-failure
+RestartSec=30
+# dev runner route が、設定の誤り（2。PAT の権限・routes の書き方・グループが selected でない）で抜けたときは、起こし直さない
+# （直さない限り同じ失敗を繰り返し、API を消費するため）。journal の理由を読んで直してから start し直す。
+RestartPreventExitStatus=2
+# 起動のときの上限。API の 1 回の呼び出しは最長 10 秒（DEV_ROUTE_API_TIMEOUT）なので、固まったまま activating に残らない。
+TimeoutStartSec=300
+# 止めるときに、全対象を ubuntu-latest へ戻す時間。最悪の見積もり: ロックの待ち 90 秒（DEV_ROUTE_LOCK_WAIT。そろえ直しは
+# online の判定と読み直しの待ちをロックの外で行い、ロックの中ではやり直さないので、持つのは書き込みの 1 巡ぶん）
+# + 一覧の読み取り（グループ・対象・ランナー）30 秒 + 書き込み 3 巡（並列なので件数に依らず 1 巡 20 秒）と待ち 2 回で 70 秒
+# + グループから外れた分の同じく 70 秒 = 260 秒。
+TimeoutStopSec=300
+
+[Install]
+WantedBy=default.target

@@ -98,15 +98,18 @@ install.sh — 外部の機械へ devhost を入れる（再実行すれば新�
 
 すること:
   1. 公開リリースから RELEASE-MANIFEST.json を取得する（既定は最新。--version でその版に固定する）
-  2. 同じリリースの dev.sh・dev-up@.service・dev-runner@.service・runner.Dockerfile・projects.example・runners.example を
+  2. 同じリリースの dev.sh・dev-up@.service・dev-runner@.service・dev-route@.service・dev-route-sync@.service・
+     dev-route-sync@.timer・runner.Dockerfile・projects.example・runners.example・routes.example を
      取得し、マニフェストの checksums と照合する（dev.sh は devhost の dev.sh の形であることと構文も確かめる）。
      1 つでも外れたら何も置かずに 1 で止まる
   3. dev を ~/.local/bin/dev へ写しで置く（置き換え先がリンク・ディレクトリ・git で追跡されているファイル・devhost の dev.sh でない
      ファイルなら置き換えずに止まる）
-  4. dev-up@.service と dev-runner@.service を ~/.config/systemd/user/ へ置き、systemctl --user daemon-reload を呼ぶ
+  4. dev-up@.service・dev-runner@.service・dev-route@.service・dev-route-sync@.service・dev-route-sync@.timer を
+     ~/.config/systemd/user/ へ置き、systemctl --user daemon-reload を呼ぶ
      ランナーのイメージの Dockerfile は ~/.config/dev/runner.Dockerfile へ置く（イメージは dev runner build で作る。自動では作らない）
   5. ~/.config/dev/projects と ~/.config/dev/runners が無ければ、それぞれ projects.example / runners.example から作る
-     （あれば決して上書きしない）
+     （あれば決して上書きしない）。routes（ACTIONS_RUNS_ON の切り替えの設定）は、使わない機械もあるので雛形から作らず、
+     雛形 routes.example を ~/.config/dev/routes.example へ置く（使うときに routes へ写す）
   6. devcontainer CLI・docker・systemd の有無を確かめ、足りないものと、次にすること（enable-linger・
      プロジェクトごとの enable --now）を案内する。これらは自動では入れない・行わない
 
@@ -233,6 +236,7 @@ main() {
   [[ -n "${HOME:-}" ]] || die "HOME が設定されていません。何も置いていません。"
 
   local conf_home bin_path unit_path projects_path runner_unit_path runner_df_path runners_path
+  local route_unit_path route_sync_unit_path route_timer_path routes_example_path
   conf_home="${XDG_CONFIG_HOME:-$HOME/.config}"
   bin_path="$HOME/.local/bin/dev"
   unit_path="$conf_home/systemd/user/dev-up@.service"
@@ -240,6 +244,10 @@ main() {
   runner_unit_path="$conf_home/systemd/user/dev-runner@.service"
   runner_df_path="$conf_home/dev/runner.Dockerfile"
   runners_path="$conf_home/dev/runners"
+  route_unit_path="$conf_home/systemd/user/dev-route@.service"
+  route_sync_unit_path="$conf_home/systemd/user/dev-route-sync@.service"
+  route_timer_path="$conf_home/systemd/user/dev-route-sync@.timer"
+  routes_example_path="$conf_home/dev/routes.example"
 
   # 置き換え先の確認。取得より先に行う（置けないと分かっているのに取りにいかない）。
   local why
@@ -254,7 +262,7 @@ main() {
     die "置き換え先 $unit_path は通常のファイルではありません（ディレクトリ、名前付きパイプなど）。何も置いていません。"
   fi
   local rp
-  for rp in "$runner_unit_path" "$runner_df_path"; do
+  for rp in "$runner_unit_path" "$runner_df_path" "$route_unit_path" "$route_sync_unit_path" "$route_timer_path" "$routes_example_path"; do
     if [[ -L "$rp" ]]; then
       die "置き換え先 $rp はリンクです。リンクの先は書き換えません。何も置いていません。"
     fi
@@ -274,7 +282,7 @@ main() {
   # すべての置き場所の親に書き込めるかを、何かを置く前に検査する。実行では見つかった時点で止まる。
   # --dry-run では止めずに集め、計画に「実行すると書き込めずに止まる」と出す（計画を出せないほうが困るため）。
   local write_problems="" t msg
-  for t in "$bin_path" "$unit_path" "$runner_unit_path" "$runner_df_path" "$projects_path" "$runners_path"; do
+  for t in "$bin_path" "$unit_path" "$runner_unit_path" "$runner_df_path" "$route_unit_path" "$route_sync_unit_path" "$route_timer_path" "$routes_example_path" "$projects_path" "$runners_path"; do
     [[ ( "$t" != "$projects_path" && "$t" != "$runners_path" ) || ! -e "$t" ]] || continue
     if ! msg="$(parent_problem "$t")"; then write_problems="${write_problems}${msg}"$'\n'; fi
   done
@@ -311,9 +319,19 @@ main() {
     die "マニフェストの版（$mver）が指定した版（$version）と違います。何も置いていません。"
   fi
 
-  # 6 つの資産を取得して照合する。個別の資産として配られているので、アーカイブは取らない。
-  local name want got
-  for name in dev.sh dev-up@.service dev-runner@.service runner.Dockerfile projects.example runners.example; do
+  # 資産を取得して照合する。個別の資産として配られているので、アーカイブは取らない。
+  local name want got has_route=1 names
+  # 変数の切り替え（dev-route）の 4 つは v0.5.0 から配る。それより前の版のマニフェストには無いので、
+  # 4 つとも無ければ取らずに進める（古い版へ固定して入れ直す・戻すことができるように）。一部だけ無いのは食い違いとして止める。
+  if ! jq -e '.checksums["dev-route@.service"]' "$IT_TMP/RELEASE-MANIFEST.json" >/dev/null 2>&1; then
+    if jq -e '.checksums | has("dev-route-sync@.service") or has("dev-route-sync@.timer") or has("routes.example")' "$IT_TMP/RELEASE-MANIFEST.json" >/dev/null 2>&1; then
+      die "RELEASE-MANIFEST.json に dev-route@.service のハッシュがありません（ほかの dev-route の資産はあります）。何も置いていません。"
+    fi
+    has_route=0
+  fi
+  names="dev.sh dev-up@.service dev-runner@.service runner.Dockerfile projects.example runners.example"
+  [[ "$has_route" -eq 0 ]] || names="$names dev-route@.service dev-route-sync@.service dev-route-sync@.timer routes.example"
+  for name in $names; do
     want="$(jq -r --arg n "$name" '.checksums[$n] // empty' "$IT_TMP/RELEASE-MANIFEST.json")" || die "RELEASE-MANIFEST.json を読めません。何も置いていません。"
     [[ "$want" =~ ^[0-9a-f]{64}$ ]] || die "RELEASE-MANIFEST.json に $name のハッシュ（checksums の $name）がありません。何も置いていません。"
     curl -fsSL "$base/$name" -o "$IT_TMP/$name" || die "$name を取得できません。何も置いていません。"
@@ -325,13 +343,26 @@ main() {
   "${BASH:-bash}" -n "$IT_TMP/dev.sh" || die "取得した dev.sh に構文の誤りがあります。何も置いていません。"
   grep -q '^ExecStart=.*dev supervise' "$IT_TMP/dev-up@.service" || die "取得した dev-up@.service が devhost のユニットだと確かめられません（ExecStart に dev supervise がありません）。何も置いていません。"
   grep -q '^ExecStart=.*dev runner run' "$IT_TMP/dev-runner@.service" || die "取得した dev-runner@.service が devhost のユニットだと確かめられません（ExecStart に dev runner run がありません）。何も置いていません。"
+  [[ "$has_route" -eq 0 ]] || grep -q '^ExecStart=.*dev runner route up' "$IT_TMP/dev-route@.service" || die "取得した dev-route@.service が devhost のユニットだと確かめられません（ExecStart に dev runner route up がありません）。何も置いていません。"
+  [[ "$has_route" -eq 0 ]] || grep -q '^ExecStart=.*dev runner route sync' "$IT_TMP/dev-route-sync@.service" || die "取得した dev-route-sync@.service が devhost のユニットだと確かめられません（ExecStart に dev runner route sync がありません）。何も置いていません。"
+  [[ "$has_route" -eq 0 ]] || grep -q '^OnUnitActiveSec=' "$IT_TMP/dev-route-sync@.timer" || die "取得した dev-route-sync@.timer が devhost のタイマーだと確かめられません（OnUnitActiveSec がありません）。何も置いていません。"
   grep -q '^FROM ghcr.io/actions/actions-runner' "$IT_TMP/runner.Dockerfile" || die "取得した runner.Dockerfile が devhost のランナーの Dockerfile だと確かめられません（FROM に公式のランナーのイメージがありません）。何も置いていません。"
 
   local dev_state unit_state proj_state runner_unit_state runner_df_state runners_state
+  local route_unit_state route_sync_unit_state route_timer_state routes_example_state
   dev_state="$(state_of "$IT_TMP/dev.sh" "$bin_path" 0755)"
   unit_state="$(state_of "$IT_TMP/dev-up@.service" "$unit_path" 0644)"
   runner_unit_state="$(state_of "$IT_TMP/dev-runner@.service" "$runner_unit_path" 0644)"
   runner_df_state="$(state_of "$IT_TMP/runner.Dockerfile" "$runner_df_path" 0644)"
+  if [[ "$has_route" -eq 1 ]]; then
+    route_unit_state="$(state_of "$IT_TMP/dev-route@.service" "$route_unit_path" 0644)"
+    route_sync_unit_state="$(state_of "$IT_TMP/dev-route-sync@.service" "$route_sync_unit_path" 0644)"
+    route_timer_state="$(state_of "$IT_TMP/dev-route-sync@.timer" "$route_timer_path" 0644)"
+    routes_example_state="$(state_of "$IT_TMP/routes.example" "$routes_example_path" 0644)"
+  else
+    # この版には無いので、置かない（置いてあるものにも触らない）。
+    route_unit_state=same route_sync_unit_state=same route_timer_state=same routes_example_state=same
+  fi
   if [[ -e "$projects_path" || -L "$projects_path" ]]; then proj_state=keep; else proj_state=new; fi
   if [[ -e "$runners_path" || -L "$runners_path" ]]; then runners_state=keep; else runners_state=new; fi
 
@@ -350,6 +381,14 @@ main() {
   echo "[$PROG]   ユニット: $(describe "$unit_state" "$unit_path")"
   echo "[$PROG]   ランナーのユニット: $(describe "$runner_unit_state" "$runner_unit_path")"
   echo "[$PROG]   ランナーの Dockerfile: $(describe "$runner_df_state" "$runner_df_path")"
+  if [[ "$has_route" -eq 1 ]]; then
+    echo "[$PROG]   変数の切り替えのユニット: $(describe "$route_unit_state" "$route_unit_path")"
+    echo "[$PROG]   変数の切り替えのそろえ直しのユニット: $(describe "$route_sync_unit_state" "$route_sync_unit_path")"
+    echo "[$PROG]   変数の切り替えのそろえ直しのタイマー: $(describe "$route_timer_state" "$route_timer_path")"
+    echo "[$PROG]   routes の雛形: $(describe "$routes_example_state" "$routes_example_path")"
+  else
+    echo "[$PROG]   変数の切り替え（dev-route）: この版には無いので置かない"
+  fi
   if [[ "$proj_state" == "new" ]]; then
     echo "[$PROG]   projects: 雛形から作る: $projects_path"
   else
@@ -386,6 +425,22 @@ EOF_PROBLEMS
     if [[ "$runner_df_state" != "same" ]]; then
       if [[ "$runner_df_state" == "mode" ]]; then note="権限を直しました"; else note="置きました"; fi
       stage_file "$IT_TMP/runner.Dockerfile" "$runner_df_path" 0644 "$note"
+    fi
+    if [[ "$route_unit_state" != "same" ]]; then
+      if [[ "$route_unit_state" == "mode" ]]; then note="権限を直しました"; else note="置きました"; fi
+      stage_file "$IT_TMP/dev-route@.service" "$route_unit_path" 0644 "$note"
+    fi
+    if [[ "$route_sync_unit_state" != "same" ]]; then
+      if [[ "$route_sync_unit_state" == "mode" ]]; then note="権限を直しました"; else note="置きました"; fi
+      stage_file "$IT_TMP/dev-route-sync@.service" "$route_sync_unit_path" 0644 "$note"
+    fi
+    if [[ "$route_timer_state" != "same" ]]; then
+      if [[ "$route_timer_state" == "mode" ]]; then note="権限を直しました"; else note="置きました"; fi
+      stage_file "$IT_TMP/dev-route-sync@.timer" "$route_timer_path" 0644 "$note"
+    fi
+    if [[ "$routes_example_state" != "same" ]]; then
+      if [[ "$routes_example_state" == "mode" ]]; then note="権限を直しました"; else note="置きました"; fi
+      stage_file "$IT_TMP/routes.example" "$routes_example_path" 0644 "$note"
     fi
     if [[ "$proj_state" == "new" ]]; then stage_file "$IT_TMP/projects.example" "$projects_path" 0644 "置きました"; fi
     if [[ "$runners_state" == "new" ]]; then stage_file "$IT_TMP/runners.example" "$runners_path" 0644 "置きました"; fi
@@ -427,6 +482,7 @@ report_next_steps() {
   echo "[$PROG]   - 常駐させるプロジェクトごとに: systemctl --user enable --now dev-up@<名前>.service"
   echo "[$PROG]   - 自前のランナーを使うなら（README.md の「自前のランナー」）: runners と PAT のファイル（権限 600）を書き、dev runner build でイメージを作り、systemctl --user enable --now dev-runner@<名前>.service"
   echo "[$PROG]   - 自前のランナーの出口の規則は root で入れます（入れないと dev runner run は起動しません。LAN に届いてよいランナーは runners で lan=allow）: dev runner net script | sudo install -m 755 /dev/stdin /usr/local/sbin/dev-runner-net、dev runner net unit | sudo install -m 644 /dev/stdin /etc/systemd/system/dev-runner-net.service、sudo systemctl daemon-reload && sudo systemctl enable --now dev-runner-net.service"
+  echo "[$PROG]   - ランナーが動けるあいだだけ ACTIONS_RUNS_ON をランナーのラベルへ向けるなら（README.md の「自前のランナー」の「変数の切り替え」。導入の順序があります。変数を先に ubuntu-latest へ逃がし、ランナーを起こして確かめてから）: routes.example を routes へ写して書き、PAT のファイル（権限 600。ランナーの登録用とは別）を置き、dev runner route show <ラベル> で読めるか確かめ、systemctl --user enable --now dev-route@<ラベル>.service dev-route-sync@<ラベル>.timer"
   if [[ "$runner_df_state" == "update" ]]; then
     if [[ "$dry_run" -eq 1 ]]; then
       echo "[$PROG]   - 実行すると、ランナーの Dockerfile を更新します。実行したあとに、dev runner build でイメージを作り直し、動いているランナーのユニットを起こし直してください。"

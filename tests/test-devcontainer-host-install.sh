@@ -65,6 +65,10 @@ make_release() {
   cp "$HOST_DIR/dev-runner@.service" "$dir/dev-runner@.service"
   cp "$HOST_DIR/runner.Dockerfile" "$dir/runner.Dockerfile"
   cp "$HOST_DIR/runners.example" "$dir/runners.example"
+  cp "$HOST_DIR/dev-route@.service" "$dir/dev-route@.service"
+  cp "$HOST_DIR/dev-route-sync@.service" "$dir/dev-route-sync@.service"
+  cp "$HOST_DIR/dev-route-sync@.timer" "$dir/dev-route-sync@.timer"
+  cp "$HOST_DIR/routes.example" "$dir/routes.example"
   write_manifest "$dir" "$ver"
 }
 
@@ -74,7 +78,8 @@ write_manifest() {
   jq -n --arg v "$ver" \
     --arg d "$(sha_of "$dir/dev.sh")" --arg u "$(sha_of "$dir/dev-up@.service")" --arg p "$(sha_of "$dir/projects.example")" \
     --arg ru "$(sha_of "$dir/dev-runner@.service")" --arg rd "$(sha_of "$dir/runner.Dockerfile")" --arg rx "$(sha_of "$dir/runners.example")" \
-    '{package: "devcontainer-host", version: $v, checksums: {"dev.sh": $d, "dev-up@.service": $u, "projects.example": $p, "dev-runner@.service": $ru, "runner.Dockerfile": $rd, "runners.example": $rx}}' \
+    --arg ro "$(sha_of "$dir/dev-route@.service")" --arg rs "$(sha_of "$dir/dev-route-sync@.service")" --arg rt "$(sha_of "$dir/dev-route-sync@.timer")" --arg re "$(sha_of "$dir/routes.example")" \
+    '{package: "devcontainer-host", version: $v, checksums: {"dev.sh": $d, "dev-up@.service": $u, "projects.example": $p, "dev-runner@.service": $ru, "runner.Dockerfile": $rd, "runners.example": $rx, "dev-route@.service": $ro, "dev-route-sync@.service": $rs, "dev-route-sync@.timer": $rt, "routes.example": $re}}' \
     > "$dir/RELEASE-MANIFEST.json"
 }
 
@@ -113,6 +118,10 @@ BIN() { echo "$H/.local/bin/dev"; }
 UNIT() { echo "$H/.config/systemd/user/dev-up@.service"; }
 PROJ() { echo "$H/.config/dev/projects"; }
 RUNIT() { echo "$H/.config/systemd/user/dev-runner@.service"; }
+ROUTE_UNIT() { echo "$H/.config/systemd/user/dev-route@.service"; }
+ROUTE_SYNC_UNIT() { echo "$H/.config/systemd/user/dev-route-sync@.service"; }
+ROUTE_TIMER() { echo "$H/.config/systemd/user/dev-route-sync@.timer"; }
+ROUTES_EXAMPLE() { echo "$H/.config/dev/routes.example"; }
 RDF() { echo "$H/.config/dev/runner.Dockerfile"; }
 RCONF() { echo "$H/.config/dev/runners"; }
 
@@ -137,6 +146,14 @@ else
   fail "ランナーのファイルが置かれていない、または内容が違う: $(find "$H" -type f | tr '\n' ' ')"
 fi
 
+it "新規の導入で、切り替えのユニット 3 つがリリースと同じ内容で置かれ、routes.example が置かれる（routes は作らない）"
+if cmp -s "$REL1/dev-route@.service" "$(ROUTE_UNIT)" && cmp -s "$REL1/dev-route-sync@.service" "$(ROUTE_SYNC_UNIT)" && cmp -s "$REL1/dev-route-sync@.timer" "$(ROUTE_TIMER)" \
+   && cmp -s "$REL1/routes.example" "$(ROUTES_EXAMPLE)" && [[ ! -e "$H/.config/dev/routes" ]]; then
+  pass
+else
+  fail "切り替えのファイルが置かれていない、内容が違う、または routes を作っている: $(find "$H" -type f | tr '\n' ' ')"
+fi
+
 it "新規の導入で、projects が projects.example から作られる"
 if cmp -s "$REL1/projects.example" "$(PROJ)"; then pass; else fail "projects が作られていない、または内容が違う"; fi
 
@@ -151,6 +168,10 @@ if grep -q "releases/latest/download/RELEASE-MANIFEST.json " "$LOG" \
    && grep -q "releases/download/v0.1.0/dev-runner@.service " "$LOG" \
    && grep -q "releases/download/v0.1.0/runner.Dockerfile " "$LOG" \
    && grep -q "releases/download/v0.1.0/runners.example " "$LOG" \
+   && grep -q "releases/download/v0.1.0/dev-route@.service " "$LOG" \
+   && grep -q "releases/download/v0.1.0/dev-route-sync@.service " "$LOG" \
+   && grep -q "releases/download/v0.1.0/dev-route-sync@.timer " "$LOG" \
+   && grep -q "releases/download/v0.1.0/routes.example " "$LOG" \
    && ! grep -q "latest/download/dev.sh" "$LOG" \
    && ! grep -q "PACKAGE_ARCHIVE" "$LOG"; then
   pass
@@ -255,7 +276,7 @@ tampered() {
   echo "$dir"
 }
 
-for asset in dev.sh dev-up@.service projects.example dev-runner@.service runner.Dockerfile runners.example; do
+for asset in dev.sh dev-up@.service projects.example dev-runner@.service dev-route@.service dev-route-sync@.service dev-route-sync@.timer runner.Dockerfile runners.example routes.example; do
   it "$asset のハッシュがマニフェストと食い違えば、何も置かずに非 0 で止まる"
   new_home
   bad="$(tampered "hash-$asset" "$asset" "改ざん")"
@@ -276,6 +297,31 @@ jq 'del(.checksums["dev-up@.service"])' "$REL1/RELEASE-MANIFEST.json" > "$bad/RE
 run_install "$bad"
 if [[ $RC -ne 0 && "$(files_in_home)" == "0" ]] && grep -q 'checksums の dev-up@.service' "$ERR"; then pass; else fail "終了コード $RC、置かれたファイル: $(find "$H" -type f | tr '\n' ' ')"; fi
 
+it "dev-route の 4 つを持たない古い版（v0.4.0 以前）のマニフェストでも入れられ、dev-route のファイルは置かない"
+new_home
+old="$WORK/old-no-route"
+rm -rf "$old"
+cp -R "$REL1" "$old"
+rm -f "$old/dev-route@.service" "$old/dev-route-sync@.service" "$old/dev-route-sync@.timer" "$old/routes.example"
+jq 'del(.checksums["dev-route@.service"], .checksums["dev-route-sync@.service"], .checksums["dev-route-sync@.timer"], .checksums["routes.example"])' \
+  "$REL1/RELEASE-MANIFEST.json" > "$old/RELEASE-MANIFEST.json"
+run_install "$old"
+if [[ $RC -eq 0 ]] && cmp -s "$old/dev.sh" "$(BIN)" && [[ ! -e "$(ROUTE_UNIT)" && ! -e "$(ROUTE_SYNC_UNIT)" && ! -e "$(ROUTE_TIMER)" && ! -e "$(ROUTES_EXAMPLE)" ]] \
+   && grep -q 'この版には無いので置かない' "$OUT" && ! grep -q 'dev-route@.service ' "$LOG"; then
+  pass
+else
+  fail "終了コード $RC: $(tail -3 "$ERR")、置かれたファイル: $(find "$H" -type f | tr '\n' ' ')"
+fi
+
+it "dev-route の資産が一部だけマニフェストに無ければ、何も置かずに非 0 で止まる"
+new_home
+bad="$WORK/tampered-partial-route"
+rm -rf "$bad"
+cp -R "$REL1" "$bad"
+jq 'del(.checksums["dev-route@.service"])' "$REL1/RELEASE-MANIFEST.json" > "$bad/RELEASE-MANIFEST.json"
+run_install "$bad"
+if [[ $RC -ne 0 && "$(files_in_home)" == "0" ]] && grep -q 'dev-route@.service のハッシュがありません' "$ERR"; then pass; else fail "終了コード $RC: $(tail -3 "$ERR")"; fi
+
 it "マニフェストのハッシュが 64 桁の 16 進でなければ、何も置かずに非 0 で止まる"
 new_home
 bad="$WORK/tampered-shorthash"
@@ -290,7 +336,7 @@ new_home
 bad="$WORK/tampered-shape"
 rm -rf "$bad"
 mkdir -p "$bad"
-cp "$REL1/dev-up@.service" "$REL1/projects.example" "$REL1/dev-runner@.service" "$REL1/runner.Dockerfile" "$REL1/runners.example" "$bad/"
+cp "$REL1/dev-up@.service" "$REL1/projects.example" "$REL1/dev-runner@.service" "$REL1/runner.Dockerfile" "$REL1/runners.example" "$REL1/dev-route@.service" "$REL1/dev-route-sync@.service" "$REL1/dev-route-sync@.timer" "$REL1/routes.example" "$bad/"
 printf '#!/usr/bin/env bash\n# 別の道具\necho hi\n' > "$bad/dev.sh"
 write_manifest "$bad" "0.1.0"
 run_install "$bad"
@@ -301,7 +347,7 @@ new_home
 bad="$WORK/tampered-syntax"
 rm -rf "$bad"
 mkdir -p "$bad"
-cp "$REL1/dev-up@.service" "$REL1/projects.example" "$REL1/dev-runner@.service" "$REL1/runner.Dockerfile" "$REL1/runners.example" "$bad/"
+cp "$REL1/dev-up@.service" "$REL1/projects.example" "$REL1/dev-runner@.service" "$REL1/runner.Dockerfile" "$REL1/runners.example" "$REL1/dev-route@.service" "$REL1/dev-route-sync@.service" "$REL1/dev-route-sync@.timer" "$REL1/routes.example" "$bad/"
 printf '#!/usr/bin/env bash\n# dev — 構文の誤り\nif then fi (\n' > "$bad/dev.sh"
 write_manifest "$bad" "0.1.0"
 run_install "$bad"
@@ -326,6 +372,19 @@ printf '[Service]\nExecStart=/bin/true\n' > "$bad/dev-runner@.service"
 write_manifest "$bad" "0.1.0"
 run_install "$bad"
 if [[ $RC -ne 0 && "$(files_in_home)" == "0" ]] && grep -q 'dev-runner@.service が devhost のユニットだと確かめられません' "$ERR"; then pass; else fail "終了コード $RC、置かれたファイル: $(find "$H" -type f | tr '\n' ' ')"; fi
+
+for pair in "dev-route@.service:dev runner route up" "dev-route-sync@.service:dev runner route sync" "dev-route-sync@.timer:OnUnitActiveSec"; do
+  asset="${pair%%:*}"
+  it "ハッシュが合っていても、$asset が devhost のものでなければ、何も置かずに非 0 で止まる"
+  new_home
+  bad="$WORK/tampered-route-$asset"
+  rm -rf "$bad"
+  cp -R "$REL1" "$bad"
+  printf '[Service]\nExecStart=/bin/true\n' > "$bad/$asset"
+  write_manifest "$bad" "0.1.0"
+  run_install "$bad"
+  if [[ $RC -ne 0 && "$(files_in_home)" == "0" ]] && grep -q "$asset が devhost の" "$ERR"; then pass; else fail "終了コード $RC、置かれたファイル: $(find "$H" -type f | tr '\n' ' ')"; fi
+done
 
 it "ハッシュが合っていても、runner.Dockerfile が公式のランナーのイメージを使っていなければ、何も置かずに非 0 で止まる"
 new_home

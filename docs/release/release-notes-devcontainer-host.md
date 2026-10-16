@@ -6,6 +6,23 @@ devhost（SSH で届く外部の機械で devcontainer を保つ道具。コマ�
 >
 > 同じ理由で、issue 参照は `ojos/ai-packages-dev#NNN` の形で書いてください。裸の `#NNN` は GitHub のオートリンクが**配布先リポジトリの issue** として解決するため、配布後は存在しない issue や無関係な issue を指します。
 
+## 次の版（未リリース）
+
+### Summary
+- **自前のランナーが動けるあいだだけ、Actions 変数 `ACTIONS_RUNS_ON` をランナーのラベルへ向け、動けないときは `ubuntu-latest` へ戻す機能を足した**（ojos/ai-packages-dev#621）。自前のランナーが止まっていると、`runs-on` がそのラベルを指すジョブは待ちのまま止まり続け、Actions には別のランナーへ自動で切り替える仕組みがないため、ワークフローが読む変数をランナーの機械の側から書き換える。
+  - `dev runner route up|down|sync|show <ラベル>` を足した。対象は、設定ファイル `routes`（雛形 `routes.example`。1 行 =「ラベル 組織 group=<名前> [pat_file=<絶対パス>]」）で指すランナーグループの「使えるリポジトリ」（`selected` でなければ設定の誤り）。違うときだけ書き（冪等）、リポジトリごとに並列で書き、失敗した分だけやり直す。「動いている」の判定は、そのラベルを持つランナーが 1 台以上 `online` か。
+  - ユニット `dev-route@.service`（起動で `up`、`ExecStopPost` で `down`）と、そろえ直しの `dev-route-sync@.service` / `dev-route-sync@.timer`（起動の 3 分後から 10 分おき。起動・停止のユニットが active のときだけ書く）を足した。
+  - グループを読めないとき、キャッシュを使うのは `ubuntu-latest` へ戻す方向だけ。グループから外したリポジトリは `ubuntu-latest` へ戻す。停止のとき、ほかの機械の同じラベルのランナーが `online` なら戻さない。
+  - PAT はランナーの登録用とは別にする（Variables: Read and write と、組織の Self-hosted runners: Read だけ）。引数にも出力にも出さない。
+  - `dev doctor --runner <名前>` が、`routes` にそのランナーのラベルの行があれば、その行の PAT・グループ・ユニットとタイマー・`runners` との一致も点検する。
+  - 新しいファイル `dev-route@.service`・`dev-route-sync@.service`・`dev-route-sync@.timer`・`routes.example` は個別の資産として添付され、`install.sh` が置く（`routes` は作らず、雛形を `routes.example` の名前で置く）。`dev self-update` はユニットの差を案内するだけで、書き換えない。
+
+### 移行
+
+- 自前のランナーを使う機械で、この機能を使うなら、`install.sh` をもう一度実行してユニットと雛形を置く。**導入の順序がある**（README の「自前のランナー」の「変数の切り替え」）: 変数を先に `ubuntu-latest` へ逃がし、ランナーのラベルと `group=` を設定して起こし直し、`routes` と PAT を置いて `dev runner route show` で読めるか確かめてから、`dev-route@<ラベル>` とタイマーを有効にする。逆にすると、変数が指すラベルのランナーがまだ居ないので、ジョブが待ちのまま止まる。
+- 使わない機械では、何も変わらない（`routes` が無ければ、`dev doctor --runner` も route の点検を出さない）。
+- 機械そのものが止まったとき（停電・回線断）は、この機能では戻せない。
+
 ## v0.4.0
 
 ### Summary

@@ -1,0 +1,15 @@
+# dev-route-sync@<ラベル>.service — ACTIONS_RUNS_ON を、いまのランナーの状態にそろえ直す。タイマー（dev-route-sync@<ラベル>.timer）から起こす。
+#
+# **ユーザーのユニットとして置く**（~/.config/systemd/user/）。単独では有効にしない（[Install] を持たない）。
+# 起動・停止のユニット（dev-route@<ラベル>.service）が active のときだけ書く（dev runner route sync が見る）。
+# 止めているあいだは何もしないので、手で ubuntu-latest に逃がしているあいだにタイマーが向け直すことはない。
+# **%i を使い %I を使わない**。
+
+[Unit]
+Description=ACTIONS_RUNS_ON をランナーの状態にそろえ直す（%i）
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/dev runner route sync %i
+# ランナーが居ないときの読み直しの待ち（60 秒）と、失敗した分のやり直しを含めて終わる時間。
+TimeoutStartSec=600
