@@ -53,6 +53,17 @@ UPGRADE_PENDING=""
 # --accept <path>...: 手を入れたファイルを取り込み済みとして ORIGIN へ記録する（3 つ目の動作）。
 ACCEPT="false"
 ACCEPT_PATHS=()
+# --absent <path>... / --no-absent <path>...: 生成物を意図して置かない記録（ORIGIN の absent: 行）を
+# 付ける・外す（--accept と並ぶ動作）。
+ABSENT="false"
+ABSENT_PATHS=()
+NO_ABSENT="false"
+NO_ABSENT_PATHS=()
+# --upgrade が「absent: の記録どおり、現物が無いので生成しなかった」相対パスの一覧（改行区切り）。
+# ORIGIN の absent: 行はこのパスの分だけを引き継ぐ（accepted: と同じ許可の一覧方式）。
+UPGRADE_ABSENT_KEEP=""
+# 旧 ORIGIN の absent: のうち、hash: も持つパスの一覧（改行で囲む。--upgrade の開始時に 1 度だけ読む）。
+UPGRADE_ABSENT_RECORDED=""
 PLAYBOOK_CONFLICT_POLICY_EXPLICIT="false"
 
 BASE_IMAGE_OVERRIDE=""
@@ -145,6 +156,14 @@ options:
                               hash: record, an existing file and no <path>.dcb-new beside it;
                               otherwise nothing is written. Not combinable with generation
                               options or --upgrade; --output-dir and --dry-run are allowed.
+  --absent <path>...          Record generated files you intentionally do not keep as
+                              absent in .devcontainer/ORIGIN (output dir defaults to $PWD).
+                              --upgrade then does not create them and doctor.sh does not
+                              report them missing. Each path needs a hash: record, no file
+                              on disk, and must not be a gate/verification file (the paths
+                              listed in the README); otherwise nothing is written. Not
+                              combinable with generation options or --upgrade.
+  --no-absent <path>...       Remove the absent record; the next --upgrade creates the file.
   --no-gitignore              管理対象の .gitignore セクションを更新しない
   --gitignore-targets <csv>   Additional template names to use (e.g. VisualStudioCode,JetBrains)
   --second-opinion-engine <gemini|antigravity|codex>
@@ -333,6 +352,14 @@ while [[ $# -gt 0 ]]; do
       ACCEPT="true"; shift
       while [[ $# -gt 0 && "$1" != -* ]]; do ACCEPT_PATHS+=("$1"); shift; done
       ;;
+    --absent)
+      ABSENT="true"; shift
+      while [[ $# -gt 0 && "$1" != -* ]]; do ABSENT_PATHS+=("$1"); shift; done
+      ;;
+    --no-absent)
+      NO_ABSENT="true"; shift
+      while [[ $# -gt 0 && "$1" != -* ]]; do NO_ABSENT_PATHS+=("$1"); shift; done
+      ;;
     --no-gitignore)     MANAGE_GITIGNORE="false"; MANAGE_GITIGNORE_EXPLICIT="true"; shift ;;
     --gitignore-targets)   GITIGNORE_TARGETS="$2"; GITIGNORE_TARGETS_EXPLICIT="true"; shift 2 ;;
     --second-opinion-engine)
@@ -396,10 +423,11 @@ if [[ "$BASELINE_FROM_SET" == "true" ]]; then
   fi
 fi
 
-# --accept は 3 つ目の動作（生成・--upgrade とは別）。生成の引数や --upgrade と混ぜると、
-# 何を書くのかが曖昧になるので、ORIGIN を書く前に止める。--output-dir と --dry-run だけは併用できる。
-if [[ "$ACCEPT" == "true" ]]; then
-  accept_conflict=""
+# --accept / --absent / --no-absent は、生成・--upgrade とは別の動作。生成の引数や --upgrade、
+# 互いに混ぜると、何を書くのかが曖昧になるので、ORIGIN を書く前に止める。--output-dir と --dry-run
+# だけは併用できる。
+origin_action_conflict_check() { # <フラグ名>
+  local label="$1" accept_conflict=""
   [[ -z "$PROJECT_NAME" ]] || accept_conflict="$accept_conflict --project-name"
   [[ ${#LANGUAGES[@]} -eq 0 ]] || accept_conflict="$accept_conflict --languages"
   [[ ${#WITH_SET[@]} -eq 0 ]] || accept_conflict="$accept_conflict --with-*"
@@ -415,13 +443,33 @@ if [[ "$ACCEPT" == "true" ]]; then
   [[ -z "$PLAYBOOK_VERSION" ]] || accept_conflict="$accept_conflict --playbook-version"
   [[ "$PLAYBOOK_CONFLICT_POLICY_EXPLICIT" != "true" ]] || accept_conflict="$accept_conflict --playbook-conflict-policy"
   [[ "$BASELINE_FROM_SET" != "true" ]] || accept_conflict="$accept_conflict --baseline-from"
+  [[ "$label" == "--accept" || "$ACCEPT" != "true" ]] || accept_conflict="$accept_conflict --accept"
+  [[ "$label" == "--absent" || "$ABSENT" != "true" ]] || accept_conflict="$accept_conflict --absent"
+  [[ "$label" == "--no-absent" || "$NO_ABSENT" != "true" ]] || accept_conflict="$accept_conflict --no-absent"
   if [[ -n "$accept_conflict" ]]; then
-    echo "error: --accept は生成の引数や --upgrade と同時に指定できません（指定されたもの:$accept_conflict）。" >&2
+    echo "error: $label は生成の引数や --upgrade と同時に指定できません（指定されたもの:$accept_conflict）。" >&2
     echo "       --output-dir と --dry-run だけが併用できます。何も書かずに止めます。" >&2
     exit 1
   fi
+}
+if [[ "$ACCEPT" == "true" ]]; then
+  origin_action_conflict_check --accept
   if [[ ${#ACCEPT_PATHS[@]} -eq 0 ]]; then
     echo "error: --accept にはパスが 1 つ以上必要です（例: --accept .devcontainer/devcontainer.json）。" >&2
+    exit 1
+  fi
+fi
+if [[ "$ABSENT" == "true" ]]; then
+  origin_action_conflict_check --absent
+  if [[ ${#ABSENT_PATHS[@]} -eq 0 ]]; then
+    echo "error: --absent にはパスが 1 つ以上必要です（例: --absent .devcontainer/compose.yaml）。" >&2
+    exit 1
+  fi
+fi
+if [[ "$NO_ABSENT" == "true" ]]; then
+  origin_action_conflict_check --no-absent
+  if [[ ${#NO_ABSENT_PATHS[@]} -eq 0 ]]; then
+    echo "error: --no-absent にはパスが 1 つ以上必要です（例: --no-absent .devcontainer/compose.yaml）。" >&2
     exit 1
   fi
 fi
@@ -447,26 +495,53 @@ accept_normalize_path() {
   printf '%s' "$p"
 }
 
+# ORIGIN の行を書き換える共通の処理（--accept / --absent / --no-absent が共有する）。
+#   $1 ORIGIN のパス  $2 落とす行の接頭辞（改行区切り。例: accepted:<path>=）  $3 末尾へ足す行（改行区切り）
+# 中身だけを差し替える（cat > で、ORIGIN のモード・所有者を変えない）。
+origin_rewrite() {
+  local origin="$1" drops="$2" appends="$3" tmp line
+  tmp="$(mktemp "${TMPDIR:-/tmp}/dcb-origin-rewrite.XXXXXX")"
+  # 一覧は改行を含むので -v ではなく環境変数で渡す（macOS の awk は -v の値の改行を拒む）。
+  DCB_ORIGIN_DROPS="$drops" awk '
+    BEGIN {
+      n = split(ENVIRON["DCB_ORIGIN_DROPS"], a, "\n")
+      for (i = 1; i <= n; i++) if (a[i] != "") drop[a[i]] = 1
+    }
+    {
+      for (k in drop) if (index($0, k) == 1) next
+      print
+    }
+  ' "$origin" > "$tmp"
+  while IFS= read -r line; do
+    [[ -n "$line" ]] || continue
+    printf '%s\n' "$line" >> "$tmp"
+  done <<EOF2
+$appends
+EOF2
+  cat "$tmp" > "$origin"
+  rm -f "$tmp"
+}
+
 # 出力先の中に ORIGIN の実体があるかを確かめ、書き込み先の ORIGIN を検査する。
 # 問題があれば何も書かずに止める。
-accept_guard_origin() {
-  local origin="$1" real root
+accept_guard_origin() { # <ORIGIN のパス> <呼び出し元のフラグ名>
+  local origin="$1" label="${2:---accept}" real root
   if [[ ! -f "$origin" ]]; then
-    echo "error: --accept: $origin がありません（このディレクトリは DCB の生成物ではない、または記録が消えています）。" >&2
+    echo "error: $label: $origin がありません（このディレクトリは DCB の生成物ではない、または記録が消えています）。" >&2
     exit 1
   fi
   real="$(cd -P "$(dirname "$origin")" 2>/dev/null && pwd -P)" || real=""
   root="$(cd -P "$OUTPUT_DIR" 2>/dev/null && pwd -P)" || root=""
   if [[ -L "$origin" || -z "$real" || -z "$root" || ( "$real" != "$root" && "$real" != "$root"/* ) ]]; then
-    echo "error: --accept: $origin が出力先の外を指しています（シンボリックリンク）。書き込まずに止めます。" >&2
+    echo "error: $label: $origin が出力先の外を指しています（シンボリックリンク）。書き込まずに止めます。" >&2
     exit 1
   fi
 }
 
 accept_run() {
-  local origin="$OUTPUT_DIR/$ORIGIN_REL_PATH" raw rel dest curh rec bad="" tmp kind h real root
+  local origin="$OUTPUT_DIR/$ORIGIN_REL_PATH" raw rel dest curh rec bad="" drops appends kind h real root
   local actions="" plan_prefix="" seen=$'\n'
-  accept_guard_origin "$origin"
+  accept_guard_origin "$origin" --accept
   [[ "$DRY_RUN" == "true" ]] && plan_prefix="plan: "
   # 検査（何も書かない）。結果は actions へ「accept|unchanged<TAB>パス<TAB>ハッシュ」で積む。
   for raw in "${ACCEPT_PATHS[@]}"; do
@@ -527,38 +602,144 @@ EOF2
   fi
 
   # 書き直す。対象パスの既存の accepted: 行と pending: 行（取り込み待ちの記録）を落とし、accept のぶんを末尾へ足す。
-  # 中身だけを差し替える（cat > で、ORIGIN のモード・所有者を変えない）。
-  tmp="$(mktemp "${TMPDIR:-/tmp}/dcb-accept.XXXXXX")"
-  # 一覧は改行を含むので -v ではなく環境変数で渡す（macOS の awk は -v の値の改行を拒む）。
-  DCB_ACCEPT_ACTIONS="$actions" awk '
-    BEGIN {
-      n = split(ENVIRON["DCB_ACCEPT_ACTIONS"], a, "\n")
-      for (i = 1; i <= n; i++) {
-        if (a[i] == "") continue
-        split(a[i], f, "\t")
-        drop["accepted:" f[2] "="] = 1
-        drop["pending:" f[2] "="] = 1
-      }
-    }
-    {
-      for (k in drop) if (index($0, k) == 1) next
-      print
-    }
-  ' "$origin" > "$tmp"
+  drops="" appends=""
   while IFS=$'\t' read -r kind rel h; do
-    [[ "$kind" == "accept" ]] || continue
-    echo "accepted:$rel=$h" >> "$tmp"
+    [[ -n "$kind" ]] || continue
+    drops="${drops}accepted:${rel}="$'\n'"pending:${rel}="$'\n'
+    [[ "$kind" == "accept" ]] && appends="${appends}accepted:$rel=$h"$'\n'
   done <<EOF2
 $actions
 EOF2
-  cat "$tmp" > "$origin"
-  rm -f "$tmp"
+  origin_rewrite "$origin" "$drops" "$appends"
   echo "write: $origin"
 }
 
 if [[ "$ACCEPT" == "true" ]]; then
   [[ -n "$OUTPUT_DIR" ]] || OUTPUT_DIR="$PWD"
   accept_run
+  exit 0
+fi
+
+# ── --absent / --no-absent: 生成物を意図して置かない記録 ──────────────────────
+#
+# 生成先が意図して置かない生成物を、ORIGIN の absent:<path>=1 として記録する。記録があると、
+# --upgrade は現物が無いそのファイルを「新しい版で増えた」として作り直さず（記録を引き継ぐ）、
+# doctor.sh は recorded in origin but missing にしない。
+# 「生成物である」の判定は、ORIGIN の hash: の記録に基づく（--accept と同じ。生成時に決まる一覧は
+# 構成の選択に依るため、記録済みの hash: が今回の構成の生成対象の写しになる）。hash: は書き換えず、
+# 記録した値のまま残す（--no-absent の後の --upgrade が通常どおり判定できる）。
+# ゲート・検証・承認の機構を担うファイルは外せない（下の一覧。README と tests/test-absent.sh が機械照合する）。
+# 1 つでも条件を満たさなければ何も書かずに止める（全件を検査してから書く）。
+
+# 外せない（absent: にできない）ファイルの一覧（単一の定義）。doctor.sh も同じ一覧を持つ。
+absent_forbidden_rel_paths() {
+  printf '%s\n' \
+    '.github/workflows/verify.yml' \
+    '.github/workflows/identity-guard.yml' \
+    'scripts/verify.sh' \
+    'scripts/acceptance.sh' \
+    'scripts/loop-gate.sh' \
+    'scripts/verify-commit-identity.sh' \
+    'scripts/verify-commit-identity-selftest.sh' \
+    'scripts/confirm-merge-hook.sh' \
+    '.claude/settings.json' \
+    '.github/workflows/second-opinion-gate.yml' \
+    '.devcontainer/devcontainer.json'
+}
+
+absent_run() {
+  local origin="$OUTPUT_DIR/$ORIGIN_REL_PATH" raw rel dest bad="" drops="" appends="" kind seen=$'\n' actions="" plan_prefix="" real root ancestor
+  local paths=() label
+  if [[ "$ABSENT" == "true" ]]; then
+    label="--absent"; paths=("${ABSENT_PATHS[@]}")
+  else
+    label="--no-absent"; paths=("${NO_ABSENT_PATHS[@]}")
+  fi
+  accept_guard_origin "$origin" "$label"
+  [[ "$DRY_RUN" == "true" ]] && plan_prefix="plan: "
+  for raw in "${paths[@]}"; do
+    rel="$(accept_normalize_path "$raw")"
+    dest="$OUTPUT_DIR/$rel"
+    if [[ -z "$rel" ]]; then
+      bad="$bad"$'\n'"  - '$raw': パスが空です"
+      continue
+    fi
+    case "$seen" in *$'\n'"$rel"$'\n'*) continue ;; esac
+    seen="$seen$rel"$'\n'
+    if [[ "$ABSENT" == "true" ]]; then
+      if ! dcb_origin_get "$origin" "hash:$rel" >/dev/null 2>&1; then
+        bad="$bad"$'\n'"  - $rel: ORIGIN に hash: の記録がありません（今回の構成の生成物ではありません）"
+        continue
+      fi
+      if absent_forbidden_rel_paths | grep -Fx -- "$rel" >/dev/null; then
+        bad="$bad"$'\n'"  - $rel: ゲート・検証・承認の機構を担うファイルなので、absent: にできません"
+        continue
+      fi
+      if [[ -e "$dest" || -L "$dest" ]]; then
+        bad="$bad"$'\n'"  - $rel: 現物があります（先に消してから記録してください。記録と現物を食い違わせないためです）"
+        continue
+      fi
+      # 親ディレクトリごと消していることがあるので、実在する最も近い祖先で実体を確かめる。
+      ancestor="$(dirname "$dest")"
+      while [[ ! -d "$ancestor" && "$ancestor" != "/" && "$ancestor" != "." ]]; do ancestor="$(dirname "$ancestor")"; done
+      real="$(cd -P "$ancestor" 2>/dev/null && pwd -P)" || real=""
+      root="$(cd -P "$OUTPUT_DIR" 2>/dev/null && pwd -P)" || root=""
+      if [[ -z "$real" || -z "$root" || ( "$real" != "$root" && "$real" != "$root"/* ) ]]; then
+        bad="$bad"$'\n'"  - $rel: 親ディレクトリが出力先の外を指しているか、解決できません（シンボリックリンクの疑い）"
+        continue
+      fi
+      kind="absent"
+    else
+      if ! dcb_origin_get "$origin" "absent:$rel" >/dev/null 2>&1; then
+        bad="$bad"$'\n'"  - $rel: ORIGIN に absent: の記録がありません"
+        continue
+      fi
+      kind="unabsent"
+    fi
+    actions="${actions}${kind}"$'\t'"${rel}"$'\n'
+  done
+  if [[ -n "$bad" ]]; then
+    echo "error: $label: 記録できないパスがあります。何も書かずに止めます:$bad" >&2
+    exit 1
+  fi
+
+  while IFS=$'\t' read -r kind rel; do
+    [[ -n "$kind" ]] || continue
+    if [[ "$kind" == "absent" ]]; then
+      echo "${plan_prefix}absent: $rel (--upgrade は作り直しません)"
+      if [[ -e "$OUTPUT_DIR/$rel.dcb-new" || -L "$OUTPUT_DIR/$rel.dcb-new" ]]; then
+        echo "note: $rel.dcb-new が残っています。不要なら消してください（--upgrade の取り込み待ちの報告に残り続けます）" >&2
+      fi
+    else
+      echo "${plan_prefix}unabsent: $rel (次の --upgrade で生成します)"
+    fi
+  done <<EOF2
+$actions
+EOF2
+  if [[ "$DRY_RUN" == "true" ]]; then
+    echo "[bootstrap] dry-run: no files were written"
+    return 0
+  fi
+
+  # 書き直す。対象パスの既存の absent: 行を落とし、--absent のときは accepted: / pending: も落として
+  # （置かないファイルに取り込み済み・取り込み待ちの記録は残さない）、absent: を末尾へ足す。
+  while IFS=$'\t' read -r kind rel; do
+    [[ -n "$kind" ]] || continue
+    drops="${drops}absent:${rel}="$'\n'
+    if [[ "$kind" == "absent" ]]; then
+      drops="${drops}accepted:${rel}="$'\n'"pending:${rel}="$'\n'
+      appends="${appends}absent:$rel=1"$'\n'
+    fi
+  done <<EOF2
+$actions
+EOF2
+  origin_rewrite "$origin" "$drops" "$appends"
+  echo "write: $origin"
+}
+
+if [[ "$ABSENT" == "true" || "$NO_ABSENT" == "true" ]]; then
+  [[ -n "$OUTPUT_DIR" ]] || OUTPUT_DIR="$PWD"
+  absent_run
   exit 0
 fi
 
@@ -652,11 +833,32 @@ upgrade_merge_inputs() {
   return 0
 }
 
+# 旧 ORIGIN の absent: を 1 度だけ読み、UPGRADE_ABSENT_RECORDED へ持つ。hash: の無い absent: は
+# 生成物でないパスの記録（壊れた記録）なので引き継がず、警告して捨てる。
+upgrade_load_absent() {
+  local origin="$OUTPUT_DIR/$ORIGIN_REL_PATH" kind rel
+  UPGRADE_ABSENT_RECORDED=$'\n'
+  [[ -f "$origin" ]] || return 0
+  while IFS=$'\t' read -r kind rel; do
+    [[ -n "$kind" ]] || continue
+    if [[ "$kind" == "ok" ]]; then
+      UPGRADE_ABSENT_RECORDED="${UPGRADE_ABSENT_RECORDED}${rel}"$'\n'
+    else
+      echo "warn: --upgrade: ORIGIN の absent:$rel には対応する hash: が無い（生成物でない）ため、引き継がずに捨てます。" >&2
+    fi
+  done < <(awk '
+    /^hash:/ { l = substr($0, 6); sub(/=[^=]*$/, "", l); h[l] = 1; next }
+    /^absent:/ { l = substr($0, 8); sub(/=[^=]*$/, "", l); a[++n] = l }
+    END { for (i = 1; i <= n; i++) printf "%s\t%s\n", (a[i] in h) ? "ok" : "bad", a[i] }
+  ' "$origin")
+}
+
 if [[ "$UPGRADE" == "true" ]]; then
   # 出力先の既定は現在のディレクトリ（生成先の中で実行する想定）。--project-name から
   # $PWD/<name> を導くと、記録から読む名前と出力先の関係が循環する。
   [[ -n "$OUTPUT_DIR" ]] || OUTPUT_DIR="$PWD"
   upgrade_merge_inputs
+  upgrade_load_absent
   # 外す前の集合を残してから、--without-<名前> の分を外す（同名の --with- との同時指定は検査で除いてある）。
   UPGRADE_PREV_WITH=(${WITH_SET[@]+"${WITH_SET[@]}"})
   if [[ ${#WITHOUT_SET[@]} -gt 0 ]]; then
@@ -11732,6 +11934,22 @@ upgrade_apply_file() {
   else
     newh="$(dcb_file_sha256 "$src")"
   fi
+  # absent: の記録があり、現物が無い（記録どおり意図して置いていない）ファイルは作らず、記録を
+  # 引き継ぐ。外せない一覧のパスの absent: は破損として無視し、通常どおり生成する。現物がある
+  # ときは記録と食い違っているので、記録は引き継がず（UPGRADE_ABSENT_KEEP に入れない）通常どおり扱う。
+  if [[ "$UPGRADE_ABSENT_RECORDED" == *$'\n'"$rel"$'\n'* ]] \
+    && ! absent_forbidden_rel_paths | grep -Fx -- "$rel" >/dev/null; then
+    if [[ ! -e "$dest" && ! -L "$dest" ]]; then
+      UPGRADE_ABSENT_KEEP="${UPGRADE_ABSENT_KEEP}${rel}"$'\n'
+      if [[ "$DRY_RUN" == "true" ]]; then
+        echo "plan: absent (recorded as intentionally absent) $dest"
+      else
+        echo "absent (recorded as intentionally absent): $dest"
+      fi
+      return 0
+    fi
+    echo "note: $rel に absent: の記録がありますが現物があるため、記録を外して通常どおり扱います" >&2
+  fi
   UPGRADE_HASHES="${UPGRADE_HASHES}${rel}"$'\t'"${newh}"$'\n'
   rec="$(dcb_origin_get "$OUTPUT_DIR/$ORIGIN_REL_PATH" "hash:$rel" 2>/dev/null || true)"
 
@@ -12169,6 +12387,12 @@ EOF
       if [[ "$UPGRADE" == "true" ]]; then
         h="$(printf '%s' "$UPGRADE_HASHES" | awk -F'\t' -v r="$rel" '$1 == r { h = $2 } END { print h }')"
       fi
+      # absent: のため作らなかったファイルは、現物が無いので、旧 ORIGIN の記録をそのまま引き継ぐ。
+      if [[ -z "$h" && "$UPGRADE" == "true" ]]; then
+        case $'\n'"$UPGRADE_ABSENT_KEEP" in
+          *$'\n'"$rel"$'\n'*) h="$(dcb_origin_get "$dest" "hash:$rel" 2>/dev/null || true)"; [[ -n "$h" ]] || continue ;;
+        esac
+      fi
       [[ -n "$h" ]] || h="$(dcb_file_sha256 "$OUTPUT_DIR/$rel")"
       echo "hash:$rel=$h"
     done <<EOF
@@ -12201,6 +12425,13 @@ EOF
         case $'\n'"$UPGRADE_ACCEPT_KEEP" in *$'\n'"$rel"$'\n'*) ;; *) continue ;; esac
         echo "$line"
       done < <(grep '^accepted:' "$dest" || true)
+      # absent: の記録は、今回「作らなかった」パスの分だけを引き継ぐ（UPGRADE_ABSENT_KEEP）。
+      # 生成対象から外れたパスの記録は、origin_rels に無いので残らない。
+      while IFS= read -r rel; do
+        [[ -n "$rel" ]] || continue
+        case $'\n'"$origin_rels"$'\n' in *$'\n'"$rel"$'\n'*) ;; *) continue ;; esac
+        echo "absent:$rel=1"
+      done < <(printf '%s' "$UPGRADE_ABSENT_KEEP" | sort -u)
     fi
   } > "$tmp"
   # --upgrade は既存 ORIGIN のモードを保つ（無ければ 644）。従来の経路は常に 644。
