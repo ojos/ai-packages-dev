@@ -230,6 +230,7 @@ cmd_up() {
   find_project "$1"
   need_project_dir
   need devcontainer "外部の機械への導入は README.md の「devcontainer CLI を入れる」。"
+  maybe_offer_update || true
   devcontainer up --workspace-folder "${P_PATHS[$IDX]}"
 }
 
@@ -256,6 +257,7 @@ cmd_attach() {
     # 自分では起こさない。ユニットが起こし直している最中に 2 本目の up を重ねないため。
     die "$1 のコンテナが動いていません。dev up $1 で起こしてから入り直してください（ユニットを有効にしていれば、30 秒ほどで戻ります）。"
   fi
+  maybe_offer_update || true
   local rc=0
   dc_exec tmux new-session -A -s "${P_TMUX[$IDX]}" || rc=$?
   if [[ "$rc" -ne 0 ]]; then
@@ -2486,6 +2488,221 @@ cmd_self_update() {
   echo "[$PROG] すでに動いているユニットは、起こし直すまで古い dev のまま動き続けます。dev restart <名前>（コンテナも再起動します）か systemctl --user restart dev-up@<名前>.service で起こし直してください。"
 }
 
+# ── 新しい版の知らせ（dev up / dev attach） ────────────────────────────────────
+# 端末が付いているときだけ、devhost の新しい安定版を知らせ、yes なら install.sh で追従する。
+# 端末が付いていない呼び出し（dev supervise・systemd のユニット・スクリプト・AI エージェント）では何も聞かず、何も出さず、何も取得しない。
+# 問い合わせは 1 日 1 回（失敗した日も 1 回に数える）。N と答えた版は、その版のあいだ聞かない。記録はキャッシュ（コミットしない）。
+# オフライン・API の失敗・制限は黙って通す（短いタイムアウト。attach / up を止めない・遅らせない）。
+# 止め方: 環境変数 DEV_UPDATE_CHECK=off、または設定ファイル update-check の 1 行 off。
+UPDATE_LATEST_API="${DEV_GITHUB_API:-https://api.github.com}/repos/ojos/devcontainer-host/releases/latest"
+# 配布先のリポジトリの CHANGELOG.md の取得元（<取得元>/<版>/CHANGELOG.md）。自己試験で差し替える。
+UPDATE_CHANGELOG_BASE="${DEV_UPDATE_CHANGELOG_BASE:-https://raw.githubusercontent.com/ojos/devcontainer-host}"
+
+update_check_conf() {
+  if [[ -n "${DEV_UPDATE_CHECK_FILE:-}" ]]; then
+    printf '%s\n' "$DEV_UPDATE_CHECK_FILE"
+  else
+    printf '%s\n' "${XDG_CONFIG_HOME:-$HOME/.config}/dev/update-check"
+  fi
+}
+
+update_state_file() {
+  printf '%s\n' "${DEV_UPDATE_STATE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/dev}/update-check"
+}
+
+# 止められているか（0 = 止められている）。環境変数 DEV_UPDATE_CHECK が設定ファイルより優先する
+# （off / 0 / no / false で止まる。それ以外の値は「止めない」）。設定ファイルは、# 以降を読み飛ばした行のどれかが off（0 / no / false も同じ）なら止まる。
+update_check_disabled() {
+  local v f line
+  # 値は大文字・小文字を区別しない（OFF / False なども止める）。bash 3.2 にも合わせ、tr で小文字にする。
+  v="$(printf '%s' "${DEV_UPDATE_CHECK:-}" | tr '[:upper:]' '[:lower:]')"
+  if [[ -n "$v" ]]; then
+    case "$v" in off | 0 | no | false) return 0 ;; *) return 1 ;; esac
+  fi
+  f="$(update_check_conf)"
+  [[ -r "$f" ]] || return 1
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line%%#*}"
+    line="$(printf '%s' "${line//[[:space:]]/}" | tr '[:upper:]' '[:lower:]')"
+    case "$line" in off | 0 | no | false) return 0 ;; esac
+  done <"$f"
+  return 1
+}
+
+# 版 $1 が $2 より新しいか（vX.Y.Z）。数の部分が同じなら、$2 だけにプレリリースの接尾辞（-rc.1 など）があるとき、
+# $1（接尾辞なし）を新しいとみなす（プレリリースの dev から正式版への追従を知らせるため）。
+semver_gt() {
+  local a b i
+  if [[ "${1%%[-+]*}" == "${2%%[-+]*}" && "$1" != *-* && "$2" == *-* ]]; then return 0; fi
+  a="${1#v}"
+  a="${a%%[-+]*}"
+  b="${2#v}"
+  b="${b%%[-+]*}"
+  local IFS=.
+  # shellcheck disable=SC2206 # 点で区切って数の並びにする意図
+  a=($a)
+  # shellcheck disable=SC2206
+  b=($b)
+  for i in 0 1 2; do
+    if ((10#${a[$i]:-0} > 10#${b[$i]:-0})); then return 0; fi
+    if ((10#${a[$i]:-0} < 10#${b[$i]:-0})); then return 1; fi
+  done
+  return 1
+}
+
+# キャッシュへ「最後に問い合わせた日」「N と答えた版」「最後の失敗の理由」を書く（書けなくても、エラーの文は出さない）。
+# 失敗の理由は、知らせが働いていないことに後から気づけるよう残す（黙って通すが、痕跡は残す）。
+# 使い方: update_state_write <ファイル> <日付> <N の版> [<失敗の理由>]
+update_state_write() {
+  { { printf 'checked=%s\n' "$2"; [[ -z "${3:-}" ]] || printf 'declined=%s\n' "$3"; [[ -z "${4:-}" ]] || printf 'last_error=%s\n' "$4"; } >"$1"; } 2>/dev/null
+}
+
+# 今の版（含まない）から最新の版（含む）までのあいだに、CHANGELOG.md で「### 移行」の節を持つ版を、空白区切りで出す。
+# 公開しているリリースの本文は「Release vX.Y.Z」だけでリリースノートを含まないので、配布先の CHANGELOG.md を読む。
+# 使い方: update_migration_versions <CHANGELOG.md> <今の版> <最新の版>。読めなければ 1。
+update_migration_versions() {
+  local f="$1" cur="$2" latest="$3" v out=""
+  [[ -s "$f" ]] || return 1
+  # 最新の版の節が無い CHANGELOG.md は、判定の材料にならない（欠けた一覧から「移行は無い」と言わないため）。
+  grep -qxF "## $latest" "$f" || return 1
+  while read -r v; do
+    if semver_gt "$v" "$cur" && ! semver_gt "$v" "$latest"; then out="${out:+$out }$v"; fi
+  done < <(awk '/^## v[0-9]+\.[0-9]+\.[0-9]+/ { ver = $2; next } /^### 移行/ && ver != "" { print ver; ver = "" }' "$f")
+  printf '%s' "$out"
+}
+
+# y と答えたあとの追従。最新の版の RELEASE-MANIFEST.json と install.sh を取得し、install.sh のハッシュをマニフェストと照合してから
+# bash install.sh --version <版> を実行する（install.sh が残りの資産を照合する）。照合が通らなければ実行しない。
+# 失敗しても attach / up は止めない（呼び出し側は戻り値で続ける）。使い方: update_run_install <版>
+update_run_install() {
+  local ver="$1" base tmp want got rc=0
+  base="$RELEASE_BASE_URL/download/$ver"
+  tmp="$(mktemp -d "${TMPDIR:-/tmp}/dev-update.XXXXXX")" || { echo "[$PROG] 作業ディレクトリを作れないので、追従しません。" >&2; return 1; }
+  if ! curl -fsSL "$base/RELEASE-MANIFEST.json" -o "$tmp/RELEASE-MANIFEST.json" || ! curl -fsSL "$base/install.sh" -o "$tmp/install.sh"; then
+    echo "[$PROG] RELEASE-MANIFEST.json か install.sh を取得できないので、追従しません（何も置いていません）。" >&2
+    rm -rf "$tmp"
+    return 1
+  fi
+  want="$(jq -r '.checksums["install.sh"] // empty' "$tmp/RELEASE-MANIFEST.json" 2>/dev/null)" || want=""
+  got="$(sha256_of "$tmp/install.sh" 2>/dev/null)" || got=""
+  if [[ ! "$want" =~ ^[0-9a-f]{64}$ || "$got" != "$want" ]]; then
+    echo "[$PROG] install.sh のハッシュがマニフェストと合わないので、追従しません（実行していません。マニフェスト ${want:-なし} / 実際 ${got:-不明}）。" >&2
+    rm -rf "$tmp"
+    return 1
+  fi
+  "${BASH:-bash}" "$tmp/install.sh" --version "$ver" || rc=$?
+  rm -rf "$tmp"
+  if [[ "$rc" -ne 0 ]]; then
+    echo "[$PROG] install.sh が失敗しました（終了コード $rc）。追従できていません。" >&2
+    return 1
+  fi
+  return 0
+}
+
+# 新しい版の確認と、yes のときの追従。端末が付いていなければ何もしない。呼び出し側は戻り値を見ない。
+# ロックの記述子（8）は、抜けるときに必ず閉じる（開いたままだと attach の先の tmux のサーバーへ引き継がれ、
+# ロックが持たれ続けて、以後の確認が走らなくなるため）。
+maybe_offer_update() {
+  maybe_offer_update_body
+  # exec に 2>/dev/null を並べると、標準エラーの捨て先までシェル全体に残るので、記述子だけを閉じる。
+  exec 8>&-
+  return 0
+}
+
+maybe_offer_update_body() {
+  # 端末の判定は標準入力と標準出力の両方（ssh -t やスクリプトの出力を拾う呼び出しでは聞かない）。
+  # DEV_UPDATE_CHECK_FORCE_TTY=1 は自己試験用（端末を付けずに、標準入力から答えを渡す）。
+  # 質問は標準エラーへ出すので、標準エラーも端末であることを見る（標準エラーを捨てた呼び出しで、見えない質問のまま待たせない）。
+  if [[ "${DEV_UPDATE_CHECK_FORCE_TTY:-}" != "1" ]] && ! [[ -t 0 && -t 1 && -t 2 ]]; then return 0; fi
+  update_check_disabled && return 0
+  command -v curl >/dev/null 2>&1 && command -v jq >/dev/null 2>&1 || return 0
+  local sf today checked="" declined="" k v resp code body latest ans="" rc=0
+  sf="$(update_state_file)"
+  today="${DEV_UPDATE_CHECK_TODAY:-$(date +%F)}"
+  mkdir -p "$(dirname "$sf")" 2>/dev/null || return 0
+  if [[ -f "$sf" ]]; then
+    while IFS='=' read -r k v || [[ -n "$k" ]]; do
+      case "$k" in checked) checked="$v" ;; declined) declined="$v" ;; esac
+    done <"$sf"
+  fi
+  [[ "$checked" != "$today" ]] || return 0
+  # 同時に打った dev up / dev attach が両方で問い合わせて聞かないよう、記録の隣のロックを取れたほうだけが進む
+  # （待たない。取れなければ、もう一方が確かめている）。flock が無ければロックなしで進める。ロックは関数の終わりまで持つ。
+  if command -v flock >/dev/null 2>&1; then
+    # 2>/dev/null は { } の中の exec にだけ効かせる（exec に直接並べると、標準エラーの捨て先がシェル全体に残る）。
+    { exec 8>>"$sf.lock"; } 2>/dev/null || return 0
+    flock -n 8 || return 0
+    # ロックを取ってから読み直す（もう一方が今日の分を済ませていれば、何もしない）。
+    if [[ -f "$sf" ]] && grep -qx "checked=$today" "$sf" 2>/dev/null; then return 0; fi
+  fi
+  # 問い合わせの前に記録する（失敗・タイムアウトの日も 1 回に数え、毎回待たせない。書けなければ毎回待たせるので問い合わせない）。
+  update_state_write "$sf" "$today" "$declined" || return 0
+  resp="$(curl -sSL -m 3 --connect-timeout 2 \
+    -H 'Accept: application/vnd.github+json' \
+    -H 'X-GitHub-Api-Version: 2022-11-28' \
+    -w '\n%{http_code}' "$UPDATE_LATEST_API" 2>/dev/null)" || { update_state_write "$sf" "$today" "$declined" "通信の失敗（$UPDATE_LATEST_API）" || true; return 0; }
+  code="${resp##*$'\n'}"
+  [[ "$code" == 2?? ]] || { update_state_write "$sf" "$today" "$declined" "HTTP $code（$UPDATE_LATEST_API）" || true; return 0; }
+  body="${resp%$'\n'*}"
+  latest="$(printf '%s\n' "$body" | jq -r 'select(.prerelease != true and .draft != true) | .tag_name // empty' 2>/dev/null)" || latest=""
+  [[ "$latest" =~ $SEMVER_RE ]] || { update_state_write "$sf" "$today" "$declined" "最新の版を読めない応答" || true; return 0; }
+  semver_gt "$latest" "$DEV_VERSION" || return 0
+  [[ "$declined" != "$latest" ]] || return 0
+
+  # 移行の節は、最新の版の CHANGELOG.md（配布先のリポジトリの直下）から、今の版の次から最新の版までを見る。
+  local cl mig mrc=0 own
+  cl="$(mktemp "${TMPDIR:-/tmp}/dev-changelog.XXXXXX" 2>/dev/null)" || cl=""
+  if [[ -n "$cl" ]] && curl -fsSL "$UPDATE_CHANGELOG_BASE/$latest/CHANGELOG.md" -o "$cl" -m 5 --connect-timeout 2 2>/dev/null; then
+    mig="$(update_migration_versions "$cl" "$DEV_VERSION" "$latest")" || mrc=$?
+  else
+    mrc=1
+  fi
+  [[ -z "$cl" ]] || rm -f "$cl"
+  # install.sh が置くのは ~/.local/bin/dev だけ。いま動いている dev が別の場所なら、y で追従しても、この dev は古いまま残る。
+  own="${DEV_SELF_PATH:-${BASH_SOURCE[0]}}"
+  {
+    echo
+    echo "[$PROG] devhost の新しい版があります: 今 $DEV_VERSION → 最新 $latest"
+    if [[ "$mrc" -ne 0 ]]; then
+      echo "[$PROG] 移行の節があるかは判定できませんでした。追従の前にリリースノート（CHANGELOG.md）を読んでください: $RELEASE_BASE_URL/tag/$latest"
+    elif [[ -n "$mig" ]]; then
+      echo "[$PROG] ★★ 移行の手順のある版を含みます（$mig）。追従の前に CHANGELOG.md の「移行」の節を読んでください（手作業が要ります）: $RELEASE_BASE_URL/tag/$latest"
+    else
+      echo "[$PROG] $DEV_VERSION から $latest までに「移行」の節はありません: $RELEASE_BASE_URL/tag/$latest"
+    fi
+  } >&2
+  if ! [[ "$own" -ef "$HOME/.local/bin/dev" ]]; then
+    {
+      echo "[$PROG] この dev（$own）は ~/.local/bin/dev ではないので、ここからは追従しません（install.sh は ~/.local/bin/dev へ置くため）。"
+      echo "[$PROG] 追従するなら dev self-update か、README の「install.sh で入れる」の手順で入れ直してください。"
+    } >&2
+    # 聞いていないので、N の記録（declined）は付けない。知らせは 1 日 1 回（checked）に留まる。
+    return 0
+  fi
+  {
+    printf '[%s] 追従しますか？ [y/N] ' "$PROG"
+  } >&2
+  # 答えが来なければ（30 秒の無応答・入力の終端）N とみなすが、記録はしない（答えていないので、次の日にまた聞く）。
+  read -r -t 30 ans || rc=$?
+  echo >&2
+  if [[ "$rc" -ne 0 ]]; then return 0; fi
+  case "$ans" in
+    y | Y | yes | Yes | YES) ;;
+    *)
+      update_state_write "$sf" "$today" "$latest" || true
+      echo "[$PROG] 追従しません。$latest のあいだは聞きません（止めるには DEV_UPDATE_CHECK=off か $(update_check_conf) の 1 行 off）。" >&2
+      return 0
+      ;;
+  esac
+  if update_run_install "$latest"; then
+    {
+      echo "[$PROG] $latest へ追従しました。この dev は更新前の版のまま、今回の処理を続けます（入り直せば新しい dev になります）。"
+      echo "[$PROG] 動いているユニットは古い dev のまま動き続けます。起こし直してください: dev restart <名前> / dev runner build（ランナーのイメージ）/ systemctl --user restart dev-up@<名前>.service"
+    } >&2
+  fi
+  return 0
+}
+
 # dev の版を出す。
 cmd_version() {
   [[ $# -eq 0 ]] || usage_error "使い方: dev version"
@@ -2786,6 +3003,15 @@ dev up — devcontainer を起こす（在れば何もしない）。
 
 devcontainer up --workspace-folder <パス> を呼ぶ。作り直しはしない（作り直すときは dev rebuild）。
 
+新しい版の知らせ（端末が付いているときだけ）:
+  標準入力と標準出力の両方が端末のとき、devhost の最新の安定版（GitHub の latest。プレリリースを除く）を認証なしで調べ、
+  今の dev より新しければ「追従しますか？ [y/N]」と聞く。リリースノートに「移行」の節がある版は目立たせる。
+  y なら RELEASE-MANIFEST.json と install.sh を取得し、install.sh のハッシュを照合してから bash install.sh --version <版> を実行する
+  （動いているユニットの起こし直しは案内だけ）。この処理は更新前の dev のまま続ける。
+  問い合わせは 1 日 1 回、N と答えた版はその版のあいだ聞かない（記録は ~/.cache/dev/update-check。XDG_CACHE_HOME があればその下）。
+  オフライン・API の失敗は黙って通す（タイムアウトは数秒）。端末が付いていない呼び出し（スクリプト・AI エージェント・dev supervise）では何もしない。
+  止め方: 環境変数 DEV_UPDATE_CHECK=off、または ~/.config/dev/update-check（XDG_CONFIG_HOME があればその下）の 1 行 off。
+
 終了コード: 0 = 成功 / 1 = 起動の失敗 / 2 = 使い方か設定ファイルの誤り（未登録の名前を含む）
 失敗したとき: 経過の出力を読む。コンテナが戻らないときは dev doctor <名前>。
 EOF
@@ -2801,6 +3027,15 @@ dev attach — コンテナの中の tmux に入る（無ければ作る）。
 devcontainer exec で tmux new-session -A -s <セッション名> を呼ぶ。セッション名の既定は main で、
 設定ファイルの tmux_session=<名前> で変えられる。コンテナは起こさない（ユニットが起こし直している
 最中に 2 本目の up を重ねないため）。
+
+新しい版の知らせ（端末が付いているときだけ）:
+  標準入力と標準出力の両方が端末のとき、devhost の最新の安定版（GitHub の latest。プレリリースを除く）を認証なしで調べ、
+  今の dev より新しければ「追従しますか？ [y/N]」と聞く。リリースノートに「移行」の節がある版は目立たせる。
+  y なら RELEASE-MANIFEST.json と install.sh を取得し、install.sh のハッシュを照合してから bash install.sh --version <版> を実行する
+  （動いているユニットの起こし直しは案内だけ）。この処理は更新前の dev のまま続ける。
+  問い合わせは 1 日 1 回、N と答えた版はその版のあいだ聞かない（記録は ~/.cache/dev/update-check。XDG_CACHE_HOME があればその下）。
+  オフライン・API の失敗は黙って通す（タイムアウトは数秒）。端末が付いていない呼び出し（スクリプト・AI エージェント・dev supervise）では何もしない。
+  止め方: 環境変数 DEV_UPDATE_CHECK=off、または ~/.config/dev/update-check（XDG_CONFIG_HOME があればその下）の 1 行 off。
 
 終了コード: 0 = 成功 / 1 = コンテナが動いていない、または中へ入れなかった・セッションが異常終了した
             （この 2 つは区別できない。元の終了コードは案内の文面に出す） / 2 = 使い方か設定の誤り
@@ -2820,6 +3055,7 @@ dev supervise — 起こして、止まるまで待つ（systemd のユニット
 devcontainer up で起こし、docker wait でコンテナが止まるまで待つ。止まった理由を問わず、
 必ず 0 以外で終わる（ユニットの Restart=always が起こし直す）。人が直接使うものではない。
 意図して止めたいときはユニットを先に止める（dev rebuild は自分で止めて起こし直す）。
+新しい版の知らせは出さない（端末が付いていない呼び出しなので、何も聞かず何も取得しない）。
 
 終了コード: 1 = コンテナが止まった、または起こせなかった / 2 = 使い方か設定ファイルの誤り
 EOF
