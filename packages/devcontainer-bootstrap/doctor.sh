@@ -111,7 +111,7 @@ check_origin_format() {
     case "$line" in
       '#'*) ;;
       version=*|flags=*|inputs-format=*) ;;
-      input:project-name=*|input:languages=*|input:base-image-mode=*|input:base-image=*|input:manage-gitignore=*|input:gitignore-targets=*|input:playbook=*|input:playbook-source=*|input:playbook-ref=*) ;;
+      input:project-name=*|input:languages=*|input:base-image-mode=*|input:base-image=*|input:manage-gitignore=*|input:gitignore-targets=*|input:second-opinion-engine=*|input:playbook=*|input:playbook-source=*|input:playbook-ref=*) ;;
       input:*) bad="$bad [認識できない入力の行: ${line%%=*}]" ;;
       hash:?*=*)
         # sha256 に = は入らないが、パスには入りうる。最後の = で区切る。
@@ -187,6 +187,10 @@ check_origin_format() {
       esac
       v="$(origin_get "$origin_file" input:manage-gitignore)" || v=""
       case "$v" in true|false) ;; *) bad="$bad [input:manage-gitignore が true / false ではない]" ;; esac
+      # 任意の入力。行があるときだけ、値が既知のエンジンであることを確かめる。
+      if v="$(origin_get "$origin_file" input:second-opinion-engine)"; then
+        case "$v" in gemini|antigravity|codex) ;; *) bad="$bad [input:second-opinion-engine が gemini / antigravity / codex ではない]" ;; esac
+      fi
       origin_get "$origin_file" input:gitignore-targets >/dev/null || bad="$bad [input:gitignore-targets が無い]"
       playbook="$(origin_get "$origin_file" input:playbook)" || playbook=""
       case "$playbook" in

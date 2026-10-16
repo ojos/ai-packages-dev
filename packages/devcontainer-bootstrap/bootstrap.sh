@@ -25,6 +25,9 @@ FORCE="false"
 DRY_RUN="false"
 MANAGE_GITIGNORE="true"
 GITIGNORE_TARGETS=""
+# .env.example の SECOND_OPINION_ENGINE に記入するエンジン（空なら選んだエンジンから決める）。
+SECOND_OPINION_ENGINE_OPT=""
+SECOND_OPINION_ENGINE_EXPLICIT="false"
 # --upgrade: 記録した入力で生成し直し、手を入れていないファイルだけ新しい版へ更新する。
 # 引数で明示されたものだけを記録の入力より優先するため、明示の有無を別に持つ。
 UPGRADE="false"
@@ -144,6 +147,12 @@ options:
                               options or --upgrade; --output-dir and --dry-run are allowed.
   --no-gitignore              管理対象の .gitignore セクションを更新しない
   --gitignore-targets <csv>   Additional template names to use (e.g. VisualStudioCode,JetBrains)
+  --second-opinion-engine <gemini|antigravity|codex>
+                              Engine written into SECOND_OPINION_ENGINE of .env.example.
+                              Requires --with-<engine> and at least one of --with-antigravity
+                              / --with-codex (otherwise the entry is not generated). Unknown
+                              or unselected values stop before anything is written.
+                              Recorded in ORIGIN and kept by --upgrade.
   --with-playbook             Install shared AI rules (ai-playbook) and entry files
   --without-playbook          Do not install shared AI rules
   --playbook-from <path|url>  Playbook source (directory path or archive URL)
@@ -228,7 +237,7 @@ dcb_origin_load_inputs() {
   local file="$1" mode
   ORIGIN_IN_PROJECT_NAME="" ORIGIN_IN_LANGUAGES="" ORIGIN_IN_FLAGS=""
   ORIGIN_IN_BASE_IMAGE_MODE="" ORIGIN_IN_BASE_IMAGE=""
-  ORIGIN_IN_MANAGE_GITIGNORE="" ORIGIN_IN_GITIGNORE_TARGETS=""
+  ORIGIN_IN_MANAGE_GITIGNORE="" ORIGIN_IN_GITIGNORE_TARGETS="" ORIGIN_IN_SECOND_OPINION_ENGINE=""
   ORIGIN_IN_PLAYBOOK="" ORIGIN_IN_PLAYBOOK_SOURCE="" ORIGIN_IN_PLAYBOOK_REF=""
   [[ -f "$file" ]] || return 1
   # 値が 1 でなければ、この版が読めない書式として 1 を返す（doctor.sh と揃える）。
@@ -243,6 +252,8 @@ dcb_origin_load_inputs() {
   fi
   ORIGIN_IN_MANAGE_GITIGNORE="$(dcb_origin_get "$file" input:manage-gitignore)" || return 1
   ORIGIN_IN_GITIGNORE_TARGETS="$(dcb_origin_get "$file" input:gitignore-targets)" || return 1
+  # 任意の入力。古い ORIGIN や未指定のときは行が無いので、無いことを失敗にしない。
+  ORIGIN_IN_SECOND_OPINION_ENGINE="$(dcb_origin_get "$file" input:second-opinion-engine)" || ORIGIN_IN_SECOND_OPINION_ENGINE=""
   ORIGIN_IN_PLAYBOOK="$(dcb_origin_get "$file" input:playbook)" || return 1
   if [[ "$ORIGIN_IN_PLAYBOOK" == "installed" ]]; then
     ORIGIN_IN_PLAYBOOK_SOURCE="$(dcb_origin_get "$file" input:playbook-source)" || return 1
@@ -324,6 +335,9 @@ while [[ $# -gt 0 ]]; do
       ;;
     --no-gitignore)     MANAGE_GITIGNORE="false"; MANAGE_GITIGNORE_EXPLICIT="true"; shift ;;
     --gitignore-targets)   GITIGNORE_TARGETS="$2"; GITIGNORE_TARGETS_EXPLICIT="true"; shift 2 ;;
+    --second-opinion-engine)
+      [[ $# -ge 2 ]] || { echo "error: --second-opinion-engine には値（gemini / antigravity / codex）が必要です。" >&2; exit 1; }
+      SECOND_OPINION_ENGINE_OPT="$2"; SECOND_OPINION_ENGINE_EXPLICIT="true"; shift 2 ;;
     --with-playbook)    WITH_PLAYBOOK="true"; shift ;;
     --without-playbook) WITH_PLAYBOOK="false"; shift ;;
     --playbook-from)    PLAYBOOK_FROM="$2"; shift 2 ;;
@@ -395,6 +409,7 @@ if [[ "$ACCEPT" == "true" ]]; then
   [[ "$UPGRADE" != "true" ]] || accept_conflict="$accept_conflict --upgrade"
   [[ "$MANAGE_GITIGNORE_EXPLICIT" != "true" ]] || accept_conflict="$accept_conflict --no-gitignore"
   [[ "$GITIGNORE_TARGETS_EXPLICIT" != "true" ]] || accept_conflict="$accept_conflict --gitignore-targets"
+  [[ "$SECOND_OPINION_ENGINE_EXPLICIT" != "true" ]] || accept_conflict="$accept_conflict --second-opinion-engine"
   [[ -z "$WITH_PLAYBOOK" ]] || accept_conflict="$accept_conflict --with-playbook/--without-playbook"
   [[ -z "$PLAYBOOK_FROM" ]] || accept_conflict="$accept_conflict --playbook-from"
   [[ -z "$PLAYBOOK_VERSION" ]] || accept_conflict="$accept_conflict --playbook-version"
@@ -560,7 +575,7 @@ require_cmd curl
 
 # --upgrade の入力の決定。ORIGIN に記録した入力を読み、引数で明示されたものだけを上書きする。
 # 規則:
-#   project-name / languages / base-image / gitignore-targets  明示があればそれ、無ければ記録
+#   project-name / languages / base-image / gitignore-targets / second-opinion-engine  明示があればそれ、無ければ記録
 #   --with-*   記録した集合へ明示分を足す。--without-<名前> は、足したあとの集合から外す
 #   --no-gitignore  明示があれば false、無ければ記録
 #   規範  --playbook-from / --playbook-version の明示は取得元ごと置き換える。
@@ -585,7 +600,7 @@ upgrade_merge_inputs() {
     fi
     echo "       記録から入力を再現できないため、生成時と同じ引数を明示してください:" >&2
     echo "         --project-name <name> --languages <csv>（必須）" >&2
-    echo "         --with-*（使っていたもの） --base-image --no-gitignore --gitignore-targets" >&2
+    echo "         --with-*（使っていたもの） --base-image --no-gitignore --gitignore-targets --second-opinion-engine" >&2
     echo "         --with-playbook / --playbook-version <tag> / --playbook-from <path|url>（規範を置いていたもの）" >&2
     echo "       出力先は --output-dir で指定します（既定は現在のディレクトリ）。明示した引数で生成し、記録し直します。" >&2
     exit 1
@@ -609,6 +624,9 @@ upgrade_merge_inputs() {
   fi
   if [[ "$GITIGNORE_TARGETS_EXPLICIT" != "true" ]]; then
     GITIGNORE_TARGETS="$ORIGIN_IN_GITIGNORE_TARGETS"
+  fi
+  if [[ "$SECOND_OPINION_ENGINE_EXPLICIT" != "true" ]]; then
+    SECOND_OPINION_ENGINE_OPT="$ORIGIN_IN_SECOND_OPINION_ENGINE"
   fi
 
   if [[ "$src_explicit" == "true" || "$WITH_PLAYBOOK" == "false" ]]; then
@@ -671,6 +689,56 @@ for lang in "${LANGUAGES[@]}"; do
     *) echo "error: unsupported language: $lang (supported: node, go, python, php, rust, ruby)" >&2; exit 1 ;;
   esac
 done
+# --with-* で選択された装備に含まれるか。has_language と対になる述語。
+# --second-opinion-engine の検証（下）が使うため、ここ（引数解析の直後）で定義する。
+# WITH_SET は空になり得るため、未束縛展開を避けて空配列を安全に扱う。
+has_with() {
+  local target="$1" w
+  for w in ${WITH_SET[@]+"${WITH_SET[@]}"}; do [[ "$w" == "$target" ]] && return 0; done
+  return 1
+}
+
+# --second-opinion-engine は、生成の前（何も書く前）に検証する。
+# 利用者が明示した値が不正なら止める。--upgrade で ORIGIN から引き継いだ値は、
+# 未知の値なら ORIGIN の破損として止め、選んでいない・記入欄が出ない構成のために
+# 使えなくなっただけなら、警告して空に戻す（そうしないと --without-<エンジン> のあと
+# どの引数でも --upgrade が通らなくなる）。空文字の明示は値の誤りとして止める。
+if [[ "$SECOND_OPINION_ENGINE_EXPLICIT" == "true" && -z "$SECOND_OPINION_ENGINE_OPT" ]]; then
+  echo "error: --second-opinion-engine には gemini / antigravity / codex のいずれかが必要です。" >&2
+  exit 1
+fi
+if [[ -n "$SECOND_OPINION_ENGINE_OPT" ]]; then
+  if [[ "$SECOND_OPINION_ENGINE_EXPLICIT" == "true" ]]; then
+    soe_label="--second-opinion-engine $SECOND_OPINION_ENGINE_OPT"
+  else
+    soe_label="ORIGIN の input:second-opinion-engine=$SECOND_OPINION_ENGINE_OPT"
+  fi
+  case "$SECOND_OPINION_ENGINE_OPT" in
+    gemini|antigravity|codex) ;;
+    *)
+      if [[ "$SECOND_OPINION_ENGINE_EXPLICIT" == "true" ]]; then
+        echo "error: --second-opinion-engine must be one of: gemini, antigravity, codex（指定: $SECOND_OPINION_ENGINE_OPT）" >&2
+      else
+        echo "error: ORIGIN の input:second-opinion-engine の値が不正です（$SECOND_OPINION_ENGINE_OPT。gemini / antigravity / codex のいずれかのはず）。ORIGIN の破損の可能性があるため止めます。" >&2
+      fi
+      exit 1
+      ;;
+  esac
+  soe_problem=""
+  if ! has_with antigravity && ! has_with codex; then
+    soe_problem="--with-antigravity も --with-codex も選んでいない構成では、.env.example に SECOND_OPINION_ENGINE の記入欄を出さず、指定の行き先がありません"
+  elif ! has_with "$SECOND_OPINION_ENGINE_OPT"; then
+    soe_problem="--with-$SECOND_OPINION_ENGINE_OPT で選んでいないエンジンは指定できません"
+  fi
+  if [[ -n "$soe_problem" ]]; then
+    if [[ "$SECOND_OPINION_ENGINE_EXPLICIT" == "true" ]]; then
+      echo "error: $soe_label: $soe_problem。" >&2
+      exit 1
+    fi
+    echo "warning: $soe_label は、今回の構成では使えません（$soe_problem）。ORIGIN の記録を外し、指定が無いときの決め方に戻します。" >&2
+    SECOND_OPINION_ENGINE_OPT=""
+  fi
+fi
 case "$PLAYBOOK_CONFLICT_POLICY" in
   skip|overwrite|prompt) ;;
   *) echo "error: --playbook-conflict-policy must be one of: skip, overwrite, prompt" >&2; exit 1 ;;
@@ -9839,14 +9907,6 @@ has_language() {
   return 1
 }
 
-# --with-* で選択された装備に含まれるか。has_language と対になる述語。
-# WITH_SET は空になり得るため、未束縛展開を避けて空配列を安全に扱う。
-has_with() {
-  local target="$1" w
-  for w in ${WITH_SET[@]+"${WITH_SET[@]}"}; do [[ "$w" == "$target" ]] && return 0; done
-  return 1
-}
-
 # with-feature（devcontainer feature）の path を返す。cloud CLI と Terraform。
 with_feature_path() {
   case "$1" in
@@ -10395,8 +10455,10 @@ build_second_opinion_engine_block() {
   #   既定の gemini（CLI もキーも無い）で回り、設定するまで使えないため。
   # - gemini を選ばず antigravity と codex の両方を選んだときは、一意に決まらないので空のまま
   #   （既定の gemini へ落ちたことは reviewer の通知が知らせる）。
+  # - --second-opinion-engine の指定があれば、上のどれよりも優先してその値（検証済み）。
   local engine_default=""
-  if has_with gemini; then engine_default="gemini"
+  if [[ -n "$SECOND_OPINION_ENGINE_OPT" ]]; then engine_default="$SECOND_OPINION_ENGINE_OPT"
+  elif has_with gemini; then engine_default="gemini"
   elif has_with codex && ! has_with antigravity; then engine_default="codex"
   elif has_with antigravity && ! has_with codex; then engine_default="antigravity"
   fi
@@ -10406,6 +10468,7 @@ build_second_opinion_engine_block() {
 
 # 第二意見レビューのエンジン（gemini | antigravity | codex）。空なら gemini。
 # gemini も選んで生成した構成では gemini を記入済みで出す。
+# 生成時に --second-opinion-engine で明示した場合は、その値になる。
 #
 # antigravity（Antigravity CLI）は Google アカウントの OAuth 認証で、API キーに
 # 対応しない。初回は対話で `agy` を起動してログインすること。
@@ -10426,6 +10489,7 @@ ENGTMPL
 
 # 第二意見レビューのエンジン（gemini | codex）。空なら gemini。
 # 生成時に選んだエンジン（gemini を選んでいれば gemini、codex だけなら codex）を記入済みで出す。
+# 生成時に --second-opinion-engine で明示した場合は、その値になる。
 #
 # codex（Codex CLI）は ChatGPT アカウントの OAuth 認証（または API キー）。初回は
 # 対話で `codex login` を通すこと。GEMINI_API_KEY は使わない。
@@ -10440,6 +10504,7 @@ ENGTMPL
 
 # 第二意見レビューのエンジン（gemini | antigravity）。空なら gemini。
 # 生成時に選んだエンジン（gemini を選んでいれば gemini、antigravity だけなら antigravity）を記入済みで出す。
+# 生成時に --second-opinion-engine で明示した場合は、その値になる。
 #
 # antigravity（Antigravity CLI）は Google アカウントの OAuth 認証で、API キーに
 # 対応しない。初回は対話で `agy` を起動してログインすること。GEMINI_API_KEY は
@@ -12083,6 +12148,10 @@ EOF
     dcb_origin_line input:base-image "$BASE_IMAGE"
     echo "input:manage-gitignore=$MANAGE_GITIGNORE"
     dcb_origin_line input:gitignore-targets "$GITIGNORE_TARGETS"
+    # 指定があったときだけ書く（未指定の ORIGIN を変えない）。
+    if [[ -n "$SECOND_OPINION_ENGINE_OPT" ]]; then
+      dcb_origin_line input:second-opinion-engine "$SECOND_OPINION_ENGINE_OPT"
+    fi
     if should_install_playbook; then
       echo "input:playbook=installed"
       pb_src="$(origin_playbook_source)"
