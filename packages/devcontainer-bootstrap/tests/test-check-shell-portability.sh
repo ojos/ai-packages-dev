@@ -381,12 +381,13 @@ rule_case xargs-r0   'printf "" | xargs -r0 echo'                           # bs
 rule_case xargs-long 'printf "" | xargs --no-run-if-empty echo'             # bsd-ok: フィクスチャ
 rule_case xargs-pipe 'printf "" | xargs -r|cat'                            # bsd-ok: フィクスチャ
 rule_case xargs-subst 'x="$(printf "" | xargs -r)"'                        # bsd-ok: フィクスチャ
+rule_case xargs-redir 'printf "" | xargs -r>out'                           # bsd-ok: フィクスチャ
 
 # xargs の後ろの引数の途中にある -r（パスの image-replace、長いオプション）は、
 # xargs のオプションではないので通す（#613）。
 xargs_clean_case() {
   local label="$1" body="$2"
-  it "規則表: xargs の引数の途中の -r（$label）は検出しない（陰性）"
+  it "規則表: xargs の引数の途中の -r（$label）は検出しない（陰性）"  # bsd-ok: テストの説明文
   {
     printf '%s\n' 'set -euo pipefail'
     printf '%s\n' "$body"
