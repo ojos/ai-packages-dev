@@ -6,18 +6,18 @@ devhost（SSH で届く外部の機械で devcontainer を保つ道具。コマ�
 >
 > 同じ理由で、issue 参照は `ojos/ai-packages-dev#NNN` の形で書いてください。裸の `#NNN` は GitHub のオートリンクが**配布先リポジトリの issue** として解決するため、配布後は存在しない issue や無関係な issue を指します。
 
-## 次の版（未リリース）
+## v0.5.0
 
 ### Summary
 - **自前のランナーが動けるあいだだけ、Actions 変数 `ACTIONS_RUNS_ON` をランナーのラベルへ向け、動けないときは `ubuntu-latest` へ戻す機能を足した**（ojos/ai-packages-dev#621）。自前のランナーが止まっていると、`runs-on` がそのラベルを指すジョブは待ちのまま止まり続け、Actions には別のランナーへ自動で切り替える仕組みがないため、ワークフローが読む変数をランナーの機械の側から書き換える。
   - `dev runner route up|down|sync|show <ラベル>` を足した。対象は、設定ファイル `routes`（雛形 `routes.example`。1 行 =「ラベル 組織 group=<名前> [pat_file=<絶対パス>]」）で指すランナーグループの「使えるリポジトリ」（`selected` でなければ設定の誤り）。違うときだけ書き（冪等）、リポジトリごとに並列で書き、失敗した分だけやり直す。「動いている」の判定は、そのラベルを持つランナーが 1 台以上 `online` か。
   - ユニット `dev-route@.service`（起動で `up`、`ExecStopPost` で `down`）と、そろえ直しの `dev-route-sync@.service` / `dev-route-sync@.timer`（起動の 3 分後から 10 分おき。起動・停止のユニットが active のときだけ書く）を足した。
-  - グループを読めないとき、キャッシュを使うのは `ubuntu-latest` へ戻す方向だけ。グループから外したリポジトリは `ubuntu-latest` へ戻す。停止のとき、ほかの機械の同じラベルのランナーが `online` なら戻さない。
+  - グループを読めないとき、キャッシュを使うのは `ubuntu-latest` へ戻す方向だけ。グループから外したリポジトリは、今の値がこのラベルなら `ubuntu-latest` へ戻す（別の値は触らない）。キャッシュは組織とラベルの組ごと。「動いている」はグループのランナーで数え、停止のとき、ほかの機械（`runners` の名前と完全一致しないもの）の同じラベルのランナーが `online` なら戻さない。そろえ直しは、居ないと判定したら 60 秒後に読み直す（ジョブの切れ目で登録し直すあいだを取り違えないため）。停止の上限は 300 秒。
   - PAT はランナーの登録用とは別にする（Variables: Read and write と、組織の Self-hosted runners: Read だけ）。引数にも出力にも出さない。
   - `dev doctor --runner <名前>` が、`routes` にそのランナーのラベルの行があれば、その行の PAT・グループ・ユニットとタイマー・`runners` との一致も点検する。
   - 新しいファイル `dev-route@.service`・`dev-route-sync@.service`・`dev-route-sync@.timer`・`routes.example` は個別の資産として添付され、`install.sh` が置く（`routes` は作らず、雛形を `routes.example` の名前で置く）。`dev self-update` はユニットの差を案内するだけで、書き換えない。
 - **`dev runner route` の端のケースを 2 つ塞いだ**（ojos/ai-packages-dev#623）。(1) 対象の一覧をロックの外で読んでから書くまでにグループが変わると、古い一覧で書いていた。ロックを取ったあと（そろえ直しは active の再確認のあと）に読み直し、違えば読み直した一覧で書く。読み直せなければ、起動・そろえ直しは何も書かず 1、停止は今までどおりキャッシュで戻す。online の判定と読み直しの待ちはロックの外のまま。(2) dev-route を持たない版（v0.4.0 以前）を `install.sh` で入れると、置いてある dev-route のユニットが残り、route を知らない古い `dev` で停止の処理が失敗して変数をラベルに残していた。`install.sh` は、そのような版を入れるとき `dev-route@*.service` か `dev-route-sync@*.timer` が enabled か、動作中（停止の途中を含む）なら、何も置かずに非 0 で止まり、先に `systemctl --user disable --now dev-route@<ラベル>.service dev-route-sync@<ラベル>.timer` で止める手順を案内する（`systemctl` の一覧に加えて `*.wants/` の有効のリンクも見る。dev-route のユニットのファイルがあるのに `systemctl --user` に問い合わせられないときも止まる。迂回のオプションは無い）。
-- **`dev up` / `dev attach` が、端末が付いているときだけ、devhost の新しい安定版を知らせ、yes なら `install.sh` で追従するようにした**（ojos/ai-packages-dev#626）。古い版のまま気づかずに使い続けないため。標準入力と標準出力の両方が端末のときだけ、GitHub の最新の安定版（プレリリースを除く。認証なしの公開 API を数秒のタイムアウトで 1 回）と `dev` の版を比べ、新しければ今の版と最新の版を示して「追従しますか？ [y/N]」と聞く。最新のリリースノートに「移行」の節があれば目立たせる（読み取れなければ `CHANGELOG.md` を読む案内に留める。途中の版の「移行」は読まない）。y なら、最新の `RELEASE-MANIFEST.json` と `install.sh` を取得し、`install.sh` のハッシュを照合してから `bash install.sh --version <最新の版>` を実行する（残りの資産は `install.sh` が照合する）。動いているユニットの起こし直し（`dev restart`・`dev runner build`・`systemctl --user restart`）は案内だけで、今回の `up` / `attach` は更新前の `dev` のまま続ける。
+- **`dev up` / `dev attach` が、端末が付いているときだけ、devhost の新しい安定版を知らせ、yes なら `install.sh` で追従するようにした**（ojos/ai-packages-dev#626）。古い版のまま気づかずに使い続けないため。標準入力・標準出力・標準エラーのすべてが端末のときだけ、GitHub の最新の安定版（プレリリースを除く。認証なしの公開 API を数秒のタイムアウトで 1 回）と `dev` の版を比べ、新しければ今の版と最新の版を示して「追従しますか？ [y/N]」と聞く。配布先の `CHANGELOG.md`（最新の版のもの）を読み、今の版の次から最新の版までに移行の節を持つ版があれば、その版を挙げて目立たせる（公開しているリリースの本文はリリースノートを含まないため。読み取れなければ、判定できないと伝えてリリースノートへ案内する）。追従するのは `~/.local/bin/dev` から動いている `dev` だけ（`install.sh` がそこへ置くため）。y なら、最新の `RELEASE-MANIFEST.json` と `install.sh` を取得し、`install.sh` のハッシュを照合してから `bash install.sh --version <最新の版>` を実行する（残りの資産は `install.sh` が照合する）。動いているユニットの起こし直し（`dev restart`・`dev runner build`・`systemctl --user restart`）は案内だけで、今回の `up` / `attach` は更新前の `dev` のまま続ける。
   - 問い合わせは 1 日 1 回（失敗した日も 1 回に数える）。N と答えた版は、その版のあいだ聞かない。記録は `~/.cache/dev/update-check`（`XDG_CACHE_HOME` があればその下）。オフライン・API の失敗は黙って通す。端末が付いていない呼び出し（`dev supervise`・systemd のユニット・スクリプト・AI エージェント）では、何も聞かず、何も出さず、何も取得しない。
   - 既定で有効。止めるには、環境変数 `DEV_UPDATE_CHECK=off`、または `~/.config/dev/update-check`（`XDG_CONFIG_HOME` があればその下）に `off` と 1 行書く（環境変数が優先する）。
 
@@ -26,6 +26,8 @@ devhost（SSH で届く外部の機械で devcontainer を保つ道具。コマ�
 - 自前のランナーを使う機械で、この機能を使うなら、`install.sh` をもう一度実行してユニットと雛形を置く。**導入の順序がある**（README の「自前のランナー」の「変数の切り替え」）: 変数を先に `ubuntu-latest` へ逃がし、ランナーのラベルと `group=` を設定して起こし直し、`routes` と PAT を置いて `dev runner route show` で読めるか確かめてから、`dev-route@<ラベル>` とタイマーを有効にする。逆にすると、変数が指すラベルのランナーがまだ居ないので、ジョブが待ちのまま止まる。
 - 使わない機械では、何も変わらない（`routes` が無ければ、`dev doctor --runner` も route の点検を出さない）。
 - 機械そのものが止まったとき（停電・回線断）は、この機能では戻せない。
+- 利用側の runner-route（`runner-route@<ラベル>`）から移るときは、古いユニットを止めて（変数が `ubuntu-latest` に戻る）から、`dev-route@<ラベル>` とタイマーを有効にする。PAT は `routes` の `pat_file=` で今のファイルを指せる。
+- この版から、`dev up` / `dev attach` が新しい版を知らせる（端末が付いているときだけ。1 日 1 回）。止めるには `DEV_UPDATE_CHECK=off` か `~/.config/dev/update-check` に `off`。
 
 ## v0.4.0
 
