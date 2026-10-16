@@ -1,0 +1,15 @@
+# dev-route-sync@<ラベル>.timer — ACTIONS_RUNS_ON のそろえ直しを、起動の 3 分後から 10 分おきに起こす。
+#
+# **ユーザーのユニットとして置く**（~/.config/systemd/user/）。有効にするのは、起動・停止のユニット
+# （dev-route@<ラベル>.service）を有効にしたあと。起こす先は同じインスタンス名の dev-route-sync@<ラベル>.service。
+# 機械そのものが止まったとき（停電・回線断）は、ここからは戻せない（README.md の「自前のランナー」の「変数の切り替え」の限界）。
+
+[Unit]
+Description=ACTIONS_RUNS_ON のそろえ直し（%i）
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=10min
+
+[Install]
+WantedBy=timers.target

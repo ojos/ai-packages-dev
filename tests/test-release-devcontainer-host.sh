@@ -8,7 +8,7 @@
 # ここでは副作用の無い範囲を確かめる。
 #
 #   1. 配布ツリーの生成と資産の生成（実物のスクリプトの関数を取り込んで通す）
-#      - dev.sh・dev-up@.service・dev-runner@.service・runner.Dockerfile・install.sh・projects.example・runners.example・
+#      - dev.sh・dev-up@.service・dev-runner@.service・dev-route@.service・dev-route-sync@.service・dev-route-sync@.timer・runner.Dockerfile・install.sh・projects.example・runners.example・routes.example・
 #        SHA256SUMS・RELEASE-MANIFEST.json・PACKAGE_ARCHIVE.tar.gz が揃う
 #      - マニフェストの checksums と SHA256SUMS が、実物のハッシュと一致する
 #      - 配布ツリーの dev.sh の `dev --version` が、指定した版を出す
@@ -70,9 +70,9 @@ else
   fail "生成に失敗した（終了コード $stage_rc）: $(tail -5 "$WORK/stage.log")"
 fi
 
-it "ステージングに dev.sh・dev-up@.service・dev-runner@.service・runner.Dockerfile・install.sh・projects.example・runners.example・SHA256SUMS・RELEASE-MANIFEST.json・PACKAGE_ARCHIVE.tar.gz がある"
+it "ステージングに dev.sh・dev-up@.service・dev-runner@.service・dev-route@.service・dev-route-sync@.service・dev-route-sync@.timer・runner.Dockerfile・install.sh・projects.example・runners.example・routes.example・SHA256SUMS・RELEASE-MANIFEST.json・PACKAGE_ARCHIVE.tar.gz がある"
 missing=""
-for f in dev.sh dev-up@.service dev-runner@.service runner.Dockerfile install.sh projects.example runners.example SHA256SUMS RELEASE-MANIFEST.json PACKAGE_ARCHIVE.tar.gz; do
+for f in dev.sh dev-up@.service dev-runner@.service dev-route@.service dev-route-sync@.service dev-route-sync@.timer runner.Dockerfile install.sh projects.example runners.example routes.example SHA256SUMS RELEASE-MANIFEST.json PACKAGE_ARCHIVE.tar.gz; do
   [[ -f "$rel/$f" ]] || missing="$missing $f"
 done
 if [[ -z "$missing" ]]; then
@@ -106,10 +106,10 @@ else
   fail "配布ツリーに無い:$missing"
 fi
 
-it "SHA256SUMS は dev.sh・dev-up@.service・dev-runner@.service・runner.Dockerfile・install.sh・projects.example・runners.example・PACKAGE_ARCHIVE.tar.gz を対象にし（attestation からアーカイブまで辿れる）、チェックサムの照合が通る"
+it "SHA256SUMS は dev.sh・dev-up@.service・dev-runner@.service・dev-route@.service・dev-route-sync@.service・dev-route-sync@.timer・runner.Dockerfile・install.sh・projects.example・runners.example・routes.example・PACKAGE_ARCHIVE.tar.gz を対象にし（attestation からアーカイブまで辿れる）、チェックサムの照合が通る"
 if [[ -f "$rel/SHA256SUMS" ]]; then
   names="$(awk '{print $2}' "$rel/SHA256SUMS" | tr '\n' ' ')"
-  if [[ "$names" == "dev.sh dev-up@.service dev-runner@.service runner.Dockerfile install.sh projects.example runners.example PACKAGE_ARCHIVE.tar.gz " ]] && (cd "$rel" && sha256sum -c SHA256SUMS >/dev/null 2>&1); then  # bsd-ok: Linux で回す
+  if [[ "$names" == "dev.sh dev-up@.service dev-runner@.service dev-route@.service dev-route-sync@.service dev-route-sync@.timer runner.Dockerfile install.sh projects.example runners.example routes.example PACKAGE_ARCHIVE.tar.gz " ]] && (cd "$rel" && sha256sum -c SHA256SUMS >/dev/null 2>&1); then  # bsd-ok: Linux で回す
     pass
   else
     fail "SHA256SUMS の対象が違う、または照合に失敗する: $names"
@@ -118,10 +118,10 @@ else
   fail "SHA256SUMS が無い"
 fi
 
-it "マニフェストの checksums が、実物（archive・SHA256SUMS・dev.sh・dev-up@.service・dev-runner@.service・runner.Dockerfile・install.sh・projects.example・runners.example）と一致する"
+it "マニフェストの checksums が、実物（archive・SHA256SUMS・dev.sh・dev-up@.service・dev-runner@.service・dev-route@.service・dev-route-sync@.service・dev-route-sync@.timer・runner.Dockerfile・install.sh・projects.example・runners.example・routes.example）と一致する"
 if [[ -f "$rel/RELEASE-MANIFEST.json" ]]; then
   bad=""
-  for f in PACKAGE_ARCHIVE.tar.gz SHA256SUMS dev.sh dev-up@.service dev-runner@.service runner.Dockerfile install.sh projects.example runners.example; do
+  for f in PACKAGE_ARCHIVE.tar.gz SHA256SUMS dev.sh dev-up@.service dev-runner@.service dev-route@.service dev-route-sync@.service dev-route-sync@.timer runner.Dockerfile install.sh projects.example runners.example routes.example; do
     want="$(jq -r --arg k "$f" '.checksums[$k] // empty' "$rel/RELEASE-MANIFEST.json")"
     got="$(sha_of "$rel/$f")"
     [[ -n "$want" && "$want" == "$got" ]] || bad="$bad $f(manifest=${want:-なし})"
@@ -138,10 +138,10 @@ else
   fail "RELEASE-MANIFEST.json が無い"
 fi
 
-it "マニフェストの assets に、dev.sh・dev-up@.service・dev-runner@.service・runner.Dockerfile・install.sh・projects.example・runners.example を含む 10 資産が載る"
+it "マニフェストの assets に、dev.sh・dev-up@.service・dev-runner@.service・dev-route@.service・dev-route-sync@.service・dev-route-sync@.timer・runner.Dockerfile・install.sh・projects.example・runners.example・routes.example を含む 14 資産が載る"
 if [[ -f "$rel/RELEASE-MANIFEST.json" ]]; then
   assets="$(jq -r '.assets | sort | join(" ")' "$rel/RELEASE-MANIFEST.json")"
-  assert_eq "$assets" "PACKAGE_ARCHIVE.tar.gz RELEASE-MANIFEST.json SHA256SUMS dev-runner@.service dev-up@.service dev.sh install.sh projects.example runner.Dockerfile runners.example" "assets"
+  assert_eq "$assets" "PACKAGE_ARCHIVE.tar.gz RELEASE-MANIFEST.json SHA256SUMS dev-route-sync@.service dev-route-sync@.timer dev-route@.service dev-runner@.service dev-up@.service dev.sh install.sh projects.example routes.example runner.Dockerfile runners.example" "assets"
 else
   fail "RELEASE-MANIFEST.json が無い"
 fi
@@ -435,7 +435,7 @@ code=$?
 if [[ $code -eq 0 ]] \
    && [[ "$out" == *'[ok] preflight checks passed'* ]] \
    && [[ "$out" == *'devcontainer-host distributed files'* ]] \
-   && [[ "$out" == *'dev.sh dev-up@.service dev-runner@.service runner.Dockerfile install.sh projects.example runners.example RELEASE-MANIFEST.json SHA256SUMS PACKAGE_ARCHIVE.tar.gz'* ]] \
+   && [[ "$out" == *'dev.sh dev-up@.service dev-runner@.service dev-route@.service dev-route-sync@.service dev-route-sync@.timer runner.Dockerfile install.sh projects.example runners.example routes.example RELEASE-MANIFEST.json SHA256SUMS PACKAGE_ARCHIVE.tar.gz'* ]] \
    && [[ "$out" == *'dry-run mode'* ]]; then
   pass
 else

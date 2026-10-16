@@ -1,0 +1,32 @@
+# dev runner route の設定ファイルの雛形。外部の機械の ~/.config/dev/routes へ写して書き換える。
+#
+# 自前のランナーが動けるあいだだけ、ワークフローが読む Actions 変数 ACTIONS_RUNS_ON をランナーのラベルへ向け、
+# 動けないときは ubuntu-latest へ戻す（README.md の「自前のランナー」の「変数の切り替え」）。
+# 向ける先は、ランナーグループの「使えるリポジトリ」（GitHub 側で selected にして絞る）。
+#
+# 1 行 1 ラベル。空白区切りで「ラベル 組織 group=<名前> [pat_file=<絶対パス>]」。# から行末はコメント。
+#
+#   ラベル  ACTIONS_RUNS_ON に書く値。英数字と . _ - だけ（先頭は英数字。systemd のユニット
+#           dev-route@<ラベル> の名前にもなる）。runners の labels= に書いたラベルと同じにする
+#   組織    ランナーを登録している GitHub の組織名（英数字と - だけ）
+#
+# キー:
+#
+#   group=<名前>         対象を決めるランナーグループ（必須。英数字と . _ - だけ）。
+#                        runners の同じラベルのランナーの group= と同じ名前にする。
+#                        グループの「使えるリポジトリ」が selected でなければ、設定の誤りとして止まる（all や private では対象を決められない）
+#   pat_file=<絶対パス>  PAT を置いたファイル（既定は同じディレクトリの route-pat）。
+#                        group / other に権限があると(644 など)、dev runner route は拒む。600 か 400 にする
+#
+# PAT はランナーの登録用（runner-pat）とは別にする。fine-grained で、有効期限を付け、次の権限だけを持たせる:
+#   Resource owner            組織
+#   Repository access         対象のリポジトリだけ
+#   Repository permissions    Variables: Read and write
+#   Organization permissions  Self-hosted runners: Read
+# 値はこのファイルへ書かず、別のファイルへ置く:
+#   install -m 600 /dev/null ~/.config/dev/route-pat   # そのあとエディタで値を 1 行書く
+#
+# 例（値は置き換える）:
+#
+# runner-label   my-org   group=my-group
+# other-label    my-org   group=other-group   pat_file=/home/me/.config/dev/other-route-pat

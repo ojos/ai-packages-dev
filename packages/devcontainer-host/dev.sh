@@ -12,9 +12,10 @@
 #   dev supervise <名前>        起こして止まるまで待つ（systemd のユニットから使う）
 #   dev rebuild <名前> [--pull] コンテナを作り直す（ユニットを止めて、作り直して、起こし直す）
 #   dev doctor <名前>           「動いているのに入れない」を見分ける（exec・pids・ゾンビ・OOM・ユニット）
-#   dev doctor --runner <名前>  自前のランナーの点検（イメージ・PAT ファイルの権限・ユニット・ランナーの版の期限）
+#   dev doctor --runner <名前>  自前のランナーの点検（イメージ・PAT ファイルの権限・ユニット・ランナーの版の期限・routes の行）
 #   dev runner build            自前のランナーのイメージを作る
 #   dev runner run <名前>       使い捨てのランナーのコンテナを起こして、止まるまで待つ（ユニットから使う）
+#   dev runner route up|down|sync|show <ラベル>  ACTIONS_RUNS_ON を、ランナーが動けるあいだだけランナーのラベルへ向ける
 #   dev restart <名前>          作り直さずに再起動する（ユニットを止めて、docker restart して、起こし直す。compose なら全体）
 #   dev stop <名前>             意図して止める（ユニットを先に止めてから、コンテナを止める。compose なら全体）
 #   dev logs <名前> [-n <行数>]  ユニットのログの末尾（既定 50 行）
@@ -88,6 +89,7 @@ usage() {
   dev runner build
   dev runner run <名前>     （systemd のユニット dev-runner@.service から使う）
   dev runner net script|unit
+  dev runner route up|down|sync|show <ラベル>   （systemd のユニット dev-route@.service / dev-route-sync@.service から使う）
   dev restart <名前>
   dev stop <名前>
   dev logs <名前> [-n <行数>]
@@ -871,13 +873,14 @@ runner_api() {
 
 cmd_runner() {
   local sub="${1:-}"
-  [[ $# -ge 1 ]] || usage_error "使い方: dev runner build | dev runner run <名前> | dev runner net script|unit"
+  [[ $# -ge 1 ]] || usage_error "使い方: dev runner build | dev runner run <名前> | dev runner net script|unit | dev runner route up|down|sync|show <ラベル>"
   shift
   case "$sub" in
     build) cmd_runner_build "$@" ;;
     run) cmd_runner_run "$@" ;;
     net) cmd_runner_net "$@" ;;
-    *) usage_error "知らない runner のサブコマンドです: $sub（build / run / net）" ;;
+    route) cmd_runner_route "$@" ;;
+    *) usage_error "知らない runner のサブコマンドです: $sub（build / run / net / route）" ;;
   esac
 }
 
@@ -1521,6 +1524,9 @@ cmd_doctor_runner() {
     *) doc_line WARN "ユニット $unit: $us（有効にしていないか、止まっています: systemctl --user enable --now $unit）" ;;
   esac
 
+  # ACTIONS_RUNS_ON の切り替え（dev runner route）。routes が無い機械では何も出さない。
+  doctor_routes "$name"
+
   if [[ "$DOC_FAIL" -gt 0 ]]; then
     echo "[$PROG] 判定: FAIL（$DOC_FAIL 件）。"
     exit 1
@@ -1529,6 +1535,748 @@ cmd_doctor_runner() {
     exit 3
   fi
   echo "[$PROG] 判定: OK"
+}
+
+# ── runner route（ACTIONS_RUNS_ON を、ランナーが動けるあいだだけランナーのラベルへ向ける）──────
+# ワークフローが `runs-on: ${{ vars.ACTIONS_RUNS_ON || 'ubuntu-latest' }}` と書いていれば、ランナーが止まっても
+# ジョブが待ちのまま止まらない。ランナーグループの対象リポジトリの Actions 変数 ACTIONS_RUNS_ON を、
+# ランナーの機械の側から書き換える（書式は routes.example）。
+# 設定ファイル routes の 1 行は「ラベル 組織 group=<名前> [pat_file=<絶対パス>]」。
+T_LABELS=()
+T_ORGS=()
+T_GROUPS=()
+T_PATS=()
+TIDX=-1
+ROUTE_VAR="ACTIONS_RUNS_ON"
+# ランナーが動けないときに戻す先（GitHub-hosted）。
+ROUTE_FALLBACK="ubuntu-latest"
+
+routes_file() {
+  if [[ -n "${DEV_ROUTES_FILE:-}" ]]; then
+    printf '%s\n' "$DEV_ROUTES_FILE"
+  else
+    printf '%s\n' "${XDG_CONFIG_HOME:-$HOME/.config}/dev/routes"
+  fi
+}
+
+# 読めた対象の一覧のキャッシュとロックの置き場所。runner_lock と同じく、自分だけが書けるディレクトリにする。
+# 環境変数 DEV_ROUTE_STATE_DIR で変えられる。
+route_state_dir() { printf '%s\n' "${DEV_ROUTE_STATE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/dev}"; }
+
+load_routes() {
+  local file dir lineno=0 line label org kv key val i grp pat
+  file="$(routes_file)"
+  if [[ ! -f "$file" ]]; then
+    usage_error "設定ファイルがありません: $file
+[$PROG] 雛形（routes.example）を写して、ラベル・組織・group= を 1 行ずつ書いてください。"
+  fi
+  dir="$(dirname "$file")"
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    lineno=$((lineno + 1))
+    line="${line%$'\r'}"
+    line="${line%%#*}"
+    set -f
+    # shellcheck disable=SC2086
+    set -- $line
+    set +f
+    [[ $# -gt 0 ]] || continue
+    if [[ $# -lt 3 ]]; then
+      usage_error "$file:$lineno: 「ラベル 組織 group=<名前>」の 3 つが要ります: $line"
+    fi
+    label="$1" org="$2"
+    shift 2
+    # ラベルは Actions 変数の値として書く文字なので、使える文字を絞る（先頭は英数字。systemd のインスタンス名にもなる）。
+    if [[ ! "$label" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+      usage_error "$file:$lineno: ラベルに使えるのは英数字と . _ - だけです（先頭は英数字）: $label"
+    fi
+    if [[ ! "$org" =~ ^[A-Za-z0-9][A-Za-z0-9-]*$ ]]; then
+      usage_error "$file:$lineno: 組織名に使えるのは英数字と - だけです: $org"
+    fi
+    for ((i = 0; i < ${#T_LABELS[@]}; i++)); do
+      [[ "${T_LABELS[$i]}" == "$label" ]] && usage_error "$file:$lineno: ラベルが重複しています: $label"
+    done
+    grp="" pat="$dir/route-pat"
+    for kv in "$@"; do
+      if [[ "$kv" != *=* ]]; then
+        usage_error "$file:$lineno: 3 つ目以降は キー=値 で書きます: $kv"
+      fi
+      key="${kv%%=*}" val="${kv#*=}"
+      [[ -n "$val" ]] || usage_error "$file:$lineno: 値が空です: $kv"
+      case "$key" in
+        group)
+          [[ "$val" =~ ^[A-Za-z0-9._-]+$ ]] || usage_error "$file:$lineno: group に使えるのは英数字と . _ - だけです（空白は使えません）: $val"
+          grp="$val"
+          ;;
+        pat_file)
+          [[ "$val" == /* ]] || usage_error "$file:$lineno: pat_file は絶対パスで書きます（~ や \$HOME は展開しません）: $val"
+          pat="$val"
+          ;;
+        *) usage_error "$file:$lineno: 知らないキーです（group / pat_file）: $key" ;;
+      esac
+    done
+    [[ -n "$grp" ]] || usage_error "$file:$lineno: group=<名前> は必須です（向ける先のリポジトリを、ランナーグループで決めるため）: $label"
+    T_LABELS+=("$label")
+    T_ORGS+=("$org")
+    T_GROUPS+=("$grp")
+    T_PATS+=("$pat")
+  done <"$file"
+  if [[ ${#T_LABELS[@]} -eq 0 ]]; then
+    usage_error "設定ファイルに行が 1 つもありません: $file"
+  fi
+}
+
+find_route() {
+  local label="$1" i
+  for ((i = 0; i < ${#T_LABELS[@]}; i++)); do
+    if [[ "${T_LABELS[$i]}" == "$label" ]]; then
+      TIDX=$i
+      return 0
+    fi
+  done
+  usage_error "routes に無いラベルです: $label（登録済み: ${T_LABELS[*]}）"
+}
+
+# GitHub の API を呼ぶ（要 RUNNER_PAT）。応答の本文を標準出力へ出す。runner_api と同じく PAT は標準入力の curl の設定で渡す。
+# 本文は任意の第 3 引数（JSON。値は秘密ではないので引数に載せてよい）。
+# runner_api と違い 404 を分ける（変数が未設定なのか、権限が無いのかを見分けるため）。
+# 戻り値: 0 = 成功(2xx) / 4 = 404 / 10 = 401・403 / 11 = 一時的な失敗(429・5xx・通信の失敗・その他)。
+# 使い方: route_api <メソッド> <パス> [<JSON の本文>]
+route_api() {
+  local method="$1" path="$2" body="${3:-}" out code
+  local extra=()
+  if [[ -n "$body" ]]; then extra=(-H 'Content-Type: application/json' -d "$body"); fi
+  out="$(printf 'header = "Authorization: Bearer %s"\n' "$RUNNER_PAT" |
+    curl -sSL -K - -X "$method" --connect-timeout 5 -m "${DEV_ROUTE_API_TIMEOUT:-10}" \
+      -H 'Accept: application/vnd.github+json' \
+      -H 'X-GitHub-Api-Version: 2022-11-28' \
+      ${extra[@]+"${extra[@]}"} \
+      -w '\n%{http_code}' \
+      "${DEV_GITHUB_API:-https://api.github.com}$path")" || return 11
+  code="${out##*$'\n'}"
+  case "$code" in
+    2??)
+      printf '%s\n' "${out%$'\n'*}"
+      return 0
+      ;;
+    404)
+      echo "[$PROG] GitHub の API が HTTP $code を返しました: $method $path" >&2
+      return 4
+      ;;
+    401 | 403)
+      echo "[$PROG] GitHub の API が HTTP $code を返しました: $method $path" >&2
+      return 10
+      ;;
+    *)
+      echo "[$PROG] GitHub の API が HTTP $code を返しました: $method $path" >&2
+      return 11
+      ;;
+  esac
+}
+
+# 一覧の API を全ページ読み、配列のキーの各要素を JSON 1 行ずつ標準出力へ出す。1 ページ 100 件で、100 件に満たないページで終わる。
+# JSON の中のキーの並び順には頼らない（jq で読む）。
+# 使い方: route_paged <パス> <配列のキー>
+route_paged() {
+  local path="$1" key="$2" page=1 resp rc items n
+  while [[ "$page" -le 1000 ]]; do
+    rc=0
+    resp="$(route_api GET "$path?per_page=100&page=$page")" || rc=$?
+    [[ "$rc" -eq 0 ]] || return "$rc"
+    # 配列のキーが無い・配列でない応答（2xx でも）は、0 件ではなく読み取りの失敗にする。0 件と読むと、
+    # 一時的な不正な応答で対象を空と判断し、キャッシュにある全リポジトリを「外れた」として戻しうるため。
+    items="$(printf '%s\n' "$resp" | jq -c --arg k "$key" 'if (type == "object") and ((.[$k] | type) == "array") then .[$k][] else error("no array") end' 2>/dev/null)" || return 11
+    n=0
+    if [[ -n "$items" ]]; then
+      printf '%s\n' "$items"
+      n="$(printf '%s\n' "$items" | grep -c .)"
+    fi
+    [[ "$n" -ge 100 ]] || return 0
+    page=$((page + 1))
+  done
+  return 11
+}
+
+# 組織のランナーグループを名前で引く。結果は ROUTE_GID / ROUTE_GVIS（使えるリポジトリの範囲。selected / all / private）に置く。
+# サブシェルで呼ばないこと（変数が親へ届かない）。戻り値: 0 = ある / 1 = 無い / 4・10・11 = route_api の失敗。
+route_group_lookup() {
+  local org="$1" grp="$2" items rc=0 row
+  ROUTE_GID="" ROUTE_GVIS=""
+  items="$(route_paged "/orgs/$org/actions/runner-groups" runner_groups)" || rc=$?
+  [[ "$rc" -eq 0 ]] || return "$rc"
+  row="$(printf '%s\n' "$items" | jq -r --arg g "$grp" 'select(.name == $g) | "\(.id) \(.visibility // "")"' 2>/dev/null | head -n 1)" || row=""
+  [[ -n "$row" ]] || return 1
+  ROUTE_GID="${row%% *}"
+  ROUTE_GVIS="${row#* }"
+  [[ "$ROUTE_GID" =~ ^[0-9]+$ ]] || return 11
+  return 0
+}
+
+# グループの使えるリポジトリ（名前だけ。重複なし）を 1 行ずつ出す。0 件は失敗ではなく、正しい空の一覧。
+# 使い方: route_group_repos <組織> <グループの id>
+route_group_repos() {
+  local items rc=0
+  items="$(route_paged "/orgs/$1/actions/runner-groups/$2/repositories" repositories)" || rc=$?
+  [[ "$rc" -eq 0 ]] || return "$rc"
+  [[ -n "$items" ]] || return 0
+  # 名前の無い・リポジトリ名として不正な要素が 1 つでもあれば、読み取りの失敗にする（11）。黙って捨てると、
+  # 一部が欠けた一覧を正しい一覧と読み、欠けたリポジトリを「外れた」として戻しうるため。
+  local names
+  names="$(printf '%s\n' "$items" | jq -r 'if (.name | type) == "string" and (.name | test("^[A-Za-z0-9._-]+$")) then .name else error("bad name") end' 2>/dev/null)" || {
+    echo "[$PROG] ランナーグループの対象のリポジトリの一覧に、名前を読めない要素があります" >&2
+    return 11
+  }
+  printf '%s\n' "$names" | awk '!s[$0]++'
+}
+
+# 対象の一覧を読む。結果は ROUTE_REPOS（改行区切り。空もありうる）。サブシェルで呼ばないこと。
+# 戻り値: 0 = 読めた / 1 = 読めない(権限・通信・API の不調) / 2 = 設定の誤り(グループが無い・使えるリポジトリが selected でない)。
+route_targets_load() {
+  local org="$1" grp="$2" rc=0
+  ROUTE_REPOS=""
+  route_group_lookup "$org" "$grp" || rc=$?
+  case "$rc" in
+    0) ;;
+    1)
+      echo "[$PROG] ランナーグループ $grp が組織 $org にありません（routes の group= を直してください）" >&2
+      return 2
+      ;;
+    *)
+      echo "[$PROG] ランナーグループの一覧を読めませんでした（PAT の失効・権限不足、または API の不調か通信の失敗。組織 $org）" >&2
+      return 1
+      ;;
+  esac
+  if [[ "$ROUTE_GVIS" != "selected" ]]; then
+    echo "[$PROG] ランナーグループ $grp の「使えるリポジトリ」が selected ではありません（${ROUTE_GVIS:-不明}）。対象を決められないので何もしません。GitHub 側で、特定のリポジトリだけに絞ってください" >&2
+    return 2
+  fi
+  rc=0
+  ROUTE_REPOS="$(route_group_repos "$org" "$ROUTE_GID")" || rc=$?
+  if [[ "$rc" -ne 0 ]]; then
+    echo "[$PROG] ランナーグループ $grp の対象のリポジトリを読めませんでした（API の不調か通信の失敗）" >&2
+    ROUTE_REPOS=""
+    return 1
+  fi
+  return 0
+}
+
+# この機械のランナーの GitHub 上の名前を、JSON の配列で出す（runners の名前から。完全一致で見分けるため）。
+# runners が無い・読めないときは空の配列（そのときは名前の先頭のホスト名で見分ける。route_online_counts）。
+route_self_names() {
+  local names=""
+  [[ -f "$(runners_file)" ]] || { echo '[]'; return 0; }
+  names="$(
+    load_runners >/dev/null 2>&1 || exit 1
+    for n in "${R_NAMES[@]}"; do runner_github_name "$n"; done
+  )" || names=""
+  printf '%s' "$names" | jq -R . | jq -s -c 'map(select(length > 0))' 2>/dev/null || echo '[]'
+}
+
+# グループのランナーの一覧から、そのラベルを持つ online のランナーを数える（ほかのグループのランナーは、対象の
+# リポジトリのジョブを受けられないので数えない）。
+# 結果は ROUTE_SELF_ONLINE（この機械のランナー）と ROUTE_OTHER_ONLINE（ほかの機械）。
+# この機械のものは、runners の名前から作った GitHub 上の名前との完全一致で見分ける（「h」と「h-x」のように、
+# ホスト名が前方一致する機械が同じ組織に並んでも取り違えないため）。runners が無いときだけ、名前の先頭の
+# 「<ホスト名>-」で見分ける。
+# 使い方: route_online_counts <組織> <ラベル> <グループの id>
+# 戻り値: 0 = 読めた / 4・10・11 = route_api の失敗（グループの id が無いときも 11）。サブシェルで呼ばないこと。
+route_online_counts() {
+  local org="$1" label="$2" gid="${3:-}" items rc=0 prefix rows own
+  ROUTE_SELF_ONLINE=0 ROUTE_OTHER_ONLINE=0
+  [[ "$gid" =~ ^[0-9]+$ ]] || return 11
+  items="$(route_paged "/orgs/$org/actions/runner-groups/$gid/runners" runners)" || rc=$?
+  [[ "$rc" -eq 0 ]] || return "$rc"
+  prefix="$(runner_github_name "")"
+  own="$(route_self_names)"
+  rows="$(printf '%s\n' "$items" | jq -r --arg l "$label" --arg p "$prefix" --argjson own "$own" '
+    select(.status == "online" and (([.labels[]?.name] | index($l)) != null))
+    | .name as $n
+    | if (if ($own | length) > 0 then any($own[]; . == $n) else ($n | startswith($p)) end)
+      then "self" else "other" end' 2>/dev/null)" || return 11
+  ROUTE_SELF_ONLINE="$(printf '%s\n' "$rows" | grep -c '^self$' || true)"
+  ROUTE_OTHER_ONLINE="$(printf '%s\n' "$rows" | grep -c '^other$' || true)"
+  return 0
+}
+
+# ── キャッシュとロック ──
+route_state_ready() {
+  local dir owner mode
+  dir="$(route_state_dir)"
+  if [[ ! -e "$dir" ]]; then
+    # shellcheck disable=SC2174
+    mkdir -p -m 700 "$dir" || usage_error "状態のディレクトリを作れません: $dir"
+  fi
+  [[ -d "$dir" ]] || usage_error "状態の置き場所がディレクトリではありません: $dir"
+  owner="$(file_uid_of "$dir")" || usage_error "状態のディレクトリの所有者を読めません: $dir"
+  mode="$(file_mode_of "$dir")" || usage_error "状態のディレクトリの権限を読めません: $dir"
+  [[ "$owner" == "$UID" ]] || usage_error "状態のディレクトリの所有者が自分ではありません: $dir"
+  if [[ ! "$mode" =~ ^[0-7]+$ ]] || (( (8#$mode & 8#022) != 0 )); then
+    usage_error "状態のディレクトリに group / other の書き込み権限があります($mode): $dir(自分だけが書ける場所にしてください)"
+  fi
+}
+
+# キャッシュは組織とラベルの組ごとに分ける（route-<組織>.<ラベル>。組織名は「.」を含まないので、組は一意に決まる）。
+# routes の同じラベルの行の組織を書き換えても、古い組織の一覧と混ざらないため。
+# 使い方: route_cache_file <組織>.<ラベル>
+route_cache_file() { printf '%s/route-%s\n' "$(route_state_dir)" "$1"; }
+
+# キャッシュ（前回に読めた対象の一覧）を 1 行ずつ出す。ファイルが無ければ 1。空のファイルは「前回は 0 件だった」ことを表す。
+route_cache_read() {
+  local f
+  f="$(route_cache_file "$1")"
+  [[ -f "$f" && ! -L "$f" ]] || return 1
+  cat "$f"
+}
+
+# キャッシュを書き換える（同じディレクトリの一時ファイルへ書いてから mv する。途中で切れても半端なものを残さない）。
+# 使い方: route_cache_write <ラベル> <改行区切りの一覧>
+route_cache_write() {
+  local f tmp
+  f="$(route_cache_file "$1")"
+  tmp="$(mktemp "$f.XXXXXX")" || return 1
+  # 書き込み（空き容量の不足など）・権限・置き換えのどれかが失敗したら、一時ファイルを消して 1。
+  if ! { { if [[ -n "$2" ]]; then printf '%s\n' "$2"; fi; } >"$tmp" && chmod 600 "$tmp" && mv -f "$tmp" "$f"; }; then
+    rm -f "$tmp"
+    return 1
+  fi
+}
+
+# ラベルごとのロックを取る（up / down / sync が互いに重ならないように。sync は、取ったあとにユニットの状態を見る）。
+# 戻り値: 0 = 取れた / 3 = flock が無い / 4 = 待っても取れなかった。
+# 使い方: route_lock <ラベル> <待つ秒数>
+route_lock() {
+  local lockf
+  lockf="$(route_state_dir)/route-$1.lock"
+  if [[ -L "$lockf" ]]; then usage_error "ロックのファイルがリンクです(辿りません): $lockf"; fi
+  if [[ -e "$lockf" && ! -f "$lockf" ]]; then usage_error "ロックのファイルが通常のファイルではありません: $lockf"; fi
+  command -v flock >/dev/null 2>&1 || return 3
+  exec 8>>"$lockf" || die "ロックのファイルを開けません: $lockf"
+  flock -w "$2" 8 || return 4
+}
+
+# ── 書き込み ──
+# 1 つのリポジトリの変数を、違うときだけ書く。標準出力へ結果を 1 語出す: same(変更なし) / set(更新) / created(作成) / skip(未設定で、作らない)。
+# 未設定(404)は POST で作り、設定済みは PATCH で更新する。値が空の既存の変数も設定済みとして扱う（POST は失敗するため）。
+# 使い方: route_write_one <組織> <リポジトリ> <値> <作るか: yes|no>
+route_write_one() {
+  local org="$1" repo="$2" want="$3" create="$4" only_from="${5:-}" resp rc=0 cur body
+  resp="$(route_api GET "/repos/$org/$repo/actions/variables/$ROUTE_VAR")" || rc=$?
+  case "$rc" in
+    0)
+      cur="$(printf '%s\n' "$resp" | jq -r '.value // ""' 2>/dev/null)" || return 1
+      if [[ "$cur" == "$want" ]]; then
+        echo same
+        return 0
+      fi
+      # <元の値> を指定したときは、今の値がそれのときだけ書く（グループから外れたリポジトリを戻すとき、別のラベルの
+      # 切り替えが向けた値や、手で設定した値を上書きしないため）。
+      if [[ -n "$only_from" && "$cur" != "$only_from" ]]; then
+        echo other
+        return 0
+      fi
+      body="$(jq -nc --arg n "$ROUTE_VAR" --arg v "$want" '{name: $n, value: $v}')" || return 1
+      route_api PATCH "/repos/$org/$repo/actions/variables/$ROUTE_VAR" "$body" >/dev/null || return 1
+      echo set
+      ;;
+    4)
+      if [[ "$create" != "yes" ]]; then
+        echo skip
+        return 0
+      fi
+      body="$(jq -nc --arg n "$ROUTE_VAR" --arg v "$want" '{name: $n, value: $v}')" || return 1
+      route_api POST "/repos/$org/$repo/actions/variables" "$body" >/dev/null || return 1
+      echo created
+      ;;
+    *) return 1 ;;
+  esac
+}
+
+# 複数のリポジトリへ並列で書く。並列の数には上限を置く（環境変数 DEV_ROUTE_PARALLEL。既定 8）。bash 3.2 でも動くよう、
+# 上限の数ずつの組にして待つ。1 件の失敗で止めず、失敗した分だけ <回数> 回まで <秒> 秒おきにやり直す（成功した分は読み直さない）。
+# 失敗が残れば ROUTE_FAILED（改行区切り）に入れて 1 を返す。
+# 使い方: route_apply <組織> <値> <作るか: yes|no> <元の値（空なら問わない）> <やり直しの回数> <やり直しの待ち秒> <リポジトリ>...
+route_apply() {
+  local org="$1" want="$2" create="$3" only_from="$4" retries="$5" rwait="$6"
+  shift 6
+  local pending=("$@") failed=() attempt=0 par="${DEV_ROUTE_PARALLEL:-8}" tmp i j k repo rc res
+  local pids=() batch=()
+  ROUTE_FAILED=""
+  [[ ${#pending[@]} -gt 0 ]] || return 0
+  tmp="$(mktemp -d "${TMPDIR:-/tmp}/dev-route.XXXXXX")" || die "作業ディレクトリを作れません"
+  while :; do
+    failed=()
+    i=0
+    while [[ "$i" -lt ${#pending[@]} ]]; do
+      pids=() batch=()
+      j=0
+      while [[ "$j" -lt "$par" && $((i + j)) -lt ${#pending[@]} ]]; do
+        repo="${pending[$((i + j))]}"
+        batch+=("$repo")
+        (route_write_one "$org" "$repo" "$want" "$create" "$only_from" >"$tmp/out.$j" 2>"$tmp/err.$j") &
+        pids+=($!)
+        j=$((j + 1))
+      done
+      for ((k = 0; k < j; k++)); do
+        rc=0
+        wait "${pids[$k]}" || rc=$?
+        repo="${batch[$k]}"
+        if [[ "$rc" -eq 0 ]]; then
+          res="$(cat "$tmp/out.$k")"
+          case "$res" in
+            same) echo "[$PROG]   $repo: 変更なし（$want）" ;;
+            set) echo "[$PROG]   $repo: $want へ更新しました" ;;
+            created) echo "[$PROG]   $repo: $want で作りました" ;;
+            skip) echo "[$PROG]   $repo: 変数が未設定なので何もしません" ;;
+            other) echo "[$PROG]   $repo: 別の値を指しているので触りません" ;;
+          esac
+        else
+          cat "$tmp/err.$k" >&2
+          echo "[$PROG]   $repo: 失敗しました" >&2
+          failed+=("$repo")
+        fi
+      done
+      i=$((i + j))
+    done
+    if [[ ${#failed[@]} -eq 0 ]]; then break; fi
+    if [[ "$attempt" -ge "$retries" ]]; then break; fi
+    attempt=$((attempt + 1))
+    echo "[$PROG] 失敗が ${#failed[@]} 件あります。${rwait} 秒後にやり直します（$attempt/$retries）" >&2
+    sleep "$rwait"
+    pending=("${failed[@]}")
+  done
+  rm -rf "$tmp"
+  if [[ ${#failed[@]} -gt 0 ]]; then
+    ROUTE_FAILED="$(printf '%s\n' "${failed[@]}")"
+    return 1
+  fi
+  return 0
+}
+
+# 改行区切りの一覧 A から、一覧 B にあるものを除いたものを出す（awk。sort が無い環境でも動く）。
+# 使い方: route_list_minus <A> <B>
+route_list_minus() {
+  printf '%s\n' "$1" | B="$2" awk 'BEGIN { n = split(ENVIRON["B"], a, "\n"); for (i = 1; i <= n; i++) if (a[i] != "") skip[a[i]] = 1 } $0 != "" && !($0 in skip) && !seen[$0]++'
+}
+
+# 改行区切りの一覧 A と B の和集合（重複なし）を出す。
+route_list_union() {
+  printf '%s\n%s\n' "$1" "$2" | awk '$0 != "" && !seen[$0]++'
+}
+
+# dev runner route show: 対象ごとの今の値を出す。何も書かない。
+# 値は printf %q で出す（変数の値は誰でも書けるので、制御文字をそのまま端末へ出さない）。
+route_show() {
+  local label="$1" org="$2" grp="$3" repo rc resp val bad=0 n removed cache
+  local trc=0
+  route_targets_load "$org" "$grp" || trc=$?
+  [[ "$trc" -ne 2 ]] || exit 2
+  [[ "$trc" -eq 0 ]] || die "$label: 対象の一覧を読めませんでした"
+  n=0
+  [[ -z "$ROUTE_REPOS" ]] || n="$(printf '%s\n' "$ROUTE_REPOS" | grep -c .)"
+  echo "[$PROG] route $label: グループ $grp（組織 $org）の対象 $n 件の、$ROUTE_VAR の今の値"
+  while IFS= read -r repo; do
+    [[ -n "$repo" ]] || continue
+    rc=0
+    resp="$(route_api GET "/repos/$org/$repo/actions/variables/$ROUTE_VAR")" || rc=$?
+    case "$rc" in
+      0)
+        val="$(printf '%s\n' "$resp" | jq -r '.value // ""' 2>/dev/null)" || val=""
+        printf '  %s\t%q\n' "$repo" "$val"
+        ;;
+      4) printf '  %s\t%s\n' "$repo" "(未設定)" ;;
+      *)
+        printf '  %s\t%s\n' "$repo" "(読めません)"
+        bad=1
+        ;;
+    esac
+  done <<<"$ROUTE_REPOS"
+  if cache="$(route_cache_read "$org.$label" 2>/dev/null)"; then
+    removed="$(route_list_minus "$cache" "$ROUTE_REPOS")"
+    if [[ -n "$removed" ]]; then
+      echo "[$PROG] グループから外れていて、次の up / down / sync で $ROUTE_FALLBACK へ戻す対象:"
+      while IFS= read -r repo; do printf '  %s\n' "$repo"; done <<<"$removed"
+    fi
+  fi
+  [[ "$bad" -eq 0 ]] || return 1
+}
+
+# dev runner route up|down|sync|show <ラベル> [--retries <n>] [--retry-wait <秒>]
+cmd_runner_route() {
+  local sub="${1:-}"
+  [[ $# -ge 1 ]] || usage_error "使い方: dev runner route up|down|sync|show <ラベル> [--retries <n>] [--retry-wait <秒>]"
+  shift
+  case "$sub" in
+    up | down | sync | show) ;;
+    *) usage_error "知らない route のサブコマンドです: $sub（up / down / sync / show）" ;;
+  esac
+  local label="" retries=3 rwait=20 opts=0 a
+  while [[ $# -gt 0 ]]; do
+    a="$1"
+    case "$a" in
+      --retries)
+        [[ $# -ge 2 && "$2" =~ ^[0-9]+$ && "$2" -le 10 ]] || usage_error "--retries には 0 から 10 の整数が要ります"
+        retries="$2" opts=1
+        shift
+        ;;
+      --retry-wait)
+        [[ $# -ge 2 && "$2" =~ ^[0-9]+$ && "$2" -le 300 ]] || usage_error "--retry-wait には 0 から 300 の整数（秒）が要ります"
+        rwait="$2" opts=1
+        shift
+        ;;
+      -*) usage_error "知らないオプションです: $a（使い方: dev runner route up|down|sync|show <ラベル> [--retries <n>] [--retry-wait <秒>]）" ;;
+      *)
+        [[ -z "$label" ]] || usage_error "ラベルは 1 つだけ指定します: $label $a"
+        label="$a"
+        ;;
+    esac
+    shift
+  done
+  [[ -n "$label" ]] || usage_error "使い方: dev runner route $sub <ラベル>"
+  if [[ "$sub" == "show" && "$opts" -eq 1 ]]; then usage_error "show は書かないので --retries / --retry-wait を取りません"; fi
+  # sync はロックを持つ時間を短くするため、既定ではやり直さない（失敗は次のタイマーの回でやり直す）。
+  if [[ "$sub" == "sync" && "$opts" -eq 0 ]]; then retries=0; fi
+  local par="${DEV_ROUTE_PARALLEL:-8}" recheck="${DEV_ROUTE_RECHECK_WAIT:-60}" lockwait="${DEV_ROUTE_LOCK_WAIT:-90}"
+  [[ "$par" =~ ^[0-9]+$ && "$par" -ge 1 && "$par" -le 32 ]] || usage_error "DEV_ROUTE_PARALLEL は 1 から 32 の整数で指定します: $par"
+  [[ "$recheck" =~ ^[0-9]+$ ]] || usage_error "DEV_ROUTE_RECHECK_WAIT は 0 以上の整数（秒）で指定します: $recheck"
+  [[ "$lockwait" =~ ^[0-9]+$ ]] || usage_error "DEV_ROUTE_LOCK_WAIT は 0 以上の整数（秒）で指定します: $lockwait"
+  need curl "curl を入れてください。"
+  need jq "jq を入れてください。"
+  load_routes
+  find_route "$label"
+  local org="${T_ORGS[$TIDX]}" grp="${T_GROUPS[$TIDX]}" patf="${T_PATS[$TIDX]}" why
+  # PAT は、group / other に権限があれば読む前に拒む。値は引数にも出力にも出さない。
+  why="$(runner_pat_problem "$patf")" || usage_error "$label: $why"
+  runner_pat_load "$patf" || usage_error "$label: PAT ファイルを読めませんでした"
+
+  if [[ "$sub" == "show" ]]; then
+    route_show "$label" "$org" "$grp"
+    return
+  fi
+
+  route_state_ready
+
+  # sync は、止まっていれば API を呼ばずに終わる。ここ（ロックの外）で先に見て、書く直前にロックの中でもう一度見る。
+  # flock が無ければ、停止の処理と重ならないことを保証できないので書かない（API を呼ぶ前に止める）。
+  local ustate
+  if [[ "$sub" == "sync" ]]; then
+    ustate="$(unit_state "dev-route@${label}.service")"
+    if [[ "$ustate" != "active" ]]; then
+      echo "[$PROG] route $label: ユニット dev-route@$label.service が active ではない（$ustate）ので、そろえ直しません"
+      return 0
+    fi
+    command -v flock >/dev/null 2>&1 || die "$label: flock（util-linux）が無いので、そろえ直しは書きません（停止の処理と重ならないことを保証できないため）"
+  fi
+
+  # 対象を読む（読むだけなのでロックの外）。読めないとき、キャッシュを使うのは $ROUTE_FALLBACK へ戻す方向(down)だけ。
+  # ランナーへ向ける方向(up・sync)は、古い一覧で外した直後のリポジトリを向け直さないよう、何もせず 1 で終わる。
+  local trc=0 repos="" readable=1 cache="" removed="" cfgerr=0
+  route_targets_load "$org" "$grp" || trc=$?
+  if [[ "$trc" -eq 2 ]]; then
+    # 設定の誤り（グループが無い・selected でない）。up・sync は書かずに 2。
+    # down は、変数がラベルを指したまま残るとジョブが待ち続けるので、前回の一覧で戻してから 2 で終わる
+    # （グループを消した・設定を変えた直後に機械を止めた場合）。
+    [[ "$sub" == "down" ]] || exit 2
+    cfgerr=1 readable=0
+  elif [[ "$trc" -ne 0 ]]; then
+    readable=0
+    [[ "$sub" == "down" ]] || die "$label: 対象の一覧を読めないので、$sub では何も書きません（古い一覧で向け直さないため）"
+  fi
+  [[ "$readable" -eq 0 ]] || repos="$ROUTE_REPOS"
+
+  # 値を決める。online の判定と読み直しの待ちもロックの外で行う（停止の処理を待たせないため）。
+  local want hold=0 orc=0
+  case "$sub" in
+    up) want="$label" ;;
+    down)
+      want="$ROUTE_FALLBACK"
+      # ほかの機械の同じラベルのランナーが online なら戻さない(そちらが動いているあいだ、ジョブは待たずに済む)。一覧を読めなければ戻す。
+      route_online_counts "$org" "$label" "$ROUTE_GID" || orc=$?
+      if [[ "$orc" -eq 0 && "$ROUTE_OTHER_ONLINE" -gt 0 ]]; then
+        hold=1
+        echo "[$PROG] route $label: ほかの機械のランナーが online（$ROUTE_OTHER_ONLINE 台）なので、$ROUTE_FALLBACK へは戻しません"
+      fi
+      ;;
+    sync)
+      route_online_counts "$org" "$label" "$ROUTE_GID" || orc=$?
+      [[ "$orc" -eq 0 ]] || die "$label: ランナーの一覧を読めないので、動いているかを判定できません。何も書きません"
+      if [[ $((ROUTE_SELF_ONLINE + ROUTE_OTHER_ONLINE)) -eq 0 ]]; then
+        # 使い捨てのランナーが、ジョブの切れ目で登録し直すあいだを「止まった」と取り違えないよう、少し待って読み直す。
+        echo "[$PROG] route $label: online のランナーが居ません。${recheck} 秒後に読み直します"
+        sleep "$recheck"
+        orc=0
+        route_online_counts "$org" "$label" "$ROUTE_GID" || orc=$?
+        [[ "$orc" -eq 0 ]] || die "$label: ランナーの一覧を読み直せないので、判定できません。何も書きません"
+      fi
+      if [[ $((ROUTE_SELF_ONLINE + ROUTE_OTHER_ONLINE)) -gt 0 ]]; then want="$label"; else want="$ROUTE_FALLBACK"; fi
+      ;;
+  esac
+
+  # ここから書き終えるまでロックを持つ（キャッシュの読み書きと変数の書き込み）。
+  local lrc=0
+  route_lock "$label" "$lockwait" || lrc=$?
+  case "$lrc" in
+    0) ;;
+    3)
+      # sync は上で止めている。up / down はロックなしで進める。
+      echo "[$PROG] 警告: flock が無いので、ロックなしで進めます" >&2
+      ;;
+    *) die "$label: ロックを ${lockwait} 秒待ちましたが取れませんでした（ほかの dev runner route が動いています）" ;;
+  esac
+  # sync は、ロックを取ってから、もう一度 active かを見る（読み直しの待ちのあいだに停止が始まっていれば書かない）。
+  if [[ "$sub" == "sync" ]]; then
+    ustate="$(unit_state "dev-route@${label}.service")"
+    if [[ "$ustate" != "active" ]]; then
+      echo "[$PROG] route $label: ユニット dev-route@$label.service が active ではない（$ustate）ので、そろえ直しません"
+      return 0
+    fi
+  fi
+  if [[ "$readable" -eq 1 ]]; then
+    if cache="$(route_cache_read "$org.$label" 2>/dev/null)"; then
+      removed="$(route_list_minus "$cache" "$repos")"
+    fi
+  else
+    if cache="$(route_cache_read "$org.$label" 2>/dev/null)"; then
+      repos="$cache"
+      echo "[$PROG] 警告: グループから対象を決められないので、前回に読めた対象の一覧(キャッシュ)で $ROUTE_FALLBACK へ戻します" >&2
+    else
+      [[ "$cfgerr" -eq 0 ]] || exit 2
+      die "$label: グループを読めず、キャッシュも無いので、戻す対象を決められません"
+    fi
+  fi
+
+  local nfail=0 n=0
+  # 読めた一覧は先にキャッシュへ足す（途中で切れても、外したリポジトリの戻し先を失わない）。
+  # ランナーへ向ける方向（up・sync でラベルへ）は、キャッシュを書けなければ書かない。書けないまま向けると、
+  # 停止のときにグループを読めなかった場合、戻す対象が分からず、変数がラベルを指したまま残るため。
+  if [[ "$readable" -eq 1 ]]; then
+    if ! route_cache_write "$org.$label" "$(route_list_union "$cache" "$repos")"; then
+      [[ "$want" == "$ROUTE_FALLBACK" ]] || die "$label: キャッシュを書けないので、$want へは向けません（停止のときに戻す対象を失わないため。空き容量と $(route_state_dir) の権限を確かめてください）"
+      echo "[$PROG] 警告: キャッシュを書けませんでした" >&2
+    fi
+  fi
+  if [[ "$hold" -eq 0 ]]; then
+    [[ -z "$repos" ]] || n="$(printf '%s\n' "$repos" | grep -c .)"
+    echo "[$PROG] route $label: 対象 $n 件を $want へそろえます（グループ $grp、組織 $org）"
+    local arr=()
+    while IFS= read -r a; do [[ -z "$a" ]] || arr+=("$a"); done <<<"$repos"
+    route_apply "$org" "$want" yes "" "$retries" "$rwait" ${arr[@]+"${arr[@]}"} || nfail=$((nfail + 1))
+  fi
+  # グループから外れたもの(キャッシュにあって、いまの一覧に無い)は、今の値がこのラベルなら $ROUTE_FALLBACK へ戻す（別の値は触らない）。
+  # 戻せなかったものはキャッシュに残し、次の実行でやり直す。
+  local kept=""
+  if [[ "$readable" -eq 1 && -n "$removed" ]]; then
+    echo "[$PROG] route $label: グループから外れた $(printf '%s\n' "$removed" | grep -c .) 件を $ROUTE_FALLBACK へ戻します"
+    local rarr=()
+    while IFS= read -r a; do [[ -z "$a" ]] || rarr+=("$a"); done <<<"$removed"
+    if ! route_apply "$org" "$ROUTE_FALLBACK" no "$label" "$retries" "$rwait" "${rarr[@]}"; then
+      nfail=$((nfail + 1))
+      kept="$ROUTE_FAILED"
+    fi
+  fi
+  if [[ "$readable" -eq 1 ]]; then
+    route_cache_write "$org.$label" "$(route_list_union "$repos" "$kept")" || echo "[$PROG] 警告: キャッシュを書けませんでした" >&2
+  fi
+  if [[ "$cfgerr" -eq 1 ]]; then
+    echo "[$PROG] route $label: 前回の一覧で戻しましたが、routes かグループの設定を直してください（終了コード 2）" >&2
+    exit 2
+  fi
+  if [[ "$nfail" -gt 0 ]]; then
+    echo "[$PROG] route $label: 書けなかったものが残りました（終了コード 1。次の実行でやり直します）" >&2
+    return 1
+  fi
+  echo "[$PROG] route $label: 完了"
+}
+
+# ── dev doctor --runner の route の点検 ──
+# routes に行があるラベルについて、PAT・グループ・ユニットとタイマー・runners との整合を見る。
+# 使い方: doctor_route_label <routes の添字> <ランナーの名前>（ランナーの行は find_runner 済みで RIDX が指す）
+doctor_route_label() {
+  local i="$1" rname="$2" label org grp patf rgrp rc=0 n
+  label="${T_LABELS[$i]}" org="${T_ORGS[$i]}" grp="${T_GROUPS[$i]}" patf="${T_PATS[$i]}"
+  rgrp="${R_GROUP[$RIDX]}"
+  echo "[$PROG]   route $label（組織 $org、グループ $grp）:"
+  local why pat_ok=0
+  if why="$(runner_pat_problem "$patf")"; then
+    doc_line OK "route $label: PAT ファイル $patf（権限 $(file_mode_of "$patf")）"
+    if runner_pat_load "$patf" 2>/dev/null; then pat_ok=1; else doc_line FAIL "route $label: PAT ファイルの中身を読めません（空、または PAT の形ではありません）"; fi
+  else
+    doc_line FAIL "route $label: $why"
+  fi
+  if [[ "$pat_ok" -eq 1 ]]; then
+    if ! command -v curl >/dev/null 2>&1 || ! command -v jq >/dev/null 2>&1; then
+      doc_line WARN "route $label: curl か jq が無いので、グループを確かめられません"
+    else
+      route_group_lookup "$org" "$grp" 2>/dev/null || rc=$?
+      case "$rc" in
+        0)
+          if [[ "$ROUTE_GVIS" == "selected" ]]; then
+            local glist grc=0
+            glist="$(route_group_repos "$org" "$ROUTE_GID" 2>/dev/null)" || grc=$?
+            if [[ "$grc" -eq 0 ]]; then
+              n=0
+              [[ -z "$glist" ]] || n="$(printf '%s\n' "$glist" | grep -c .)"
+              doc_line OK "route $label: グループ $grp を読めて、使えるリポジトリは selected です（対象 $n 件）"
+            else
+              doc_line WARN "route $label: グループ $grp の使えるリポジトリの一覧を読めませんでした（PAT の失効・権限不足か、通信の失敗・API の不調。dev runner route は 1 で終わる）"
+            fi
+          else
+            doc_line FAIL "route $label: グループ $grp の使えるリポジトリが selected ではありません（${ROUTE_GVIS:-不明}）。dev runner route は 2 で止まる。GitHub 側で特定のリポジトリだけに絞る"
+          fi
+          ;;
+        1) doc_line FAIL "route $label: ランナーグループ $grp が組織 $org にありません（dev runner route は 2 で止まる）" ;;
+        *) doc_line WARN "route $label: グループの一覧を読めませんでした（PAT の失効・権限不足か、通信の失敗・API の不調。PAT には組織の Self-hosted runners: Read が要る）" ;;
+      esac
+    fi
+  else
+    doc_line WARN "route $label: PAT を使えないため、グループを確かめられません"
+  fi
+  if [[ "$rgrp" == "$grp" && "${R_ORGS[$RIDX]}" == "$org" ]]; then
+    doc_line OK "route $label: ランナー $rname の組織・group= が routes と一致します"
+  else
+    doc_line FAIL "route $label: ランナー $rname の組織（${R_ORGS[$RIDX]}）・group=（${rgrp:-既定}）が routes の組織（$org）・group=（$grp）と違います。向け先のリポジトリを、このランナーが受けられません"
+  fi
+  local us
+  us="$(unit_state "dev-route@${label}.service")"
+  case "$us" in
+    active) doc_line OK "ユニット dev-route@$label.service: active" ;;
+    *) doc_line WARN "ユニット dev-route@$label.service: $us（有効にしていないか、止まっています: systemctl --user enable --now dev-route@$label.service）" ;;
+  esac
+  us="$(unit_state "dev-route-sync@${label}.timer")"
+  case "$us" in
+    active) doc_line OK "タイマー dev-route-sync@$label.timer: active" ;;
+    *) doc_line WARN "タイマー dev-route-sync@$label.timer: $us（有効にしていません: systemctl --user enable --now dev-route-sync@$label.timer）" ;;
+  esac
+  if ! command -v flock >/dev/null 2>&1; then
+    doc_line WARN "flock（util-linux）が無いので、dev runner route sync は書きません"
+  fi
+}
+
+# このランナーの点検の一部として、routes の行を点検する。routes が無い機械では何も出さない。
+# このランナーが持つラベル(runners の labels=)の行は全部点検する。どのランナーも持たないラベルの行は、WARN を 1 行出す。
+# 使い方: doctor_routes <ランナーの名前>（find_runner 済み）
+doctor_routes() {
+  local rname="$1" file err i j k label mine carried mylabels l
+  file="$(routes_file)"
+  [[ -f "$file" ]] || return 0
+  if ! err="$(load_routes 2>&1)"; then
+    doc_line FAIL "routes を読めません: ${err//$'\n'/ }"
+    return 0
+  fi
+  load_routes
+  mylabels=",${R_LABELS[$RIDX]},"
+  for ((i = 0; i < ${#T_LABELS[@]}; i++)); do
+    label="${T_LABELS[$i]}"
+    mine=0 carried=0
+    [[ "$mylabels" == *",$label,"* ]] && mine=1
+    for ((j = 0; j < ${#R_NAMES[@]}; j++)); do
+      l=",${R_LABELS[$j]},"
+      [[ "$l" == *",$label,"* ]] && carried=1
+    done
+    if [[ "$mine" -eq 1 ]]; then
+      doctor_route_label "$i" "$rname"
+    elif [[ "$carried" -eq 0 ]]; then
+      doc_line WARN "route $label: runners にこのラベルを持つランナーがありません（向けても受けるランナーが、この機械に居ません）"
+    fi
+  done
 }
 
 # ── self-update ───────────────────────────────────────────────────────────────
@@ -1630,6 +2378,9 @@ su_check_unit() {
   su_check_asset "$1" "$2" "${3:-}" dev-up@.service "$conf/systemd/user/dev-up@.service" "ユニット"
   su_check_asset "$1" "$2" "${3:-}" dev-runner@.service "$conf/systemd/user/dev-runner@.service" "ランナーのユニット"
   su_check_asset "$1" "$2" "${3:-}" runner.Dockerfile "$(runner_dockerfile)" "ランナーの Dockerfile" "更新したら dev runner build でイメージを作り直してください。"
+  su_check_asset "$1" "$2" "${3:-}" dev-route@.service "$conf/systemd/user/dev-route@.service" "切り替えのユニット"
+  su_check_asset "$1" "$2" "${3:-}" dev-route-sync@.service "$conf/systemd/user/dev-route-sync@.service" "切り替えのそろえ直しのユニット"
+  su_check_asset "$1" "$2" "${3:-}" dev-route-sync@.timer "$conf/systemd/user/dev-route-sync@.timer" "切り替えのそろえ直しのタイマー"
 }
 
 # dev 自身を、devcontainer-host の公開リリースの dev.sh へ置き換える。
@@ -2116,6 +2867,11 @@ TERM を送っても止まらないときは、さらに 5 秒（DEV_EXEC_KILL_G
         ランナーの版に新しい版が出ている（期限の日付と残りの日数を出す） /
         公開済みの版の一覧を読めない / イメージに版のラベルが無い（dev runner build で作り直す）
   （docker=yes の設定は、危険を知らせる INFO を出す。PAT の値は出さない）
+  routes（dev runner route の設定ファイル）に、そのランナーが持つラベル(runners の labels=)の行があれば、その行も点検する。routes が無い機械では何も出さない。
+  FAIL  routes を読めない / route の PAT ファイルが無い・group / other に権限がある・読めない /
+        グループが組織に無い・使えるリポジトリが selected でない / ランナーの組織・group= が routes の行と違う
+  WARN  グループの一覧を読めない / ユニット dev-route@<ラベル> かタイマー dev-route-sync@<ラベル>.timer が active でない / flock が無い /
+        routes の行のラベルを持つランナーが runners のどこにも無い
 EOF
 }
 
@@ -2127,6 +2883,7 @@ dev runner — GitHub Actions の自前のランナーを、使い捨てのコ�
   dev runner build
   dev runner run <名前>
   dev runner net script|unit
+  dev runner route up|down|sync|show <ラベル> [--retries <n>] [--retry-wait <秒>]
 
 build: ランナーのイメージ（公式のランナーのイメージに道具を足した runner.Dockerfile）を作る。
   Dockerfile は標準入力から渡す（ビルドの文脈を作らない）。Dockerfile は編集しない。公式のランナーの版を上げるときは、
@@ -2158,6 +2915,32 @@ net: 出口の規則を入れる root の部分を標準出力へ出す（dev �
   script  規則を入れるスクリプト（/usr/local/sbin/dev-runner-net）。apply / unmark / clear / rules を持つ
   unit    それを呼ぶ systemd のシステムのユニット（/etc/systemd/system/dev-runner-net.service）
   止める出口: 専用ブリッジから 10/8・172.16/12・192.168/16・169.254/16・100.64/10 と、機械自身への新しい接続。docker=yes のランナーはソケットで迂回できるので対象外。
+route: ワークフローが読む Actions 変数 ACTIONS_RUNS_ON（`runs-on: ${{ vars.ACTIONS_RUNS_ON || 'ubuntu-latest' }}`）を、
+  ランナーが動けるあいだだけランナーのラベルへ向け、動けないときは ubuntu-latest へ戻す。ランナーが止まっても、ジョブが待ちのまま止まらないようにする。
+  対象は、設定ファイル routes の group= のランナーグループの「使えるリポジトリ」（API から全ページ読む。0 件は正しい空の一覧）。
+  グループの使えるリポジトリが selected でなければ設定の誤り(2)。
+  up    対象をラベルへ向ける(ユニット dev-route@<ラベル>.service の ExecStart)
+  down  対象を ubuntu-latest へ戻す(同 ExecStopPost。ExecStop は起動に失敗したとき動かないため)。ただし、ほかの機械（runners の名前から
+        作った名前に一致しない）の同じラベルのランナーが online なら戻さない。ランナーの一覧を読めなければ戻す。
+        グループが無い・selected でないときも、前回の一覧で戻してから 2 で終わる
+  sync  online のランナー（そのラベルを持ち、status が online）が 1 台以上いればラベルへ、いなければ ubuntu-latest へそろえる(タイマー dev-route-sync@<ラベル>.timer から)。
+        いないと判定したら 60 秒後（環境変数 DEV_ROUTE_RECHECK_WAIT で変えられる）に読み直し、それでもいなければ戻す
+        （使い捨てのランナーが、ジョブの切れ目で登録し直すあいだを「止まった」と取り違えないため）。
+        dev-route@<ラベル>.service が active のときだけ書く(止まっていれば API を呼ばない)。停止の処理と重ならないよう、ラベルごとのロックを flock で取ってから判定する
+        （停止の処理も同じロックを取る。flock が無ければ書かない）
+  show  対象ごとの今の値を出す(書かない)。グループから外れていて、次に戻す対象もあわせて出す
+  共通: 違うときだけ書く（未設定は作り、あれば更新する。値が空の既存の変数も設定済み）。リポジトリごとに並列で書く（上限は環境変数 DEV_ROUTE_PARALLEL。1 から 32、既定 8）。
+        1 件の失敗で止めず、失敗した分だけ --retries 回(既定 3。0 から 10) --retry-wait 秒(既定 20。0 から 300)おきにやり直す。失敗が残れば 1。
+        読めた対象の一覧はキャッシュする（~/.cache/dev/route-<組織>.<ラベル>。XDG_CACHE_HOME があればその下。環境変数 DEV_ROUTE_STATE_DIR で置き場所を変えられる）。
+        グループを読めないとき、キャッシュを使うのは ubuntu-latest へ戻す方向(down)だけ。ランナーへ向ける方向(up・sync)は、
+        古い一覧で外した直後のリポジトリを向け直さないよう、何も書かずに 1 で終わる。キャッシュにあってグループに無い（外した）リポジトリは、今の値がこのラベルなら ubuntu-latest へ戻す
+        （別の値なら触らない。戻せなければキャッシュに残し、次の実行でやり直す）。
+  PAT: routes の pat_file=（既定は routes と同じディレクトリの route-pat）。fine-grained で、対象のリポジトリの Variables: Read and write と、
+        組織の Self-hosted runners: Read だけを持たせる（ランナーの登録用の PAT とは別にする）。group / other に権限があれば（600 / 400 以外）拒む。引数・出力には出さない。
+  設定ファイル: routes（既定は ~/.config/dev/routes（XDG_CONFIG_HOME があればその下）。環境変数 DEV_ROUTES_FILE で差し替える。書式は routes.example）。
+  1 行 1 ラベルで「ラベル 組織 group=名前 [pat_file=絶対パス]」。ラベルは Actions 変数の値として書くので、英数字と . _ - だけ。
+  終了コード: 0 = 成功(sync で、ユニットが active でなく何もしなかった場合を含む) / 1 = 一部の失敗・一時的な失敗 / 2 = 使い方か設定の誤り
+  （2 は、ユニットが起こし直さない: RestartPreventExitStatus=2）
 点検は dev doctor --runner <名前>。curl と jq が要る。
 
 終了コード: 0 = ジョブを終えて止まった（build は作れた） / 1 = 一時的な失敗（API の 429・5xx や通信の失敗、コンテナの失敗、出口の規則の印がまだ無い、など。ユニットは起こし直す） /

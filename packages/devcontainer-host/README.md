@@ -12,6 +12,10 @@ devcontainer を起こし、入る**ための道具一式です。どのプロ�
 | `dev-runner@.service` | `~/.config/systemd/user/`（外部の機械） | 自前のランナーを使い捨てのコンテナで常駐させるユニット（「自前のランナー」） |
 | `runner.Dockerfile` | `~/.config/dev/runner.Dockerfile`（外部の機械） | ランナーのイメージ（公式のイメージに道具を足す）。`dev runner build` が作る |
 | `runners.example` | `~/.config/dev/runners`（外部の機械） | ランナーの設定ファイルの雛形（名前 → 組織・ラベル・Docker を渡すか） |
+| `dev-route@.service` | `~/.config/systemd/user/`（外部の機械） | ランナーが動けるあいだだけ `ACTIONS_RUNS_ON` をランナーのラベルへ向け、止まるとき `ubuntu-latest` へ戻すユニット（「変数の切り替え」） |
+| `dev-route-sync@.service` | `~/.config/systemd/user/`（外部の機械） | `ACTIONS_RUNS_ON` をランナーの状態にそろえ直すユニット（単独では有効にしない。タイマーが起こす） |
+| `dev-route-sync@.timer` | `~/.config/systemd/user/`（外部の機械） | そろえ直しを、起動の 3 分後から 10 分おきに起こすタイマー |
+| `routes.example` | `~/.config/dev/routes`（外部の機械。`install.sh` は `routes.example` の名前で置く） | 変数の切り替えの設定ファイルの雛形（ラベル → 組織・グループ・PAT のファイル） |
 | `ssh_config.plain.example` | 端末の `~/.ssh/config` | ssh の入口の断片（経路: 素の SSH） |
 | `ssh_config.cloudflared.example` | 端末の `~/.ssh/config` | ssh の入口の断片（経路: Cloudflare Access） |
 | `ssh_config.tailscale.example` | 端末の `~/.ssh/config` | ssh の入口の断片（経路: Tailscale） |
@@ -112,13 +116,14 @@ jq -r '.checksums["install.sh"] + "  install.sh"' RELEASE-MANIFEST.json | $sha25
 `bash install.sh --dry-run` は、何も書かずに計画だけを出します（取得と照合は行います）。`--version` を省くと最新を入れます。
 `install.sh` がすることは次のとおりです。
 
-1. 同じ版の `RELEASE-MANIFEST.json`・`dev.sh`・`dev-up@.service`・`dev-runner@.service`・`runner.Dockerfile`・`projects.example`・`runners.example` を取得し、マニフェストの `checksums` と照合します。
+1. 同じ版の `RELEASE-MANIFEST.json`・`dev.sh`・`dev-up@.service`・`dev-runner@.service`・`dev-route@.service`・`dev-route-sync@.service`・`dev-route-sync@.timer`・`runner.Dockerfile`・`projects.example`・`runners.example`・`routes.example` を取得し、マニフェストの `checksums` と照合します。
    **1 つでも食い違えば、何も置かずに非 0 で止まります。** `dev.sh` は devhost の `dev.sh` の形か（1 行目が bash の shebang、2 行目が `# dev — ` で始まる）と構文も確かめます。
 2. `dev` を `~/.local/bin/dev` へ**写しで**置きます。置き換え先がリンク・ディレクトリ・git で追跡されているファイル・devhost の `dev.sh` でないファイルなら、
    `dev self-update` と同じく置き換えずに止まります。
-3. `dev-up@.service` と `dev-runner@.service` を `~/.config/systemd/user/` へ置き、`systemctl --user daemon-reload` を呼びます。
+3. `dev-up@.service`・`dev-runner@.service`・`dev-route@.service`・`dev-route-sync@.service`・`dev-route-sync@.timer` を `~/.config/systemd/user/` へ置き、`systemctl --user daemon-reload` を呼びます。
    `runner.Dockerfile` は `~/.config/dev/runner.Dockerfile` へ置きます（イメージは自動では作りません。「自前のランナー」）。
 4. `~/.config/dev/projects` と `~/.config/dev/runners` が無ければ、それぞれ `projects.example` / `runners.example` から作ります。**あれば決して上書きしません。**
+   `routes`（変数の切り替えの設定）は、使わない機械もあるので作りません。雛形を `~/.config/dev/routes.example` へ置くので、使うときに `routes` へ写します。
 5. devcontainer CLI・docker・systemd の有無を確かめ、足りないものを案内します。**自動では入れません。**
    `loginctl enable-linger` と、プロジェクトごとの `systemctl --user enable --now dev-up@<名前>.service` も、案内だけです
    （`sudo` が要る・どのプロジェクトを常駐させるかは利用者が決めるため）。
@@ -138,8 +143,8 @@ jq -r '.checksums["install.sh"] + "  install.sh"' RELEASE-MANIFEST.json | $sha25
 devhost は、独自の版を持つ公開リポジトリ `ojos/devcontainer-host` のリリースで配られます
 （以前は devcontainer-bootstrap（DCB）のリリースに同梱していましたが、同梱は外しました）。
 各リリースには `RELEASE-MANIFEST.json`・`SHA256SUMS`・`PACKAGE_ARCHIVE.tar.gz`（このリポジトリのツリー一式）に加えて、
-`dev.sh`・`dev-up@.service`・`dev-runner@.service`・`runner.Dockerfile`・`install.sh`・`projects.example`・`runners.example` が個別の資産として付きます（ランナーの 3 つは v0.2.0 から）。`RELEASE-MANIFEST.json` の `checksums` が
-`PACKAGE_ARCHIVE.tar.gz` / `SHA256SUMS` と、個別の資産 7 つのハッシュを持つので、取得したものを照合してから使います。
+`dev.sh`・`dev-up@.service`・`dev-runner@.service`・`dev-route@.service`・`dev-route-sync@.service`・`dev-route-sync@.timer`・`runner.Dockerfile`・`install.sh`・`projects.example`・`runners.example`・`routes.example` が個別の資産として付きます（ランナーの 3 つは v0.2.0 から、変数の切り替えの 4 つは v0.5.0 から）。`RELEASE-MANIFEST.json` の `checksums` が
+`PACKAGE_ARCHIVE.tar.gz` / `SHA256SUMS` と、個別の資産 11 個のハッシュを持つので、取得したものを照合してから使います。
 
 ```bash
 TAG=v0.4.0   # devcontainer-host の最新安定リリース
@@ -171,7 +176,7 @@ jq -r '.checksums["dev.sh"] + "  dev.sh"' RELEASE-MANIFEST.json | $sha256c -c - 
 ```
 
 リリースの `SHA256SUMS` には、GitHub Actions が発行した artifact attestation（SLSA provenance）が付いています
-（任意の検証。[GitHub CLI](https://cli.github.com/) が要ります）。`SHA256SUMS` は `dev.sh`・`dev-up@.service`・`dev-runner@.service`・`runner.Dockerfile`・`install.sh`・`projects.example`・`runners.example`・`PACKAGE_ARCHIVE.tar.gz` のハッシュを持ちます（ランナーの 3 つは v0.2.0 から）。
+（任意の検証。[GitHub CLI](https://cli.github.com/) が要ります）。`SHA256SUMS` は `dev.sh`・`dev-up@.service`・`dev-runner@.service`・`dev-route@.service`・`dev-route-sync@.service`・`dev-route-sync@.timer`・`runner.Dockerfile`・`install.sh`・`projects.example`・`runners.example`・`routes.example`・`PACKAGE_ARCHIVE.tar.gz` のハッシュを持ちます（ランナーの 3 つは v0.2.0 から、変数の切り替えの 4 つは v0.5.0 から）。
 **attestation が保証するのは `SHA256SUMS` 自身だけです。** 取得したファイルまで辿るには、attestation の検証に続けて `SHA256SUMS` と取得物を照合します（`RELEASE-MANIFEST.json` だけの照合では、マニフェストごと差し替えられた場合を検出できません）。
 **成功しても何も表示されません。判定は終了コードで行ってください**（0 = 成功、非 0 = 失敗）。
 
@@ -182,7 +187,7 @@ if gh attestation verify SHA256SUMS --owner "$OWNER"; then echo "attestation: ok
 
 # 検証済みの SHA256SUMS と、取得したものだけを照合する（取得していないファイルは飛ばす。
 # 全行を渡すと、取得していない dev.sh などが無いことで落ちる）
-for f in PACKAGE_ARCHIVE.tar.gz dev.sh dev-up@.service dev-runner@.service runner.Dockerfile install.sh projects.example runners.example; do
+for f in PACKAGE_ARCHIVE.tar.gz dev.sh dev-up@.service dev-runner@.service dev-route@.service dev-route-sync@.service dev-route-sync@.timer runner.Dockerfile install.sh projects.example runners.example routes.example; do
   [ -f "$f" ] || continue
   awk -v f="$f" '$2 == f' SHA256SUMS | $sha256c -c - || { echo "$f: 照合に失敗しました" >&2; exit 1; }
 done
@@ -353,6 +358,77 @@ journalctl --user -u dev-runner@<名前>.service -n 20
   （`gh` は GitHub CLI の公式の apt リポジトリから入れ、`ca-certificates`・`gnupg` はその導入に使います）。
 - **更新。** 新しい版へは `install.sh` を再実行します（`runner.Dockerfile` が変わったら、`dev runner build` でイメージを作り直します）。
   `dev self-update` はユニットや `runner.Dockerfile` を書き換えず、古いときに案内だけを出します。
+- **変数の切り替え。** ランナーが止まったときにジョブが待ちのまま止まらないようにする仕組みは、次の「変数の切り替え（ACTIONS_RUNS_ON）」にあります。
+
+### 変数の切り替え（ACTIONS_RUNS_ON）
+
+自前のランナーが止まっていると、`runs-on` がそのラベルを指すジョブは、待ちのまま止まり続けます。GitHub Actions には、別のランナーへ自動で切り替える仕組みがありません。
+そこで、ワークフローが読む Actions 変数 `ACTIONS_RUNS_ON`（`runs-on: ${{ vars.ACTIONS_RUNS_ON || 'ubuntu-latest' }}`。devcontainer-bootstrap が配るワークフローの雛形が対応済みです）を、
+**ランナーのある機械の側から書き換えます。** ランナーが動けるあいだは変数をランナーのラベルへ向け、動けないとき（ランナーの停止・PAT の失効・イメージの故障・機械の停止と再起動）は `ubuntu-latest` へ戻します。
+
+**仕組み。**
+
+- ユニット `dev-route@<ラベル>.service`（`Type=oneshot`・`RemainAfterExit=yes`）が、起動で `dev runner route up <ラベル>`、停止で `dev runner route down <ラベル>` を呼びます。
+  戻すのは `ExecStop` ではなく `ExecStopPost` です（`ExecStop` は起動に失敗したときは動かないため）。起動の直後にネットワークがまだ無いときは `up` が失敗し、30 秒後に起こし直します。
+- タイマー `dev-route-sync@<ラベル>.timer`（起動の 3 分後から 10 分おき）が `dev runner route sync <ラベル>` を呼び、**いまのランナーの状態にそろえ直します。** 起動と停止だけでは、ユニットが動いたままランナーだけが落ちた場合（PAT の失効・イメージの故障など）を拾えないためです。
+- 「動いている」の判定は、GitHub 上でそのラベルを持つランナーが 1 台以上 `online` かどうかです（ランナーグループのランナーの一覧を API で読みます。ほかのグループのランナーは、対象のリポジトリのジョブを受けられないので数えません）。
+  使い捨てのランナーは、ジョブの切れ目で登録し直すあいだ一覧から消えるため、居ないと判定したら 60 秒後に読み直し、それでも居なければ戻します。
+- **向ける先は、ランナーグループの「使えるリポジトリ」です**（API から全ページ読みます。0 件は正しい空の一覧です）。グループの「使えるリポジトリ」が `selected` でなければ、対象を決められないので設定の誤り（終了コード 2）として止まります。
+  グループの作成と、使えるリポジトリの設定は GitHub 側で行います（`dev` は作りません）。
+- 違うときだけ書きます（冪等）。変数が無ければ作り、あれば更新します。値が空の既存の変数も設定済みとして扱います。リポジトリごとに並列で書き（上限は環境変数 `DEV_ROUTE_PARALLEL`、既定 8）、
+  1 件の失敗で止めず、失敗した分だけ `--retries` 回（既定 3）、`--retry-wait` 秒（既定 20）おきにやり直します。失敗が残れば終了コード 1 です。
+- 読めた対象の一覧は、キャッシュ（`~/.cache/dev/route-<組織>.<ラベル>`。`XDG_CACHE_HOME` があればその下）に残します。**グループを読めないとき、キャッシュを使うのは `ubuntu-latest` へ戻す方向（停止）だけ**です。
+  ランナーへ向ける方向（起動・そろえ直し）は、古い一覧で、グループから外した直後のリポジトリを向け直さないよう、何も書かずに終了コード 1 で終わります。キャッシュにあってグループに無い（外した）リポジトリは、今の値がこのラベルなら
+  `ubuntu-latest` へ戻します（別のラベルの切り替えや手で設定した値は触りません）。戻せなければキャッシュに残し、次の実行でやり直します。
+- **そろえ直しは、`dev-route@<ラベル>.service` が active のときだけ書きます。** 手で `ubuntu-latest` へ逃がしてユニットを止めているあいだに、タイマーが向け直さないためです。停止の処理と重ならないよう、
+  ラベルごとのロックを `flock` で取ってから判定します（停止の処理も同じロックを取ります）。`flock` が無ければ、そろえ直しは書きません。
+- 停止のとき、**ほかの機械の同じラベルのランナー**が `online` なら、戻しません。そちらが動いているあいだ、ジョブは待たずに済むためです。この機械のランナーは、`runners` の名前から作った GitHub 上の名前（`<ホスト名>-<名前>`）との完全一致で見分けます（ホスト名が前方一致する機械と取り違えないため）。ランナーの一覧を読めなければ戻します。
+- 停止のとき、グループが無い・`selected` でない（設定の誤り）ときも、前回に読めた一覧で戻してから 2 で終わります。グループを消した・設定を変えた直後に機械を止めても、変数がラベルを指したまま残らないためです。
+- 終了コードは、0 = 成功（そろえ直しで、ユニットが active でなく何もしなかった場合を含む）/ 1 = 一部の失敗・一時的な失敗 / 2 = 使い方か設定の誤りです。`RestartPreventExitStatus=2` で、2 のときはユニットが起こし直しません。
+- `dev runner route show <ラベル>` は、対象ごとの今の値を出します（書きません）。変数の値は誰でも書けるので、制御文字をそのまま端末へ出さないようにエスケープして出します。
+
+**PAT（ランナーの登録用とは別にする）。** fine-grained で、有効期限を付けます。
+
+| 項目 | 設定 |
+|---|---|
+| Resource owner | 組織 |
+| Repository access | 対象のリポジトリだけ |
+| Repository permissions | **Variables: Read and write** |
+| Organization permissions | **Self-hosted runners: Read**（グループとランナーの一覧の読み取り。登録の権限は持たせない） |
+
+分けるのは、PAT だけが漏れたときに「ランナーの登録」と「変数の書き換え」が揃うと、攻撃者の機械へ対象リポジトリのジョブを向けられるためです。
+ファイルは `routes` の `pat_file=`（既定は `routes` と同じディレクトリの `route-pat`）に置き、600 か 400 にします（group / other に権限があれば拒みます）。引数にも出力にも出しません。
+
+**導入の順序。** 逆にすると、変数が指すラベルのランナーがまだ居ないので、ジョブが待ちのまま止まります。
+
+```bash
+# 1. 対象のリポジトリの変数 ACTIONS_RUNS_ON を ubuntu-latest に逃がしておく（GitHub 側。この時点ではランナーへ向けない）
+# 2. ランナーのラベルと group= を runners に設定し、ランナーを起こし直して、組織の画面で online なのを確かめる
+#    グループは先に作る（無いグループへは登録できない）
+# 3. routes と PAT を置き、読めるか確かめる
+cp ~/.config/dev/routes.example ~/.config/dev/routes && $EDITOR ~/.config/dev/routes   # ラベル 組織 group=名前 [pat_file=絶対パス]
+install -m 600 /dev/null ~/.config/dev/route-pat && $EDITOR ~/.config/dev/route-pat
+dev runner route show <ラベル>
+dev doctor --runner <名前>
+# 4. 有効にする（ここで初めて、変数がラベルへ向く）
+systemctl --user enable --now dev-route@<ラベル>.service dev-route-sync@<ラベル>.timer
+```
+
+**足す・外す。** 対象を足すときは、GitHub 側でグループの「使えるリポジトリ」に足します。次の `sync`（最長 10 分後）で変数が向きます。
+**外すときは、利用側でグループの一覧から外してから、そこを適用し、そのあとで戻します**（逆にすると、先に戻した変数を、グループにまだ残っているあいだに `sync` が向け直します）。
+外したリポジトリは、キャッシュに残っているため、次の実行で `ubuntu-latest` へ戻ります。ラベルを丸ごとやめるときは、ユニットとタイマーを止めて（`ubuntu-latest` へ戻ります）から、`routes` の行を消します。
+
+**限界。** 機械そのものが止まったとき（停電・回線断）は、ここからは戻せません。その間に起動したジョブは待ちのままになるので、手元など、別の場所から変数を戻す運用を続けます。
+停止の処理は、シャットダウンの途中でネットワークが生きているあいだに走ります。
+`routes` の行の組織を書き換えるときは、先に `dev runner route down <ラベル>` で古い組織の変数を戻してから書き換えます（キャッシュは組織ごとに分かれていて、書き換えたあとは古い組織のリポジトリを戻しません）。
+停止の処理の上限は 300 秒です（`dev-route@.service` の `TimeoutStopSec`）。ふだんは十秒前後で終わりますが、最悪の見積もり（ロックの待ち 90 秒・一覧の読み取り・書き込みのやり直し・グループから外れた分）は、対象が 8 件以下（並列に書く 1 組。`DEV_ROUTE_PARALLEL`）で 260 秒です。対象がそれより多いと組の数だけ延び、上限を超えると systemd が途中で止めるので、戻しきれなかった変数は手元から戻します。
+`dev-route` の PAT が失効すると、戻す書き込みもできません（ランナー登録の PAT の失効は、ランナーが online でなくなるので、そろえ直しが戻します）。期限の前に差し替えます。
+
+**`ACTIONS_RUNS_ON` を Terraform などの宣言で管理しません。** この変数は、ランナーの起動・停止のたびに変わる運用の状態です。宣言に書くと、plan の差分が「直すべきずれ」なのか「ランナーが止まっただけ」なのか区別できなくなります。
+そのため、宣言の側では対象のリポジトリの一覧（ランナーグループの使えるリポジトリ）だけを持ち、変数の値は持ちません。
+
+`dev doctor --runner <名前>` は、そのランナーが持つラベルの行が `routes` にあれば、その行も点検します（PAT のファイルと権限・グループを読めて `selected` か・ランナーの組織と `group=` が一致するか・ユニットとタイマーが有効か・`flock` があるか）。
+`routes` が無い機械では何も出しません。
 
 ## VS Code の窓を閉じたときの停止（stopCompose）
 
@@ -403,9 +479,10 @@ compose のサービスに `restart: always` があると、`dev disable` で止
 | `dev supervise <名前>` | 起こして止まるまで待つ（ユニットから使う） |
 | `dev rebuild <名前> [--pull]` | コンテナを作り直す |
 | `dev doctor <名前>` | 「動いているのに入れない」を見分ける |
-| `dev doctor --runner <名前>` | 自前のランナーの点検（イメージ・PAT ファイルの権限・ユニット） |
+| `dev doctor --runner <名前>` | 自前のランナーの点検（イメージ・PAT ファイルの権限・ユニット・routes の行） |
 | `dev runner build` / `dev runner run <名前>` | ランナーのイメージを作る / 使い捨てのランナーのコンテナを起こして止まるまで待つ（ユニットから使う） |
 | `dev runner net script` / `dev runner net unit` | 出口の規則を入れる root のスクリプト / systemd のシステムのユニットを標準出力へ出す（`sudo` で入れる） |
+| `dev runner route up\|down\|sync\|show <ラベル>` | `ACTIONS_RUNS_ON` をランナーのラベルへ向ける / `ubuntu-latest` へ戻す / いまの状態にそろえる / 今の値を出す（ユニットから使う。「変数の切り替え」） |
 | `dev restart <名前>` | 作り直さずに再起動する |
 | `dev stop <名前>` | 意図して止める（ユニットを先に止める。戻すのは `dev enable`） |
 | `dev logs <名前> [-n <行数>]` | ユニットのログの末尾（既定 50 行） |
@@ -548,6 +625,11 @@ TERM を送っても止まらないときは、さらに 5 秒（DEV_EXEC_KILL_G
         ランナーの版に新しい版が出ている（期限の日付と残りの日数を出す） /
         公開済みの版の一覧を読めない / イメージに版のラベルが無い（dev runner build で作り直す）
   （docker=yes の設定は、危険を知らせる INFO を出す。PAT の値は出さない）
+  routes（dev runner route の設定ファイル）に、そのランナーが持つラベル(runners の labels=)の行があれば、その行も点検する。routes が無い機械では何も出さない。
+  FAIL  routes を読めない / route の PAT ファイルが無い・group / other に権限がある・読めない /
+        グループが組織に無い・使えるリポジトリが selected でない / ランナーの組織・group= が routes の行と違う
+  WARN  グループの一覧を読めない / ユニット dev-route@<ラベル> かタイマー dev-route-sync@<ラベル>.timer が active でない / flock が無い /
+        routes の行のラベルを持つランナーが runners のどこにも無い
 ```
 
 ### dev runner
@@ -559,6 +641,7 @@ dev runner — GitHub Actions の自前のランナーを、使い捨てのコ�
   dev runner build
   dev runner run <名前>
   dev runner net script|unit
+  dev runner route up|down|sync|show <ラベル> [--retries <n>] [--retry-wait <秒>]
 
 build: ランナーのイメージ（公式のランナーのイメージに道具を足した runner.Dockerfile）を作る。
   Dockerfile は標準入力から渡す（ビルドの文脈を作らない）。Dockerfile は編集しない。公式のランナーの版を上げるときは、
@@ -590,6 +673,32 @@ net: 出口の規則を入れる root の部分を標準出力へ出す（dev �
   script  規則を入れるスクリプト（/usr/local/sbin/dev-runner-net）。apply / unmark / clear / rules を持つ
   unit    それを呼ぶ systemd のシステムのユニット（/etc/systemd/system/dev-runner-net.service）
   止める出口: 専用ブリッジから 10/8・172.16/12・192.168/16・169.254/16・100.64/10 と、機械自身への新しい接続。docker=yes のランナーはソケットで迂回できるので対象外。
+route: ワークフローが読む Actions 変数 ACTIONS_RUNS_ON（`runs-on: ${{ vars.ACTIONS_RUNS_ON || 'ubuntu-latest' }}`）を、
+  ランナーが動けるあいだだけランナーのラベルへ向け、動けないときは ubuntu-latest へ戻す。ランナーが止まっても、ジョブが待ちのまま止まらないようにする。
+  対象は、設定ファイル routes の group= のランナーグループの「使えるリポジトリ」（API から全ページ読む。0 件は正しい空の一覧）。
+  グループの使えるリポジトリが selected でなければ設定の誤り(2)。
+  up    対象をラベルへ向ける(ユニット dev-route@<ラベル>.service の ExecStart)
+  down  対象を ubuntu-latest へ戻す(同 ExecStopPost。ExecStop は起動に失敗したとき動かないため)。ただし、ほかの機械（runners の名前から
+        作った名前に一致しない）の同じラベルのランナーが online なら戻さない。ランナーの一覧を読めなければ戻す。
+        グループが無い・selected でないときも、前回の一覧で戻してから 2 で終わる
+  sync  online のランナー（そのラベルを持ち、status が online）が 1 台以上いればラベルへ、いなければ ubuntu-latest へそろえる(タイマー dev-route-sync@<ラベル>.timer から)。
+        いないと判定したら 60 秒後（環境変数 DEV_ROUTE_RECHECK_WAIT で変えられる）に読み直し、それでもいなければ戻す
+        （使い捨てのランナーが、ジョブの切れ目で登録し直すあいだを「止まった」と取り違えないため）。
+        dev-route@<ラベル>.service が active のときだけ書く(止まっていれば API を呼ばない)。停止の処理と重ならないよう、ラベルごとのロックを flock で取ってから判定する
+        （停止の処理も同じロックを取る。flock が無ければ書かない）
+  show  対象ごとの今の値を出す(書かない)。グループから外れていて、次に戻す対象もあわせて出す
+  共通: 違うときだけ書く（未設定は作り、あれば更新する。値が空の既存の変数も設定済み）。リポジトリごとに並列で書く（上限は環境変数 DEV_ROUTE_PARALLEL。1 から 32、既定 8）。
+        1 件の失敗で止めず、失敗した分だけ --retries 回(既定 3。0 から 10) --retry-wait 秒(既定 20。0 から 300)おきにやり直す。失敗が残れば 1。
+        読めた対象の一覧はキャッシュする（~/.cache/dev/route-<組織>.<ラベル>。XDG_CACHE_HOME があればその下。環境変数 DEV_ROUTE_STATE_DIR で置き場所を変えられる）。
+        グループを読めないとき、キャッシュを使うのは ubuntu-latest へ戻す方向(down)だけ。ランナーへ向ける方向(up・sync)は、
+        古い一覧で外した直後のリポジトリを向け直さないよう、何も書かずに 1 で終わる。キャッシュにあってグループに無い（外した）リポジトリは、今の値がこのラベルなら ubuntu-latest へ戻す
+        （別の値なら触らない。戻せなければキャッシュに残し、次の実行でやり直す）。
+  PAT: routes の pat_file=（既定は routes と同じディレクトリの route-pat）。fine-grained で、対象のリポジトリの Variables: Read and write と、
+        組織の Self-hosted runners: Read だけを持たせる（ランナーの登録用の PAT とは別にする）。group / other に権限があれば（600 / 400 以外）拒む。引数・出力には出さない。
+  設定ファイル: routes（既定は ~/.config/dev/routes（XDG_CONFIG_HOME があればその下）。環境変数 DEV_ROUTES_FILE で差し替える。書式は routes.example）。
+  1 行 1 ラベルで「ラベル 組織 group=名前 [pat_file=絶対パス]」。ラベルは Actions 変数の値として書くので、英数字と . _ - だけ。
+  終了コード: 0 = 成功(sync で、ユニットが active でなく何もしなかった場合を含む) / 1 = 一部の失敗・一時的な失敗 / 2 = 使い方か設定の誤り
+  （2 は、ユニットが起こし直さない: RestartPreventExitStatus=2）
 点検は dev doctor --runner <名前>。curl と jq が要る。
 
 終了コード: 0 = ジョブを終えて止まった（build は作れた） / 1 = 一時的な失敗（API の 429・5xx や通信の失敗、コンテナの失敗、出口の規則の印がまだ無い、など。ユニットは起こし直す） /
