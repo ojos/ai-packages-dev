@@ -49,7 +49,8 @@
 #   本文は `-d` で受け、書いた内容を $FAKE_STATE/writes へ「メソッド リポジトリ 値」で足す。失敗の注入: FAKE_WRITE_FAIL（書き込みが常に 500 のリポジトリ。カンマ区切り）/
 #   FAKE_WRITE_FAIL_ONCE（最初の書き込みだけ 500）/ FAKE_VAR_FAIL（読み取りが 500）/ FAKE_VAR_403（読み取りが 403）。
 #   `GET .../runner-groups/<id>/repositories`（FAKE_GROUP_REPOS のカンマ区切り。既定 r-a,r-b,r-c。FAKE_GROUP_REPOS_GEN=N なら gen-1..gen-N。FAKE_API_FAIL=group-repos で失敗）、
-#   グループの一覧は visibility を持つ（FAKE_GROUP_VIS。既定 selected）。FAKE_GROUPS_PAD=N は、名前の違うグループ N 件を前に並べて対象を 2 ページ目へ送る。
+#   グループの一覧は visibility を持つ（FAKE_GROUP_VIS。既定 selected）。FAKE_GROUP_REPOS_AFTER は、1 回目の読み取りのあとの一覧（ロックを取るまでにグループが変わる仕込み）、FAKE_GROUP_REPOS_AFTER_FAIL=1 は 2 回目以降の読み取りが 500。
+#   FAKE_GROUPS_PAD=N は、名前の違うグループ N 件を前に並べて対象を 2 ページ目へ送る。
 #   ランナーの一覧は FAKE_RUNNERS（「名前:状態:ラベル+ラベル」のカンマ区切り）で差し替えられる（FAKE_RUNNERS_FIRST は 1 回目の読み取りだけ。FAKE_RUNNERS_PAGES=2 は 1 ページ目を 100 件の別のランナーで埋める。FAKE_API_FAIL=runners で失敗）。
 #   FAKE_PAR_TRACK=1 は、変数の読み取りを 0.3 秒止めて、同時に走っている数を $FAKE_STATE/par へ足す（並列の上限を見る）。
 #   `sleep` は、route の試験だけ PATH の先頭に置いた偽物（呼ばれた引数を記録して、待たずに返る）に差し替える。
@@ -645,7 +646,14 @@ if [[ "${2:-}" == "-K" ]]; then
           body='{"total_count":2,"repositories":[{"name":"r-a"},{"id":9}]}'
         else
           page="${url##*page=}"
-          body="$(jq -nc --arg r "${FAKE_GROUP_REPOS-r-a,r-b,r-c}" --argjson gen "${FAKE_GROUP_REPOS_GEN:-0}" --argjson page "$page" '
+          # FAKE_GROUP_REPOS_AFTER: 対象の一覧の 1 回目の読み取り（1 ページ目）のあとは、この一覧に変わる（ロックを取るまでにグループが変わる仕込み）。
+          # FAKE_GROUP_REPOS_AFTER_FAIL=1 なら、2 回目以降の読み取りが 500 になる。
+          grpn="$(cat "$FAKE_STATE/group-repos-n" 2>/dev/null || echo 0)"
+          if [[ "$page" == "1" ]]; then printf '%s' "$((grpn + 1))" >"$FAKE_STATE/group-repos-n"; fi
+          grepos="${FAKE_GROUP_REPOS-r-a,r-b,r-c}"
+          if [[ "$grpn" -ge 1 && -n "${FAKE_GROUP_REPOS_AFTER+x}" ]]; then grepos="$FAKE_GROUP_REPOS_AFTER"; fi
+          if [[ "$grpn" -ge 1 && "${FAKE_GROUP_REPOS_AFTER_FAIL:-0}" == "1" ]]; then body='{"message":"error"}' code=500; fi
+          [[ -n "$body" ]] || body="$(jq -nc --arg r "$grepos" --argjson gen "${FAKE_GROUP_REPOS_GEN:-0}" --argjson page "$page" '
             (if $gen > 0 then [range($gen) | "gen-\(. + 1)"] else ($r | split(",") | map(select(length > 0))) end) as $all
             | {total_count: ($all | length), repositories: [$all[] | {full_name: ("my-org/" + .), name: .}][(($page - 1) * 100):($page * 100)]}')"
         fi
@@ -2783,6 +2791,43 @@ for code in 403 500; do
 done
 rt 1 "route up: 対象のリポジトリの一覧を読めなければ、何も書かず 1" FAKE_API_FAIL=group-repos -- runner route up rt1
 log_lacks 'actions/variables'
+
+# ── ロックを取ったあとの読み直し（ロックの外で読んでから書くまでにグループが変わる）──
+RT_VARS="r-a=ubuntu-latest r-b=ubuntu-latest r-c=ubuntu-latest"
+rt 0 "route up: ロックの外で読んだあとにグループから外れたものは、読み直した一覧で書かず向けない" FAKE_GROUP_REPOS_AFTER=r-a,r-c -- runner route up rt1
+writes_has "PATCH r-a rt1"
+writes_has "PATCH r-c rt1"
+writes_lack ' r-b '
+var_is r-b ubuntu-latest
+cache_is "r-a r-c "
+expect_out_line "ロックを取るまでにグループの対象が変わったので、読み直した一覧で書きます"
+RT_VARS="r-a=ubuntu-latest r-b=ubuntu-latest r-c=ubuntu-latest"
+rt 0 "route up: ロックの外で読んだあとにグループへ足されたものも、読み直した一覧で書く" FAKE_GROUP_REPOS_AFTER=r-a,r-b,r-c,r-d -- runner route up rt1
+writes_has "POST r-d rt1"
+cache_is "r-a r-b r-c r-d "
+RT_VARS="r-a=ubuntu-latest r-b=ubuntu-latest r-c=ubuntu-latest"
+rt 1 "route up: 読み直せなければ、ロックの外で読んだ一覧を使わず、何も書かず 1" FAKE_GROUP_REPOS_AFTER_FAIL=1 -- runner route up rt1
+no_writes
+expect_err "ロックを取った後に対象の一覧を読み直せないので、up では何も書きません"
+RT_VARS="r-a=ubuntu-latest r-b=ubuntu-latest r-c=ubuntu-latest"
+rt 0 "route sync: ロックの外で読んだあとにグループから外れたものは、読み直した一覧で書かず向けない" FAKE_ACTIVE_UNITS=dev-route@rt1.service FAKE_RUNNERS=h-q1:online:rt1 FAKE_GROUP_REPOS_AFTER=r-a,r-c -- runner route sync rt1
+writes_has "PATCH r-a rt1"
+writes_lack ' r-b '
+var_is r-b ubuntu-latest
+RT_VARS="r-a=ubuntu-latest r-b=ubuntu-latest r-c=ubuntu-latest"
+rt 1 "route sync: 読み直せなければ、何も書かず 1" FAKE_ACTIVE_UNITS=dev-route@rt1.service FAKE_RUNNERS=h-q1:online:rt1 FAKE_GROUP_REPOS_AFTER_FAIL=1 -- runner route sync rt1
+no_writes
+RT_CACHE="r-a,r-b,r-c" RT_VARS="r-a=rt1 r-b=rt1 r-c=rt1"
+rt 0 "route down: 読み直せなければ、今までどおりキャッシュの一覧で ubuntu-latest へ戻す" FAKE_GROUP_REPOS_AFTER_FAIL=1 -- runner route down rt1
+writes_has "PATCH r-a ubuntu-latest"
+writes_has "PATCH r-b ubuntu-latest"
+writes_has "PATCH r-c ubuntu-latest"
+expect_err "キャッシュ"
+RT_CACHE="r-a,r-b,r-c" RT_VARS="r-a=rt1 r-b=rt1 r-c=rt1"
+rt 0 "route down: 読み直した一覧が違えば、それで書く（外れたものはキャッシュから戻す）" FAKE_GROUP_REPOS_AFTER=r-a,r-b -- runner route down rt1
+writes_has "PATCH r-a ubuntu-latest"
+writes_has "PATCH r-b ubuntu-latest"
+writes_has "PATCH r-c ubuntu-latest"
 
 # ── グループから外したリポジトリの扱い・キャッシュ ──
 RT_CACHE="r-a,r-b,r-x" RT_VARS="r-a=rt1 r-b=rt1 r-c=rt1 r-x=rt1"

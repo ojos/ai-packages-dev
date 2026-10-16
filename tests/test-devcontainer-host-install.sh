@@ -49,6 +49,14 @@ STUB
 cat > "$FAKEBIN/systemctl" <<'STUB'
 #!/usr/bin/env bash
 echo "systemctl $*" >> "$FAKE_LOG"
+# 有効・動作中のユニットの一覧（install.sh が dev-route を持たない版を入れる前に尋ねる）。FAKE_ROUTE_UNITS を 1 行 1 ユニットで出す。
+case "${2:-}" in
+  list-unit-files | list-units)
+    [[ -z "${FAKE_SYSTEMCTL_FAIL:-}" ]] || exit 1
+    [[ -z "${FAKE_ROUTE_UNITS:-}" ]] || printf '%s\n' $FAKE_ROUTE_UNITS
+    exit 0
+    ;;
+esac
 exit "${FAKE_SYSTEMCTL_RC:-0}"
 STUB
 chmod +x "$FAKEBIN/curl" "$FAKEBIN/systemctl"
@@ -312,6 +320,55 @@ if [[ $RC -eq 0 ]] && cmp -s "$old/dev.sh" "$(BIN)" && [[ ! -e "$(ROUTE_UNIT)" &
 else
   fail "終了コード $RC: $(tail -3 "$ERR")、置かれたファイル: $(find "$H" -type f | tr '\n' ' ')"
 fi
+
+it "dev-route を持たない版を入れるとき、dev-route@ が有効なら、何も置かずに非 0 で止まり、先に止める手順を案内する"
+new_home
+FAKE_ROUTE_UNITS="dev-route@ci.service dev-route-sync@ci.timer" run_install "$old"
+if [[ $RC -ne 0 && "$(files_in_home)" == "0" ]] && grep -q 'dev-route@ci.service' "$ERR" \
+   && grep -q 'systemctl --user disable --now dev-route@<ラベル>.service dev-route-sync@<ラベル>.timer' "$ERR" && ! grep -q 'daemon-reload' "$LOG"; then
+  pass
+else
+  fail "終了コード $RC、置かれたファイル: $(find "$H" -type f | tr '\n' ' ')、$(tail -3 "$ERR")"
+fi
+
+it "dev-route を持たない版を入れるとき、タイマーだけが有効でも止まる"
+new_home
+FAKE_ROUTE_UNITS="dev-route-sync@ci.timer" run_install "$old"
+if [[ $RC -ne 0 && "$(files_in_home)" == "0" ]]; then pass; else fail "終了コード $RC"; fi
+
+it "dev-route を持たない版を入れるとき、dev-route のユニットが有効でなければ（ひな形だけの行を除いて）入れられる"
+new_home
+FAKE_ROUTE_UNITS="dev-route@.service dev-up@x.service" run_install "$old"
+if [[ $RC -eq 0 ]] && cmp -s "$old/dev.sh" "$(BIN)"; then pass; else fail "終了コード $RC: $(tail -3 "$ERR")"; fi
+
+it "dev-route を持たない版を入れるとき、systemctl が列挙しなくても、*.wants/ に有効のリンクがあれば何も置かずに止まる"
+new_home
+mkdir -p "$H/.config/systemd/user/default.target.wants"
+ln -s ../dev-route@.service "$H/.config/systemd/user/default.target.wants/dev-route@ci.service"
+run_install "$old"
+if [[ $RC -ne 0 ]] && grep -q 'dev-route@ci.service' "$ERR" && [[ ! -e "$(BIN)" ]]; then pass; else fail "終了コード $RC: $(tail -3 "$ERR")"; fi
+
+it "dev-route を持たない版を入れるとき、ユニットのファイルがあるのに systemctl --user に問い合わせられなければ、何も置かずに止まる"
+new_home
+mkdir -p "$H/.config/systemd/user"
+cp "$REL1/dev-route@.service" "$H/.config/systemd/user/dev-route@.service"
+FAKE_SYSTEMCTL_FAIL=1 run_install "$old"
+if [[ $RC -ne 0 ]] && grep -q '問い合わせられず' "$ERR" && [[ ! -e "$(BIN)" ]]; then pass; else fail "終了コード $RC: $(tail -3 "$ERR")"; fi
+
+it "dev-route を持たない版を入れるとき、systemctl が無い機械では判定せずに入れられる"
+new_home
+NOSYS="$WORK/nosys"
+rm -rf "$NOSYS"
+mkdir -p "$NOSYS"
+ln -s "$FAKEBIN/curl" "$NOSYS/curl"
+for t in bash jq sed awk cat cp mv rm mkdir mktemp chmod cmp dirname grep sha256sum shasum tr head sort git; do
+  tp="$(command -v "$t" 2>/dev/null || true)"
+  [[ -z "$tp" ]] || ln -s "$tp" "$NOSYS/$t"
+done
+LOG="$WORK/calls.log"; : > "$LOG"; OUT="$WORK/out.txt"; ERR="$WORK/err.txt"
+RC=0
+env -u XDG_CONFIG_HOME HOME="$H" PATH="$NOSYS" FAKE_LOG="$LOG" FAKE_CURL_DIR="$old" FAKE_ROUTE_UNITS="dev-route@ci.service" "$(command -v bash)" "$INSTALL" > "$OUT" 2> "$ERR" < /dev/null || RC=$?
+if [[ $RC -eq 0 ]] && cmp -s "$old/dev.sh" "$(BIN)"; then pass; else fail "終了コード $RC: $(tail -3 "$ERR")"; fi
 
 it "dev-route の資産が一部だけマニフェストに無ければ、何も置かずに非 0 で止まる"
 new_home
