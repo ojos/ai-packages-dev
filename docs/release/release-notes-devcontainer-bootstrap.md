@@ -6,7 +6,7 @@
 >
 > 同じ理由で、issue 参照は `ojos/ai-packages-dev#NNN` の形で書いてください。裸の `#NNN` は GitHub のオートリンクが**配布先リポジトリの issue** として解決するため、配布後は存在しない issue や無関係な issue を指します。
 
-## 次の版（未リリース）
+## v0.23.0
 
 ### Summary
 - **接続時に DCB と ai-playbook の新しい安定版を知らせ、対話のシェルで yes と答えたときだけ `--upgrade` で追従する `scripts/update-check.sh` を足した**（ojos/ai-packages-dev#625）。**既定で有効**。
@@ -16,10 +16,18 @@
   - ORIGIN が無い・`version=` がリリースの版（`vX.Y.Z`）でない環境では何もしない。
   - 止め方として、生成のオプション `--no-update-check`（ORIGIN に `input:update-check=off` を記録し、`--upgrade` で引き継ぐ。戻すのは `--upgrade --update-check`）と、環境変数 `UPDATE_CHECK=off`（環境の値が `.env` より優先される。`.env.example` に説明をコメントで足した）を足した。`doctor.sh` は新しい入力キーを認め、値が `off` であることを確かめる。
 
+- **安全性の修正: `.env` の自動読み込みを `~/.bashrc` へ差し込む行が、プロジェクトのパスをシェル用に引用していなかった**（ojos/ai-packages-dev#625 / ojos/ai-packages-dev#628）。パスに `$(...)` や引用符を含むプロジェクトでは、シェルを開くたびに、その部分がコマンドとして実行されていた。差し込む行を `printf %q` で引用するようにした（新しく差し込む版の確認の行も同じ）。悪用には、プロジェクトのディレクトリ名を決められる必要がある。**既に差し込まれた古い行は `--upgrade` では書き直されない**（下の「移行」）。
+- **`.env.example` に記入する第二意見のエンジンを、生成時に選べるようにした（`--second-opinion-engine <gemini|antigravity|codex>`）**（ojos/ai-packages-dev#610 / ojos/ai-packages-dev#612）。指定したときだけ ORIGIN に `input:second-opinion-engine` を記録し、`--upgrade` が引き継ぐ。`--with-<エンジン>` で選んでいないエンジンや、記入欄が出ない構成での指定は、生成の前に止める。
+- **生成物を「意図して置かない」と ORIGIN に記録できるようにした（`--absent <path>` / `--no-absent <path>`）**（ojos/ai-packages-dev#614 / ojos/ai-packages-dev#616）。記録したファイルは `--upgrade` が作り直さず、`doctor.sh` も欠落を FAIL にしない。ゲート・検証・承認の機構と `devcontainer.json` の 11 件は外せない（README と試験が照合する）。
+- **Claude Code の Remote Control を常に有効にするユーザー設定を、オプトインで配れるようにした（`--claude-remote-control` / `--no-claude-remote-control`。`--with-claude` が必要）**（ojos/ai-packages-dev#617 / ojos/ai-packages-dev#620）。`install-ai-tools.sh` が、`~/.claude/settings.json` に `remoteControlAtStartup` が無いときだけ `true` をマージする。失敗は警告に留め、コンテナの作成は止めない。
+- **`.env.example` の `SESSION_HOST_LABEL` の説明を直した**（ojos/ai-packages-dev#609 / ojos/ai-packages-dev#611）。宛先名の末尾は、`--resume` に会話の識別子があればその先頭 8 桁、無いときだけ PID の 16 進（動作は変えていない）。
+- **`check-shell-portability.sh` の `xargs -r` の規則が、引数の途中の `-r`（`image-replace` など）にも一致していたのを直した**（ojos/ai-packages-dev#613 / ojos/ai-packages-dev#615）。
+- **パイプの後ろの `grep -q` の検査が、`| command grep -q` の形も検出するようにした**（ojos/ai-packages-dev#618 / ojos/ai-packages-dev#619）。
 ### 移行
 - **`bootstrap.sh --upgrade` で追従する。** 新しいファイル `scripts/update-check.sh` が置かれ、`scripts/on-attach.sh` が変わる（`on-attach.sh` に手を入れていれば、`.dcb-new` が置かれる）。`.env.example` に `UPDATE_CHECK` の説明（コメント）が足される（既存の `.env` は書き換えない）。
 - **既定で有効になる。** 接続時に GitHub の API へ 1 日 1 回、認証なしで問い合わせる。使いたくなければ、`--upgrade --no-update-check`、または `UPDATE_CHECK=off`。
 - 追従の `--upgrade` は、作業ツリーに未コミットの変更があるときは実行しない。コミットか退避をしてから。
+- **既に差し込まれた `.env` の自動読み込みの行は、`--upgrade` では書き直されない**（印が同じで、二重に足さないため）。パスに `$(...)`・引用符・空白を含むプロジェクトを使っているなら、`~/.bashrc`（と `~/.zshrc`）からその行（印の行とその次の行）を消して、接続し直す（新しい行が引用付きで差し込まれる）。
 
 ## v0.22.1
 
