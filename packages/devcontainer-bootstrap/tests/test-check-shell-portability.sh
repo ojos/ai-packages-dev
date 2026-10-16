@@ -379,6 +379,8 @@ rule_case xargs-0r   'printf "" | xargs -0r echo'                           # bs
 rule_case xargs-0-r  'printf "" | xargs -0 -r echo'                         # bsd-ok: フィクスチャ
 rule_case xargs-r0   'printf "" | xargs -r0 echo'                           # bsd-ok: フィクスチャ
 rule_case xargs-long 'printf "" | xargs --no-run-if-empty echo'             # bsd-ok: フィクスチャ
+rule_case xargs-pipe 'printf "" | xargs -r|cat'                            # bsd-ok: フィクスチャ
+rule_case xargs-subst 'x="$(printf "" | xargs -r)"'                        # bsd-ok: フィクスチャ
 
 # xargs の後ろの引数の途中にある -r（パスの image-replace、長いオプション）は、
 # xargs のオプションではないので通す（#613）。
