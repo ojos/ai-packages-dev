@@ -28,6 +28,12 @@ GITIGNORE_TARGETS=""
 # .env.example の SECOND_OPINION_ENGINE に記入するエンジン（空なら選んだエンジンから決める）。
 SECOND_OPINION_ENGINE_OPT=""
 SECOND_OPINION_ENGINE_EXPLICIT="false"
+# --claude-remote-control: ~/.claude/settings.json へ remoteControlAtStartup=true をマージする
+# 処理を install-ai-tools.sh に生成する（オプトイン。既定は生成しない）。
+CLAUDE_REMOTE_CONTROL="false"
+CLAUDE_REMOTE_CONTROL_EXPLICIT="false"
+# --no-claude-remote-control: --upgrade で ORIGIN の記録を引き継がず、外して生成する。
+NO_CLAUDE_REMOTE_CONTROL="false"
 # --upgrade: 記録した入力で生成し直し、手を入れていないファイルだけ新しい版へ更新する。
 # 引数で明示されたものだけを記録の入力より優先するため、明示の有無を別に持つ。
 UPGRADE="false"
@@ -172,6 +178,16 @@ options:
                               / --with-codex (otherwise the entry is not generated). Unknown
                               or unselected values stop before anything is written.
                               Recorded in ORIGIN and kept by --upgrade.
+  --claude-remote-control     Opt in: generated install-ai-tools.sh merges
+                              remoteControlAtStartup=true into ~/.claude/settings.json
+                              when the key is absent (an existing value, including false,
+                              is kept). Requires --with-claude; otherwise stops before
+                              anything is written. Recorded in ORIGIN and kept by --upgrade.
+  --no-claude-remote-control  With --upgrade: drop the recorded --claude-remote-control and
+                              regenerate without it (the key already written to
+                              ~/.claude/settings.json is not removed). Alone at generation
+                              time it equals leaving the option out. Not combinable with
+                              --claude-remote-control.
   --with-playbook             Install shared AI rules (ai-playbook) and entry files
   --without-playbook          Do not install shared AI rules
   --playbook-from <path|url>  Playbook source (directory path or archive URL)
@@ -256,7 +272,7 @@ dcb_origin_load_inputs() {
   local file="$1" mode
   ORIGIN_IN_PROJECT_NAME="" ORIGIN_IN_LANGUAGES="" ORIGIN_IN_FLAGS=""
   ORIGIN_IN_BASE_IMAGE_MODE="" ORIGIN_IN_BASE_IMAGE=""
-  ORIGIN_IN_MANAGE_GITIGNORE="" ORIGIN_IN_GITIGNORE_TARGETS="" ORIGIN_IN_SECOND_OPINION_ENGINE=""
+  ORIGIN_IN_MANAGE_GITIGNORE="" ORIGIN_IN_GITIGNORE_TARGETS="" ORIGIN_IN_SECOND_OPINION_ENGINE="" ORIGIN_IN_CLAUDE_REMOTE_CONTROL="" ORIGIN_IN_CLAUDE_REMOTE_CONTROL_SET=""
   ORIGIN_IN_PLAYBOOK="" ORIGIN_IN_PLAYBOOK_SOURCE="" ORIGIN_IN_PLAYBOOK_REF=""
   [[ -f "$file" ]] || return 1
   # 値が 1 でなければ、この版が読めない書式として 1 を返す（doctor.sh と揃える）。
@@ -273,6 +289,12 @@ dcb_origin_load_inputs() {
   ORIGIN_IN_GITIGNORE_TARGETS="$(dcb_origin_get "$file" input:gitignore-targets)" || return 1
   # 任意の入力。古い ORIGIN や未指定のときは行が無いので、無いことを失敗にしない。
   ORIGIN_IN_SECOND_OPINION_ENGINE="$(dcb_origin_get "$file" input:second-opinion-engine)" || ORIGIN_IN_SECOND_OPINION_ENGINE=""
+  # 行が無い（未指定・古い ORIGIN）と、値が空の行（破損）を区別するため、行の有無を別に持つ。
+  if ORIGIN_IN_CLAUDE_REMOTE_CONTROL="$(dcb_origin_get "$file" input:claude-remote-control)"; then
+    ORIGIN_IN_CLAUDE_REMOTE_CONTROL_SET="true"
+  else
+    ORIGIN_IN_CLAUDE_REMOTE_CONTROL=""
+  fi
   ORIGIN_IN_PLAYBOOK="$(dcb_origin_get "$file" input:playbook)" || return 1
   if [[ "$ORIGIN_IN_PLAYBOOK" == "installed" ]]; then
     ORIGIN_IN_PLAYBOOK_SOURCE="$(dcb_origin_get "$file" input:playbook-source)" || return 1
@@ -365,6 +387,8 @@ while [[ $# -gt 0 ]]; do
     --second-opinion-engine)
       [[ $# -ge 2 ]] || { echo "error: --second-opinion-engine には値（gemini / antigravity / codex）が必要です。" >&2; exit 1; }
       SECOND_OPINION_ENGINE_OPT="$2"; SECOND_OPINION_ENGINE_EXPLICIT="true"; shift 2 ;;
+    --claude-remote-control) CLAUDE_REMOTE_CONTROL="true"; CLAUDE_REMOTE_CONTROL_EXPLICIT="true"; shift ;;
+    --no-claude-remote-control) NO_CLAUDE_REMOTE_CONTROL="true"; shift ;;
     --with-playbook)    WITH_PLAYBOOK="true"; shift ;;
     --without-playbook) WITH_PLAYBOOK="false"; shift ;;
     --playbook-from)    PLAYBOOK_FROM="$2"; shift 2 ;;
@@ -438,6 +462,8 @@ origin_action_conflict_check() { # <フラグ名>
   [[ "$MANAGE_GITIGNORE_EXPLICIT" != "true" ]] || accept_conflict="$accept_conflict --no-gitignore"
   [[ "$GITIGNORE_TARGETS_EXPLICIT" != "true" ]] || accept_conflict="$accept_conflict --gitignore-targets"
   [[ "$SECOND_OPINION_ENGINE_EXPLICIT" != "true" ]] || accept_conflict="$accept_conflict --second-opinion-engine"
+  [[ "$CLAUDE_REMOTE_CONTROL_EXPLICIT" != "true" ]] || accept_conflict="$accept_conflict --claude-remote-control"
+  [[ "$NO_CLAUDE_REMOTE_CONTROL" != "true" ]] || accept_conflict="$accept_conflict --no-claude-remote-control"
   [[ -z "$WITH_PLAYBOOK" ]] || accept_conflict="$accept_conflict --with-playbook/--without-playbook"
   [[ -z "$PLAYBOOK_FROM" ]] || accept_conflict="$accept_conflict --playbook-from"
   [[ -z "$PLAYBOOK_VERSION" ]] || accept_conflict="$accept_conflict --playbook-version"
@@ -757,6 +783,7 @@ require_cmd curl
 # --upgrade の入力の決定。ORIGIN に記録した入力を読み、引数で明示されたものだけを上書きする。
 # 規則:
 #   project-name / languages / base-image / gitignore-targets / second-opinion-engine  明示があればそれ、無ければ記録
+#   --claude-remote-control  明示があれば true、無ければ記録（記録が true のときだけ true）
 #   --with-*   記録した集合へ明示分を足す。--without-<名前> は、足したあとの集合から外す
 #   --no-gitignore  明示があれば false、無ければ記録
 #   規範  --playbook-from / --playbook-version の明示は取得元ごと置き換える。
@@ -781,7 +808,7 @@ upgrade_merge_inputs() {
     fi
     echo "       記録から入力を再現できないため、生成時と同じ引数を明示してください:" >&2
     echo "         --project-name <name> --languages <csv>（必須）" >&2
-    echo "         --with-*（使っていたもの） --base-image --no-gitignore --gitignore-targets --second-opinion-engine" >&2
+    echo "         --with-*（使っていたもの） --base-image --no-gitignore --gitignore-targets --second-opinion-engine --claude-remote-control" >&2
     echo "         --with-playbook / --playbook-version <tag> / --playbook-from <path|url>（規範を置いていたもの）" >&2
     echo "       出力先は --output-dir で指定します（既定は現在のディレクトリ）。明示した引数で生成し、記録し直します。" >&2
     exit 1
@@ -808,6 +835,15 @@ upgrade_merge_inputs() {
   fi
   if [[ "$SECOND_OPINION_ENGINE_EXPLICIT" != "true" ]]; then
     SECOND_OPINION_ENGINE_OPT="$ORIGIN_IN_SECOND_OPINION_ENGINE"
+  fi
+  # 引き継ぐのは、明示も --no-claude-remote-control も無いときだけ。記録が true 以外なら
+  # ORIGIN の破損として止める（黙って未指定として扱うと、次の生成で行が消える）。
+  if [[ "$CLAUDE_REMOTE_CONTROL_EXPLICIT" != "true" && "$NO_CLAUDE_REMOTE_CONTROL" != "true" && "$ORIGIN_IN_CLAUDE_REMOTE_CONTROL_SET" == "true" ]]; then
+    if [[ "$ORIGIN_IN_CLAUDE_REMOTE_CONTROL" != "true" ]]; then
+      echo "error: ORIGIN の input:claude-remote-control の値が不正です（$ORIGIN_IN_CLAUDE_REMOTE_CONTROL。true のはず）。ORIGIN の破損の可能性があるため止めます。記録を外すなら --no-claude-remote-control を指定してください。" >&2
+      exit 1
+    fi
+    CLAUDE_REMOTE_CONTROL="true"
   fi
 
   if [[ "$src_explicit" == "true" || "$WITH_PLAYBOOK" == "false" ]]; then
@@ -940,6 +976,23 @@ if [[ -n "$SECOND_OPINION_ENGINE_OPT" ]]; then
     echo "warning: $soe_label は、今回の構成では使えません（$soe_problem）。ORIGIN の記録を外し、指定が無いときの決め方に戻します。" >&2
     SECOND_OPINION_ENGINE_OPT=""
   fi
+fi
+if [[ "$CLAUDE_REMOTE_CONTROL_EXPLICIT" == "true" && "$NO_CLAUDE_REMOTE_CONTROL" == "true" ]]; then
+  echo "error: --claude-remote-control と --no-claude-remote-control は同時に指定できません。" >&2
+  exit 1
+fi
+# --claude-remote-control は、生成の前（何も書く前）に検証する。~/.claude/settings.json を
+# 書くのは Claude Code を導入する構成だけなので、--with-claude が要る。--upgrade で
+# 記録から引き継いだ値は、--without-claude で行き先が無くなっただけなら警告して外す
+# （そうしないと --without-claude のあと --upgrade が通らなくなる）。
+if [[ "$CLAUDE_REMOTE_CONTROL" == "true" ]] && ! has_with claude; then
+  if [[ "$CLAUDE_REMOTE_CONTROL_EXPLICIT" == "true" ]]; then
+    echo "error: --claude-remote-control には --with-claude が必要です（Claude Code を導入しない構成では、設定を書く行き先がありません）。" >&2
+    exit 1
+  fi
+  if [[ "$DRY_RUN" == "true" ]]; then crc_verb="外すことになります（--dry-run のため書き込みません）"; else crc_verb="外します"; fi
+  echo "warning: ORIGIN の input:claude-remote-control=true は、今回の構成では使えません（--with-claude を選んでいません）。ORIGIN の記録を$crc_verb。" >&2
+  CLAUDE_REMOTE_CONTROL="false"
 fi
 case "$PLAYBOOK_CONFLICT_POLICY" in
   skip|overwrite|prompt) ;;
@@ -1515,6 +1568,7 @@ install_if_missing() {
 
 __AGY_FUNCTION_LINES__
 __CODEX_FUNCTION_LINES__
+__CLAUDE_FUNCTION_LINES__
 __AI_INSTALL_LINES__
 echo "[install-ai-tools] done"
 TMPL
@@ -10741,7 +10795,103 @@ build_ai_install_block() {
     pkg="${spec#* }"
     out+="install_if_missing $cmd \"$pkg\""$'\n'
   done < <(selected_ai_tools)
+  # --claude-remote-control のときだけ、設定のマージを呼ぶ（関数は __CLAUDE_FUNCTION_LINES__）。
+  # claude の導入行（上の loop）より後ろに置く。未指定なら 1 行も足さない。
+  if [[ "$CLAUDE_REMOTE_CONTROL" == "true" ]]; then
+    out+="enable_claude_remote_control"$'\n'
+  fi
   printf '%s' "$out"
+}
+
+# install-ai-tools.sh の __CLAUDE_FUNCTION_LINES__。Claude Code の Remote Control を
+# 常に有効にするユーザー設定のマージ。--claude-remote-control が無ければ空を返し、
+# 生成物にこの関連は 1 行も入らない。
+#
+# remoteControlAtStartup の true が効くのはユーザー設定（~/.claude/settings.json）と
+# 管理ポリシーだけで、プロジェクトの .claude/settings.json の true は読まれない。
+# したがってコミットする形では有効にできず、コンテナの作成時にマージする。
+#
+# 設定の書き込みは agy の enableTelemetry と同じ流儀（マージ・一時ファイル＋mv・
+# 壊れた JSON を捨てない）だが、失敗の扱いだけ違う。これは利用者のオプトインした
+# 利便であって、無効化の保証（テレメトリ）ではないため、jq が無い・JSON が壊れて
+# いるときは警告して飛ばし、コンテナの作成を止めない。
+build_claude_remote_control_block() {
+  [[ "$CLAUDE_REMOTE_CONTROL" == "true" ]] || { printf ''; return; }
+  cat <<'CRCTMPL'
+# Claude Code の Remote Control を常に有効にする（remoteControlAtStartup）。
+# キーが無いときだけ true を足す。利用者が明示した値（false を含む）は覆さない。
+CLAUDE_USER_SETTINGS="$HOME/.claude/settings.json"
+
+enable_claude_remote_control() {
+  local dir tmp mode
+  dir="$(dirname "$CLAUDE_USER_SETTINGS")"
+
+  # この関数は set -e の下で動く。どの失敗でも警告して 0 を返し、コンテナの作成を止めない。
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "[install-ai-tools] warning: jq が無いため Remote Control の設定を飛ばします（remoteControlAtStartup は未設定のまま）" >&2
+    return 0
+  fi
+
+  # シンボリックリンクは書き換えない（mv が通常のファイルで置き換え、利用者の dotfiles を壊す）。
+  if [[ -L "$CLAUDE_USER_SETTINGS" ]]; then
+    echo "[install-ai-tools] warning: シンボリックリンクのため Remote Control の設定を飛ばします: $CLAUDE_USER_SETTINGS" >&2
+    return 0
+  fi
+  if [[ -e "$CLAUDE_USER_SETTINGS" && ! -f "$CLAUDE_USER_SETTINGS" ]]; then
+    echo "[install-ai-tools] warning: 通常のファイルでないため Remote Control の設定を飛ばします: $CLAUDE_USER_SETTINGS" >&2
+    return 0
+  fi
+
+  if ! mkdir -p "$dir" 2>/dev/null; then
+    echo "[install-ai-tools] warning: $dir を作れないため Remote Control の設定を飛ばします" >&2
+    return 0
+  fi
+
+  mode=""
+  if [[ -f "$CLAUDE_USER_SETTINGS" ]]; then
+    # 壊れた JSON、オブジェクトでない JSON、複数の値を連結した JSON を黙って置き換えない
+    # （-s で全体を配列として読み、値がちょうど 1 つのオブジェクトであることを確かめる）。
+    if ! jq -e -s 'length == 1 and (.[0] | type == "object")' "$CLAUDE_USER_SETTINGS" >/dev/null 2>&1; then
+      echo "[install-ai-tools] warning: JSON のオブジェクトとして読めないため Remote Control の設定を飛ばします: $CLAUDE_USER_SETTINGS" >&2
+      return 0
+    fi
+    # 冪等。キーがあれば（false でも）触らない。
+    if jq -e 'has("remoteControlAtStartup")' "$CLAUDE_USER_SETTINGS" >/dev/null 2>&1; then
+      echo "[install-ai-tools] remoteControlAtStartup already set, skipping"
+      return 0
+    fi
+    # 利用者が読み取り専用にしたファイルは、親ディレクトリに書けても mv で置き換えない。
+    if [[ ! -w "$CLAUDE_USER_SETTINGS" ]]; then
+      echo "[install-ai-tools] warning: 書き込めないため Remote Control の設定を飛ばします: $CLAUDE_USER_SETTINGS" >&2
+      return 0
+    fi
+    # 既存のファイルは元の権限を保つ（stat は GNU / BSD で書式が違う）。
+    mode="$(stat -c %a "$CLAUDE_USER_SETTINGS" 2>/dev/null || stat -f %Lp "$CLAUDE_USER_SETTINGS" 2>/dev/null || true)"
+  fi
+
+  # 一時ファイルへ書いて mv で差し替える（同じディレクトリに作る。理由は agy の設定と同じ）。
+  if ! tmp="$(mktemp "$dir/.settings.json.XXXXXX" 2>/dev/null)"; then
+    echo "[install-ai-tools] warning: $dir に一時ファイルを作れないため Remote Control の設定を飛ばします" >&2
+    return 0
+  fi
+  # ファイルが無ければ新規（600）。あれば既存のキーを保ってマージする。
+  if [[ -f "$CLAUDE_USER_SETTINGS" ]]; then
+    jq '.remoteControlAtStartup = true' "$CLAUDE_USER_SETTINGS" > "$tmp" 2>/dev/null
+  else
+    jq -n '{remoteControlAtStartup: true}' > "$tmp" 2>/dev/null
+  fi || {
+    rm -f "$tmp"
+    echo "[install-ai-tools] warning: settings.json の書き換えに失敗したため Remote Control の設定を飛ばします: $CLAUDE_USER_SETTINGS" >&2
+    return 0
+  }
+  if ! chmod "${mode:-600}" "$tmp" 2>/dev/null || ! mv "$tmp" "$CLAUDE_USER_SETTINGS" 2>/dev/null; then
+    rm -f "$tmp"
+    echo "[install-ai-tools] warning: settings.json を置き換えられないため Remote Control の設定を飛ばします: $CLAUDE_USER_SETTINGS" >&2
+    return 0
+  fi
+  echo "[install-ai-tools] Claude Code Remote Control enabled (remoteControlAtStartup=true)"
+}
+CRCTMPL
 }
 
 # install-ai-tools.sh の __AGY_FUNCTION_LINES__。agy の導入とテレメトリ無効化の
@@ -11083,6 +11233,7 @@ render_content() {
   subst_block __ON_CREATE_COMMAND__ "$(build_on_create_command_block)"
   subst_block __AGY_FUNCTION_LINES__ "$(build_agy_block)"
   subst_block __CODEX_FUNCTION_LINES__ "$(build_codex_block)"
+  subst_block __CLAUDE_FUNCTION_LINES__ "$(build_claude_remote_control_block)"
   subst_block __AI_INSTALL_LINES__ "$(build_ai_install_block)"
   subst_block __VOLUME_MOUNTS__ "$(build_volume_mounts_block)"
   subst_block __VOLUME_SECTION__ "$(build_volume_section_block)"
@@ -12369,6 +12520,10 @@ EOF
     # 指定があったときだけ書く（未指定の ORIGIN を変えない）。
     if [[ -n "$SECOND_OPINION_ENGINE_OPT" ]]; then
       dcb_origin_line input:second-opinion-engine "$SECOND_OPINION_ENGINE_OPT"
+    fi
+    # 指定があったときだけ true を書く（未指定の ORIGIN を変えない）。
+    if [[ "$CLAUDE_REMOTE_CONTROL" == "true" ]]; then
+      echo "input:claude-remote-control=true"
     fi
     if should_install_playbook; then
       echo "input:playbook=installed"
