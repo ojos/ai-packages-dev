@@ -303,6 +303,8 @@ fi
   - マージは、キーが無いときだけ `true` を足します。既存のキーは保ち、利用者が書いた `false` は覆しません（冪等です）。ファイルが無ければ作ります。`jq` が無い、JSON として読めない、シンボリックリンクである、書き込めない、といったときは、警告を出して飛ばします（コンテナの作成は止めません）。既存のファイルを書き換えるときは元の権限を保ち、新規に作るときだけ 600 にします。
   - **オプションを外しても、足したキーは消えません。** `--upgrade --no-claude-remote-control` で ORIGIN の記録を外し、`install-ai-tools.sh` から処理を取り除きますが、すでに書いた `remoteControlAtStartup` は残ります。無効にするには `~/.claude/settings.json` を手で直します。）
 - `--no-claude-remote-control`（既定: 無効。`--upgrade` と併用して、ORIGIN に記録した `--claude-remote-control` を引き継がず、外して生成します。生成時に単独で使っても、未指定と同じです。`--claude-remote-control` と同時に指定すると止まります。`--accept` とは同時に指定できません）
+- `--no-update-check`（既定: 無効＝確認する。生成物の `scripts/update-check.sh`（新しい版の確認と追従。[新しい版の確認と追従](#新しい版の確認と追従update-check)）を動かさない記録を、ORIGIN に `input:update-check=off` として残します。`--upgrade` は引き継ぎます。`.env` の `UPDATE_CHECK=off` でも止められます。`--update-check` と同時に指定すると止まります。`--accept` とは同時に指定できません）
+- `--update-check`（`--upgrade` と併用して、ORIGIN に記録した `--no-update-check` を外し、確認を有効に戻します。生成時に単独で使っても、未指定と同じです。ORIGIN の `input:update-check` の値が `off` 以外のときは破損として止まり、この指定で直せます）
 - `--with-playbook` / `--without-playbook`（AI 共通ルールの配置。既定: 配置しない）
 - `--without-aws` / `--without-gcp` / `--without-claude` / `--without-gemini` / `--without-antigravity` / `--without-codex` / `--without-copilot` / `--without-copilot-review`（`--with-<名前>` のそれぞれと対になる打ち消し。`--upgrade` では、記録した集合から外し、外したフラグでだけ生成していたファイルのうち手を入れていないものを削除します。`--upgrade` 以外では「付けない」と同じなので受け付けるだけで、既存のファイルには触れません。同じ名前の `--with-<名前>` と同時に指定するとエラーで止まり、何も書きません。下記「`--upgrade` の注意」参照）
 - `--playbook-version <tag>`（既定: 空。既定ソース `ojos/ai-playbook` のタグ tarball への糖衣。`--playbook-from` とは排他。`<tag>` は GitHub の実タグ名をそのまま指定します。例: `v0.1.4`（先頭の `v` を含む）。存在しないタグを指定すると、**ファイルを 1 つも書かずに**明示エラーで終了します）
@@ -432,6 +434,7 @@ bash bootstrap.sh --no-absent .devcontainer/compose.yaml   # 記録を外す（�
 
 - **`--second-opinion-engine` の記録は引き継がれます。** 規則（止まる条件、引き継ぎ、使えなくなったときに警告して記録を外すこと）は、上のオプション一覧の項が正本です。これにより `.env.example` を手で直して `--accept` する回避を、`--upgrade` のたびに繰り返す必要がなくなります。既存の `.env` は書き換えません。
 - **`--claude-remote-control` の記録は引き継がれます。** 規則は、上のオプション一覧の項が正本です。
+- **`--no-update-check` の記録（`input:update-check=off`）は引き継がれます。** 規則は、上のオプション一覧の項が正本です。
 - **`--with-*` は足せます。外すには `--without-<名前>` を使います。** 引数で渡した `--with-*` は記録した集合へ足されます。`--upgrade --without-<名前>` は記録した集合から外し、ORIGIN の `flags=` からも消えます。生成し直す必要はありません。同じ名前の `--with-` と `--without-` を同時に渡すとエラーで止まります。
 - **外すときは、外したフラグでだけ生成していたファイルを、手を入れていないものに限って削除します。** ORIGIN に記録したハッシュと現物が一致するものを削除し（`remove: <path> (flag removed, unmodified)`）、手を入れたものは残して `keep (modified, no longer generated): <path>` と報告します。`--dry-run` では `plan: remove <path>` と出すだけで、何も消しません。ORIGIN は外した結果で書き直すため、残したファイルは記録から外れ、次の `--upgrade` の対象にも出ません（不要なら手で消してください）。外していないフラグで生成されるファイルは対象外です。`--upgrade` 以外で `--without-<名前>` を渡した場合は、新規生成なら付けないのと同じで、既存のファイルは削除しません。
 - **リモート最終ゲート（`--without-copilot-review`）を外すときは、生成物以外の作業が残ります。** DCB は次を変えません。(1) `.github/project-ai-rules.md` の「リモート最終ゲート」の記述を、置かない構成に合わせて直す。(2) リポジトリの required check（ブランチ保護・ruleset）に `review-gate` を入れていれば外す（ワークフローが無くなると、その check は永久に待ち状態になりマージが止まります）。(3) GitHub 側の Copilot の自動レビュー（ruleset の「Automatically request Copilot code review」など）の設定を止める。
@@ -996,6 +999,7 @@ OAuth トークン（`CLAUDE_CODE_OAUTH_TOKEN`）を `remoteEnv` へ注入する
 - `scripts/setup-git-identity.sh` / `scripts/verify-commit-identity.sh` / `scripts/verify-commit-identity-selftest.sh`（git identity ガード。下記参照）
 - `.github/workflows/identity-guard.yml`（コミット identity の検証 CI。下記参照）
 - `scripts/verify.sh` / `scripts/acceptance.sh` / `scripts/loop-gate.sh`（ループコーディング支援。下記参照）
+- `scripts/update-check.sh`（DCB と ai-playbook の新しい安定版の確認と追従。`on-attach.sh` が通知を、対話のシェルの rc が問いかけを呼ぶ。[新しい版の確認と追従](#新しい版の確認と追従update-check)）
 - `scripts/session-ledger.sh`（同じホストで並行して動く AI セッションの共有台帳。`claim` / `release` / `list` / `check` / `refresh` を持つ。置き場所は `git rev-parse --git-common-dir` の配下で、セッションごとに別ファイルへ追記する。規範は `.ai-playbook/shared-ai-rules.md`「セッション間の協調」。実行環境に依存しないので、装備フラグに関わらず常に生成する）
 - `scripts/check-no-secrets.sh`（機密混入の検知ゲート。`verify.sh` が受け入れ条件の手前で呼ぶ。下記参照）
 - `scripts/check-control-chars.sh`（追跡ファイルへの表示されない制御文字混入の検知ゲート。作業ツリーの内容に加え、索引（ステージ済み）と作業ツリーで内容が違うファイルは索引の blob も読み、索引側の検出は `<パス> (staged)` と示す。git の clean フィルターが、作業ツリーに無い禁止バイトを索引へ書き込む場合は見逃す（限界。`git diff` がフィルターを通した後の内容を比べるため）。単体で `bash scripts/check-control-chars.sh` として実行する。生成時の `acceptance.sh` の雛形は呼ぶ。既存の出力先ではプロジェクト側で配線する（[Doctor 自己診断](#doctor-自己診断)））
@@ -1094,6 +1098,7 @@ absent:.devcontainer/compose.yaml=1                  # --absent で意図して�
 | `--no-gitignore` / `--gitignore-targets` | 記録する（`input:manage-gitignore` / `input:gitignore-targets`） | 生成結果（`.gitignore`）を決める |
 | `--second-opinion-engine` | 指定したときだけ記録する（`input:second-opinion-engine`） | 生成結果（`.env.example`）を決める。未指定の ORIGIN には行を足さず、古い ORIGIN にこの行が無くても `--upgrade` は止まらない。値は gemini / antigravity / codex のいずれか（`doctor.sh` が検査する） |
 | `--claude-remote-control` | 指定したときだけ `input:claude-remote-control=true` を記録する | 生成結果（`install-ai-tools.sh`）を決める。未指定の ORIGIN には行を足さず、古い ORIGIN にこの行が無くても `--upgrade` は止まらない。値は `true` だけ（`doctor.sh` が検査する） |
+| `--no-update-check` | 指定したとき（`--upgrade` で引き継いだときを含む）だけ `input:update-check=off` を記録する | 生成物 `scripts/update-check.sh` が実行時に読む。未指定の ORIGIN には行を足さず、古い ORIGIN にこの行が無くても `--upgrade` は止まらない。値は `off` だけを認め、それ以外は破損として止まる（`--update-check` で外せる） |
 | 規範の取得元（`--playbook-version` / `--playbook-from` / `--with-playbook`） | 種類（`input:playbook-source` = `tag` / `url` / `local` / `adjacent`）と、記録できる場合の値（`input:playbook-ref`）を記録する。配置しないときは `input:playbook=none` | `tag` と、`@` `?` `#` を含まない URL だけ値を記録する。ローカルのパスは、絶対パスがコミットされると困り、相対パスは実行した場所で意味が変わるため記録しない。`@` `?` `#` を含む URL は資格情報や署名を含みうるため記録しない（これらは `--upgrade` で `--playbook-from` の明示が要る） |
 | `--playbook-conflict-policy` | 記録しない | 既存ファイルへの対処であって、生成結果を決める入力ではない（`--upgrade` は自分の振り分けで決める） |
 | `--force` / `--dry-run` / `--upgrade` / `--output-dir` | 記録しない | 実行の仕方であって生成結果を決める入力ではない。出力先の絶対パスも残さない |
@@ -1308,6 +1313,7 @@ github/gitignore のテンプレートは言語・OS・エディタの生成物�
 | `scripts/on-attach.sh` | そのまま書き出す | — |
 | `scripts/session-coord-hook.sh` | そのまま書き出す | —（`--with-claude` のときだけ生成） |
 | `scripts/session-ledger.sh` | そのまま書き出す | — |
+| `scripts/update-check.sh` | そのまま書き出す | — |
 | `scripts/session-peers.sh` | そのまま書き出す | —（`--with-claude` のときだけ生成） |
 | `scripts/claude-session-wrapper.sh` | そのまま書き出す | —（`--with-claude` のときだけ生成） |
 | `scripts/setup-git-identity.sh` | そのまま書き出す | — |
@@ -1330,6 +1336,20 @@ github/gitignore のテンプレートは言語・OS・エディタの生成物�
 `scripts/confirm-merge-hook.sh` を一致必須の対象へ加えた経緯は、後から写しを足す判断がどう起きるかの一例です。かつてこの開発リポジトリは `.claude/settings.json` を追跡せず、フックを配線できないため写しも置いていませんでした（写しだけを置くと、誰も起動しないスクリプトが `scripts/` とカタログに並ぶためです）。**その後、許可リストを `.claude/settings.local.json` へ分離し、`settings.json` をフックの配線だけにして追跡へ切り替えたため、配線できない理由は成立しなくなりました。** 同テストのコメントが「配線を入れる判断をしたときは写しを置いて一致必須へ移すこと」を要求しており、その手順どおりに移しています。`scripts/check-control-chars.sh` / `scripts/check-table-breaks.sh` / `scripts/check-shell-portability.sh` は、判定がプレースホルダを持たず生成条件に依らず全構成で同一であるため、最初から一致必須の対象として加えています。**移植性の検査はさらに、自分自身を走査対象に含めます**——正本と写しがずれると、同じツリーに対して片方だけが赤くなる形で矛盾するため、一致必須である必要が他の 2 本より強くあります。
 
 この開発リポジトリは `.claude/` 配下の写し（スキル定義・サブエージェント定義）も持ちます。こちらは `tests/test-claude-mirror.sh` が雛形とのバイト一致を照合します。**`scripts/` に照合があって `.claude/` に無かったあいだ、実際に 3 件がドリフトしていました。**
+
+## 新しい版の確認と追従（update-check）
+
+生成した環境が、DCB と ai-playbook の古い版のまま気づかずに使われ続けないようにする仕組みです。生成物の `scripts/update-check.sh` が担い、**既定で有効**です（既存の利用者は次の `--upgrade` から）。
+
+- **確認:** 接続時（`postAttachCommand` の `scripts/on-attach.sh`）に、ORIGIN の版を GitHub の最新の安定版（`releases/latest`。プレリリースを除く。認証なし）と比べ、新しければ通知を 1 行だけ出します。聞きません。`on-attach.sh` は端末の入力を受けられないためです。
+- **聞く:** 対話のシェル（`on-attach.sh` が `~/.bashrc` / `~/.zshrc` へ注入します。端末が付いている対話のシェルで、今いるディレクトリがそのプロジェクトの中のときだけ。差し込みの印はプロジェクトごとです）で「追従しますか？ [y/N]」と聞きます。今の版と最新の版を示し、**「移行」の節がある版を 2 つ以上飛び越えるときは `[注意]` で目立たせます**（最新のタグの配布先の `CHANGELOG.md`（`raw.githubusercontent.com`）を読み、(今の版, 最新] の「## vX.Y.Z」の節のうち「### 移行」を持つ版を数えます。リリースの本文は「Release vX.Y.Z」の 1 行でリリースノートを含まないためです。読めなければ、リリースノートを読む案内に留めます）。複数の端末が同時に開いても、聞く・追従するのは 1 つの端末だけです（`flock`。無い環境ではロックのディレクトリ）。
+- **y のとき:** 新しい版の `bootstrap.sh` と `SHA256SUMS`（リリースの資産）を取得し、**ハッシュを照合してから**、ORIGIN を引き継ぐ `--upgrade` を流します。ai-playbook に新しい版があれば、取得元の種類のまま渡します（`tag` は `--playbook-version`、リリースのタグの tarball の url は、フォークの owner を保ったままの `--playbook-from`）。**y で上げるのは、表示した部品だけです**（N と答えた版は上げません。DCB を上げないときは、今の版の `bootstrap.sh` で追従し、生成物の DCB の版を下げません）。失敗したとき、何も書かれていなければ、切った作業用のブランチを消して元のブランチへ戻します。途中で書かれたファイルがあれば、自動では戻さず（作業ツリー全体を戻すと、ほかの端末での編集まで消しうるため）、作業用のブランチに留まって戻し方（`git restore .` と `git clean -fd`）を案内します。規範の取得元が `adjacent` / `local` / 記録のない url のときは、取得した `bootstrap.sh` からは再現できないので追従せず、手元の `bootstrap.sh` で `--upgrade` する案内に留めます。既定ブランチの上なら先に作業用のブランチ（`chore/update-dcb-<版>`）を切ります。差分を作業ツリーに残して止まり、変わったファイルと次の手順（差分を読む → `scripts/verify.sh` → コミット → PR）を出します。**コミット・push・PR はしません。** 未コミットの変更があるときは、差分が混ざるので追従せずに止めます。照合に通らないときは何も実行しません。
+- **N のとき:** その版のあいだは聞きません（通知も出しません）。さらに新しい版が出れば、また聞きます。
+- **手で追従する:** `bash scripts/update-check.sh upgrade`（最新を問い合わせて、y と同じ処理をします）。
+- **間引きと失敗:** 問い合わせは 1 日 1 回です。失敗した日も数えます。オフライン・API の失敗・制限は黙って通し（短いタイムアウト）、起動を止めません。端末が付いていないシェル（AI エージェント・CI・スクリプト）では何も聞かず、何も出しません。
+- **キャッシュ:** `${XDG_CACHE_HOME:-~/.cache}/dcb-update-check/<プロジェクトごとの鍵>/`。コミットしません。
+- **確認の対象:** ORIGIN の `version=` が `vX.Y.Z` のときの DCB（取得元は `ojos/devcontainer-bootstrap`）。ai-playbook は、取得元が `tag`、またはリリースのタグの tarball の URL（`https://github.com/<owner>/ai-playbook/archive/refs/tags/<版>.tar.gz`）のときだけで、ほかの取得元（`adjacent` / `local` など）は確認しません。ORIGIN が無い、`version=` がリリースの版でない環境（この開発リポジトリを含む）では何もしません。
+- **止め方:** 生成時の `--no-update-check`（ORIGIN に記録し、`--upgrade` で引き継ぎます。戻すのは `--upgrade --update-check`）、または `UPDATE_CHECK=off`（`0` / `false` / `no` / `disabled` も同じ）。環境変数で設定すれば止まります（`.env` が読み込まれても環境の値が優先されます）。`.env` に書くときは、`.env.example` のコメントの行の `#` を外します。
 
 ## Doctor 自己診断
 

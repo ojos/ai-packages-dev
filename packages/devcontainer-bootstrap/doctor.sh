@@ -148,7 +148,7 @@ check_origin_format() {
     case "$line" in
       '#'*) ;;
       version=*|flags=*|inputs-format=*) ;;
-      input:project-name=*|input:languages=*|input:base-image-mode=*|input:base-image=*|input:manage-gitignore=*|input:gitignore-targets=*|input:second-opinion-engine=*|input:claude-remote-control=*|input:playbook=*|input:playbook-source=*|input:playbook-ref=*) ;;
+      input:project-name=*|input:languages=*|input:base-image-mode=*|input:base-image=*|input:manage-gitignore=*|input:gitignore-targets=*|input:second-opinion-engine=*|input:claude-remote-control=*|input:update-check=*|input:playbook=*|input:playbook-source=*|input:playbook-ref=*) ;;
       input:*) bad="$bad [認識できない入力の行: ${line%%=*}]" ;;
       hash:?*=*)
         # sha256 に = は入らないが、パスには入りうる。最後の = で区切る。
@@ -233,6 +233,10 @@ check_origin_format() {
         # 設定を書く行き先は Claude Code を導入する構成だけ。flags= に claude が無ければ不整合。
         flags_v="$(origin_get "$origin_file" flags)" || flags_v=""
         [[ ",$flags_v," == *,claude,* ]] || bad="$bad [input:claude-remote-control があるのに flags= に claude が無い]"
+      fi
+      # 任意の入力。off を記録したときだけ行がある。
+      if v="$(origin_get "$origin_file" input:update-check)"; then
+        [[ "$v" == "off" ]] || bad="$bad [input:update-check が off ではない]"
       fi
       origin_get "$origin_file" input:gitignore-targets >/dev/null || bad="$bad [input:gitignore-targets が無い]"
       playbook="$(origin_get "$origin_file" input:playbook)" || playbook=""

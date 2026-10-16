@@ -6,6 +6,21 @@
 >
 > 同じ理由で、issue 参照は `ojos/ai-packages-dev#NNN` の形で書いてください。裸の `#NNN` は GitHub のオートリンクが**配布先リポジトリの issue** として解決するため、配布後は存在しない issue や無関係な issue を指します。
 
+## 次の版（未リリース）
+
+### Summary
+- **接続時に DCB と ai-playbook の新しい安定版を知らせ、対話のシェルで yes と答えたときだけ `--upgrade` で追従する `scripts/update-check.sh` を足した**（ojos/ai-packages-dev#625）。**既定で有効**。
+  - `on-attach.sh`（接続時）が、ORIGIN の版を GitHub の最新の安定版（`releases/latest`。プレリリースを除く。認証なし・短いタイムアウト）と比べ、新しければ通知を 1 行だけ出す。聞かない。問い合わせは 1 日 1 回で、失敗は黙って通す。
+  - `on-attach.sh` が対話のシェルの rc（`~/.bashrc` / `~/.zshrc`）へ問いかけを注入する。端末が付いている対話のシェルでだけ「追従しますか？ [y/N]」と聞く。AI エージェント・CI・スクリプトのシェルでは何も出ない。N と答えた版は、その版のあいだ聞かない（キャッシュは `${XDG_CACHE_HOME:-~/.cache}/dcb-update-check/` の下。コミットしない）。配布先の `CHANGELOG.md` で移行の節を持つ版を 2 つ以上飛び越えるときは `[注意]` で目立たせる（リリースの本文はリリースノートを含まないため）。複数の端末が同時に開いても、聞く・追従するのは 1 つだけ。rc の差し込みの印はプロジェクトごとで、そのプロジェクトの中のときだけ聞く。
+  - y のとき、新しい `bootstrap.sh` と `SHA256SUMS` を取得して**照合してから**、ORIGIN を引き継ぐ `--upgrade`（ai-playbook は取得元の種類のまま最新の版を渡す。フォークの url はフォークのまま）を流す。y で上げるのは表示した部品だけで、DCB を上げないときは今の版の `bootstrap.sh` を使う。失敗したとき、何も書かれていなければ作業用のブランチを消して戻り、書かれていれば自動では戻さず作業用のブランチに留まって戻し方を案内する。規範の取得元が `adjacent` / `local` のときは追従せず案内に留める。既定ブランチの上なら作業用のブランチを切る。差分を作業ツリーに残して止め、変わったファイルと次の手順を出す。コミット・push・PR はしない。手で追従するときは `bash scripts/update-check.sh upgrade`。
+  - ORIGIN が無い・`version=` がリリースの版（`vX.Y.Z`）でない環境では何もしない。
+  - 止め方として、生成のオプション `--no-update-check`（ORIGIN に `input:update-check=off` を記録し、`--upgrade` で引き継ぐ。戻すのは `--upgrade --update-check`）と、環境変数 `UPDATE_CHECK=off`（環境の値が `.env` より優先される。`.env.example` に説明をコメントで足した）を足した。`doctor.sh` は新しい入力キーを認め、値が `off` であることを確かめる。
+
+### 移行
+- **`bootstrap.sh --upgrade` で追従する。** 新しいファイル `scripts/update-check.sh` が置かれ、`scripts/on-attach.sh` が変わる（`on-attach.sh` に手を入れていれば、`.dcb-new` が置かれる）。`.env.example` に `UPDATE_CHECK` の説明（コメント）が足される（既存の `.env` は書き換えない）。
+- **既定で有効になる。** 接続時に GitHub の API へ 1 日 1 回、認証なしで問い合わせる。使いたくなければ、`--upgrade --no-update-check`、または `UPDATE_CHECK=off`。
+- 追従の `--upgrade` は、作業ツリーに未コミットの変更があるときは実行しない。コミットか退避をしてから。
+
 ## v0.22.1
 
 ### Summary
