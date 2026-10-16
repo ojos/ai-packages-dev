@@ -29,7 +29,7 @@ if [[ -n "$SECTION" ]]; then pass; else fail "節を抽出できなかった"; f
 check() {
   local label="$1" pattern="$2"
   it "$label"
-  if printf '%s\n' "$SECTION" | command grep -qE -- "$pattern"; then pass; else fail "節に見つからない: $pattern"; fi
+  if printf '%s\n' "$SECTION" | command grep -E -- "$pattern" >/dev/null; then pass; else fail "節に見つからない: $pattern"; fi
 }
 
 check "verify.yml を消すと doctor が FAIL になると書いてある" 'verify\.yml.*消すと.*doctor.*FAIL'

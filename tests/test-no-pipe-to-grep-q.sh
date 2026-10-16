@@ -32,9 +32,9 @@ G="gre"
 G="${G}p"
 BAR="|"
 
-# パイプの直後（空白可）の grep が、-q を含む短いオプションの束または --quiet を持つ行。
+# パイプの直後（空白可。`command` を前に置いた形を含む）の grep が、-q を含む短いオプションの束または --quiet を持つ行。
 # `||` の後ろは別のコマンドの連結なので除く（find_offenders 側で前置条件を持つ）。
-PATTERN="[|][[:space:]]*${G}[[:space:]]+(-[A-Za-z]+[[:space:]]+)*(-[A-Za-z]*q|--quiet)"
+PATTERN="[|][[:space:]]*(command[[:space:]]+)?${G}[[:space:]]+(-[A-Za-z]+[[:space:]]+)*(-[A-Za-z]*q|--quiet)"
 
 # find_offenders <ファイル...> — 該当行を「ファイル:行番号:本文」で出す。
 # コメント行と `# bsd-ok:` を付けた行は除く。パイプで折り返した書き方（`x |` の
@@ -84,6 +84,8 @@ tmp="$WORK/fixture.sh"
   printf '%s\n' "x | ${G} -Fxq a"
   printf '%s\n' "x | ${G} -q -- -a"
   printf '%s\n' "x | ${G} --quiet a"
+  printf '%s\n' "x | command ${G} -q a"
+  printf '%s\n' "x | command ${G} -qE 'a|b'"
   printf '%s\n' "x |${G} -q a"
   printf '%s\n' "x |"
   printf '%s\n' "  ${G} -q a"
@@ -91,7 +93,7 @@ tmp="$WORK/fixture.sh"
   printf '%s\n' "  ${G} -qF a"
 } > "$tmp"
 found="$(find_offenders "$tmp" | wc -l | tr -d ' ')"
-if [[ "$found" == "8" ]]; then pass; else fail "8 行を期待したが ${found} 行"; fi
+if [[ "$found" == "10" ]]; then pass; else fail "10 行を期待したが ${found} 行"; fi
 
 it "検出は -q を持たない grep・連結の ||・コメント行・bsd-ok の行を拾わない"
 tmp="$WORK/fixture-ok.sh"
