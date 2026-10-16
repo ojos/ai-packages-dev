@@ -141,14 +141,14 @@ absent_recorded() {
 # （bootstrap.sh --absent が書く、意図して置かない生成物の記録。値は読まない）のどれかであること。
 # 読み飛ばして黙って通さない。
 check_origin_format() {
-  local origin_file="$1" line bad="" v val mode playbook source lang l_rest
+  local origin_file="$1" line bad="" flags_v v val mode playbook source lang l_rest
   # 最終行が改行で終わっていなくても検査する。
   while IFS= read -r line || [[ -n "$line" ]]; do
     [[ -n "$line" ]] || continue
     case "$line" in
       '#'*) ;;
       version=*|flags=*|inputs-format=*) ;;
-      input:project-name=*|input:languages=*|input:base-image-mode=*|input:base-image=*|input:manage-gitignore=*|input:gitignore-targets=*|input:second-opinion-engine=*|input:playbook=*|input:playbook-source=*|input:playbook-ref=*) ;;
+      input:project-name=*|input:languages=*|input:base-image-mode=*|input:base-image=*|input:manage-gitignore=*|input:gitignore-targets=*|input:second-opinion-engine=*|input:claude-remote-control=*|input:playbook=*|input:playbook-source=*|input:playbook-ref=*) ;;
       input:*) bad="$bad [認識できない入力の行: ${line%%=*}]" ;;
       hash:?*=*)
         # sha256 に = は入らないが、パスには入りうる。最後の = で区切る。
@@ -227,6 +227,12 @@ check_origin_format() {
       # 任意の入力。行があるときだけ、値が既知のエンジンであることを確かめる。
       if v="$(origin_get "$origin_file" input:second-opinion-engine)"; then
         case "$v" in gemini|antigravity|codex) ;; *) bad="$bad [input:second-opinion-engine が gemini / antigravity / codex ではない]" ;; esac
+      fi
+      if v="$(origin_get "$origin_file" input:claude-remote-control)"; then
+        [[ "$v" == "true" ]] || bad="$bad [input:claude-remote-control が true ではない]"
+        # 設定を書く行き先は Claude Code を導入する構成だけ。flags= に claude が無ければ不整合。
+        flags_v="$(origin_get "$origin_file" flags)" || flags_v=""
+        [[ ",$flags_v," == *,claude,* ]] || bad="$bad [input:claude-remote-control があるのに flags= に claude が無い]"
       fi
       origin_get "$origin_file" input:gitignore-targets >/dev/null || bad="$bad [input:gitignore-targets が無い]"
       playbook="$(origin_get "$origin_file" input:playbook)" || playbook=""
