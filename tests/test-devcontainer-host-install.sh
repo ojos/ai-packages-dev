@@ -753,9 +753,10 @@ found="$( { printf '%s\n' "$region" | sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\)() {$
 listed="$(printf '%s\n' $COPIED_FUNCS $COPIED_VARS | sort -u)"
 assert_same_set "$found" "$listed" "install.sh の写しの区間" "写しの一覧"
 
+# dev.sh の SEMVER_RE の使用は 3 か所: self-update の --version、self-update のマニフェストの版、新しい版の知らせ（maybe_offer_update）の最新の版。
 it "dev.sh の self-update と install.sh が、置き換え先の確認（dev_target_refusal）と版の形（SEMVER_RE）を使っている"
 if grep -q 'dev_target_refusal "\$self"' "$DEV_SH" && grep -q 'dev_target_refusal "\$bin_path"' "$INSTALL" \
-   && [[ "$(grep -c '=~ \$SEMVER_RE' "$DEV_SH")" == "2" && "$(grep -c '=~ \$SEMVER_RE' "$INSTALL")" == "2" ]]; then
+   && [[ "$(grep -c '=~ \$SEMVER_RE' "$DEV_SH")" == "3" && "$(grep -c '=~ \$SEMVER_RE' "$INSTALL")" == "2" ]]; then
   pass
 else
   fail "どちらかが、写しを使わず独自の条件を持っている"

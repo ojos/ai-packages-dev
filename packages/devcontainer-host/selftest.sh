@@ -34,6 +34,7 @@
 #   （コンテナの状態は 1 行 1 つで「パス<TAB>ID<TAB>状態<TAB>compose のプロジェクト（任意）」）
 # - curl: `-fsSL <URL> -o <出力先>` だけ。リリースの取得先（devcontainer-host の latest/download か download/v*）以外の URL は落とす
 #   （ネットワークには出ない。URL の末尾のファイル名で、試験が用意したファイルを写す。-f の失敗は 22）
+# - curl（devhost の最新の版）: `-sSL ... <https://api.github.com/repos/ojos/devcontainer-host/releases/latest>`。FAKE_DH_LATEST の JSON を 200 で返す（未設定は 404。FAKE_DH_LATEST_FAIL / FAKE_API_NETFAIL で失敗）。認証を付けたら落とす
 # - docker（ランナー用）: `image inspect <イメージ>`（FAKE_IMAGE_MISSING=1 で無い）、`build -t <名前> -`（標準入力を $FAKE_STATE/build-stdin へ写す）、
 #   `rm -f <名前>`、`run ...`（**環境変数の一覧を $FAKE_STATE/run-env へ書く**。FAKE_RUN_SIGNAL=TERM で親へ TERM を送って 143 で抜ける
 #   ＝ユニットを止められた状況。FAKE_RUN_EXIT で抜ける終了コードを変える）。他の形は落とす
@@ -98,6 +99,9 @@ log_call() {
   local a
   for a in "$@"; do line="$line [$a]"; done
   printf '%s\n' "$line" >>"$FAKE_LOG"
+  # 版の知らせのロックの記述子（8）を引き継いで起動されたら記録する（tmux などへ漏れると、ロックが持たれ続けるため）。
+  # 問い合わせの curl は、ロックを持っているあいだに走って終わるだけなので数えない。
+  if [[ "${0##*/}" != curl && -e "/proc/$$/fd/8" ]]; then printf '%s\n' "${0##*/} $1" >>"$FAKE_STATE/fd8-leak"; fi
 }
 # コンテナの状態: 1 行 1 つで「ワークスペースのパス<TAB>ID<TAB>状態」。
 STATE_FILE="$FAKE_STATE/containers"
@@ -571,6 +575,23 @@ if [[ "${*: -1}" == "https://api.github.com/repos/actions/runner/releases?per_pa
   printf '%s\n%s' "${FAKE_RELEASES:-$default_releases}" 200
   exit 0
 fi
+if [[ "${*: -1}" == "https://api.github.com/repos/ojos/devcontainer-host/releases/latest" ]]; then
+  # devhost の最新の安定版（dev up / attach の知らせ。PAT を付けない）。FAKE_DH_LATEST は JSON（未設定は 404）。
+  # FAKE_DH_LATEST_FAIL=500 は HTTP エラー。FAKE_API_NETFAIL=1 は通信の失敗。
+  [[ "$*" != *Authorization* ]] || { echo "fake curl: 公開 API に認証を付けてはなりません: $*" >&2; exit 2; }
+  if [[ "${FAKE_API_NETFAIL:-}" == "1" ]]; then
+    echo "curl: (6) Could not resolve host: api.github.com" >&2
+    exit 6
+  fi
+  if [[ -n "${FAKE_DH_LATEST_FAIL:-}" ]]; then
+    printf '%s\n%s' '{"message":"error"}' "$FAKE_DH_LATEST_FAIL"
+  elif [[ -n "${FAKE_DH_LATEST:-}" ]]; then
+    printf '%s\n%s' "$FAKE_DH_LATEST" 200
+  else
+    printf '%s\n%s' '{"message":"Not Found"}' 404
+  fi
+  exit 0
+fi
 if [[ "${2:-}" == "-K" ]]; then
   # API。設定（PAT のヘッダ）は標準入力から来る。本物の `-w '\n%{http_code}'` に合わせ、本文の後に HTTP ステータスを出す
   # （-f を付けないので、HTTP エラーでも curl 自身は 0 で抜ける）。
@@ -723,6 +744,14 @@ if [[ "${2:-}" == "-K" ]]; then
   printf '%s\n%s' "$body" "$code"
   exit 0
 fi
+if [[ "${2:-}" == https://raw.githubusercontent.com/ojos/devcontainer-host/v*/CHANGELOG.md ]]; then
+  # 版の知らせが読む配布先の CHANGELOG.md（-fsSL <URL> -o <ファイル> -m 5 --connect-timeout 2）。FAKE_DH_CHANGELOG のファイルを写す。
+  # 未設定なら 404 相当（-f で 22）。
+  [[ "$1" == "-fsSL" && "$3" == "-o" ]] || { echo "fake curl: 想定外の CHANGELOG の取得: $*" >&2; exit 2; }
+  [[ -n "${FAKE_DH_CHANGELOG:-}" ]] || { echo "curl: (22) The requested URL returned error: 404" >&2; exit 22; }
+  cp "$FAKE_DH_CHANGELOG" "$4"
+  exit 0
+fi
 [[ $# -eq 4 && "$1" == "-fsSL" && "$3" == "-o" ]] || { echo "fake curl: 想定外の呼び出し: $*" >&2; exit 2; }
 case "$2" in
   https://github.com/ojos/devcontainer-host/releases/latest/download/* | https://github.com/ojos/devcontainer-host/releases/download/v*/*) ;;
@@ -801,7 +830,7 @@ run() {
     DEV_PROJECTS_FILE="${T_CONF:-$CONF}" FAKE_LOG="$LOG" FAKE_STATE="$STATE" \
     DEV_PROC_ROOT="$WORK/proc" DEV_CGROUP_ROOT="$WORK/cg" \
     ${envs[@]+"${envs[@]}"} \
-    "$BASH_BIN" "$DEV" "$@" >"$OUT" 2>"$ERR" </dev/null || code=$?
+    "$BASH_BIN" "$DEV" "$@" >"$OUT" 2>"$ERR" <"${RUN_STDIN:-/dev/null}" || code=$?
   if [[ "$code" != "$want" ]]; then
     ng "$name: 終了コード want $want got $code"
     sed 's/^/    stderr: /' "$ERR" >&2
@@ -1827,6 +1856,224 @@ expect_no_calls
 run 0 "rebuild の説明にユニットの扱いがある" -- -- help rebuild
 expect_out_line 'ユニット dev-up@<名前> が inactive / failed / unknown（ユニットを入れていない）でなければ止める'
 expect_out_line '3 が失敗しても、INT / HUP / TERM で中断されても'
+
+# ── 6d'. 新しい版の知らせ（dev up / dev attach） ─────────────────────────────
+# 端末が付いているときだけ聞く。試験では端末を付けられないので、DEV_UPDATE_CHECK_FORCE_TTY=1 で端末の判定だけを差し替え、
+# 答えは標準入力（RUN_STDIN のファイル）から渡す。キャッシュは HOME の下（$WORK/home/.cache/dev/update-check）。
+UREL="$WORK/urelease"
+UCSTATE="$WORK/home/.cache/dev/update-check"
+mkdir -p "$UREL"
+# shellcheck disable=SC2016 # 偽の install.sh の本文。ここでは展開しない（実行時に展開される）
+printf '%s\n' '#!/usr/bin/env bash' 'echo "$*" >"$FAKE_STATE/install-args"' >"$UREL/install.sh"
+uc_sum="$($sum_cmd "$UREL/install.sh" | awk '{ print $1 }')"
+write_uc_manifest() { printf '{\n  "package": "devcontainer-host",\n  "version": "99.0.0",\n  "checksums": {\n    "install.sh": "%s"\n  }\n}\n' "$1" >"$UREL/RELEASE-MANIFEST.json"; }
+write_uc_manifest "$uc_sum"
+UAPI="https://api.github.com/repos/ojos/devcontainer-host/releases/latest"
+NOTES_MIG='### Summary\n- 変更\n\n### 移行\n- 手作業が要る'
+NOTES_NONE='### Summary\n- 変更'
+uc_latest() { printf '{"tag_name":"%s","prerelease":%s,"draft":false,"body":"%s"}' "$1" "${2:-false}" "${3:-$NOTES_NONE}"; }
+# 配布先の CHANGELOG.md（版の知らせが「移行」の節を探す）。CL_MIG は、途中の版 v50.0.0 に「移行」があり、今より古い v0.0.1 の「移行」は数えない形。
+CL_NONE="$WORK/changelog-none.md"
+CL_MIG="$WORK/changelog-mig.md"
+printf '%s\n' '# devcontainer-host Release Notes' '## v99.0.0' '### Summary' '- 変更' '## v0.0.1' '### Summary' >"$CL_NONE"
+printf '%s\n' '# devcontainer-host Release Notes' '## v99.0.0' '### Summary' '- 変更' '## v50.0.0' '### Summary' '### 移行' '- 手作業' '## v0.0.1' '### 移行' '- 古い' >"$CL_MIG"
+# install.sh が置く ~/.local/bin/dev から動いている形にする（別の場所の dev からは追従しない）。
+mkdir -p "$WORK/home/.local/bin"
+: >"$WORK/home/.local/bin/dev"
+UC_TTY=(DEV_UPDATE_CHECK_FORCE_TTY=1 FAKE_CURL_DIR="$UREL" FAKE_DH_CHANGELOG="$CL_NONE" DEV_SELF_PATH="$WORK/home/.local/bin/dev")
+printf 'y\n' >"$WORK/ans-y"
+printf 'n\n' >"$WORK/ans-n"
+uc_reset() { rm -f "$UCSTATE"; rm -f "$STATE/install-args" "$WORK/uc-off"; }
+uc_asked() { grep -qF "追従しますか" "$ERR"; }
+expect_asked() { uc_asked || { ng "$CUR: 追従の質問が出ていません"; sed 's/^/    stderr: /' "$ERR" >&2; }; }
+expect_not_asked() { if uc_asked; then ng "$CUR: 質問が出ないはずが出ています"; fi; }
+expect_attached() { expect_log_has "tmux [new-session] [-A] [-s] [main]"; }
+expect_api_called() { expect_log_has "$UAPI"; }
+expect_api_not_called() { expect_log_lacks "$UAPI"; }
+
+reset_state
+run 0 "知らせ: 仕込み（up alpha。端末なし）" -- -- up alpha
+expect_log_lacks "$UAPI"
+uc_reset
+
+# 端末なし（既定の試験の呼び出しと同じ）: 何も聞かず、何も取得せず、何も出さない。
+RUN_STDIN="$WORK/ans-y" run 0 "知らせ: 端末なしの attach は何もしない" -- FAKE_CURL_DIR="$UREL" FAKE_DH_LATEST="$(uc_latest v99.0.0)" -- attach alpha
+expect_api_not_called
+expect_not_asked
+expect_attached
+[[ ! -e "$UCSTATE" ]] || ng "知らせ: 端末なしでキャッシュを書いています"
+RUN_STDIN="$WORK/ans-y" run 0 "知らせ: 端末なしの up も何もしない" -- FAKE_CURL_DIR="$UREL" FAKE_DH_LATEST="$(uc_latest v99.0.0)" -- up alpha
+expect_api_not_called
+expect_not_asked
+# 端末が付いていても、dev supervise からは聞かない。
+RUN_STDIN="$WORK/ans-y" run 1 "知らせ: supervise は端末の判定が通っても聞かない" -- "${UC_TTY[@]}" FAKE_DH_LATEST="$(uc_latest v99.0.0)" FAKE_WAIT_CODE=0 -- supervise alpha
+expect_api_not_called
+expect_not_asked
+run 0 "知らせ: 仕込み（supervise が止めたコンテナを起こし直す。端末なし）" -- -- up alpha
+
+# 新しい版あり + n: 今の版・最新の版を示し、attach は続け、N を記録する。
+uc_reset
+RUN_STDIN="$WORK/ans-n" run 0 "知らせ: 新しい版があれば聞く（n）" -- "${UC_TTY[@]}" DEV_UPDATE_CHECK_TODAY=2026-10-16 FAKE_DH_LATEST="$(uc_latest v99.0.0)" -- attach alpha
+expect_api_called
+expect_asked
+expect_err "今 $(bash "$DEV" version | awk '{ print $2 }') → 最新 v99.0.0"
+expect_attached
+[[ ! -e "$STATE/install-args" ]] || ng "知らせ: n なのに install.sh を実行しています"
+expect_log_lacks "install.sh"
+grep -qx 'declined=v99.0.0' "$UCSTATE" || ng "知らせ: N の版を記録していません"
+if [[ -s "$STATE/fd8-leak" ]]; then ng "知らせ: ロックの記述子（8）が、あとに起動する道具へ漏れています: $(tr '\n' ' ' <"$STATE/fd8-leak")"; fi
+expect_err "「移行」の節はありません"
+# 1 日 1 回: 同じ日にもう一度打っても、問い合わせない。
+RUN_STDIN="$WORK/ans-y" run 0 "知らせ: 同じ日は問い合わせない（1 日 1 回）" -- "${UC_TTY[@]}" DEV_UPDATE_CHECK_TODAY=2026-10-16 FAKE_DH_LATEST="$(uc_latest v99.0.0)" -- attach alpha
+expect_api_not_called
+expect_not_asked
+expect_attached
+# 次の日: 問い合わせるが、N と答えた版は聞かない。
+RUN_STDIN="$WORK/ans-y" run 0 "知らせ: 次の日は問い合わせるが、N の版は聞かない" -- "${UC_TTY[@]}" DEV_UPDATE_CHECK_TODAY=2026-10-17 FAKE_DH_LATEST="$(uc_latest v99.0.0)" -- attach alpha
+expect_api_called
+expect_not_asked
+[[ ! -e "$STATE/install-args" ]] || ng "知らせ: N の版で install.sh を実行しています"
+grep -qx 'declined=v99.0.0' "$UCSTATE" || ng "知らせ: 問い合わせの後に N の記録が消えています"
+# さらに新しい版が出たら、また聞く。
+RUN_STDIN="$WORK/ans-n" run 0 "知らせ: さらに新しい版が出たらまた聞く" -- "${UC_TTY[@]}" DEV_UPDATE_CHECK_TODAY=2026-10-18 FAKE_DH_LATEST="$(uc_latest v99.1.0)" -- attach alpha
+expect_asked
+grep -qx 'declined=v99.1.0' "$UCSTATE" || ng "知らせ: 新しい版の N を記録していません"
+
+# 新しい版なし（同じ版・古い版）・プレリリース: 聞かない。
+cur_ver="$(bash "$DEV" version | awk '{ print $2 }')"
+uc_reset
+RUN_STDIN="$WORK/ans-y" run 0 "知らせ: 同じ版なら聞かない" -- "${UC_TTY[@]}" DEV_UPDATE_CHECK_TODAY=2026-10-16 FAKE_DH_LATEST="$(uc_latest "$cur_ver")" -- attach alpha
+expect_api_called
+expect_not_asked
+expect_attached
+uc_reset
+RUN_STDIN="$WORK/ans-y" run 0 "知らせ: 古い版なら聞かない" -- "${UC_TTY[@]}" DEV_UPDATE_CHECK_TODAY=2026-10-16 FAKE_DH_LATEST="$(uc_latest v0.0.1)" -- attach alpha
+expect_not_asked
+uc_reset
+RUN_STDIN="$WORK/ans-y" run 0 "知らせ: プレリリースは聞かない" -- "${UC_TTY[@]}" DEV_UPDATE_CHECK_TODAY=2026-10-16 FAKE_DH_LATEST="$(uc_latest v99.0.0 true)" -- attach alpha
+expect_not_asked
+expect_attached
+
+# API の失敗・通信の失敗・読めない応答: 黙って通す（attach は続く。1 日 1 回には数える）。
+uc_reset
+RUN_STDIN="$WORK/ans-y" run 0 "知らせ: API が HTTP エラーなら黙って通す" -- "${UC_TTY[@]}" DEV_UPDATE_CHECK_TODAY=2026-10-16 FAKE_DH_LATEST_FAIL=500 -- attach alpha
+expect_api_called
+expect_not_asked
+expect_attached
+[[ ! -s "$ERR" ]] || { ng "知らせ: API の失敗で標準エラーに出力しています"; sed 's/^/    stderr: /' "$ERR" >&2; }
+grep -qx 'checked=2026-10-16' "$UCSTATE" || ng "知らせ: 失敗した日を 1 日 1 回に数えていません"
+uc_reset
+RUN_STDIN="$WORK/ans-y" run 0 "知らせ: 通信の失敗なら黙って通す" -- "${UC_TTY[@]}" DEV_UPDATE_CHECK_TODAY=2026-10-16 FAKE_API_NETFAIL=1 -- attach alpha
+expect_not_asked
+expect_attached
+[[ ! -s "$ERR" ]] || ng "知らせ: 通信の失敗で標準エラーに出力しています"
+uc_reset
+RUN_STDIN="$WORK/ans-y" run 0 "知らせ: 版を読めない応答なら黙って通す" -- "${UC_TTY[@]}" DEV_UPDATE_CHECK_TODAY=2026-10-16 FAKE_DH_LATEST='{"tag_name":"not-a-version"}' -- attach alpha
+expect_not_asked
+expect_attached
+uc_reset
+RUN_STDIN="$WORK/ans-y" run 0 "知らせ: 本文が JSON でない応答なら黙って通す" -- "${UC_TTY[@]}" DEV_UPDATE_CHECK_TODAY=2026-10-16 FAKE_DH_LATEST='<html>' -- attach alpha
+expect_not_asked
+expect_attached
+
+# 止める設定: 環境変数・設定ファイル。どちらも問い合わせ自体をしない。
+uc_reset
+RUN_STDIN="$WORK/ans-y" run 0 "知らせ: DEV_UPDATE_CHECK=off で止まる" -- "${UC_TTY[@]}" DEV_UPDATE_CHECK=off FAKE_DH_LATEST="$(uc_latest v99.0.0)" -- attach alpha
+expect_api_not_called
+expect_not_asked
+expect_attached
+printf '# 新しい版の知らせを止める\n  off  # 理由\n' >"$WORK/uc-off"
+RUN_STDIN="$WORK/ans-y" run 0 "知らせ: 設定ファイルの off で止まる" -- "${UC_TTY[@]}" DEV_UPDATE_CHECK_FILE="$WORK/uc-off" FAKE_DH_LATEST="$(uc_latest v99.0.0)" -- up alpha
+expect_api_not_called
+expect_not_asked
+RUN_STDIN="$WORK/ans-n" run 0 "知らせ: 環境変数が設定ファイルより優先する（on 側）" -- "${UC_TTY[@]}" DEV_UPDATE_CHECK=on DEV_UPDATE_CHECK_FILE="$WORK/uc-off" FAKE_DH_LATEST="$(uc_latest v99.0.0)" -- attach alpha
+expect_asked
+printf '# 止めていない\n' >"$WORK/uc-off"
+uc_reset
+RUN_STDIN="$WORK/ans-n" run 0 "知らせ: 設定ファイルに off が無ければ止まらない" -- "${UC_TTY[@]}" DEV_UPDATE_CHECK_FILE="$WORK/uc-off" FAKE_DH_LATEST="$(uc_latest v99.0.0)" -- attach alpha
+expect_asked
+
+# 答えが来ない（入力の終端）: N とみなして先へ進むが、N の版としては記録しない（次の日にまた聞く）。
+uc_reset
+run 0 "知らせ: 答えが来なければ先へ進み、N は記録しない" -- "${UC_TTY[@]}" DEV_UPDATE_CHECK_TODAY=2026-10-16 FAKE_DH_LATEST="$(uc_latest v99.0.0)" -- attach alpha
+expect_asked
+expect_attached
+if grep -q declined "$UCSTATE"; then ng "知らせ: 答えていないのに N を記録しています"; fi
+[[ ! -e "$STATE/install-args" ]] || ng "知らせ: 答えが無いのに install.sh を実行しています"
+
+# y: 「移行」の節がある版は目立たせる。最新の版のマニフェストと install.sh を取得し、照合してから install.sh --version <最新> を呼ぶ。
+uc_reset
+RUN_STDIN="$WORK/ans-y" run 0 "知らせ: y なら照合済みの install.sh を呼び、attach は続ける" -- "${UC_TTY[@]}" FAKE_DH_CHANGELOG="$CL_MIG" DEV_UPDATE_CHECK_TODAY=2026-10-16 FAKE_DH_LATEST="$(uc_latest v99.0.0 false "$NOTES_MIG")" -- attach alpha
+expect_asked
+expect_err "★★ 移行の手順のある版を含みます（v50.0.0）"
+expect_log_has "curl [-fsSL] [$RELEASES/download/v99.0.0/RELEASE-MANIFEST.json] [-o]"
+expect_log_has "curl [-fsSL] [$RELEASES/download/v99.0.0/install.sh] [-o]"
+[[ "$(cat "$STATE/install-args" 2>/dev/null)" == "--version v99.0.0" ]] || ng "知らせ: install.sh が --version v99.0.0 で呼ばれていません: $(cat "$STATE/install-args" 2>/dev/null)"
+expect_err "dev restart <名前>"
+expect_err "dev runner build"
+expect_err "systemctl --user restart"
+expect_attached
+# up でも同じ。
+uc_reset
+RUN_STDIN="$WORK/ans-y" run 0 "知らせ: dev up でも y で追従して up を続ける" -- "${UC_TTY[@]}" DEV_UPDATE_CHECK_TODAY=2026-10-16 FAKE_DH_LATEST="$(uc_latest v99.0.0)" -- up alpha
+[[ "$(cat "$STATE/install-args" 2>/dev/null)" == "--version v99.0.0" ]] || ng "知らせ: up で install.sh が呼ばれていません"
+expect_log_has "devcontainer [up] [--workspace-folder] [$A]"
+# 本文が空なら、移行の節を判定できないと伝える。
+uc_reset
+RUN_STDIN="$WORK/ans-n" run 0 "知らせ: CHANGELOG.md を読めなければ判定できないと伝える" -- "${UC_TTY[@]}" FAKE_DH_CHANGELOG= DEV_UPDATE_CHECK_TODAY=2026-10-16 FAKE_DH_LATEST='{"tag_name":"v99.0.0","prerelease":false,"draft":false}' -- attach alpha
+expect_err "移行の節があるかは判定できませんでした"
+# ~/.local/bin/dev ではない dev からは追従しない（install.sh が置くのは ~/.local/bin/dev だけなので、この dev は古いまま残る）。
+uc_reset
+RUN_STDIN="$WORK/ans-y" run 0 "知らせ: ~/.local/bin/dev ではない dev からは追従せず、手順を案内する" -- "${UC_TTY[@]}" DEV_SELF_PATH="$WORK/elsewhere-dev" DEV_UPDATE_CHECK_TODAY=2026-10-16 FAKE_DH_LATEST="$(uc_latest v99.0.0)" -- attach alpha
+expect_err "ここからは追従しません"
+expect_not_asked
+if grep -q '^declined=' "$UCSTATE" 2>/dev/null; then ng "知らせ: 聞いていないのに N の記録（declined）を付けています"; fi
+[[ ! -e "$STATE/install-args" ]] || ng "知らせ: 別の場所の dev なのに install.sh を実行しています"
+expect_attached
+# 同時に打った dev up / dev attach は、ロックを取れたほうだけが確かめる（取れなければ黙って先へ進む）。
+uc_reset
+mkdir -p "$(dirname "$UCSTATE")"
+exec 9>>"$UCSTATE.lock"
+if command -v flock >/dev/null 2>&1 && flock -n 9; then
+  RUN_STDIN="$WORK/ans-y" run 0 "知らせ: もう一方がロックを持っていれば、問い合わせずに先へ進む" -- "${UC_TTY[@]}" DEV_UPDATE_CHECK_TODAY=2026-10-16 FAKE_DH_LATEST="$(uc_latest v99.0.0)" -- attach alpha
+  expect_api_not_called
+  expect_not_asked
+  expect_attached
+  flock -u 9
+fi
+exec 9>&-
+# CHANGELOG.md に最新の版の節が無ければ、「移行は無い」と言わず、判定できないと伝える。
+CL_STALE="$WORK/changelog-stale.md"
+printf '%s\n' '## v50.0.0' '### Summary' >"$CL_STALE"
+uc_reset
+RUN_STDIN="$WORK/ans-n" run 0 "知らせ: CHANGELOG.md に最新の版の節が無ければ判定できないと伝える" -- "${UC_TTY[@]}" FAKE_DH_CHANGELOG="$CL_STALE" DEV_UPDATE_CHECK_TODAY=2026-10-16 FAKE_DH_LATEST="$(uc_latest v99.0.0)" -- attach alpha
+expect_err "移行の節があるかは判定できませんでした"
+# 止める値は大文字・小文字を区別しない。
+uc_reset
+RUN_STDIN="$WORK/ans-y" run 0 "知らせ: DEV_UPDATE_CHECK=OFF（大文字）でも止まる" -- "${UC_TTY[@]}" DEV_UPDATE_CHECK=OFF FAKE_DH_LATEST="$(uc_latest v99.0.0)" -- attach alpha
+expect_not_asked
+expect_api_not_called
+# 失敗の理由をキャッシュに残す（黙って通すが、痕跡は残す）。
+uc_reset
+RUN_STDIN="$WORK/ans-y" run 0 "知らせ: API の失敗の理由をキャッシュに残す" -- "${UC_TTY[@]}" DEV_UPDATE_CHECK_TODAY=2026-10-16 FAKE_DH_LATEST_FAIL=500 -- attach alpha
+grep -q '^last_error=HTTP 500' "$UCSTATE" || ng "知らせ: 失敗の理由（last_error）を残していません"
+expect_not_asked
+
+# 照合が合わなければ install.sh を実行しない（attach は続く）。
+uc_reset
+write_uc_manifest "$zero_sum"
+RUN_STDIN="$WORK/ans-y" run 0 "知らせ: install.sh のハッシュが合わなければ実行しない" -- "${UC_TTY[@]}" DEV_UPDATE_CHECK_TODAY=2026-10-16 FAKE_DH_LATEST="$(uc_latest v99.0.0)" -- attach alpha
+expect_err "install.sh のハッシュがマニフェストと合わない"
+[[ ! -e "$STATE/install-args" ]] || ng "知らせ: ハッシュが合わないのに install.sh を実行しています"
+expect_attached
+write_uc_manifest "$uc_sum"
+# 取得に失敗したら実行しない（attach は続く）。
+uc_reset
+RUN_STDIN="$WORK/ans-y" run 0 "知らせ: 取得に失敗したら実行しない" -- "${UC_TTY[@]}" FAKE_CURL_FAIL=1 DEV_UPDATE_CHECK_TODAY=2026-10-16 FAKE_DH_LATEST="$(uc_latest v99.0.0)" -- attach alpha
+expect_err "取得できないので、追従しません"
+[[ ! -e "$STATE/install-args" ]] || ng "知らせ: 取得に失敗したのに install.sh を実行しています"
+expect_attached
+uc_reset
 
 # ── 6e. README の「コマンドの説明」と dev help の照合 ─────────────────────────
 # README の各サブコマンドのブロック（### dev <名前> の次の ```text ... ```）が dev help <名前> の

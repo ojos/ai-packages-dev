@@ -507,6 +507,26 @@ compose のサービスに `restart: always` があると、`dev disable` で止
 同じ内容を端末で `dev help <サブコマンド>` として読めます（説明文の正本は `dev.sh` で、
 下のブロックは `dev help <サブコマンド>` の出力をそのまま載せたものです。`selftest.sh` が一致を照合します）。
 
+## 新しい版の知らせ
+
+`dev up` と `dev attach` は、**端末が付いているとき（標準入力・標準出力・標準エラーのすべてが端末）だけ**、devhost の新しい安定版が出ていないか調べ、あれば追従するか聞きます。
+キーボードの入力を受けられない場面（`dev supervise`・systemd のユニット・スクリプト・AI エージェントの呼び出し）では、何も聞かず、何も出さず、何も取得しません。
+
+- 調べるのは GitHub の最新の安定版（`https://api.github.com/repos/ojos/devcontainer-host/releases/latest`。プレリリースを除く）です。認証なしの公開 API を、数秒のタイムアウトで 1 回読みます。
+  今の `dev`（`dev version`）より新しければ、今の版と最新の版を示して「追従しますか？ [y/N]」と聞きます。
+  そのとき、配布先の `CHANGELOG.md`（最新の版のもの）を読み、今の版の次から最新の版までに「移行」の節を持つ版があれば、その版を挙げて目立たせます
+  （公開しているリリースの本文はリリースノートを含まないため）。読み取れなければ、判定できないと伝えてリリースノートへ案内します。
+- **問い合わせは 1 日 1 回**です（失敗した日も 1 回に数えます）。N と答えた版は、その版のあいだ聞きません。記録は `~/.cache/dev/update-check`（`XDG_CACHE_HOME` があればその下）で、コミットしません。
+  オフライン・API の失敗・制限は黙って通し、`attach` / `up` を止めません。最後の失敗の理由は、同じファイルの `last_error=` に残します。
+- **追従するのは `~/.local/bin/dev` の `dev` からだけ**です（`install.sh` がそこへ置くため）。ほかの場所の `dev` からは、知らせと手順の案内だけを出します。
+- **y のとき**は、その最新の版の `RELEASE-MANIFEST.json` と `install.sh` を取得し、`install.sh` のハッシュをマニフェストと照合して、通ったときだけ `bash install.sh --version <最新の版>` を実行します
+  （「install.sh で入れる」と同じ照合。残りの資産は `install.sh` が照合します）。照合が通らなければ実行せず、元の処理を続けます。
+  動いているユニットの起こし直し（`dev restart <名前>`・`dev runner build`・`systemctl --user restart`）は案内だけで、自動では行いません。
+  追従したあとも、**今回の `up` / `attach` は更新前の `dev` のまま続けます**（`install.sh` は `dev` を `mv` で置き換えるので、動いているプロセスは壊れません）。入り直せば新しい `dev` になります。
+- **止め方**は次の 2 つです。環境変数が設定ファイルより優先します。
+  - 環境変数 `DEV_UPDATE_CHECK=off`（`0` / `no` / `false` も同じ。大文字・小文字は区別しない）
+  - 設定ファイル `~/.config/dev/update-check`（`XDG_CONFIG_HOME` があればその下。`DEV_UPDATE_CHECK_FILE` で差し替えられる）に、`off` と 1 行書く（`#` 以降はコメント）
+
 ## コマンドの説明
 
 ### dev ls
@@ -536,6 +556,15 @@ dev up — devcontainer を起こす（在れば何もしない）。
 
 devcontainer up --workspace-folder <パス> を呼ぶ。作り直しはしない（作り直すときは dev rebuild）。
 
+新しい版の知らせ（端末が付いているときだけ）:
+  標準入力と標準出力の両方が端末のとき、devhost の最新の安定版（GitHub の latest。プレリリースを除く）を認証なしで調べ、
+  今の dev より新しければ「追従しますか？ [y/N]」と聞く。リリースノートに「移行」の節がある版は目立たせる。
+  y なら RELEASE-MANIFEST.json と install.sh を取得し、install.sh のハッシュを照合してから bash install.sh --version <版> を実行する
+  （動いているユニットの起こし直しは案内だけ）。この処理は更新前の dev のまま続ける。
+  問い合わせは 1 日 1 回、N と答えた版はその版のあいだ聞かない（記録は ~/.cache/dev/update-check。XDG_CACHE_HOME があればその下）。
+  オフライン・API の失敗は黙って通す（タイムアウトは数秒）。端末が付いていない呼び出し（スクリプト・AI エージェント・dev supervise）では何もしない。
+  止め方: 環境変数 DEV_UPDATE_CHECK=off、または ~/.config/dev/update-check（XDG_CONFIG_HOME があればその下）の 1 行 off。
+
 終了コード: 0 = 成功 / 1 = 起動の失敗 / 2 = 使い方か設定ファイルの誤り（未登録の名前を含む）
 失敗したとき: 経過の出力を読む。コンテナが戻らないときは dev doctor <名前>。
 ```
@@ -551,6 +580,15 @@ dev attach — コンテナの中の tmux に入る（無ければ作る）。
 devcontainer exec で tmux new-session -A -s <セッション名> を呼ぶ。セッション名の既定は main で、
 設定ファイルの tmux_session=<名前> で変えられる。コンテナは起こさない（ユニットが起こし直している
 最中に 2 本目の up を重ねないため）。
+
+新しい版の知らせ（端末が付いているときだけ）:
+  標準入力と標準出力の両方が端末のとき、devhost の最新の安定版（GitHub の latest。プレリリースを除く）を認証なしで調べ、
+  今の dev より新しければ「追従しますか？ [y/N]」と聞く。リリースノートに「移行」の節がある版は目立たせる。
+  y なら RELEASE-MANIFEST.json と install.sh を取得し、install.sh のハッシュを照合してから bash install.sh --version <版> を実行する
+  （動いているユニットの起こし直しは案内だけ）。この処理は更新前の dev のまま続ける。
+  問い合わせは 1 日 1 回、N と答えた版はその版のあいだ聞かない（記録は ~/.cache/dev/update-check。XDG_CACHE_HOME があればその下）。
+  オフライン・API の失敗は黙って通す（タイムアウトは数秒）。端末が付いていない呼び出し（スクリプト・AI エージェント・dev supervise）では何もしない。
+  止め方: 環境変数 DEV_UPDATE_CHECK=off、または ~/.config/dev/update-check（XDG_CONFIG_HOME があればその下）の 1 行 off。
 
 終了コード: 0 = 成功 / 1 = コンテナが動いていない、または中へ入れなかった・セッションが異常終了した
             （この 2 つは区別できない。元の終了コードは案内の文面に出す） / 2 = 使い方か設定の誤り
@@ -570,6 +608,7 @@ dev supervise — 起こして、止まるまで待つ（systemd のユニット
 devcontainer up で起こし、docker wait でコンテナが止まるまで待つ。止まった理由を問わず、
 必ず 0 以外で終わる（ユニットの Restart=always が起こし直す）。人が直接使うものではない。
 意図して止めたいときはユニットを先に止める（dev rebuild は自分で止めて起こし直す）。
+新しい版の知らせは出さない（端末が付いていない呼び出しなので、何も聞かず何も取得しない）。
 
 終了コード: 1 = コンテナが止まった、または起こせなかった / 2 = 使い方か設定ファイルの誤り
 ```
