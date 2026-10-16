@@ -143,16 +143,16 @@ assert_eq "$names" "lab-proj-a1 lab-proj-wt2-b2 " "宛先名"
 tbl="$(peers list 2>/dev/null)"
 
 it "list: PID が再利用されたもの（procStart 不一致）は出ない"
-if ! printf '%s\n' "$tbl" | command grep -q 'reused-pid'; then pass; else fail "出ている"; fi
+if ! printf '%s\n' "$tbl" | command grep 'reused-pid' >/dev/null; then pass; else fail "出ている"; fi
 
 it "list: 別の pidDomain のものは出ない"
-if ! printf '%s\n' "$tbl" | command grep -q 'stale-domain'; then pass; else fail "出ている"; fi
+if ! printf '%s\n' "$tbl" | command grep 'stale-domain' >/dev/null; then pass; else fail "出ている"; fi
 
 it "list: 別のリポジトリのものは出ない"
-if ! printf '%s\n' "$tbl" | command grep -q 'private-chat'; then pass; else fail "出ている"; fi
+if ! printf '%s\n' "$tbl" | command grep 'private-chat' >/dev/null; then pass; else fail "出ている"; fi
 
 it "list: 終了したプロセスのものは出ない"
-if ! printf '%s\n' "$tbl" | command grep -q 'dead-proc'; then pass; else fail "出ている"; fi
+if ! printf '%s\n' "$tbl" | command grep 'dead-proc' >/dev/null; then pass; else fail "出ている"; fi
 
 it "list: 別の作業ツリーでも、同じ git-common-dir ならその作業ツリー名で出る"
 if [[ "$(printf '%s\n' "$tbl" | cut -f1-3 | sed -n '3p')" == "$(printf '2\tlab-proj-wt2-b2\tproj-wt2')" ]]; then pass; else fail "$tbl"; fi
@@ -194,7 +194,7 @@ esac
 
 it "list: 状態が出る。自分の行に印が付き、--others では自分が出ない"
 if [[ "$(printf '%s\n' "$tbl" | sed -n '3p' | cut -f5)" == "busy" ]] \
-  && printf '%s\n' "$tbl" | command grep -q 'idle (自分)' \
+  && printf '%s\n' "$tbl" | command grep 'idle (自分)' >/dev/null \
   && [[ "$(peers list --names --others 2>/dev/null)" == "lab-proj-wt2-b2" ]]; then
   pass
 else
@@ -226,14 +226,14 @@ sout="$(peers resolve no-such-session 2>/dev/null)"
 err="$(peers resolve no-such-session 2>&1 >/dev/null)"
 peers resolve no-such-session >/dev/null 2>&1
 rc=$?
-if [[ "$rc" == "1" && -z "$sout" ]] && printf '%s' "$err" | command grep -q 'lab-proj-a1'; then pass; else fail "rc=$rc out=$sout err=$err"; fi
+if [[ "$rc" == "1" && -z "$sout" ]] && printf '%s' "$err" | command grep 'lab-proj-a1' >/dev/null; then pass; else fail "rc=$rc out=$sout err=$err"; fi
 
 it "resolve: 複数件は非 0（3）で、標準出力に何も出さず、候補を標準エラーへ出す"
 sout="$(peers resolve lab-proj 2>/dev/null)"
 err="$(peers resolve lab-proj 2>&1 >/dev/null)"
 peers resolve lab-proj >/dev/null 2>&1
 rc=$?
-if [[ "$rc" == "3" && -z "$sout" ]] && printf '%s' "$err" | command grep -q 'lab-proj-wt2-b2'; then pass; else fail "rc=$rc out=$sout err=$err"; fi
+if [[ "$rc" == "3" && -z "$sout" ]] && printf '%s' "$err" | command grep 'lab-proj-wt2-b2' >/dev/null; then pass; else fail "rc=$rc out=$sout err=$err"; fi
 
 it "resolve: 範囲外の番号は 0 件扱い（非 0）"
 peers resolve 99 >/dev/null 2>&1
@@ -307,7 +307,7 @@ it "json に pidDomain / procStart が欠けていると、警告と ListAgents 
 spawn; PID_MISSING="$SPAWNED"
 printf '{"pid":%s,"name":"missing-fields","cwd":"%s","status":"idle","startedAt":8000}' "$PID_MISSING" "$REPO" >"$SESS/$PID_MISSING.json"
 warn_out="$(peers list 2>&1 >/dev/null)"
-if printf '%s' "$warn_out" | command grep -q 'WARN' && printf '%s' "$warn_out" | command grep -q 'ListAgents' && printf '%s' "$warn_out" | command grep -q "$PID_MISSING.json"; then pass; else fail "$warn_out"; fi
+if printf '%s' "$warn_out" | command grep 'WARN' >/dev/null && printf '%s' "$warn_out" | command grep 'ListAgents' >/dev/null && printf '%s' "$warn_out" | command grep "$PID_MISSING.json" >/dev/null; then pass; else fail "$warn_out"; fi
 rm -f "$SESS/$PID_MISSING.json"
 
 # ── fail-open ─────────────────────────────────────────────────────────────────
@@ -317,7 +317,7 @@ spawn; PID_BROKEN="$SPAWNED"
 printf '{ this is not json' >"$SESS/$PID_BROKEN.json"
 out_broken="$(peers list 2>&1)"
 rc=$?
-if [[ "$rc" == "0" ]] && printf '%s' "$out_broken" | command grep -q 'WARN' && printf '%s' "$out_broken" | command grep -q 'lab-proj-a1'; then pass; else fail "rc=$rc $out_broken"; fi
+if [[ "$rc" == "0" ]] && printf '%s' "$out_broken" | command grep 'WARN' >/dev/null && printf '%s' "$out_broken" | command grep 'lab-proj-a1' >/dev/null; then pass; else fail "rc=$rc $out_broken"; fi
 
 it "形が違う json（pid が数字でない・name が無い）も読み飛ばして 0 で終わる"
 spawn; PID_ODD1="$SPAWNED"
@@ -335,7 +335,7 @@ spawn; PID_ODD4="$SPAWNED"
 proc_start "$PID_ODD4"
 printf '{"pid":%s,"procStart":"%s","pidDomain":"%s","cwd":"%s"}' "$PID_ODD4" "$PROC_START" "$DOMAIN" "$REPO" >"$SESS/$PID_ODD4.json"
 odd_out2="$(peers list 2>&1 >/dev/null)"
-if printf '%s' "$odd_out" | command grep -q "pid が数字でない.*ListAgents" && printf '%s' "$odd_out2" | command grep -q "name が無い.*ListAgents"; then pass; else fail "pid: $odd_out / name: $odd_out2"; fi
+if printf '%s' "$odd_out" | command grep "pid が数字でない.*ListAgents" >/dev/null && printf '%s' "$odd_out2" | command grep "name が無い.*ListAgents" >/dev/null; then pass; else fail "pid: $odd_out / name: $odd_out2"; fi
 rm -f "$SESS/$PID_ODD3.json" "$SESS/$PID_ODD4.json"
 
 it "cwd が無い json を読み飛ばすときも、警告と ListAgents を使う案内を出す"
@@ -343,7 +343,7 @@ spawn; PID_ODD5="$SPAWNED"
 proc_start "$PID_ODD5"
 printf '{"pid":%s,"procStart":"%s","pidDomain":"%s","name":"no-cwd"}' "$PID_ODD5" "$PROC_START" "$DOMAIN" >"$SESS/$PID_ODD5.json"
 nocwd_out="$(peers list 2>&1)"
-if printf '%s' "$nocwd_out" | command grep -q "cwd が無い.*ListAgents" && ! printf '%s' "$nocwd_out" | command grep -q 'no-cwd	'; then pass; else fail "$nocwd_out"; fi
+if printf '%s' "$nocwd_out" | command grep "cwd が無い.*ListAgents" >/dev/null && ! printf '%s' "$nocwd_out" | command grep 'no-cwd	' >/dev/null; then pass; else fail "$nocwd_out"; fi
 rm -f "$SESS/$PID_ODD5.json"
 
 it "壊れた json があっても resolve は読める分で解決できる"
@@ -352,12 +352,12 @@ assert_eq "$(peers resolve lab-proj-a1 2>/dev/null)" "lab-proj-a1" "宛先名"
 it "セッションの置き場所が無いときは 0 で終わり、ListAgents を使う案内を出す"
 msg="$(cd "$REPO" && HOME="$W/no-such-home" SESSION_PEERS_PID_DOMAIN="$DOMAIN" bash "$PEERS" list 2>&1)"
 rc=$?
-if [[ "$rc" == "0" ]] && printf '%s' "$msg" | command grep -q 'ListAgents'; then pass; else fail "rc=$rc $msg"; fi
+if [[ "$rc" == "0" ]] && printf '%s' "$msg" | command grep 'ListAgents' >/dev/null; then pass; else fail "rc=$rc $msg"; fi
 
 it "git リポジトリの外から実行しても 0 で終わり、ListAgents を使う案内を出す"
 msg="$(cd "$W" && HOME="$HOME_DIR" SESSION_PEERS_PID_DOMAIN="$DOMAIN" bash "$PEERS" list 2>&1)"
 rc=$?
-if [[ "$rc" == "0" ]] && printf '%s' "$msg" | command grep -q 'ListAgents'; then pass; else fail "rc=$rc $msg"; fi
+if [[ "$rc" == "0" ]] && printf '%s' "$msg" | command grep 'ListAgents' >/dev/null; then pass; else fail "rc=$rc $msg"; fi
 
 it "使い方の誤りは 2"
 peers frobnicate >/dev/null 2>&1

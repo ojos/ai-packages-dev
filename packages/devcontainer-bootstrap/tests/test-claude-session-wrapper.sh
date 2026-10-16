@@ -90,8 +90,8 @@ if [[ "$name" == "lab-my-repo-$(field PIDHEX "$res")" ]]; then pass; else fail "
 
 it "ラベルありでも、本体のパスと引数がそのまま渡る（空白を含む引数も 1 個のまま）"
 if [[ "$(field ARGC "$res")" == "2" ]] \
-  && printf '%s\n' "$res" | command grep -qx 'ARG=--flag' \
-  && printf '%s\n' "$res" | command grep -qx 'ARG=two words'; then
+  && printf '%s\n' "$res" | command grep -x 'ARG=--flag' >/dev/null \
+  && printf '%s\n' "$res" | command grep -x 'ARG=two words' >/dev/null; then
   pass
 else
   fail "$res"
@@ -139,7 +139,7 @@ EMPTY_BIN="$WORK/empty-bin"
 mkdir -p "$EMPTY_BIN"
 res="$(cd / && env -u CLAUDE_CODE_SESSION_NAME PATH="$EMPTY_BIN" /bin/bash "$P1/scripts/claude-session-wrapper.sh" "$STUB" --flag "two words" 2>/dev/null)"
 if [[ "$(field NAME "$res")" == "<unset>" && "$(field ARGC "$res")" == "2" ]] \
-  && printf '%s\n' "$res" | command grep -qx 'ARG=two words'; then
+  && printf '%s\n' "$res" | command grep -x 'ARG=two words' >/dev/null; then
   pass
 else
   fail "$res"
@@ -266,7 +266,7 @@ run_on_attach() {
 
 it "on-attach.sh が起動役を設置する（実行可能。作業ツリーの外のパス）"
 attach1="$(run_on_attach)"
-if [[ -x "$LAUNCHER" ]] && printf '%s' "$attach1" | command grep -q 'installed Claude Code launcher'; then pass; else fail "$attach1"; fi
+if [[ -x "$LAUNCHER" ]] && printf '%s' "$attach1" | command grep 'installed Claude Code launcher' >/dev/null; then pass; else fail "$attach1"; fi
 
 it "on-attach.sh の設置は冪等である（2 回目は何も書き直さない）"
 inode1="$(ls -i "$LAUNCHER")"
@@ -274,7 +274,7 @@ sum1="$(cksum <"$LAUNCHER")"
 attach2="$(run_on_attach)"
 inode2="$(ls -i "$LAUNCHER")"
 sum2="$(cksum <"$LAUNCHER")"
-if [[ "$inode1" == "$inode2" && "$sum1" == "$sum2" ]] && ! printf '%s' "$attach2" | command grep -q 'installed Claude Code launcher'; then pass; else fail "inode $inode1->$inode2 sum $sum1->$sum2"; fi
+if [[ "$inode1" == "$inode2" && "$sum1" == "$sum2" ]] && ! printf '%s' "$attach2" | command grep 'installed Claude Code launcher' >/dev/null; then pass; else fail "inode $inode1->$inode2 sum $sum1->$sum2"; fi
 
 it "起動役を壊されていても、on-attach.sh が元の内容へ戻す"
 printf '#!/bin/sh\nexit 9\n' >"$LAUNCHER"
@@ -293,7 +293,7 @@ mkdir -p "$ONLY_HOME"
 only_out="$(cd "$out" && HOME="$ONLY_HOME" GIT_CONFIG_GLOBAL="$ONLY_HOME/.gitconfig" CLAUDE_SESSION_LAUNCHER="$ONLY_LAUNCHER" bash scripts/on-attach.sh --install-launcher 2>&1)"
 only_rc=$?
 if [[ "$only_rc" == "0" && -x "$ONLY_LAUNCHER" && ! -e "$ONLY_HOME/.bashrc" && ! -e "$ONLY_HOME/.zshrc" && ! -e "$ONLY_HOME/.gitconfig" ]] \
-  && ! printf '%s' "$only_out" | command grep -q 'bootstrap active'; then
+  && ! printf '%s' "$only_out" | command grep 'bootstrap active' >/dev/null; then
   pass
 else
   fail "rc=$only_rc $only_out"
@@ -305,7 +305,7 @@ printf 'SESSION_HOST_LABEL=viaL\n' >"$out/.env"
 it "起動役は、ラッパーがあるときはそれを呼ぶ（名前が付き、引数がそのまま渡る）"
 res="$(cd "$out" && env -u CLAUDE_CODE_SESSION_NAME -u SESSION_HOST_LABEL "$LAUNCHER" "$STUB" --flag "two words" 2>/dev/null)"
 if [[ "$(field NAME "$res")" =~ ^viaL-out-[0-9a-f]+$ && "$(field ARGC "$res")" == "2" ]] \
-  && printf '%s\n' "$res" | command grep -qx 'ARG=two words'; then
+  && printf '%s\n' "$res" | command grep -x 'ARG=two words' >/dev/null; then
   pass
 else
   fail "$res"
@@ -316,7 +316,7 @@ mv "$out/scripts/claude-session-wrapper.sh" "$out/scripts/claude-session-wrapper
 res="$(cd "$out" && env -u CLAUDE_CODE_SESSION_NAME -u SESSION_HOST_LABEL "$LAUNCHER" "$STUB" --flag "two words" 2>/dev/null)"
 rc=$?
 if [[ "$rc" == "0" && "$(field NAME "$res")" == "<unset>" && "$(field ARGC "$res")" == "2" ]] \
-  && printf '%s\n' "$res" | command grep -qx 'ARG=two words'; then
+  && printf '%s\n' "$res" | command grep -x 'ARG=two words' >/dev/null; then
   pass
 else
   fail "rc=$rc $res"
@@ -363,7 +363,7 @@ it "--with-claude の生成物の onCreateCommand は on-attach.sh を呼ばず�
 oc="$(jqc -r '.onCreateCommand // empty' "$DC" 2>/dev/null)"
 pa="$(jqc -r '.postAttachCommand // empty' "$DC" 2>/dev/null)"
 if [[ -n "$oc" && "$oc" == *"claude-session-launcher"* ]] \
-  && ! printf '%s' "$oc" | command grep -q 'on-attach' \
+  && ! printf '%s' "$oc" | command grep 'on-attach' >/dev/null \
   && [[ "$pa" == *"scripts/on-attach.sh"* ]]; then pass; else fail "onCreate=$oc postAttach=$pa"; fi
 
 it "--with-claude を選ばない生成物には onCreateCommand がない"
@@ -410,7 +410,7 @@ mkdir -p "$BAD_HOME"
 : >"$BAD_HOME/.local"
 bad_rc=0
 bad_out="$(run_oncreate "$BAD_HOME")" || bad_rc=$?
-if [[ "$bad_rc" == "0" ]] && printf '%s' "$bad_out" | command grep -q 'WARN'; then pass; else fail "rc=$bad_rc out=$bad_out"; fi
+if [[ "$bad_rc" == "0" ]] && printf '%s' "$bad_out" | command grep 'WARN' >/dev/null; then pass; else fail "rc=$bad_rc out=$bad_out"; fi
 
 it "onCreateCommand の書き出し先と claudeProcessWrapper の配線先が同じパスである（HOME に依らない）"
 if [[ "$oc" == *"f=\"$wired\""* && "$oc" != *'$HOME'* ]]; then pass; else fail "wired=$wired"; fi

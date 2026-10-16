@@ -27,13 +27,13 @@ G="gre"
 G="${G}p"
 BAR="|"
 
-# パイプの直後（空白可）の grep が、-q を含む短いオプションの束または --quiet を持つ行。
+# パイプの直後（空白可。`command` を前に置いた形を含む）の grep が、-q を含む短いオプションの束または --quiet を持つ行。
 # `||` の後ろは別のコマンドの連結なので除く（先頭がパイプ 1 本のものだけを対象にする）。
 # `# bsd-ok:` を付けた行（検出器のフィクスチャとして綴りを持つ行）とコメント行は除く。
 # `||` を除く条件（パイプの前に何も無いか、パイプ以外の文字で終わる）は、行番号の
 # 接頭辞を付けた後で判定するため、find_offenders 側で前置する（行頭の ^ は接頭辞の
 # 後ろでは効かない）。
-PATTERN="[|][[:space:]]*${G}[[:space:]]+(-[A-Za-z]+[[:space:]]+)*(-[A-Za-z]*q|--quiet)"
+PATTERN="[|][[:space:]]*(command[[:space:]]+)?${G}[[:space:]]+(-[A-Za-z]+[[:space:]]+)*(-[A-Za-z]*q|--quiet)"
 
 # find_offenders <ファイル...> — 該当行を「ファイル:行番号:本文」で出す。
 find_offenders() {
@@ -71,6 +71,8 @@ tmp="$(new_workdir)/fixture.sh"
   printf '%s\n' "x | ${G} -Fq a"
   printf '%s\n' "x | ${G} -q -- -a"
   printf '%s\n' "x | ${G} --quiet a"
+  printf '%s\n' "x | command ${G} -q a"
+  printf '%s\n' "x | command ${G} -qE 'a|b'"
   printf '%s\n' "x |${G} -q a"
   printf '%s\n' "x |"
   printf '%s\n' "  ${G} -q a"
@@ -78,7 +80,7 @@ tmp="$(new_workdir)/fixture.sh"
   printf '%s\n' "  ${G} -qF a"
 } > "$tmp"
 found="$(find_offenders "$tmp" | wc -l | tr -d ' ')"
-if [[ "$found" == "8" ]]; then pass; else fail "8 行を期待したが ${found} 行"; fi
+if [[ "$found" == "10" ]]; then pass; else fail "10 行を期待したが ${found} 行"; fi
 
 it "検出は -q を持たない grep・連結の ||・コメント行・bsd-ok の行を拾わない"
 tmp="$(new_workdir)/fixture-ok.sh"

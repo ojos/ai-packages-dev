@@ -227,7 +227,7 @@ fi
 it "pull_request の経路に（導入の PR の枝を除いて）sleep が無い"
 pr_branch="$(awk '/if \[ "\$EVENT" = "pull_request" \]; then/{f=1} /^else$/{if(f)exit} f' "$WORK/run.sh" \
   | awk '/if \[ "\$intro" -eq 1 \]; then/{skip=1;next} skip && /^  else$/{skip=0;next} !skip')"
-if [[ -n "$pr_branch" ]] && ! printf '%s\n' "$pr_branch" | command grep -Eq '(^|[^[:alnum:]_])sleep[[:space:]]'; then
+if [[ -n "$pr_branch" ]] && ! printf '%s\n' "$pr_branch" | command grep -E '(^|[^[:alnum:]_])sleep[[:space:]]' >/dev/null; then
   pass
 else
   fail "pull_request の分岐に sleep が残っている（または分岐を取り出せなかった）"
