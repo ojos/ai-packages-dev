@@ -9,7 +9,7 @@
 
 | パッケージ | リポジトリ | 現行バージョン | 配布形態 |
 |---|---|---|---|
-| devcontainer-bootstrap | `ojos/devcontainer-bootstrap` | v0.23.3 | GitHub Release + 資産 5 点（配布スクリプト 2: `bootstrap.sh` / `doctor.sh`、生成物 3: `SHA256SUMS` / `RELEASE-MANIFEST.json` / `PACKAGE_ARCHIVE.tar.gz`） |
+| devcontainer-bootstrap | `ojos/devcontainer-bootstrap` | v0.23.4 | GitHub Release + 資産 5 点（配布スクリプト 2: `bootstrap.sh` / `doctor.sh`、生成物 3: `SHA256SUMS` / `RELEASE-MANIFEST.json` / `PACKAGE_ARCHIVE.tar.gz`） |
 | ai-playbook | `ojos/ai-playbook` | v0.12.1 | git タグのみ |
 | devcontainer-host | `ojos/devcontainer-host` | v0.5.1 | GitHub Release + 資産 14 点（個別 11: `dev.sh` / `dev-up@.service` / `dev-runner@.service` / `dev-route@.service` / `dev-route-sync@.service` / `dev-route-sync@.timer` / `runner.Dockerfile` / `install.sh` / `projects.example` / `runners.example` / `routes.example`、生成物 3: `SHA256SUMS` / `RELEASE-MANIFEST.json` / `PACKAGE_ARCHIVE.tar.gz`） |
 
@@ -17,6 +17,7 @@
 
 | パッケージ | 版 | 公開日 | 要点 |
 |---|---|---|---|
+| devcontainer-bootstrap | v0.23.4 | 2026-10-17 | `.env` にだけある値の空のキー（v0.23.3 で雛形から消した `GEMINI_API_KEY` など）で、`check-no-secrets.sh` がゲートを止めていたのを直した（#652。NOTICE に留めて通す） |
 | devcontainer-bootstrap | v0.23.3 | 2026-10-17 | `update-check.sh` の `UPDATE_CHECK` の優先順位を、推測に頼らない設計へ変えた（#645。ローダーは上書きせず、update-check が .env を読む。追従後はシェルを開き直す）。notify のロック後の読み直し（#643）、y の前に追従先の作業ツリーとブランチを示す（#650）、`GEMINI_API_KEY` の欄を gemini を使わない構成では出さない（#646）、`confirm-merge-hook.sh` が長いコマンドで遅い（#647）を直した。codex の緩和が要る理由を書いた（#649） |
 | devcontainer-host | v0.5.1 | 2026-10-17 | `dev doctor --runner` が、route のユニットが有効なのに routes が無い（またはそのラベルの行が無い）と、止まっているユニットを見逃して OK を返していたのを直した（#648。FAIL と直し方を出し、どのランナーにも無いラベルの有効なユニットは WARN） |
 | devcontainer-bootstrap | v0.23.2 | 2026-10-17 | `scripts/update-check.sh` で、そのコマンドで明示した `UPDATE_CHECK` が、親のシェルが退避した値に負けていたのを直した（#640 / #641。v0.23.1 の #637 の続き） |
