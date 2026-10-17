@@ -908,4 +908,105 @@ o="$(env PATH="$STUBBIN:$PATH" UPDATE_CHECK_CACHE_DIR="$TEST_TMP_ROOT/cy8" UPDAT
 if grep -qx 'version=v0.99.0' "$R8/.devcontainer/ORIGIN" && [[ "$(git -C "$R8" rev-list --count HEAD)" == 1 ]] \
   && [[ "$(git -C "$R8" symbolic-ref --short HEAD)" == "chore/update-dcb-v0.99.0" ]]; then pass; else fail "出力: $o"; fi
 
+# ── 対話シェルでの環境の優先（#635） ─────────────────────────────────────────
+# 対話シェルでは rc の自動読み込みが先に .env で UPDATE_CHECK を上書きする。注入された rc の 2 つの
+# ブロックを取り出し、端末の検査（[ -t 0 ] && [ -t 1 ]）と対話の検査（*i*）だけを外して、そのまま動かす。
+RIA="$(new_workdir)/pia"; run_bootstrap "$RIA" >/dev/null 2>&1
+RIA="$(cd "$RIA" && pwd)"
+RIAH="$TEST_TMP_ROOT/riahome"; mkdir -p "$RIAH"
+env HOME="$RIAH" "$BASH_BIN" "$RIA/scripts/on-attach.sh" >/dev/null 2>&1 </dev/null
+sed -e 's/\*i\*/*/' -e 's/\[ -t 0 \] && \[ -t 1 \]/true/' "$RIAH/.bashrc" > "$TEST_TMP_ROOT/ria-rc.sh"
+# sim_interactive <cache> <答え> [env...]: プロジェクトの中で開いた対話シェルが rc を読む動きを模す。
+sim_interactive() {
+  local cache="$1" ans="$2"; shift 2
+  ( cd "$RIA" && printf '%s\n' "$ans" | env PATH="$STUBBIN:$PATH" HOME="$RIAH" UPDATE_CHECK_CACHE_DIR="$cache" \
+      UPDATE_CHECK_TODAY="$TODAY" UPDATE_CHECK_ASSUME_TTY=1 FAKE_CURL_DIR="$FIX" "$@" \
+      "$BASH_BIN" --norc "$TEST_TMP_ROOT/ria-rc.sh" 2>&1 )
+}
+reset_fixture; set_latest "$DCB_API" "v0.99.0"
+
+it "対話シェルを模して、環境に値が無く .env も無いときは聞く（模擬が動いている確認）"
+CIA0="$TEST_TMP_ROOT/cia0"; run_uc "$CIA0" notify >/dev/null
+o="$(sim_interactive "$CIA0" n)"
+if [[ "$o" == *"追従しますか？"* ]]; then pass; else fail "出力: $o"; fi
+
+it "環境が UPDATE_CHECK=off で .env が UPDATE_CHECK=on なら、対話シェルでも問いかけが出ない"
+printf 'UPDATE_CHECK=on\n' > "$RIA/.env"
+CIA1="$TEST_TMP_ROOT/cia1"; run_uc "$CIA1" notify >/dev/null
+o="$(sim_interactive "$CIA1" n UPDATE_CHECK=off)"
+rm -f "$RIA/.env"
+if [[ -z "$o" && ! -f "$CIA1/declined-dcb" ]]; then pass; else fail "出力: $o"; fi
+
+it "環境に値が無く .env が UPDATE_CHECK=off なら、対話シェルでも止まる"
+printf 'UPDATE_CHECK=off\n' > "$RIA/.env"
+CIA2="$TEST_TMP_ROOT/cia2"; run_uc "$CIA2" notify >/dev/null
+o="$(sim_interactive "$CIA2" n)"
+rm -f "$RIA/.env"
+if [[ -z "$o" ]]; then pass; else fail "出力: $o"; fi
+
+it "環境に値が無く .env が UPDATE_CHECK=on なら、対話シェルでは聞く"
+printf 'UPDATE_CHECK=on\n' > "$RIA/.env"
+CIA3="$TEST_TMP_ROOT/cia3"; run_uc "$CIA3" notify >/dev/null
+o="$(sim_interactive "$CIA3" n)"
+rm -f "$RIA/.env"
+if [[ "$o" == *"追従しますか？"* ]]; then pass; else fail "出力: $o"; fi
+
+it "退避の変数は、対話シェルの子プロセスの環境へ残らない"
+printf 'UPDATE_CHECK=on\n' > "$RIA/.env"
+{ cat "$TEST_TMP_ROOT/ria-rc.sh"; echo 'env | cut -d= -f1 > "$DCB_TEST_ENV_OUT"'; } > "$TEST_TMP_ROOT/ria-rc2.sh"
+o="$( cd "$RIA" && printf 'n\n' | env PATH="$STUBBIN:$PATH" HOME="$RIAH" UPDATE_CHECK_CACHE_DIR="$TEST_TMP_ROOT/cia4" \
+  UPDATE_CHECK_TODAY="$TODAY" UPDATE_CHECK_ASSUME_TTY=1 FAKE_CURL_DIR="$FIX" UPDATE_CHECK=off \
+  DCB_TEST_ENV_OUT="$TEST_TMP_ROOT/ria-env" "$BASH_BIN" --norc "$TEST_TMP_ROOT/ria-rc2.sh" 2>&1 )"
+rm -f "$RIA/.env"
+if ! command grep -qx 'DCB_ENV_UPDATE_CHECK' "$TEST_TMP_ROOT/ria-env"; then pass; else fail "環境に残っている"; fi
+
+it "古い形（退避の無い）のブロックが入った rc は、on-attach の再実行で新しい形に置き換わり、重複せず、ほかの行は残る"
+OLDH="$TEST_TMP_ROOT/oldhome"; mkdir -p "$OLDH"
+for rcname in .bashrc .zshrc; do
+  {
+    echo 'export USER_LINE_BEFORE=1'
+    echo '# >>> other tool >>>'
+    echo 'export OTHER_TOOL=1'
+    echo '# <<< other tool <<<'
+    echo ''
+    echo '# >>> project .env autoload >>>'
+    echo "if [[ -f $RIA/scripts/load-project-env.sh ]]; then . $RIA/scripts/load-project-env.sh; fi"
+    echo '# <<< project .env autoload <<<'
+    echo ''
+    echo "# >>> dcb update check: $RIA >>>"
+    echo "case \"\$-\" in *i*) case \"\$PWD/\" in $RIA/*) if [ -t 0 ] && [ -t 1 ] && [ -f $RIA/scripts/update-check.sh ]; then bash $RIA/scripts/update-check.sh prompt || true; fi ;; esac ;; esac"
+    echo '# <<< dcb update check <<<'
+    echo 'export USER_LINE_AFTER=1'
+  } > "$OLDH/$rcname"
+done
+env HOME="$OLDH" "$BASH_BIN" "$RIA/scripts/on-attach.sh" >/dev/null 2>&1 </dev/null
+ok=1
+for rcname in .bashrc .zshrc; do
+  f="$OLDH/$rcname"
+  [[ "$(grep -c '^# >>> project .env autoload >>>$' "$f")" == 1 ]] || ok=0
+  [[ "$(grep -c '^# <<< project .env autoload <<<$' "$f")" == 1 ]] || ok=0
+  [[ "$(grep -c '^# >>> dcb update check: ' "$f")" == 1 ]] || ok=0
+  [[ "$(grep -c '^# <<< dcb update check <<<$' "$f")" == 1 ]] || ok=0
+  grep -qF 'DCB_ENV_UPDATE_CHECK="${UPDATE_CHECK-}"' "$f" || ok=0
+  grep -qF '(export DCB_ENV_UPDATE_CHECK;' "$f" || ok=0
+  grep -qx 'export USER_LINE_BEFORE=1' "$f" || ok=0
+  grep -qx 'export USER_LINE_AFTER=1' "$f" || ok=0
+  grep -qx 'export OTHER_TOOL=1' "$f" || ok=0
+  # 自動読み込みが update check より前にある（順序が変わらない）
+  [[ "$(grep -n '^# >>> project .env autoload >>>$' "$f" | cut -d: -f1)" -lt "$(grep -n '^# >>> dcb update check: ' "$f" | cut -d: -f1)" ]] || ok=0
+done
+if [[ "$ok" == 1 ]]; then pass; else fail "置き換え後の rc: $(cat "$OLDH/.bashrc")"; fi
+
+it "置き換えたあとの再実行では、rc が変わらない（冪等）"
+before="$(cat "$OLDH/.bashrc" "$OLDH/.zshrc")"
+env HOME="$OLDH" "$BASH_BIN" "$RIA/scripts/on-attach.sh" >/dev/null 2>&1 </dev/null
+after="$(cat "$OLDH/.bashrc" "$OLDH/.zshrc")"
+if [[ "$before" == "$after" ]]; then pass; else fail "変わった"; fi
+
+it "終端の行が無い壊れたブロックは書き換えない（利用者の行を巻き込まない）"
+BRH="$TEST_TMP_ROOT/brokenhome"; mkdir -p "$BRH"
+printf '%s\n' '# >>> project .env autoload >>>' 'export USER_KEEP=1' > "$BRH/.bashrc"
+env HOME="$BRH" "$BASH_BIN" "$RIA/scripts/on-attach.sh" >/dev/null 2>&1 </dev/null
+if grep -qx 'export USER_KEEP=1' "$BRH/.bashrc"; then pass; else fail "消えた"; fi
+
 exit_with_result
