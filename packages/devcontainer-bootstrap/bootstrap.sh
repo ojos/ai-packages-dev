@@ -2251,6 +2251,32 @@ json_tag_name() {
   ' "$1"
 }
 
+# タグの一覧の JSON から、"name" の値をすべて出す（1 行に並んでいても読める）。
+json_tag_names() {
+  awk '
+    {
+      s = $0
+      while (match(s, /"name"[ ]*:[ ]*"[^"]*"/)) {
+        m = substr(s, RSTART, RLENGTH)
+        s = substr(s, RSTART + RLENGTH)
+        sub(/^"name"[ ]*:[ ]*"/, "", m)
+        sub(/"$/, "", m)
+        print m
+      }
+    }
+  ' "$1"
+}
+
+# タグの一覧の JSON から、vX.Y.Z の形（プレリリースの形を除く）のうち最大の版を出す。無ければ何も出さない。
+max_semver_tag() {
+  local t best=""
+  while IFS= read -r t; do
+    is_semver "$t" || continue
+    if [[ -z "$best" ]] || ver_lt "$best" "$t"; then best="$t"; fi
+  done < <(json_tag_names "$1")
+  printf '%s' "$best"
+}
+
 # 配布先の CHANGELOG.md から、「### 移行」の節を持つ版（「## vX.Y.Z」の節）を出す。
 # リリースの本文は「Release vX.Y.Z」の 1 行でリリースノートを含まないため、CHANGELOG.md を読む。
 changelog_migration_tags() {
@@ -2269,32 +2295,45 @@ is_offline_rc() {
 
 # 最新の安定版を問い合わせ、キャッシュへ書く。部品ごとの失敗は、もう片方の確認を止めない。
 # 通信ができないと分かったときだけ、残りを試さない。
-# 今日の取得に失敗した部品の、前の日のキャッシュは使わない（先に消す）。
+# 取得の結果は、いったん作業用のディレクトリへ集め、最後に rename で差し替える。
+# 取得のあいだ、prompt は古い（または新しい）キャッシュを一貫して読める（先に消さない）。
+# 今日の取得に失敗した部品・記録が無くなった部品の、前の日のキャッシュは使わない（最後に消す）。
+# 「今日の印」(checked) は取得を終えてから最後に書く。通信ができずに抜けたときは書かず、
+# キャッシュにも触らない（次の notify で取り直す）。
+# 最新の版の取得先は部品で分ける。DCB は Release の最新（releases/latest）、
+# ai-playbook はタグだけを打って Release を作らないため、タグの一覧（先頭の 100 件）から vX.Y.Z の最大を取る。
 refresh_cache() {
-  local dir c cur slug tmp tag t list rc
+  local dir c cur slug tmp stage tag t list rc
+  local keep="" drop=""
   dir="$(cache_dir)"
   mkdir -p "$dir" 2>/dev/null || return 0
-  # 先に今日の印を書く。失敗しても、同じ日にもう一度問い合わせない（1 日 1 回）。
-  printf '%s\n' "${UPDATE_CHECK_TODAY:-$(date +%Y-%m-%d)}" > "$dir/checked" 2>/dev/null || return 0
-  rm -f "$dir"/latest-* "$dir"/migrations-* 2>/dev/null
-  tmp="$(mktemp "${TMPDIR:-/tmp}/dcb-update-check.XXXXXX" 2>/dev/null)" || return 0
+  tmp="$(mktemp "$dir/.fetch.XXXXXX" 2>/dev/null)" || return 0
+  stage="$(mktemp -d "$dir/.stage.XXXXXX" 2>/dev/null)" || { rm -f "$tmp"; return 0; }
   for c in dcb playbook; do
     cur="$(comp_cur "$c")"
-    [[ -n "$cur" ]] || continue
+    if [[ -z "$cur" ]]; then drop="$drop $c"; continue; fi
     slug="$(comp_slug "$c")"
-    fetch "https://api.github.com/repos/$slug/releases/latest" "$tmp" 3
+    case "$c" in
+      playbook) fetch "https://api.github.com/repos/$slug/tags?per_page=100" "$tmp" 3 ;;
+      *)        fetch "https://api.github.com/repos/$slug/releases/latest" "$tmp" 3 ;;
+    esac
     rc=$?
     if [[ $rc -ne 0 ]]; then
       if is_offline_rc "$rc"; then
-        rm -f "$tmp"
+        rm -rf "$tmp" "$stage"
         return 0
       fi
+      drop="$drop $c"
       continue
     fi
-    tag="$(json_tag_name "$tmp")"
+    case "$c" in
+      playbook) tag="$(max_semver_tag "$tmp")" ;;
+      *)        tag="$(json_tag_name "$tmp")" ;;
+    esac
     # プレリリース・draft は latest に出ないはずだが、形の合わない値も取り込まない。
-    is_semver "$tag" || continue
-    printf '%s\n' "$tag" > "$dir/latest-$c" 2>/dev/null || continue
+    if ! is_semver "$tag"; then drop="$drop $c"; continue; fi
+    if ! printf '%s\n' "$tag" > "$stage/latest-$c" 2>/dev/null; then drop="$drop $c"; continue; fi
+    keep="$keep $c"
     # 新しいときだけ、飛び越える版のうち「移行」の節がある版を、最新のタグの CHANGELOG.md から調べる
     # （読めなければ印を消し、案内に留める）。
     if ver_lt "$cur" "$tag" && fetch "https://raw.githubusercontent.com/$slug/$tag/CHANGELOG.md" "$tmp" 5; then
@@ -2303,10 +2342,24 @@ refresh_cache() {
         [[ -n "$t" ]] || continue
         if ver_lt "$cur" "$t" && ! ver_lt "$tag" "$t"; then list="$list $t"; fi
       done < <(changelog_migration_tags "$tmp")
-      printf '%s\n' "${list# }" > "$dir/migrations-$c" 2>/dev/null || true
+      printf '%s\n' "${list# }" > "$stage/migrations-$c" 2>/dev/null || rm -f "$stage/migrations-$c"
     fi
   done
-  rm -f "$tmp"
+  # 差し替え。取得できた部品は rename で置き換え、消すべき部品だけを最後に消す。
+  for c in $keep; do
+    if [[ -f "$stage/migrations-$c" ]]; then
+      mv -f "$stage/migrations-$c" "$dir/migrations-$c" 2>/dev/null || rm -f "$dir/migrations-$c"
+    else
+      rm -f "$dir/migrations-$c"
+    fi
+    mv -f "$stage/latest-$c" "$dir/latest-$c" 2>/dev/null || rm -f "$dir/latest-$c"
+  done
+  for c in $drop; do
+    rm -f "$dir/latest-$c" "$dir/migrations-$c" 2>/dev/null
+  done
+  rm -rf "$tmp" "$stage"
+  # 今日の印は、取得を終えてから最後に書く。失敗した日も数える（1 日 1 回）。
+  printf '%s\n' "${UPDATE_CHECK_TODAY:-$(date +%Y-%m-%d)}" > "$dir/checked" 2>/dev/null || true
   return 0
 }
 
