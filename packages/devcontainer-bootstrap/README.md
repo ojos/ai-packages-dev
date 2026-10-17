@@ -784,7 +784,7 @@ codex は、コマンドを読み取り専用などのサンドボックスの�
 
 `.env.example` が持つキー:
 
-- `GEMINI_API_KEY` — 第二意見レビュー（`scripts/second-opinion-review.sh`）が読みます。
+- `GEMINI_API_KEY` — 第二意見レビュー（`scripts/second-opinion-review.sh`）が読みます。**記入するエンジン（下の `SECOND_OPINION_ENGINE`）が `codex` / `antigravity` に決まっていて、かつ `--with-gemini` を選んでいないときだけ出しません**（gemini の CLI が入らず、どのエンジンも使わないため）。`--with-gemini` を選んだ構成は、エンジンを固定しても gemini の CLI が入るので出します。エンジンが gemini、空（既定の gemini で回る）、またはエンジンの欄自体が出ない構成でも出します。
 - `SECOND_OPINION_ENGINE` — 第二意見のエンジン（`--with-antigravity` / `--with-codex` を選んだときだけ出ます）。**選んだエンジンから一意に決まるときは、記入済みで出します。** `--with-gemini` も選んだ構成では `gemini`（明示しておけば、`.env` を持つ作業ツリーでは下の通知が出ず、`.env` を写し忘れた作業ツリーでだけ出ます）、`--with-gemini` を選ばず antigravity か codex の片方だけを選んだ構成ではそのエンジンです（既定の gemini は CLI もキーも無く、設定するまで使えないため）。gemini を選ばず antigravity と codex の両方を選んだ構成は、どれを選ぶかが一意に決まらないので空のままです（空なら gemini）。**実際に使うエンジンが、これらの決め方と違うとき（例: gemini の CLI を入れたまま第二意見を codex で回す）は、`--second-opinion-engine <gemini|antigravity|codex>` で明示します。** 指定した値が最優先で記入されます。止まる条件と `--upgrade` の引き継ぎは、オプション一覧の `--second-opinion-engine` の項に従います。**既存の `.env` は書き換えません。** `--upgrade` で変わるのは `.env.example` だけなので、すでに `.env` を持つ構成には効きません。
 - `GH_TOKEN` — GitHub の PAT。**上表の「コンテナ内でのログイン」に対する唯一の例外**です（下記「[GitHub 認証だけが例外である理由](#github-認証だけが例外である理由)」）。空にすれば従来どおり `gh auth login` の保存済み認証で動きます（**`GITHUB_TOKEN` も未設定であることが条件**。下記「[`GITHUB_TOKEN` は設定しない](#github_token-は設定しない)」）。
 - `GIT_IDENTITY_NAME` / `GIT_IDENTITY_EMAIL` — コミット identity。`scripts/setup-git-identity.sh` が local へ適用します。
@@ -953,7 +953,7 @@ bash scripts/check-no-secrets.sh   # 終了コード 0 / 標準出力 SECRETS_PA
 | エンジン | コマンド | 認証環境変数 | 導入経路 | 未導入・未認証時の挙動 |
 |----------|----------|--------------|-------------------|------------------------|
 | Claude | `claude` | `/login`（既定。トークン注入は任意） | `--with-claude` 指定時に `scripts/install-ai-tools.sh`（`postCreateCommand`）で導入 | 未認証時は `/login` プロンプト表示（トークン運用は下記「Claude の認証」参照） |
-| Gemini | `gemini` | `.env` の `GEMINI_API_KEY` | `--with-gemini` 指定時に `scripts/install-ai-tools.sh`（`postCreateCommand`）で導入 | API キー不足または API/認証エラーで失敗 |
+| Gemini | `gemini` | `.env` の `GEMINI_API_KEY`（`.env.example` の欄は、エンジンが codex / antigravity に決まり `--with-gemini` を選ばない構成では出ません） | `--with-gemini` 指定時に `scripts/install-ai-tools.sh`（`postCreateCommand`）で導入 | API キー不足または API/認証エラーで失敗 |
 | Antigravity | `agy` | Google アカウントの **OAuth のみ**（API キー非対応） | `--with-antigravity` 指定時に `scripts/install-ai-tools.sh`（`postCreateCommand`）で導入 | 未認証時は応答を返さず終了（非対話ではツール実行許可を自動拒否し、診断は標準エラーへ出る） |
 | Copilot | `copilot` | GitHub 認証（`gh` / OAuth） | `--with-copilot` 指定時に `scripts/install-ai-tools.sh`（`postCreateCommand`）で導入 | 未認証時はログインプロンプト表示またはエラー終了 |
 | Codex  | `codex` | `.env` の `OPENAI_API_KEY` | 未対応（`--with-codex` は将来対応予定。現状は手動導入のみ） | バイナリ未導入または API キー未設定で失敗 |
@@ -990,7 +990,7 @@ OAuth トークン（`CLAUDE_CODE_OAUTH_TOKEN`）を `remoteEnv` へ注入する
 
 - `.devcontainer/devcontainer.json`（言語別 feature を反映。docker-compose ベースで `.devcontainer/compose.yaml` の `app` サービスを参照。`--with-codex` のときだけ、説明のコメント付きで `securityOpt` を持つ JSONC になる）
 - `.devcontainer/compose.yaml`（単一サービス `app` の compose 定義。compose 利用時は feature や devcontainer.json の mounts が適用されないため、docker socket を常に明示。認証用の永続 volume は `gh` を常時、cloud / AI CLI を `--with-*` 随伴で配置。`init: true` で PID 1 を Docker の組み込みの init にし、孤児になったプロセスを回収させる。PID 1 の `sleep infinity` は子を回収しないため、これが無いとゾンビが溜まり、数日でプロセス数の上限に達して `docker exec` もコンテナ内のセッションも止まる。既存の生成先は `--upgrade` で取り込んだあと、コンテナの作り直し（Rebuild）で効く）
-- `.env.example`（プロジェクト固有値の雛形。`GEMINI_API_KEY` / `GIT_IDENTITY_NAME` / `GIT_IDENTITY_EMAIL`）
+- `.env.example`（プロジェクト固有値の雛形。`GEMINI_API_KEY`（条件付き。上記）/ `GIT_IDENTITY_NAME` / `GIT_IDENTITY_EMAIL`）
 - `scripts/fix-mount-owner.sh`（永続 volume のマウント先を remoteUser 所有へ戻す。`postCreateCommand` の先頭で実行）
 - `scripts/install-ai-tools.sh`（`postCreateCommand` の後段で実行。`--with-<ai>` で選んだ AI CLI だけを導入する。上記「AI CLI 導入挙動」参照）
 - `scripts/load-project-env.sh`（プロジェクト `.env` の優先読み込み。下記参照）

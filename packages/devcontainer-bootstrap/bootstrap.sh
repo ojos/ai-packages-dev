@@ -1258,9 +1258,7 @@ get_template_content() {
 # 認証そのもの（cloud / AI CLI）はコンテナ内で行う。ログイン状態は named volume に
 # 残るため、rebuild しても消えない。トークンをこのファイルへ書き写す必要はない。
 # 例外は GitHub（gh）だけで、理由は下の GH_TOKEN の項に書く。
-
-# Gemini API キー（第二意見レビュー scripts/second-opinion-review.sh が読む）
-GEMINI_API_KEY=
+__GEMINI_API_KEY_LINES__
 __SECOND_OPINION_ENGINE_LINES__
 
 # 新しい版の確認（scripts/update-check.sh）。devcontainer-bootstrap と ai-playbook の新しい安定版が
@@ -11579,6 +11577,34 @@ SESSION_HOST_LABEL=
 LBLTMPL
 }
 
+# 第二意見のエンジンとして .env.example へ記入する値を標準出力へ返す（決まらなければ空）。
+# build_second_opinion_engine_block と build_gemini_api_key_block が同じ決め方を使う。
+# 優先順: --second-opinion-engine の指定 > gemini を選んだ構成 > codex / antigravity の片方だけ。
+resolve_second_opinion_engine_default() {
+  if [[ -n "$SECOND_OPINION_ENGINE_OPT" ]]; then printf '%s' "$SECOND_OPINION_ENGINE_OPT"
+  elif has_with gemini; then printf 'gemini'
+  elif has_with codex && ! has_with antigravity; then printf 'codex'
+  elif has_with antigravity && ! has_with codex; then printf 'antigravity'
+  fi
+}
+
+# .env.example の __GEMINI_API_KEY_LINES__。引数 $1 は resolve_second_opinion_engine_default の結果。
+# 欄を出さないのは、エンジンが codex / antigravity に決まっていて、かつ --with-gemini を選んでいない
+# ときだけ。--with-gemini を選んだ構成は、エンジンを固定しても gemini の CLI が入るので欄が要る。
+# 先頭の空行はこのブロックが持つ（欄が無いとき、直後のエンジンの欄の空行と 2 つ続かないため）。
+build_gemini_api_key_block() {
+  if gemini_key_hidden "$1"; then printf ''; return; fi
+  printf '\n%s\n%s' \
+    '# Gemini API キー（第二意見レビュー scripts/second-opinion-review.sh が読む）' \
+    'GEMINI_API_KEY='
+}
+
+# GEMINI_API_KEY の欄を出さない構成なら 0。引数 $1 はエンジンの記入値。
+gemini_key_hidden() {
+  has_with gemini && return 1
+  [[ "$1" == "codex" || "$1" == "antigravity" ]]
+}
+
 # 選択した AI ツールの install 行を生成する（install-ai-tools.sh の __AI_INSTALL_LINES__）。
 # トークン分岐は行わない。未選択なら空。
 # .env.example の __SECOND_OPINION_ENGINE_LINES__。第二意見のエンジン選択。
@@ -11588,6 +11614,7 @@ LBLTMPL
 # ときだけ出す。常時出すと、それらを導入していない生成物に「選べないエンジン」の記入欄が残る。
 # 値は、選んだエンジンから一意に決まるときだけ記入済みにする（下記）。
 build_second_opinion_engine_block() {
+  # $1 は resolve_second_opinion_engine_default の結果（キーの欄と同じ判断を使う）
   has_with antigravity || has_with codex || { printf ''; return; }
 
   # 値は、選んだエンジンから一意に決まるときだけ記入済みにする。
@@ -11598,15 +11625,20 @@ build_second_opinion_engine_block() {
   # - gemini を選ばず antigravity と codex の両方を選んだときは、一意に決まらないので空のまま
   #   （既定の gemini へ落ちたことは reviewer の通知が知らせる）。
   # - --second-opinion-engine の指定があれば、上のどれよりも優先してその値（検証済み）。
-  local engine_default=""
-  if [[ -n "$SECOND_OPINION_ENGINE_OPT" ]]; then engine_default="$SECOND_OPINION_ENGINE_OPT"
-  elif has_with gemini; then engine_default="gemini"
-  elif has_with codex && ! has_with antigravity; then engine_default="codex"
-  elif has_with antigravity && ! has_with codex; then engine_default="antigravity"
+  engine_fill() {
+    local t; t="$(sed "s|__ENGINE_DEFAULT__|$engine_default|")"
+    t="${t//__KEY_LINE__/$key_line}"
+    printf '%s\n' "${t//__KEY_NOTE__/$key_note}"
+  }
+  local engine_default="$1" key_note="" key_line=""
+  # キーの欄が無い構成では、読み手に見えないキーを指さない。
+  if ! gemini_key_hidden "$engine_default"; then
+    key_note="GEMINI_API_KEY は使わない。"
+    key_line=$'\n#\n# いずれも GEMINI_API_KEY は使わない。'
   fi
 
   if has_with antigravity && has_with codex; then
-    cat <<'ENGTMPL' | sed "s|__ENGINE_DEFAULT__|$engine_default|"
+    cat <<'ENGTMPL' | engine_fill
 
 # 第二意見レビューのエンジン（gemini | antigravity | codex）。空なら gemini。
 # gemini も選んで生成した構成では gemini を記入済みで出す。
@@ -11616,9 +11648,7 @@ build_second_opinion_engine_block() {
 # 対応しない。初回は対話で `agy` を起動してログインすること。
 #
 # codex（Codex CLI）は ChatGPT アカウントの OAuth 認証（または API キー）。初回は
-# 対話で `codex login` を通すこと。
-#
-# いずれも GEMINI_API_KEY は使わない。
+# 対話で `codex login` を通すこと。__KEY_LINE__
 SECOND_OPINION_ENGINE=__ENGINE_DEFAULT__
 
 # 第二意見のモデル（空なら各エンジンの既定）。codex の既定は gpt-6-sol
@@ -11627,14 +11657,14 @@ SECOND_OPINION_ENGINE=__ENGINE_DEFAULT__
 SECOND_OPINION_MODEL=
 ENGTMPL
   elif has_with codex; then
-    cat <<'ENGTMPL' | sed "s|__ENGINE_DEFAULT__|$engine_default|"
+    cat <<'ENGTMPL' | engine_fill
 
 # 第二意見レビューのエンジン（gemini | codex）。空なら gemini。
 # 生成時に選んだエンジン（gemini を選んでいれば gemini、codex だけなら codex）を記入済みで出す。
 # 生成時に --second-opinion-engine で明示した場合は、その値になる。
 #
 # codex（Codex CLI）は ChatGPT アカウントの OAuth 認証（または API キー）。初回は
-# 対話で `codex login` を通すこと。GEMINI_API_KEY は使わない。
+# 対話で `codex login` を通すこと。__KEY_NOTE__
 SECOND_OPINION_ENGINE=__ENGINE_DEFAULT__
 
 # 第二意見のモデル（空なら各エンジンの既定）。codex の既定は gpt-6-sol
@@ -11642,15 +11672,14 @@ SECOND_OPINION_ENGINE=__ENGINE_DEFAULT__
 SECOND_OPINION_MODEL=
 ENGTMPL
   else
-    cat <<'ENGTMPL' | sed "s|__ENGINE_DEFAULT__|$engine_default|"
+    cat <<'ENGTMPL' | engine_fill
 
 # 第二意見レビューのエンジン（gemini | antigravity）。空なら gemini。
 # 生成時に選んだエンジン（gemini を選んでいれば gemini、antigravity だけなら antigravity）を記入済みで出す。
 # 生成時に --second-opinion-engine で明示した場合は、その値になる。
 #
 # antigravity（Antigravity CLI）は Google アカウントの OAuth 認証で、API キーに
-# 対応しない。初回は対話で `agy` を起動してログインすること。GEMINI_API_KEY は
-# 使わない。
+# 対応しない。初回は対話で `agy` を起動してログインすること。__KEY_NOTE__
 SECOND_OPINION_ENGINE=__ENGINE_DEFAULT__
 ENGTMPL
   fi
@@ -12113,7 +12142,9 @@ render_content() {
   subst_block __LANGUAGE_EXTENSIONS__ "$(build_language_extensions_block)"
   subst_block __WITH_EXTENSIONS__ "$(build_with_extensions_block)"
   subst_block __MOUNT_OWNER_LINES__ "$(build_mount_owner_block)"
-  subst_block __SECOND_OPINION_ENGINE_LINES__ "$(build_second_opinion_engine_block)"
+  local so_engine; so_engine="$(resolve_second_opinion_engine_default)"
+  subst_block __GEMINI_API_KEY_LINES__ "$(build_gemini_api_key_block "$so_engine")"
+  subst_block __SECOND_OPINION_ENGINE_LINES__ "$(build_second_opinion_engine_block "$so_engine")"
   subst_block __SESSION_HOST_LABEL_LINES__ "$(build_session_host_label_block)"
   subst_block __VSCODE_SETTINGS__ "$(build_vscode_settings_block)"
   subst_block __ON_CREATE_COMMAND__ "$(build_on_create_command_block)"

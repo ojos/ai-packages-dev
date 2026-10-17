@@ -103,4 +103,38 @@ expect_stop "gemini を選んでいないのに gemini を指定すると止ま�
 expect_stop "エンジンの記入欄が出ない構成（gemini のみ）で止まる" --with-gemini --second-opinion-engine gemini
 expect_stop "エンジンの記入欄が出ない構成（装備なし）で止まる" --second-opinion-engine gemini
 
+# ── GEMINI_API_KEY の欄はエンジンが codex / antigravity のときだけ出さない（#646） ──
+has_key() { [[ -n "$(command grep -n '^GEMINI_API_KEY=' "$1/.env.example")" ]]; }
+
+check_key() { # 説明 期待(present|absent) 引数...
+  local desc="$1" want="$2"; shift 2
+  local out; out="$(new_workdir)/p"
+  it "$desc"
+  if ! run_bootstrap "$out" "$@" >/dev/null 2>&1 || [[ ! -f "$out/.env.example" ]]; then fail "生成に失敗した、または .env.example が無い"; return; fi
+  if has_key "$out"; then
+    [[ "$want" == present ]] && pass || fail "GEMINI_API_KEY が出ている"
+  else
+    [[ "$want" == absent ]] && pass || fail "GEMINI_API_KEY が無い"
+  fi
+}
+
+check_key "gemini なしの codex 構成では GEMINI_API_KEY が無い" absent --with-claude --with-codex
+check_key "gemini なしの antigravity 構成では GEMINI_API_KEY が無い" absent --with-claude --with-antigravity
+check_key "gemini + codex（エンジンは gemini）では GEMINI_API_KEY がある" present --with-gemini --with-codex
+check_key "antigravity も codex も選ばない構成では GEMINI_API_KEY がある" present --with-claude
+check_key "antigravity と codex の両方で gemini なし（エンジン空）では GEMINI_API_KEY がある" present --with-antigravity --with-codex
+check_key "gemini + codex に --second-opinion-engine codex でも GEMINI_API_KEY がある（gemini の CLI が入る）" present --with-gemini --with-codex --second-opinion-engine codex
+
+OUT_K="$(new_workdir)/p"
+it "GEMINI_API_KEY の説明行も一緒に消える"
+if ! run_bootstrap "$OUT_K" --with-claude --with-codex >/dev/null 2>&1 || [[ ! -f "$OUT_K/.env.example" ]]; then fail "生成に失敗した"
+elif [[ -z "$(command grep -n 'Gemini API キー' "$OUT_K/.env.example")" ]]; then pass; else fail "説明行が残っている"; fi
+
+it "キーの欄が無い .env.example に、GEMINI_API_KEY への言及も空行 2 連続も無い"
+if [[ -z "$(command grep -n 'GEMINI_API_KEY' "$OUT_K/.env.example")" && -z "$(awk 'prev=="" && $0=="" && NR>1 {print NR} {prev=$0}' "$OUT_K/.env.example")" ]]; then pass; else fail "残っている"; fi
+
+it "キーの欄がある構成（gemini + codex 固定）の .env.example にも空行 2 連続が無い"
+OUT_L="$(new_workdir)/p"
+if run_bootstrap "$OUT_L" --with-gemini --with-codex --second-opinion-engine codex >/dev/null 2>&1 && [[ -z "$(awk 'prev=="" && $0=="" && NR>1 {print NR} {prev=$0}' "$OUT_L/.env.example")" ]]; then pass; else fail "空行が続く、または生成失敗"; fi
+
 exit_with_result
