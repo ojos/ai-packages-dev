@@ -543,6 +543,58 @@ git -C "$R34E" switch -q master
 b2="$(branch_after_follow "$R34E" "$TEST_TMP_ROOT/c34e")"
 if [[ "$b1" == main && "$b2" == chore/update-dcb-v0.99.0 ]]; then pass; else fail "main の上: $b1 / master の上: $b2"; fi
 
+# ── 問いかけに、追従する作業ツリーと切る（乗る）ブランチを出す（#650） ──────────────
+# follow_text <out> <cache>: y で流し、出力（問いかけの文を含む）を返す。
+follow_text() {
+  reset_fixture; set_latest "$DCB_API" "v0.99.0"; put_assets_for v0.99.0
+  notify_in "$1" "$2"
+  yes_run "$1" "$2"
+}
+it "既定ブランチ（origin/HEAD）の上: 問いかけにパスと切るブランチ名が出て、実際に切られる名前と一致する"
+R650A="$(new_workdir)/p"; make_repo "$R650A"
+git -C "$R650A" update-ref refs/remotes/origin/main main
+git -C "$R650A" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main
+R650A_PATH="$(cd "$R650A" && pwd)"
+o="$(follow_text "$R650A" "$TEST_TMP_ROOT/c650a")"
+if [[ "$o" == *"作業ツリー $R650A_PATH で、作業用のブランチ chore/update-dcb-v0.99.0 を切って追従します。追従しますか？ [y/N]"* \
+  && "$(git -C "$R650A" symbolic-ref --short HEAD)" == chore/update-dcb-v0.99.0 ]]; then pass; else fail "出力: $o"; fi
+
+it "作業用のブランチの上: 問いかけに「今のブランチ <名前> の上で追従する」が出て、ブランチは切られない"
+R650B="$(new_workdir)/p"; make_repo "$R650B"
+git -C "$R650B" update-ref refs/remotes/origin/main main
+git -C "$R650B" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main
+git -C "$R650B" switch -q -c chore/mine
+R650B_PATH="$(cd "$R650B" && pwd)"
+o="$(follow_text "$R650B" "$TEST_TMP_ROOT/c650b")"
+if [[ "$o" == *"作業ツリー $R650B_PATH で、今のブランチ chore/mine の上で追従します。追従しますか？ [y/N]"* \
+  && "$(git -C "$R650B" symbolic-ref --short HEAD)" == chore/mine ]]; then pass; else fail "出力: $o"; fi
+
+it "origin/HEAD が無く main / master の上: 問いかけに切るブランチ名が出て、実際に切られる名前と一致する（#634 と同じ判断）"
+R650C="$(new_workdir)/p"; make_repo "$R650C"; git -C "$R650C" branch -q master
+o="$(follow_text "$R650C" "$TEST_TMP_ROOT/c650c")"
+if [[ "$o" == *"で、作業用のブランチ chore/update-dcb-v0.99.0 を切って追従します。"* \
+  && "$(git -C "$R650C" symbolic-ref --short HEAD)" == chore/update-dcb-v0.99.0 ]]; then pass; else fail "出力: $o"; fi
+
+it "origin/HEAD が無く main / master の上でもない: 問いかけに「今のブランチ」が出て、切られない"
+R650D="$(new_workdir)/p"; make_repo "$R650D"; git -C "$R650D" branch -q master; git -C "$R650D" switch -q -c feature/y
+o="$(follow_text "$R650D" "$TEST_TMP_ROOT/c650d")"
+if [[ "$o" == *"で、今のブランチ feature/y の上で追従します。"* && "$(git -C "$R650D" symbolic-ref --short HEAD)" == feature/y ]]; then pass; else fail "出力: $o"; fi
+
+it "同名のブランチが既にあるとき、問いかけの名前（-2 付き）も実際に切られる名前と一致する"
+R650E="$(new_workdir)/p"; make_repo "$R650E"; git -C "$R650E" branch -q chore/update-dcb-v0.99.0
+o="$(follow_text "$R650E" "$TEST_TMP_ROOT/c650e")"
+if [[ "$o" == *"作業用のブランチ chore/update-dcb-v0.99.0-2 を切って追従します。"* \
+  && "$(git -C "$R650E" symbolic-ref --short HEAD)" == chore/update-dcb-v0.99.0-2 ]]; then pass; else fail "出力: $o"; fi
+
+it "手で呼ぶ upgrade も、追従を始める前に作業ツリーと切るブランチ名を 1 行出し、実際に切られる名前と一致する"
+reset_fixture; set_latest "$DCB_API" "v0.99.0"; set_changelog "ojos/devcontainer-bootstrap" "v0.99.0" "v0.99.0:0"; put_assets_for v0.99.0
+R650F="$(new_workdir)/p"; make_repo "$R650F"
+R650F_PATH="$(cd "$R650F" && pwd)"
+: > "$BOOT_LOG"
+o="$(env PATH="$STUBBIN:$PATH" UPDATE_CHECK_CACHE_DIR="$TEST_TMP_ROOT/c650f" UPDATE_CHECK_TODAY="$TODAY" FAKE_CURL_DIR="$FIX" FAKE_BOOT_LOG="$BOOT_LOG" "$BASH_BIN" "$R650F/scripts/update-check.sh" upgrade </dev/null 2>&1)"
+if [[ "$o" == *"作業ツリー $R650F_PATH で、作業用のブランチ chore/update-dcb-v0.99.0 を切って追従します。"* \
+  && "$(git -C "$R650F" symbolic-ref --short HEAD)" == chore/update-dcb-v0.99.0 ]]; then pass; else fail "出力: $o"; fi
+
 # ── 見落としの修正（オフライン・ページ・一体の差し替え・後始末） ─────────────
 it "オフラインの upgrade は、前の日のキャッシュが残っていても、「すでに最新」と言わず、古い版へ追従せず、失敗で終える"
 reset_fixture; set_latest "$DCB_API" "v0.99.0"; put_assets_for v0.99.0
@@ -551,7 +603,7 @@ C35="$TEST_TMP_ROOT/c35"; mkdir -p "$C35"
 printf 'v0.99.0\n' > "$C35/latest-dcb"; printf 'v0.99.0=v0.99.0\n' > "$C35/migrations-dcb"; printf '%s\n' "$TODAY" > "$C35/checked"
 : > "$BOOT_LOG"
 o="$(env PATH="$STUBBIN:$PATH" UPDATE_CHECK_CACHE_DIR="$C35" UPDATE_CHECK_TODAY="$NEXTDAY" FAKE_CURL_DIR="$FIX" FAKE_BOOT_LOG="$BOOT_LOG" FAKE_CURL_FAIL=1 FAKE_CURL_RC=7 "$BASH_BIN" "$R35/scripts/update-check.sh" upgrade </dev/null 2>&1)"; rc=$?
-if [[ "$rc" != 0 && "$o" != *すでに最新* && ! -s "$BOOT_LOG" && ! -e "$C35/latest-dcb" && "$(cat "$C35/checked")" == "$TODAY" ]]; then pass; else fail "rc=$rc 出力: $o"; fi
+if [[ "$rc" != 0 && "$o" != *すでに最新* && ! -s "$BOOT_LOG" && -e "$C35/latest-dcb" && "$(cat "$C35/checked")" == "$TODAY" ]]; then pass; else fail "rc=$rc 出力: $o"; fi
 
 it "ai-playbook のタグが 100 件を超えるときは、ページをたどって最大を取る（2 ページ目に最大がある）"
 reset_fixture
@@ -654,6 +706,24 @@ else
   pass
 fi
 
+it "ロックを取るまでのあいだに、ほかの notify が今日の取得を終えていたら、取り直さない（#643）"
+if command -v flock >/dev/null 2>&1; then
+  reset_fixture; set_latest "$DCB_API" "v0.99.0"; set_changelog "ojos/devcontainer-bootstrap" "v0.99.0" "v0.99.0:0"
+  CRR="$TEST_TMP_ROOT/crace-recheck"; run_uc "$CRR" notify >/dev/null
+  # 偽の flock: 呼ばれた瞬間（ロックを取る直前）に、ほかの notify が更新を終えた状態（今日の checked）を作る。
+  FLOCKBIN="$TEST_TMP_ROOT/flock-recheck-bin"; mkdir -p "$FLOCKBIN"
+  real_flock="$(command -v flock)"
+  printf '#!/bin/sh\nprintf "%%s\\n" "$RECHECK_TODAY" > "$RECHECK_FILE"\nexec %s "$@"\n' "$real_flock" > "$FLOCKBIN/flock"
+  chmod +x "$FLOCKBIN/flock"
+  set_latest "$DCB_API" "v0.100.0"
+  n0="$(calls)"
+  env PATH="$FLOCKBIN:$STUBBIN:$PATH" UPDATE_CHECK_CACHE_DIR="$CRR" UPDATE_CHECK_TODAY="$NEXTDAY" FAKE_CURL_DIR="$FIX" \
+    RECHECK_TODAY="$NEXTDAY" RECHECK_FILE="$CRR/checked" "$BASH_BIN" "$UC" notify </dev/null >/dev/null 2>&1
+  if [[ "$(calls)" == "$n0" && "$(cat "$CRR/latest-dcb")" == v0.99.0 && "$(cat "$CRR/checked")" == "$NEXTDAY" ]]; then pass; else fail "calls $n0 -> $(calls) latest=$(cat "$CRR/latest-dcb") checked=$(cat "$CRR/checked")"; fi
+else
+  pass
+fi
+
 it "更新用のロックは、ロックのディレクトリの方式でも効く（持ち主が生きているあいだ更新を飛ばす）"
 CRD="$TEST_TMP_ROOT/crace2"; mkdir -p "$CRD/refresh-lock.d"
 sleep 5 & live=$!
@@ -698,8 +768,8 @@ CU3="$TEST_TMP_ROOT/cu3"; mkdir -p "$CU3"; printf 'v0.99.0\n' > "$CU3/latest-dcb
 o="$(env PATH="$STUBBIN:$PATH" UPDATE_CHECK_CACHE_DIR="$CU3" UPDATE_CHECK_TODAY="$TODAY" FAKE_CURL_DIR="$FIX" FAKE_BOOT_LOG="$BOOT_LOG" "$BASH_BIN" "$RU3/scripts/update-check.sh" upgrade </dev/null 2>&1)"; rc=$?
 if [[ "$rc" != 0 && ! -s "$BOOT_LOG" && "$o" != *すでに最新* ]]; then pass; else fail "rc=$rc 出力: $o"; fi
 
-it "upgrade: 同じ日の印があっても、再取得に失敗したら印を消し、次の notify で取り直す"
-if [[ ! -e "$CU3/checked" ]]; then pass; else fail "印が残った: $(cat "$CU3/checked")"; fi
+it "upgrade: 同じ日の印があって再取得に失敗しても、印は消さない（追従は今回取得できた部品だけで判断する）"
+if [[ "$(cat "$CU3/checked" 2>/dev/null)" == "$TODAY" ]]; then pass; else fail "印が消えた"; fi
 
 it "upgrade: DCB は取得できて ai-playbook が通信不能のとき、DCB だけ追従する"
 reset_fixture; set_latest "$DCB_API" "v0.99.0"; set_changelog "ojos/devcontainer-bootstrap" "v0.99.0" "v0.99.0:0"; put_assets_for v0.99.0
@@ -962,12 +1032,13 @@ o="$( cd "$RIA" && printf 'n\n' | env PATH="$STUBBIN:$PATH" HOME="$RIAH" UPDATE_
 rm -f "$RIA/.env"
 if [[ -z "$o" && ! -f "$CIA5/declined-dcb" ]]; then pass; else fail "出力: $o"; fi
 
-it ".env に DCB_ENV_UPDATE_CHECK が書かれていても、退避した環境の off は上書きされない"
-printf 'DCB_ENV_UPDATE_CHECK=on\nUPDATE_CHECK=on\n' > "$RIA/.env"
+it ".env に合図の変数（DCB_LOAD_ENV_UPDATE_CHECK=1）と UPDATE_CHECK=on を書いても、対話シェルの UPDATE_CHECK は上書きされず、環境の off が勝つ"
+printf 'DCB_LOAD_ENV_UPDATE_CHECK=1\nDCB_ENV_UPDATE_CHECK=on\nUPDATE_CHECK=on\n' > "$RIA/.env"
 CIA6="$TEST_TMP_ROOT/cia6"; run_uc "$CIA6" notify >/dev/null
 o="$(sim_interactive "$CIA6" n UPDATE_CHECK=off)"
+o2="$(env -u UPDATE_CHECK HOME="$RIAH" "$BASH_BIN" --norc -c ". \"$RIA/scripts/load-project-env.sh\"; printf '%s' \"\${UPDATE_CHECK-unset}\"")"
 rm -f "$RIA/.env"
-if [[ -z "$o" && ! -f "$CIA6/declined-dcb" ]]; then pass; else fail "出力: $o"; fi
+if [[ -z "$o" && ! -f "$CIA6/declined-dcb" && "$o2" == "unset" ]]; then pass; else fail "出力: $o / $o2"; fi
 
 # nested_ask <cache> <子の環境の指定>: 親（UPDATE_CHECK 未設定・.env は on）が rc を読んだあと、子が rc を読む。
 nested_ask() {
@@ -992,19 +1063,71 @@ o="$(nested_ask "$CIA8" A_DUMMY=1)"
 rm -f "$RIA/.env"
 if [[ "$o" == *"追従しますか？"* ]]; then pass; else fail "出力: $o"; fi
 
-# ── コマンドで明示した UPDATE_CHECK は、親のシェルの退避値に勝つ（#640） ─────────
+# ── コマンドで明示した UPDATE_CHECK は、環境・.env のどちらにも勝つ（#640 / #645） ─────
+# 対話シェルの模擬（ローダーを通したシェル）で、値が一致する組み合わせも両向きで確かめる。
 reset_fixture; set_latest "$DCB_API" "v0.99.0"
 
-it "退避が off・読んだ直後の値も off のシェルで、UPDATE_CHECK=on を明示すると通知が出る"
-o="$(run_uc "$TEST_TMP_ROOT/cex1" notify DCB_ENV_UPDATE_CHECK=off DCB_ENV_UPDATE_CHECK_LOADED=off UPDATE_CHECK=on)"
+# explicit_in_shell <cache> <シェルの環境の指定> <明示する値>: 対話シェルが rc を読んだあと、同じシェルから
+# 明示した値で update-check.sh を動かす。標準入力は答え（n）。
+explicit_in_shell() {
+  local cache="$1" shellenv="$2" val="$3"
+  printf '%s\n' ". \"$TEST_TMP_ROOT/ria-rc.sh\" </dev/null >/dev/null 2>&1" \
+    "UPDATE_CHECK=$val \"$BASH_BIN\" \"$RIA/scripts/update-check.sh\" notify" > "$TEST_TMP_ROOT/ria-explicit.sh"
+  ( cd "$RIA" && env PATH="$STUBBIN:$PATH" HOME="$RIAH" UPDATE_CHECK_CACHE_DIR="$cache" UPDATE_CHECK_TODAY="$TODAY" \
+      FAKE_CURL_DIR="$FIX" $shellenv "$BASH_BIN" --norc "$TEST_TMP_ROOT/ria-explicit.sh" </dev/null 2>&1 )
+}
+
+it "環境 on・.env off のシェルで、UPDATE_CHECK=off を明示すると止まる"
+printf 'UPDATE_CHECK=off\n' > "$RIA/.env"
+CEX1="$TEST_TMP_ROOT/cex1"; run_uc "$CEX1" notify >/dev/null
+o="$(explicit_in_shell "$CEX1" UPDATE_CHECK=on off)"
+rm -f "$RIA/.env"
+if [[ -z "$o" ]]; then pass; else fail "出力: $o"; fi
+
+it "環境 off・.env on のシェルで、UPDATE_CHECK=on を明示すると通知が出る"
+printf 'UPDATE_CHECK=on\n' > "$RIA/.env"
+CEX2="$TEST_TMP_ROOT/cex2"; run_uc "$CEX2" notify >/dev/null
+o="$(explicit_in_shell "$CEX2" UPDATE_CHECK=off on)"
+rm -f "$RIA/.env"
 if [[ "$o" == *"新しい版があります"* ]]; then pass; else fail "出力: $o"; fi
 
-it "退避が on・読んだ直後の値も on のシェルで、UPDATE_CHECK=off を明示すると止まる"
-o="$(run_uc "$TEST_TMP_ROOT/cex2" notify DCB_ENV_UPDATE_CHECK=on DCB_ENV_UPDATE_CHECK_LOADED=on UPDATE_CHECK=off)"
+it "環境に値が無く .env が on のシェルで、UPDATE_CHECK=off を明示すると止まる"
+printf 'UPDATE_CHECK=on\n' > "$RIA/.env"
+CEX3="$TEST_TMP_ROOT/cex3"; run_uc "$CEX3" notify >/dev/null
+o="$(explicit_in_shell "$CEX3" A_DUMMY=1 off)"
+rm -f "$RIA/.env"
 if [[ -z "$o" ]]; then pass; else fail "出力: $o"; fi
 
-it "明示しない（今の値が読んだ直後の値と同じ）ときは、従来どおり退避値が勝つ"
-o="$(run_uc "$TEST_TMP_ROOT/cex3" notify DCB_ENV_UPDATE_CHECK=off DCB_ENV_UPDATE_CHECK_LOADED=on UPDATE_CHECK=on)"
+it "ローダーを読んだあとのシェルで、UPDATE_CHECK が .env の値で上書きされていない（環境の値も、無い状態も保つ）"
+printf 'UPDATE_CHECK=on\nOTHER_KEY=x\n' > "$RIA/.env"
+o1="$(env HOME="$RIAH" UPDATE_CHECK=off "$BASH_BIN" --norc -c ". \"$RIA/scripts/load-project-env.sh\"; printf '%s|%s' \"\${UPDATE_CHECK-}\" \"\${OTHER_KEY-}\"")"
+o2="$(env -u UPDATE_CHECK HOME="$RIAH" "$BASH_BIN" --norc -c ". \"$RIA/scripts/load-project-env.sh\"; printf '%s|%s' \"\${UPDATE_CHECK-unset}\" \"\${OTHER_KEY-}\"")"
+rm -f "$RIA/.env"
+if [[ "$o1" == "off|x" && "$o2" == "unset|x" ]]; then pass; else fail "出力: $o1 / $o2"; fi
+
+it "UPDATE_CHECK が空のときは、update-check.sh が .env の値（引用符・export 付き）を読む"
+printf 'export UPDATE_CHECK="off"  \n' > "$RIA/.env"
+CEX5="$TEST_TMP_ROOT/cex5"; run_uc "$CEX5" notify >/dev/null
+o="$(cd "$RIA" && env PATH="$STUBBIN:$PATH" UPDATE_CHECK_CACHE_DIR="$CEX5" UPDATE_CHECK_TODAY="$TODAY" FAKE_CURL_DIR="$FIX" UPDATE_CHECK= "$BASH_BIN" "$RIA/scripts/update-check.sh" notify </dev/null 2>&1)"
+rm -f "$RIA/.env"
 if [[ -z "$o" ]]; then pass; else fail "出力: $o"; fi
+
+# ── UPDATE_CHECK に値があっても、ほかの .env の値は届く（#645） ─────────────────
+it "update-check.sh は UPDATE_CHECK の有無によらずローダーを読む（UPDATE_CHECK の条件で囲まない）"
+if command grep -q '^if \[\[ -f "\$HELPER" \]\]; then' "$RIA/scripts/update-check.sh" \
+  && ! command grep -q 'UPDATE_CHECK-}" \]\] && \[\[ -f "\$HELPER"' "$RIA/scripts/update-check.sh"; then pass; else fail "条件付きの読み込みが残っている"; fi
+
+# ── upgrade の取得失敗は、直前の notify のキャッシュと今日の印を消さない（#645） ──────
+reset_fixture; set_latest "$DCB_API" "v0.99.0"; set_changelog "ojos/devcontainer-bootstrap" "v0.99.0" "v0.99.0:0"
+CUP="$TEST_TMP_ROOT/cup"
+run_uc "$CUP" notify >/dev/null
+it "upgrade の取得が失敗しても、notify が取得したキャッシュ（latest）と今日の印（checked）は残る"
+o="$(run_uc "$CUP" upgrade FAKE_CURL_FAIL=1)"; rc=$?
+if [[ $rc -ne 0 && -f "$CUP/latest-dcb" && "$(cat "$CUP/checked" 2>/dev/null)" == "$TODAY" ]]; then pass; else fail "rc=$rc 出力: $o"; fi
+
+it "通知の文言が、環境の値、無ければ .env の値という優先順位を示す"
+reset_fixture; set_latest "$DCB_API" "v0.99.0"
+o="$(run_uc "$TEST_TMP_ROOT/cmsg" notify)"
+if [[ "$o" == *"UPDATE_CHECK=off（環境の値。無ければ .env の値）"* ]]; then pass; else fail "出力: $o"; fi
 
 exit_with_result

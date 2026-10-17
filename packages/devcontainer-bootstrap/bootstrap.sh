@@ -1265,7 +1265,7 @@ __SECOND_OPINION_ENGINE_LINES__
 # あれば、接続時に通知を 1 行出し、対話のシェルで「追従しますか？ [y/N]」と聞く（y なら
 # bootstrap.sh --upgrade で追従し、差分を作業ツリーに残して止める。コミット・push・PR はしない）。
 # 問い合わせは 1 日 1 回、認証なし。既定は有効。止めるには次の行の # を外す（環境変数で
-# UPDATE_CHECK=off を設定しても止まる。環境の値が優先される）。
+# UPDATE_CHECK=off を設定しても止まる。環境の値・コマンドで明示した値が .env より優先される）。
 # 生成時に --no-update-check を付けると、ORIGIN に記録して --upgrade でも引き継ぐ。
 # UPDATE_CHECK=off
 
@@ -1727,23 +1727,18 @@ TMPL
 #   - .env は source せず安全にパースする（KEY=VALUE のみ export、任意コードは実行しない）。
 #     これにより、壊れた .env が対話シェルの初期化ごと落とす事故を防ぐ。
 #   - CRLF・=前後や値前後の空白など、実務的な .env の揺れを吸収する。
+#   - UPDATE_CHECK だけは .env の値で上書きしない（環境の値・コマンドで明示した値を優先する）。
+#     読み飛ばすのは常にで、合図の変数は無い。.env の UPDATE_CHECK を知りたい update-check.sh は、
+#     __load_project_env_value UPDATE_CHECK で値だけを標準出力へ受け取る（変数は変えない）。
+#   - __load_project_env_value KEY: .env の KEY の値（後勝ち）を標準出力へ返す。見つかれば 0、
+#     無ければ 1。解釈は読み込み本体と同じ処理を共有する（引数に KEY を渡した __load_project_env）。
 #
 # 冪等: 複数回 source しても安全。.env が無ければ何もしない。
 
 __load_project_env() {
   local project_root env_file line key val src
-  # .env で UPDATE_CHECK を上書きする前の値（環境で設定した値）を、最上位のシェルで一度だけ退避する。
-  # 対話シェルでは rc の自動読み込みが先に .env で上書きするため、update-check.sh は退避が無いと
-  # 環境の値を知れない。export するので、入れ子のシェル（tmux・bash）や子プロセスも同じ値を受け継ぎ、
-  # 子の読み込みで .env の値を退避し直すことが無い（${DCB_ENV_UPDATE_CHECK+x} が空のときだけ退避する）。
-  # 退避し直す条件: 退避が無いとき、または今の UPDATE_CHECK がローダーが前回読んだ直後の値
-  # （DCB_ENV_UPDATE_CHECK_LOADED）と違うとき（親が未設定のまま、利用者が UPDATE_CHECK=off bash の
-  # ように明示して入れ子のシェルを開いたとき）。同じなら親の .env の値を受け継いだだけなので退避し直さない。
-  if [ -z "${DCB_ENV_UPDATE_CHECK+x}" ] || [ "${UPDATE_CHECK-}" != "${DCB_ENV_UPDATE_CHECK_LOADED-}" ]; then
-    export DCB_ENV_UPDATE_CHECK="${UPDATE_CHECK-}"
-  fi
-  # .env が DCB_ENV_UPDATE_CHECK を書いていても上書きされないよう、読んだあとで戻す。
-  local saved_update_check="$DCB_ENV_UPDATE_CHECK"
+  # 引数があれば値の取得モード: その KEY の値を標準出力へ返すだけで、何も export しない。
+  local want_key="${1-}" result="" found=1
   # ソース中ファイルのパスを bash / zsh 双方で解決する。zsh には BASH_SOURCE が無いため
   # ${BASH_SOURCE[0]} は空になり CWD 依存へ化ける。実行シェルを判定して回避する。
   if [ -n "${BASH_VERSION:-}" ]; then
@@ -1783,7 +1778,7 @@ __load_project_env() {
   fi
 
   if [[ ! -f "$env_file" ]]; then
-    export DCB_ENV_UPDATE_CHECK_LOADED="${UPDATE_CHECK-}"
+    [[ -z "$want_key" ]] || return 1
     return 0
   fi
 
@@ -1816,11 +1811,27 @@ __load_project_env() {
     elif [[ ${#val} -ge 2 && "$val" == \'*\' ]]; then
       val="${val:1:${#val}-2}"
     fi
+    # 値の取得モード: 変数は変えず、後勝ちで値だけを控える。
+    if [[ -n "$want_key" ]]; then
+      if [[ "$key" == "$want_key" ]]; then result="$val"; found=0; fi
+      continue
+    fi
+    # UPDATE_CHECK は上書きしない（シェルの値は、環境の値か、コマンドで明示した値のまま）。
+    # 「明示した値」と「.env が上書きした値」を後から推測しなくて済むようにするため。
+    [[ "$key" != UPDATE_CHECK ]] || continue
     # 後勝ちで既存の環境変数（remoteEnv 由来のホスト値）を上書きする。
     export "$key=$val"
   done < "$env_file"
-  export DCB_ENV_UPDATE_CHECK="$saved_update_check"
-  export DCB_ENV_UPDATE_CHECK_LOADED="${UPDATE_CHECK-}"
+  if [[ -n "$want_key" ]]; then
+    printf '%s' "$result"
+    return "$found"
+  fi
+  return 0
+}
+
+# .env の KEY の値だけを標準出力へ返す（変数は変えない。見つかれば 0、無ければ 1）。
+__load_project_env_value() {
+  __load_project_env "$1"
 }
 
 __load_project_env
@@ -2143,24 +2154,21 @@ DCB_SLUG="ojos/devcontainer-bootstrap"
 PB_DEFAULT_SLUG="ojos/ai-playbook"
 LOG_PREFIX="[update-check]"
 
-# .env の UPDATE_CHECK を効かせる（ローダーは source 専用・冪等。無ければ何もしない）。
-# ローダーは .env の値で既存の環境変数を上書きするので、環境で設定した値（例: off）は読む前に
-# 退避し、読んだあとで戻す（環境の値を優先する。.env の空の行で打ち消されない）。
-# 対話シェルでは、rc の自動読み込み（load-project-env.sh）が先に .env で UPDATE_CHECK を上書きしている。
-# そのため、ローダーが読み込み前に退避した DCB_ENV_UPDATE_CHECK が空でなければ、それを環境の値とする。
-# ただし、今の UPDATE_CHECK がローダーの読んだ直後の値（DCB_ENV_UPDATE_CHECK_LOADED）と違えば、
-# このコマンドで利用者が明示したものとして今の値を採る（ローダーが退避し直す条件と同じ考え方）。
-if [[ -n "${DCB_ENV_UPDATE_CHECK-}" && "${UPDATE_CHECK-}" == "${DCB_ENV_UPDATE_CHECK_LOADED-}" ]]; then
-  ENV_UPDATE_CHECK="$DCB_ENV_UPDATE_CHECK"
-else
-  ENV_UPDATE_CHECK="${UPDATE_CHECK-}"
-fi
+# .env を読み込む（ローダーは source 専用・冪等。無ければ何もしない）。HTTPS_PROXY や GIT_IDENTITY_* など、
+# curl や子の bootstrap.sh --upgrade が使う値を届けるため、UPDATE_CHECK の有無によらず常に読む。
+# ローダーは UPDATE_CHECK を常に読み飛ばすので、読み込みは UPDATE_CHECK の優先順位を変えない。
 if [[ -f "$HELPER" ]]; then
   # shellcheck source=/dev/null
   . "$HELPER" 2>/dev/null || true
 fi
-if [[ -n "$ENV_UPDATE_CHECK" ]]; then
-  UPDATE_CHECK="$ENV_UPDATE_CHECK"
+# UPDATE_CHECK の優先順位: UPDATE_CHECK に値（空でない）があればそれを採る（環境の値、またはコマンドで
+# 明示した値）。無いときだけ、ローダーの値取得の関数で .env の UPDATE_CHECK を読む（読み方はローダーと
+# 同じ。変数は変えない）。値の比較による推測はしない。
+if [[ -z "${UPDATE_CHECK-}" ]] && declare -F __load_project_env_value >/dev/null 2>&1; then
+  ENV_UPDATE_CHECK="$(__load_project_env_value UPDATE_CHECK 2>/dev/null)" || ENV_UPDATE_CHECK=""
+  if [[ -n "$ENV_UPDATE_CHECK" ]]; then
+    UPDATE_CHECK="$ENV_UPDATE_CHECK"
+  fi
 fi
 
 # UPDATE_CHECK が止める値なら 0 を返す（止めない値なら 1）。
@@ -2360,10 +2368,12 @@ is_offline_rc() {
 # ai-playbook はタグだけを打って Release を作らないため、タグの一覧から vX.Y.Z の最大を取る。
 # latest-<部品> は版だけの 1 行。migrations-<部品> は「<版>=<移行の節がある版の空白区切り>」で、
 # 読む側は latest の版と一致するときだけ使う（rename は別々でも、組み合わせを読み違えない）。
+# 第 1 引数が preserve なら、失敗しても既存のキャッシュと今日の印を消さない（upgrade は今回取得できた部品
+# だけを使うので、古いキャッシュを使う心配が無い。直前に notify が取得した内容を消さないため）。
 REFRESHED=""
 refresh_cache() {
   local dir c cur slug tag t list rc offline="" failed="" today
-  local keep="" drop=""
+  local keep="" drop="" preserve="${1-}"
   REFRESHED=""
   dir="$(cache_dir)"
   mkdir -p "$dir" 2>/dev/null || return 1
@@ -2424,7 +2434,7 @@ refresh_cache() {
     mv -f "$RC_STAGE/latest-$c" "$dir/latest-$c" 2>/dev/null || rm -f "$dir/latest-$c"
   done
   for c in $drop; do
-    rm -f "$dir/latest-$c" "$dir/migrations-$c" 2>/dev/null
+    [[ "$preserve" == preserve ]] || rm -f "$dir/latest-$c" "$dir/migrations-$c" 2>/dev/null
   done
   rm -rf "$RC_TMP" "$RC_STAGE"
   RC_TMP="" RC_STAGE=""
@@ -2432,7 +2442,7 @@ refresh_cache() {
   # 成功した notify の印が残ると、失敗で消した部品を、その日のうちに取り直さないため。
   # 前の日の印は、どのみち今日の取り直しを止めないので、そのままにする。
   if [[ -n "$offline" || -n "$failed" ]]; then
-    if [[ "$(cat "$dir/checked" 2>/dev/null)" == "$today" ]]; then rm -f "$dir/checked" 2>/dev/null; fi
+    if [[ "$preserve" != preserve && "$(cat "$dir/checked" 2>/dev/null)" == "$today" ]]; then rm -f "$dir/checked" 2>/dev/null; fi
     [[ -z "$offline" ]] || return 1
     return 0
   fi
@@ -2470,14 +2480,19 @@ pend_names() {
 
 # 今日まだ問い合わせていなければ問い合わせ、追従の候補があれば通知を 1 行だけ出す（聞かない）。
 cmd_notify() {
-  local dir pend t c line="" cur latest
+  local dir pend t c line="" cur latest today
   dir="$(cache_dir)"
-  if [[ "$(cat "$dir/checked" 2>/dev/null || true)" != "${UPDATE_CHECK_TODAY:-$(date +%Y-%m-%d)}" ]]; then
+  # 今日の日付は 1 度だけ求め、外側の確認とロックの後の読み直しで同じ値を使う（日付をまたいで食い違わないように）。
+  today="${UPDATE_CHECK_TODAY:-$(date +%Y-%m-%d)}"
+  if [[ "$(cat "$dir/checked" 2>/dev/null || true)" != "$today" ]]; then
     # 更新は更新用の排他（refresh-lock）を取って行う（待たずに試し、取れなければ飛ばす。checked を書かないので、
     # 次の接続で取り直す）。聞く側のロック（lock）は取らないので、prompt が問いかけ中でも更新でき、更新中でも
     # prompt は問いかけられる。飛ばすのは更新だけで、通知は出す（キャッシュを読んで知らせるだけで、
     # 更新は rename 差し替えなので、ほかの端末が更新・問いかけの最中でも一貫した状態を読める）。
-    if acquire_lock refresh-lock 8; then
+    # ロックを取ったあとで checked を読み直す。ほかの notify が、こちらの確認とロックのあいだに更新を
+    # 終えていれば、同じ日に取り直さない（取り直して失敗すると、相手が取得したキャッシュと今日の印を消すため）。
+    if acquire_lock refresh-lock 8 \
+      && [[ "$(cat "$dir/checked" 2>/dev/null || true)" != "$today" ]]; then
       refresh_cache || true
     fi
   fi
@@ -2488,7 +2503,7 @@ cmd_notify() {
     cur="$(comp_cur "$c")"
     line="${line:+$line, }$(comp_repo "$c") $cur -> $latest"
   done
-  echo "$LOG_PREFIX 新しい版があります: $line。対話のシェルで追従できます（bash scripts/update-check.sh upgrade でも追従できます）。止めるには UPDATE_CHECK=off（.env）"
+  echo "$LOG_PREFIX 新しい版があります: $line。対話のシェルで追従できます（bash scripts/update-check.sh upgrade でも追従できます）。止めるには UPDATE_CHECK=off（環境の値。無ければ .env の値）"
   return 0
 }
 
@@ -2557,14 +2572,31 @@ acquire_lock() {
   return 0
 }
 
-# 作業用のブランチを切る（既定ブランチの上にいるときだけ）。切ったら名前を $BRANCH_MADE へ、
-# 元のブランチを $BRANCH_ORIG へ入れる。
-BRANCH_MADE=""
-BRANCH_ORIG=""
-prepare_branch() {
-  local want="$1" cur def n name why=""
+# 作業用のブランチの名前の元（追従する版から決める）。$1 = DCB の版（上げないなら空）、$2 = ai-playbook の版（同）。
+# 問いかけ・手で呼ぶ upgrade の案内・prepare_branch が同じ名前を使うよう、決め方はここにだけ置く。
+follow_branch_name() {
+  local ver_dcb="$1" ver_pb="$2" bname
+  if [[ -n "$ver_dcb" ]]; then
+    bname="chore/update-dcb-$ver_dcb"
+    [[ -z "$ver_pb" ]] || bname="$bname-playbook-$ver_pb"
+  else
+    bname="chore/update-playbook-$ver_pb"
+  fi
+  printf '%s' "$bname"
+}
+
+# 追従で作業用のブランチを切るかを決める（git は変えない）。結果:
+#   BRANCH_PLAN     = make（切る）/ stay（今のブランチの上で追従する）/ none（git のブランチの上ではない）
+#   BRANCH_PLAN_CUR = 今のブランチ
+#   BRANCH_PLAN_WHY = 切る理由（make のとき）
+# 既定ブランチの判断（origin/HEAD が無いときの扱い。#634）は、prepare_branch と問いかけで共有する。
+BRANCH_PLAN="" BRANCH_PLAN_CUR="" BRANCH_PLAN_WHY=""
+plan_branch() {
+  local cur def
+  BRANCH_PLAN="none" BRANCH_PLAN_CUR="" BRANCH_PLAN_WHY=""
   git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 0
   cur="$(git -C "$ROOT" symbolic-ref --quiet --short HEAD 2>/dev/null)" || return 0
+  BRANCH_PLAN_CUR="$cur"
   def="$(git -C "$ROOT" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null)" || def=""
   def="${def#origin/}"
   # origin/HEAD が無ければ、既定ブランチを推定しない（main と master が両方あると取り違えるため。
@@ -2576,28 +2608,58 @@ prepare_branch() {
     for b in main master; do
       if git -C "$ROOT" show-ref --verify --quiet "refs/heads/$b"; then has_default="yes"; fi
     done
-    [[ -z "$has_default" || "$cur" == main || "$cur" == master ]] || return 0
+    if [[ -n "$has_default" && "$cur" != main && "$cur" != master ]]; then BRANCH_PLAN="stay"; return 0; fi
+    BRANCH_PLAN="make"
     if [[ -n "$has_default" ]]; then
-      why="origin/HEAD が無いため、main / master の上を既定ブランチの上とみなして"
+      BRANCH_PLAN_WHY="origin/HEAD が無いため、main / master の上を既定ブランチの上とみなして"
     else
-      why="既定ブランチを判断できなかった（origin/HEAD も main / master も無い）ため、念のため"
+      BRANCH_PLAN_WHY="既定ブランチを判断できなかった（origin/HEAD も main / master も無い）ため、念のため"
     fi
   elif [[ "$cur" != "$def" ]]; then
-    return 0
+    BRANCH_PLAN="stay"
   else
-    why="既定ブランチ（$def）の上だったので"
+    BRANCH_PLAN="make"
+    BRANCH_PLAN_WHY="既定ブランチ（$def）の上だったので"
   fi
-  name="$want"; n=1
+  return 0
+}
+
+# 切るブランチの実際の名前（$1 = 名前の元。同名が既にあれば -2, -3 を付ける）。
+unique_branch_name() {
+  local want="$1" name n=1
+  name="$want"
   while git -C "$ROOT" show-ref --verify --quiet "refs/heads/$name"; do
     n=$((n + 1)); name="$want-$n"
   done
+  printf '%s' "$name"
+}
+
+# 追従で何が起きるかを 1 文で出す（作業ツリーのパスと、切るブランチ／追従するブランチ）。$1 = 名前の元。
+branch_plan_text() {
+  plan_branch
+  case "$BRANCH_PLAN" in
+    make) printf '作業ツリー %s で、作業用のブランチ %s を切って追従します' "$ROOT" "$(unique_branch_name "$1")" ;;
+    stay) printf '作業ツリー %s で、今のブランチ %s の上で追従します' "$ROOT" "$BRANCH_PLAN_CUR" ;;
+    *)    printf '作業ツリー %s で、ブランチは切らずに追従します（git のブランチの上ではありません）' "$ROOT" ;;
+  esac
+}
+
+# 作業用のブランチを切る（既定ブランチの上にいるときだけ）。切ったら名前を $BRANCH_MADE へ、
+# 元のブランチを $BRANCH_ORIG へ入れる。
+BRANCH_MADE=""
+BRANCH_ORIG=""
+prepare_branch() {
+  local want="$1" name
+  plan_branch
+  [[ "$BRANCH_PLAN" == make ]] || return 0
+  name="$(unique_branch_name "$want")"
   if ! git -C "$ROOT" switch -c "$name" >/dev/null 2>&1; then
     echo "$LOG_PREFIX 作業用のブランチ $name を切れませんでした。何も変えずに止めます。" >&2
     return 1
   fi
   BRANCH_MADE="$name"
-  BRANCH_ORIG="$cur"
-  echo "$LOG_PREFIX ${why}、作業用のブランチ $name を切りました。"
+  BRANCH_ORIG="$BRANCH_PLAN_CUR"
+  echo "$LOG_PREFIX ${BRANCH_PLAN_WHY}、作業用のブランチ $name を切りました。"
   return 0
 }
 
@@ -2701,12 +2763,9 @@ do_upgrade() {
   fi
   echo "$LOG_PREFIX bootstrap.sh $use_tag を取得し、SHA256SUMS と照合しました。"
 
-  if [[ -n "$want_dcb" ]]; then
-    wantbranch="chore/update-dcb-$latest_dcb"
-    [[ -z "$want_pb" ]] || wantbranch="$wantbranch-playbook-$latest_pb"
-  else
-    wantbranch="chore/update-playbook-$latest_pb"
-  fi
+  wantbranch="$(follow_branch_name "$latest_dcb" "$latest_pb")"
+  # 問いかけを経ない（手で呼ぶ upgrade）ときは、追従を始める前に何が起きるかを 1 行出す。
+  [[ -n "$from_prompt" ]] || echo "$LOG_PREFIX $(branch_plan_text "$wantbranch")。"
   if ! prepare_branch "$wantbranch"; then
     rm -rf "$work"
     return 1
@@ -2805,7 +2864,8 @@ cmd_prompt() {
     done
     return 0
   fi
-  printf '追従しますか？ [y/N] '
+  # 追従する作業ツリーと、切る（または乗る）ブランチを問いかけの文に含める。名前は prepare_branch と同じ関数で決める。
+  printf '%s。追従しますか？ [y/N] ' "$(branch_plan_text "$(follow_branch_name "$shown_dcb" "$shown_playbook")")"
   ans=""
   read -r ans || ans=""
   case "$ans" in
@@ -2836,7 +2896,7 @@ cmd_upgrade() {
   fi
   # 取得の結果は部品ごとに見る。今回取得できた部品だけを対象にする（取得できなかった部品は、
   # 前の日・同じ日のキャッシュがあっても使わない）。どちらも取得できなければ、「すでに最新」と言わずに失敗で終える。
-  refresh_cache || true
+  refresh_cache preserve || true
   if [[ -z "$REFRESHED" ]]; then
     echo "$LOG_PREFIX 最新の版を取得できなかったため、追従するか判断できません（オフライン・GitHub の不調・API の制限）。時間をおいて、もう一度実行してください。" >&2
     return 1
@@ -4127,19 +4187,25 @@ CNS_PROBE='
     printf "%s\n" "$before"
     exit 0
   fi
-  # ローダーが内部用に export する DCB_ENV_UPDATE_CHECK（.env を読む前の UPDATE_CHECK の退避）は、
-  # .env のキーではない。ソース前の一覧へ足して、差分に現れないようにする。
-  before="$(printf "%s\n" "$before" DCB_ENV_UPDATE_CHECK DCB_ENV_UPDATE_CHECK_LOADED | sort -u)"
   . "$loader" || exit 3
   after="$(compgen -e | sort)"
   keys="$(comm -13 <(printf "%s\n" "$before") <(printf "%s\n" "$after"))"
+  # ローダーは UPDATE_CHECK を読み飛ばす（変数が変わらず、差分に現れない）。.env / .env.example に
+  # あるキーとして数えるため、ローダーの値取得の関数で読む。
+  uc=""; uc_found=0
+  if uc="$(__load_project_env_value UPDATE_CHECK)"; then
+    uc_found=1
+    if [ -n "$keys" ]; then keys="$keys
+UPDATE_CHECK"; else keys="UPDATE_CHECK"; fi
+  fi
   if [ "$mode" = keys ]; then
     printf "%s\n" "$keys"
     exit 0
   fi
   printf "%s\n" "$keys" | while IFS= read -r k; do
     [ -n "$k" ] || continue
-    if [ -n "${!k}" ]; then printf "%s\n" "$k"; fi
+    if [ "$k" = UPDATE_CHECK ] && [ "$uc_found" = 1 ]; then v="$uc"; else v="${!k}"; fi
+    if [ -n "$v" ]; then printf "%s\n" "$k"; fi
   done
   exit 0
 '
