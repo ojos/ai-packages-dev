@@ -3439,6 +3439,7 @@ rt 1 "doctor --runner: routes にそのラベルの行が無く、ユニット�
 expect_out_line '\[FAIL\] route rt1: ユニット（dev-route@rt1.service）は有効ですが、routes に rt1 の行がありません'
 rt 1 "doctor --runner: enable せず start して failed で止まったユニットも、routes が無ければ FAIL" DEV_ROUTES_FILE="$WORK/conf/no-such-routes" FAKE_FAILED_UNITS="dev-route@rt1.service" FAKE_ACTIVE_UNITS="dev-runner@q1.service" -- doctor --runner q1
 expect_out_line '\[FAIL\] route rt1: ユニット（dev-route@rt1.service）は有効ですが'
+expect_out_line 'systemctl --user reset-failed dev-route@rt1.service dev-route-sync@rt1.timer'
 rt 1 "doctor --runner: activating のユニットも、routes が無ければ FAIL" DEV_ROUTES_FILE="$WORK/conf/no-such-routes" FAKE_ACTIVATING_UNITS="dev-route@rt1.service" FAKE_ACTIVE_UNITS="dev-runner@q1.service" -- doctor --runner q1
 expect_out_line '\[FAIL\] route rt1: ユニット（dev-route@rt1.service）は有効ですが'
 rt 1 "doctor --runner: enabled-runtime のユニットも、routes が無ければ FAIL" DEV_ROUTES_FILE="$WORK/conf/no-such-routes" FAKE_ENABLED_RUNTIME_UNITS="dev-route@rt1.service" FAKE_ACTIVE_UNITS="dev-runner@q1.service" -- doctor --runner q1
@@ -3447,6 +3448,12 @@ expect_out_line '先に routes にその行を戻してから systemctl --user d
 rt 3 "doctor --runner: どのランナーの labels= にも無いラベルの有効なユニットは WARN（1 回）" DEV_ROUTES_FILE="$WORK/conf/no-such-routes" FAKE_ENABLED_UNITS="dev-route-sync@gone.timer" FAKE_ACTIVE_UNITS="dev-runner@q1.service dev-route-sync@gone.timer" -- doctor --runner q1
 expect_out_line '\[WARN\] route gone: ユニット dev-route-sync@gone.timer は有効ですが、runners のどのランナーの labels= にもこのラベルがありません'
 if [[ "$(grep -c 'route gone' "$OUT")" -ne 1 ]]; then ng "$CUR: どのランナーにも無いラベルの WARN が 1 回ではありません"; fi
+expect_out_line 'systemctl --user reset-failed dev-route@gone.service dev-route-sync@gone.timer'
+mkdir -p "$WORK/home/.config/systemd/user/default.target.wants"
+ln -s ../dev-route@.service "$WORK/home/.config/systemd/user/default.target.wants/dev-route@wantsonly.service"
+rt 3 "doctor --runner: wants のリンクだけがあるインスタンス（一覧に出ない）も WARN で拾う" DEV_ROUTES_FILE="$WORK/conf/no-such-routes" FAKE_ACTIVE_UNITS="dev-runner@q1.service" -- doctor --runner q1
+expect_out_line '\[WARN\] route wantsonly: ユニット dev-route@wantsonly.service は有効ですが'
+rm -rf "$WORK/home/.config/systemd/user/default.target.wants"
 rt 0 "doctor --runner: どのランナーの labels= にも無いラベルでも、ユニットが無効なら何も出さない" DEV_ROUTES_FILE="$WORK/conf/no-such-routes" FAKE_ACTIVE_UNITS="dev-runner@q1.service" -- doctor --runner q1
 rt 0 "doctor --runner: routes にそのラベルの行が無くても、ユニットが無効なら何も出さない" DEV_ROUTES_FILE="$WORK/conf/routes-other" FAKE_ACTIVE_UNITS="dev-runner@q1.service" -- doctor --runner q1
 if grep -q 'route rt1' "$OUT"; then ng "$CUR: ユニットが無効なのに route rt1 の行が出ています"; fi

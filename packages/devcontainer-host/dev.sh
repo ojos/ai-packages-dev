@@ -2291,15 +2291,16 @@ doctor_route_orphan_units() {
     if unit_is_on "$u"; then on="${on:+$on, }$u"; fi
   done
   [[ -n "$on" ]] || return 0
-  doc_line FAIL "route $label: ユニット（$on）は有効ですが、$why。ユニットは設定ファイルを読めず止まります。直し方: (1) 使い続けるなら、routes に「$label <組織> group=<名前>」の行を書き（雛形は routes.example）、systemctl --user restart dev-route@$label.service で起こし直す。(2) 使わないなら、先に routes にその行を戻してから systemctl --user disable --now dev-route@$label.service dev-route-sync@$label.timer を打ち（停止の処理 dev runner route down が、行から対象を解決して ACTIONS_RUNS_ON を ubuntu-latest へ戻す）、戻ったのを確かめてから行を消す。行を戻せないときは、向けていたリポジトリごとに gh variable set ACTIONS_RUNS_ON --repo <組織>/<リポジトリ> --body ubuntu-latest で手で戻す"
+  doc_line FAIL "route $label: ユニット（$on）は有効ですが、$why。ユニットは設定ファイルを読めず止まります。直し方: (1) 使い続けるなら、routes に「$label <組織> group=<名前>」の行を書き（雛形は routes.example）、systemctl --user restart dev-route@$label.service で起こし直す。(2) 使わないなら、先に routes にその行を戻してから systemctl --user disable --now dev-route@$label.service dev-route-sync@$label.timer を打ち（停止の処理 dev runner route down が、行から対象を解決して ACTIONS_RUNS_ON を ubuntu-latest へ戻す）、戻ったのを確かめてから行を消す。無効にしたあとも failed が残っていれば（設定の誤りで止まったユニットは残る）、systemctl --user reset-failed dev-route@$label.service dev-route-sync@$label.timer で消す。行を戻せないときは、向けていたリポジトリごとに gh variable set ACTIONS_RUNS_ON --repo <組織>/<リポジトリ> --body ubuntu-latest で手で戻す"
 }
 
 # route のユニットが有効なのに、どのランナーの labels= にも無いラベルを WARN で報告する（runners からラベルを外したのに、ユニットやタイマーを残した形）。
 # systemctl の一覧から dev-route@ / dev-route-sync@ のインスタンスを列挙する。どの doctor --runner でも 1 回出る。
 # 使い方: doctor_route_stray_units（runners を読み込み済み）
 doctor_route_stray_units() {
-  local u st rest label j seen="," l
+  local u st rest label j seen="," l wants
   command -v systemctl >/dev/null 2>&1 || return 0
+  wants="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
   while read -r u st rest; do
     case "$st" in active | activating | failed | enabled | enabled-runtime) ;; *) continue ;; esac
     [[ "$u" =~ ^dev-route(-sync)?@(.+)\.(service|timer)$ ]] || continue
@@ -2310,11 +2311,15 @@ doctor_route_stray_units() {
       [[ "$l" == *",$label,"* ]] && continue 2
     done
     seen="$seen$label,"
-    doc_line WARN "route $label: ユニット $u は有効ですが、runners のどのランナーの labels= にもこのラベルがありません（ラベルを外したのにユニットを残していないか。使わないなら、routes に行を戻して systemctl --user disable --now dev-route@$label.service dev-route-sync@$label.timer）"
+    doc_line WARN "route $label: ユニット $u は有効ですが、runners のどのランナーの labels= にもこのラベルがありません（ラベルを外したのにユニットを残していないか。使わないなら、routes に行を戻して systemctl --user disable --now dev-route@$label.service dev-route-sync@$label.timer を打ち、failed が残っていれば systemctl --user reset-failed dev-route@$label.service dev-route-sync@$label.timer で消す）"
   done < <(
     # list-units は 3 列目が状態、list-unit-files は 2 列目が状態。列を揃えて「ユニット 状態」にする
     systemctl --user list-units --plain --no-legend 'dev-route@*' 'dev-route-sync@*' 2>/dev/null | awk '{ print $1, $3 }' || true
     systemctl --user list-unit-files --plain --no-legend 'dev-route@*' 'dev-route-sync@*' 2>/dev/null | awk '{ print $1, $2 }' || true
+    # list-unit-files にはテンプレートしか出ず、enable 済みで動いていないインスタンスは出ないことが多い。wants のリンクからも拾う
+    for u in "$wants"/*.wants/dev-route@*.service "$wants"/*.wants/dev-route-sync@*.timer; do
+      [[ -L "$u" ]] && echo "${u##*/} enabled"
+    done
   )
 }
 
@@ -3183,7 +3188,8 @@ TERM を送っても止まらないときは、さらに 5 秒（DEV_EXEC_KILL_G
         公開済みの版の一覧を読めない / イメージに版のラベルが無い（dev runner build で作り直す）
   （docker=yes の設定は、危険を知らせる INFO を出す。PAT の値は出さない）
   routes（dev runner route の設定ファイル）に、そのランナーが持つラベル(runners の labels=)の行があれば、その行も点検する。routes が無い機械では、route のユニットが有効でなければ何も出さない。
-  FAIL  routes が無い・routes にそのラベルの行が無いのに、ユニット dev-route@<ラベル> かタイマー dev-route-sync@<ラベル>.timer が有効（enabled・active・activating・failed のいずれか） /
+  FAIL  routes が無い・routes にそのラベルの行が無いのに、ユニット dev-route@<ラベル> かタイマー dev-route-sync@<ラベル>.timer が有効（enabled・active・activating・failed のいずれか。
+        無効にしたあと failed が残っていれば systemctl --user reset-failed <ユニット> で消す） /
         routes を読めない / route の PAT ファイルが無い・group / other に権限がある・読めない /
         グループが組織に無い・使えるリポジトリが selected でない / ランナーの組織・group= が routes の行と違う
   WARN  グループの一覧を読めない / ユニット dev-route@<ラベル> かタイマー dev-route-sync@<ラベル>.timer が active でない / flock が無い /

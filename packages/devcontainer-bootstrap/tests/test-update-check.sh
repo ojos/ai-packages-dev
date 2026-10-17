@@ -1032,7 +1032,7 @@ o="$( cd "$RIA" && printf 'n\n' | env PATH="$STUBBIN:$PATH" HOME="$RIAH" UPDATE_
 rm -f "$RIA/.env"
 if [[ -z "$o" && ! -f "$CIA5/declined-dcb" ]]; then pass; else fail "出力: $o"; fi
 
-it ".env に合図の変数（DCB_LOAD_ENV_UPDATE_CHECK=1）と UPDATE_CHECK=on を書いても、対話シェルの UPDATE_CHECK は上書きされず、環境の off が勝つ"
+it ".env に内部用らしい変数（DCB_LOAD_ENV_UPDATE_CHECK / DCB_ENV_UPDATE_CHECK）と UPDATE_CHECK=on を書いても、対話シェルの UPDATE_CHECK は .env の値で上書きされず、環境の off が勝つ"
 printf 'DCB_LOAD_ENV_UPDATE_CHECK=1\nDCB_ENV_UPDATE_CHECK=on\nUPDATE_CHECK=on\n' > "$RIA/.env"
 CIA6="$TEST_TMP_ROOT/cia6"; run_uc "$CIA6" notify >/dev/null
 o="$(sim_interactive "$CIA6" n UPDATE_CHECK=off)"

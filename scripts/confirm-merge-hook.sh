@@ -330,7 +330,7 @@ for_each_clause() {
   # 塊の中を読む費用は一定で、先読み（k + 1）も塊の中に収まる。ロケールは変えない
   # （文字コードによっては、バイト単位で数えると 2 バイト目を区切りと取り違える）。
   local blk="" blk_start=0 k=0 word_raw=""
-  local word="" have_word=0 word_quoted=0 word_start=-1
+  local word="" have_word=0 word_quoted=0
   local in_squote=0 in_dquote=0
 
   clause_words=()
@@ -386,24 +386,10 @@ for_each_clause() {
 
     case "$c" in
       "'")
-        # クォートが開いた時点で「語が始まった」ことを記録する。空クォート
-        # （'' / ""）は中身の文字を 1 つも追加しないため、内容が付くときにだけ
-        # have_word を立てる実装だと、空クォートだけの語はいつまでも
-        # have_word=0 のまま扱われる（実測）。その結果、空白や区切り文字に
-        # 達しても「語を確定させて word_start をリセットする」処理
-        # （下の空白・区切り文字の分岐、いずれも have_word -eq 1 を条件にする）
-        # が走らず、word_start が空クォートの開始位置に残り続ける。次の語の
-        # 先頭でも word_start が -1 に戻っていないため上書きされず、
-        # clause_word_raw の切り出しに直前の空クォートや区切り文字まで
-        # 巻き込んでしまい、環境変数代入の判定（^[A-Za-z_][A-Za-z0-9_]*=）が
-        # raw の先頭に来るはずの文字の前へ無関係な文字が挟まって外れる
-        # （実測: `echo '' ; FOO=bar gh pr merge 1` が素通りしていた）。逆に
-        # `'' gh pr merge 1` では、空クォートが語として clause_words に入らない
-        # ため gh が誤って先頭語として扱われ、逆方向の誤検知も起きていた
-        # （実測）。クォートが開いた瞬間に have_word と word_quoted を立てる
-        # ことで、中身が空でも「クォートで作った語」を 1 つの語として確定
-        # できるようにする。
-        [[ $word_start -eq -1 ]] && word_start=$i
+        # クォートが開いた時点で have_word と word_quoted を立てる。空クォート
+        # （'' / ""）は中身の文字を足さないため、内容が付くときにだけ立てる実装だと、
+        # 空クォートだけの語が確定されず、次の語と混ざる（実測: `echo '' ; FOO=bar gh pr merge 1`
+        # が素通りし、`'' gh pr merge 1` では gh が誤って先頭語になっていた）。
         have_word=1
         word_quoted=1
         in_squote=1
@@ -411,7 +397,6 @@ for_each_clause() {
         word_raw+="$c"
         ;;
       '"')
-        [[ $word_start -eq -1 ]] && word_start=$i
         have_word=1
         word_quoted=1
         in_dquote=1
@@ -419,7 +404,6 @@ for_each_clause() {
         word_raw+="$c"
         ;;
       $'\\')
-        [[ $word_start -eq -1 ]] && word_start=$i
         clause_text+="$c"
         word_raw+="$c"
         i=$((i + 1))
@@ -442,7 +426,6 @@ for_each_clause() {
           word=""
           have_word=0
           word_quoted=0
-          word_start=-1
         fi
         ;;
       '{')
@@ -462,7 +445,6 @@ for_each_clause() {
             || [[ "${blk:k+1:1}" == $'\n' ]]; }; then
           :
         else
-          [[ $word_start -eq -1 ]] && word_start=$i
           clause_text+="$c"
           word_raw+="$c"
           word+="$c"
@@ -478,7 +460,6 @@ for_each_clause() {
           word=""
           have_word=0
           word_quoted=0
-          word_start=-1
         fi
         if [[ -n "$clause_text" || ${#clause_words[@]} -gt 0 ]]; then
           "$handler"
@@ -494,7 +475,6 @@ for_each_clause() {
         fi
         ;;
       *)
-        [[ $word_start -eq -1 ]] && word_start=$i
         clause_text+="$c"
         word_raw+="$c"
         word+="$c"
