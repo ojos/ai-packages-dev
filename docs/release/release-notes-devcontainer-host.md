@@ -6,6 +6,15 @@ devhost（SSH で届く外部の機械で devcontainer を保つ道具。コマ�
 >
 > 同じ理由で、issue 参照は `ojos/ai-packages-dev#NNN` の形で書いてください。裸の `#NNN` は GitHub のオートリンクが**配布先リポジトリの issue** として解決するため、配布後は存在しない issue や無関係な issue を指します。
 
+## v0.5.1
+
+### Summary
+- **`dev doctor --runner <名前>` が、止まっている route のユニットを見逃していたのを直した**（ojos/ai-packages-dev#648）。`dev-route@<ラベル>`（または `dev-route-sync@<ラベル>.timer`）を有効にしたのに `~/.config/dev/routes` が無い（またはそのラベルの行が無い）と、ユニットは設定の誤りで止まるのに、doctor は route の行を 1 つも出さずに「判定: OK」を返していた。
+  - そのランナーのラベルについて、route のユニットが有効（enabled・enabled-runtime などの `systemctl is-enabled` が真、または active・activating・failed）なのに、routes が無い・そのラベルの行が無いときは FAIL にする。直し方として、「routes に行を書いてユニットを起こし直す」か、「先に行を戻してから `disable --now` で変数を戻す（戻せなければ `gh variable set` で手で戻す）」を示す。
+  - どのランナーの `labels=` にも無いラベルの route のユニットが有効なまま残っていれば、WARN で知らせる。
+  - route のユニットがどれも有効でない機械では、今のとおり何も出さない。
+- 手で行う移行の作業は無い（`dev self-update` か `install.sh` で追従する）。
+
 ## v0.5.0
 
 ### Summary

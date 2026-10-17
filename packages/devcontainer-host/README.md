@@ -100,7 +100,7 @@ devhost は、`devcontainer.json` を持つプロジェクトなら DCB の生�
 マニフェストと `install.sh` を取得し、`install.sh` のハッシュをマニフェストと照合して、通ったときだけ実行します。
 
 ```bash
-TAG=v0.5.0   # devcontainer-host の最新安定リリース
+TAG=v0.5.1   # devcontainer-host の最新安定リリース
 BASE="https://github.com/ojos/devcontainer-host/releases/download/${TAG}"
 
 curl -fsSL "${BASE}/RELEASE-MANIFEST.json" -o RELEASE-MANIFEST.json
@@ -155,7 +155,7 @@ devhost は、独自の版を持つ公開リポジトリ `ojos/devcontainer-host
 `PACKAGE_ARCHIVE.tar.gz` / `SHA256SUMS` と、個別の資産 11 個のハッシュを持つので、取得したものを照合してから使います。
 
 ```bash
-TAG=v0.5.0   # devcontainer-host の最新安定リリース
+TAG=v0.5.1   # devcontainer-host の最新安定リリース
 BASE="https://github.com/ojos/devcontainer-host/releases/download/${TAG}"
 
 curl -sSL "${BASE}/RELEASE-MANIFEST.json" -o RELEASE-MANIFEST.json
@@ -238,7 +238,7 @@ cp devhost/projects.example ~/.config/dev/projects   # 名前と絶対パスを�
 **リンクではなく写しで置きます。** リンクにすると、そのリポジトリのブランチを切り替えただけで
 外部の機械の道具が黙って変わるためです。道具を更新するには、同じ `install` をもう一度打つか、
 `dev self-update` を使います。`dev self-update` は上の「devhost を入手する」と同じ照合（マニフェストの
-ハッシュの照合）を通してから、`dev.sh` だけを置き換えます（既定は最新、`--version v0.5.0` で固定）。
+ハッシュの照合）を通してから、`dev.sh` だけを置き換えます（既定は最新、`--version v0.5.1` で固定）。
 置き換え先が devhost の `dev.sh` だと確かめられないとき（リンク、別の道具など）は、何も置き換えずに止まります。
 ユニットのファイルと `projects` は書き換えません。更新のあとに、置いてあるユニットのファイルを同じリリースの
 `dev-up@.service` と比べ、違えば `install.sh` の再実行（または「ユニットを入れる」の `install` の打ち直し）を案内します。
@@ -439,7 +439,10 @@ dev-route を持たない版（v0.4.0 以前）へ戻すときは、先に `syst
 そのため、宣言の側では対象のリポジトリの一覧（ランナーグループの使えるリポジトリ）だけを持ち、変数の値は持ちません。
 
 `dev doctor --runner <名前>` は、そのランナーが持つラベルの行が `routes` にあれば、その行も点検します（PAT のファイルと権限・グループを読めて `selected` か・ランナーの組織と `group=` が一致するか・ユニットとタイマーが有効か・`flock` があるか）。
-`routes` が無い機械では何も出しません。
+`routes` が無い機械では、route のユニットが有効でなければ何も出しません。
+`dev-route@<ラベル>.service` か `dev-route-sync@<ラベル>.timer` が有効（enabled・enabled-runtime・active・activating、または enable せずに start して設定の誤りで止まった failed）なのに、`routes` が無い、または `routes` にそのラベルの行が無いときは、FAIL にします（ユニットは設定ファイルを読めず止まります）。
+直し方は 2 通りです。使い続けるなら、`routes` にそのラベルの行を書いて `systemctl --user restart dev-route@<ラベル>.service` で起こし直します。使わないなら、**先に `routes` へその行を戻してから** `systemctl --user disable --now dev-route@<ラベル>.service dev-route-sync@<ラベル>.timer` を打ちます。停止の処理（`dev runner route down`）は `routes` の行から対象を解決して変数を `ubuntu-latest` へ戻すので、行が無いまま止めると `ACTIONS_RUNS_ON` が自前のラベルのまま残ります。戻ったのを確かめてから行を消します。無効にしたあとも `failed` が残っていれば（設定の誤りで止まったユニットは残ります）、`systemctl --user reset-failed dev-route@<ラベル>.service dev-route-sync@<ラベル>.timer` で消します。行を戻せないときは、向けていたリポジトリごとに `gh variable set ACTIONS_RUNS_ON --repo <組織>/<リポジトリ> --body ubuntu-latest` で手で戻します。
+どのランナーの `labels=` にも無いラベルの route のユニット（`runners` からラベルを外したのにユニットやタイマーを残した形）が有効なときは、どの `dev doctor --runner` でも WARN を 1 回出します。有効かどうかは `systemctl` の一覧に加え、`~/.config/systemd/user/`（`XDG_CONFIG_HOME` があればその下）の `*.wants/` にあるリンクからも拾います（動いていない enable 済みのインスタンスは一覧に出ないことがあるため）。無効にしたあと `failed` が残っていれば `systemctl --user reset-failed` で消します。
 
 ## VS Code の窓を閉じたときの停止（stopCompose）
 
@@ -675,11 +678,14 @@ TERM を送っても止まらないときは、さらに 5 秒（DEV_EXEC_KILL_G
         ランナーの版に新しい版が出ている（期限の日付と残りの日数を出す） /
         公開済みの版の一覧を読めない / イメージに版のラベルが無い（dev runner build で作り直す）
   （docker=yes の設定は、危険を知らせる INFO を出す。PAT の値は出さない）
-  routes（dev runner route の設定ファイル）に、そのランナーが持つラベル(runners の labels=)の行があれば、その行も点検する。routes が無い機械では何も出さない。
-  FAIL  routes を読めない / route の PAT ファイルが無い・group / other に権限がある・読めない /
+  routes（dev runner route の設定ファイル）に、そのランナーが持つラベル(runners の labels=)の行があれば、その行も点検する。routes が無い機械では、route のユニットが有効でなければ何も出さない。
+  FAIL  routes が無い・routes にそのラベルの行が無いのに、ユニット dev-route@<ラベル> かタイマー dev-route-sync@<ラベル>.timer が有効（enabled・active・activating・failed のいずれか。
+        無効にしたあと failed が残っていれば systemctl --user reset-failed <ユニット> で消す） /
+        routes を読めない / route の PAT ファイルが無い・group / other に権限がある・読めない /
         グループが組織に無い・使えるリポジトリが selected でない / ランナーの組織・group= が routes の行と違う
   WARN  グループの一覧を読めない / ユニット dev-route@<ラベル> かタイマー dev-route-sync@<ラベル>.timer が active でない / flock が無い /
-        routes の行のラベルを持つランナーが runners のどこにも無い
+        routes の行のラベルを持つランナーが runners のどこにも無い /
+        有効な route のユニットのラベルを、どのランナーも labels= に持たない
 ```
 
 ### dev runner

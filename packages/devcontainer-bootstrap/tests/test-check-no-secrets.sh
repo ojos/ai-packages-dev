@@ -583,6 +583,26 @@ printf 'PATH=/usr/bin\nHOME=/nonexistent\n' > "$repo/.env.example"
 run_check "$repo"
 assert_pass "ベースライン名だけの .env.example"
 
+it ".env.example が UPDATE_CHECK= だけでも、抽出が成立している（ローダーが読み飛ばすキーも数える）"
+repo="$(new_repo)"
+printf 'UPDATE_CHECK=\n' > "$repo/.env.example"
+run_check "$repo"
+assert_pass "UPDATE_CHECK= だけの .env.example"
+
+it ".env の UPDATE_CHECK も雛形と突き合わせる（雛形にある UPDATE_CHECK は欠けと見なさず、ほかの余分なキーは落とす）"
+repo="$(new_repo)"
+printf 'UPDATE_CHECK=\n' > "$repo/.env.example"
+printf 'UPDATE_CHECK=off\nONLY_IN_ENV=1\n' > "$repo/.env"
+run_check "$repo"
+if [[ "$CHECK_RC" -ne 0 && "$CHECK_OUT" == *"ONLY_IN_ENV"* && "$CHECK_OUT" != *"黙って欠ける）: UPDATE_CHECK"* ]]; then pass; else fail "rc=$CHECK_RC 出力: $CHECK_OUT"; fi
+
+it ".env にだけ UPDATE_CHECK があれば、雛形に無いキーとして落ちる"
+repo="$(new_repo)"
+printf 'OTHER_KEY=\n' > "$repo/.env.example"
+printf 'UPDATE_CHECK=off\n' > "$repo/.env"
+run_check "$repo"
+if [[ "$CHECK_RC" -ne 0 && "$CHECK_OUT" == *"黙って欠ける）: UPDATE_CHECK"* ]]; then pass; else fail "rc=$CHECK_RC 出力: $CHECK_OUT"; fi
+
 # ── 呼び出し元（verify.sh から直接呼ぶ） ─────────────────────────────────────
 
 it "生成された verify.sh が check-no-secrets.sh を呼ぶ"

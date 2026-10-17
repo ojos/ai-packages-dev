@@ -62,7 +62,7 @@ DEFAULT_TMUX_SESSION="main"
 # dev の版。公開する版（リリースのタグ）は、リリースの手順がこの行を書き換えて配る
 # （scripts/release-packages.sh の stamp_host_version）。リポジトリの中の値は、次に出す版の目印で、
 # 公開物の値ではない。行の形（DEV_VERSION="vX.Y.Z"）を変えると、リリースの手順が止まる。
-DEV_VERSION="v0.5.0"
+DEV_VERSION="v0.5.1"
 
 # ssh の非対話のコマンド（`ssh <ホスト> .local/bin/dev ...`）と systemd のユーザーのユニットは
 # ~/.profile を読まないので、~/.local/bin などが PATH に無い。devcontainer CLI の既定の置き場所
@@ -244,6 +244,17 @@ unit_state() {
     [[ -n "$s" ]] || s="-"
   fi
   printf '%s\n' "$s"
+}
+
+# route のユニットが「有効」か（0 = 有効）。active・activating・failed（enable せず start して、設定の誤りで止まったものを含む）か、
+# systemctl is-enabled が 0 を返す（enabled・enabled-runtime など。判定は systemctl に任せる）とき有効とみなす。
+# 先に状態を引き、それで分かれば is-enabled を呼ばない。systemctl が無い機械では偽。
+unit_is_on() {
+  command -v systemctl >/dev/null 2>&1 || return 1
+  case "$(unit_state "$1")" in
+    active | activating | failed) return 0 ;;
+  esac
+  systemctl --user is-enabled "$1" >/dev/null 2>&1
 }
 
 cmd_attach() {
@@ -1526,7 +1537,7 @@ cmd_doctor_runner() {
     *) doc_line WARN "ユニット $unit: $us（有効にしていないか、止まっています: systemctl --user enable --now $unit）" ;;
   esac
 
-  # ACTIONS_RUNS_ON の切り替え（dev runner route）。routes が無い機械では何も出さない。
+  # ACTIONS_RUNS_ON の切り替え（dev runner route）。routes が無く、route のユニットも有効でない機械では何も出さない。
   doctor_routes "$name"
 
   if [[ "$DOC_FAIL" -gt 0 ]]; then
@@ -2271,19 +2282,73 @@ doctor_route_label() {
   fi
 }
 
-# このランナーの点検の一部として、routes の行を点検する。routes が無い機械では何も出さない。
+# routes にラベルの行が無いのに、そのラベルの route のユニット（dev-route@ か dev-route-sync@ のタイマー）が
+# 有効（unit_is_on）のとき FAIL を出す（ユニットは routes を読めず設定の誤りで止まっている）。どちらも有効でなければ何も出さない。
+# 使い方: doctor_route_orphan_units <ラベル> <routes に行が無い理由の文>
+doctor_route_orphan_units() {
+  local label="$1" why="$2" u on=""
+  for u in "dev-route@${label}.service" "dev-route-sync@${label}.timer"; do
+    if unit_is_on "$u"; then on="${on:+$on, }$u"; fi
+  done
+  [[ -n "$on" ]] || return 0
+  doc_line FAIL "route $label: ユニット（$on）は有効ですが、$why。ユニットは設定ファイルを読めず止まります。直し方: (1) 使い続けるなら、routes に「$label <組織> group=<名前>」の行を書き（雛形は routes.example）、systemctl --user restart dev-route@$label.service で起こし直す。(2) 使わないなら、先に routes にその行を戻してから systemctl --user disable --now dev-route@$label.service dev-route-sync@$label.timer を打ち（停止の処理 dev runner route down が、行から対象を解決して ACTIONS_RUNS_ON を ubuntu-latest へ戻す）、戻ったのを確かめてから行を消す。無効にしたあとも failed が残っていれば（設定の誤りで止まったユニットは残る）、systemctl --user reset-failed dev-route@$label.service dev-route-sync@$label.timer で消す。行を戻せないときは、向けていたリポジトリごとに gh variable set ACTIONS_RUNS_ON --repo <組織>/<リポジトリ> --body ubuntu-latest で手で戻す"
+}
+
+# route のユニットが有効なのに、どのランナーの labels= にも無いラベルを WARN で報告する（runners からラベルを外したのに、ユニットやタイマーを残した形）。
+# systemctl の一覧から dev-route@ / dev-route-sync@ のインスタンスを列挙する。どの doctor --runner でも 1 回出る。
+# 使い方: doctor_route_stray_units（runners を読み込み済み）
+doctor_route_stray_units() {
+  local u st rest label j seen="," l wants
+  command -v systemctl >/dev/null 2>&1 || return 0
+  wants="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+  while read -r u st rest; do
+    case "$st" in active | activating | failed | enabled | enabled-runtime) ;; *) continue ;; esac
+    [[ "$u" =~ ^dev-route(-sync)?@(.+)\.(service|timer)$ ]] || continue
+    label="${BASH_REMATCH[2]}"
+    [[ "$seen" == *",$label,"* ]] && continue
+    for ((j = 0; j < ${#R_NAMES[@]}; j++)); do
+      l=",${R_LABELS[$j]},"
+      [[ "$l" == *",$label,"* ]] && continue 2
+    done
+    seen="$seen$label,"
+    doc_line WARN "route $label: ユニット $u は有効ですが、runners のどのランナーの labels= にもこのラベルがありません（ラベルを外したのにユニットを残していないか。使わないなら、routes に行を戻して systemctl --user disable --now dev-route@$label.service dev-route-sync@$label.timer を打ち、failed が残っていれば systemctl --user reset-failed dev-route@$label.service dev-route-sync@$label.timer で消す）"
+  done < <(
+    # list-units は 3 列目が状態、list-unit-files は 2 列目が状態。列を揃えて「ユニット 状態」にする
+    systemctl --user list-units --plain --no-legend 'dev-route@*' 'dev-route-sync@*' 2>/dev/null | awk '{ print $1, $3 }' || true
+    systemctl --user list-unit-files --plain --no-legend 'dev-route@*' 'dev-route-sync@*' 2>/dev/null | awk '{ print $1, $2 }' || true
+    # list-unit-files にはテンプレートしか出ず、enable 済みで動いていないインスタンスは出ないことが多い。wants のリンクからも拾う
+    for u in "$wants"/*.wants/dev-route@*.service "$wants"/*.wants/dev-route-sync@*.timer; do
+      [[ -L "$u" ]] && echo "${u##*/} enabled"
+    done
+  )
+}
+
+# このランナーの点検の一部として、routes の行を点検する。routes が無い機械では、route のユニットが有効でなければ何も出さない。
 # このランナーが持つラベル(runners の labels=)の行は全部点検する。どのランナーも持たないラベルの行は、WARN を 1 行出す。
 # 使い方: doctor_routes <ランナーの名前>（find_runner 済み）
 doctor_routes() {
-  local rname="$1" file err i j k label mine carried mylabels l
+  local rname="$1" file err i j label mine carried mylabels l
+  local -a own
   file="$(routes_file)"
-  [[ -f "$file" ]] || return 0
+  mylabels=",${R_LABELS[$RIDX]},"
+  doctor_route_stray_units
+  IFS=',' read -r -a own <<<"${R_LABELS[$RIDX]}"
+  if [[ ! -f "$file" ]]; then
+    for label in "${own[@]}"; do
+      [[ -n "$label" ]] && doctor_route_orphan_units "$label" "routes（$file）がありません"
+    done
+    return 0
+  fi
   if ! err="$(load_routes 2>&1)"; then
     doc_line FAIL "routes を読めません: ${err//$'\n'/ }"
     return 0
   fi
   load_routes
-  mylabels=",${R_LABELS[$RIDX]},"
+  local tl
+  tl=",$(IFS=,; echo "${T_LABELS[*]}"),"
+  for label in "${own[@]}"; do
+    [[ -n "$label" && "$tl" != *",$label,"* ]] && doctor_route_orphan_units "$label" "routes に $label の行がありません"
+  done
   for ((i = 0; i < ${#T_LABELS[@]}; i++)); do
     label="${T_LABELS[$i]}"
     mine=0 carried=0
@@ -3122,11 +3187,14 @@ TERM を送っても止まらないときは、さらに 5 秒（DEV_EXEC_KILL_G
         ランナーの版に新しい版が出ている（期限の日付と残りの日数を出す） /
         公開済みの版の一覧を読めない / イメージに版のラベルが無い（dev runner build で作り直す）
   （docker=yes の設定は、危険を知らせる INFO を出す。PAT の値は出さない）
-  routes（dev runner route の設定ファイル）に、そのランナーが持つラベル(runners の labels=)の行があれば、その行も点検する。routes が無い機械では何も出さない。
-  FAIL  routes を読めない / route の PAT ファイルが無い・group / other に権限がある・読めない /
+  routes（dev runner route の設定ファイル）に、そのランナーが持つラベル(runners の labels=)の行があれば、その行も点検する。routes が無い機械では、route のユニットが有効でなければ何も出さない。
+  FAIL  routes が無い・routes にそのラベルの行が無いのに、ユニット dev-route@<ラベル> かタイマー dev-route-sync@<ラベル>.timer が有効（enabled・active・activating・failed のいずれか。
+        無効にしたあと failed が残っていれば systemctl --user reset-failed <ユニット> で消す） /
+        routes を読めない / route の PAT ファイルが無い・group / other に権限がある・読めない /
         グループが組織に無い・使えるリポジトリが selected でない / ランナーの組織・group= が routes の行と違う
   WARN  グループの一覧を読めない / ユニット dev-route@<ラベル> かタイマー dev-route-sync@<ラベル>.timer が active でない / flock が無い /
-        routes の行のラベルを持つランナーが runners のどこにも無い
+        routes の行のラベルを持つランナーが runners のどこにも無い /
+        有効な route のユニットのラベルを、どのランナーも labels= に持たない
 EOF
 }
 

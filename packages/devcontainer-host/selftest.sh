@@ -27,7 +27,7 @@
 #   パスの形が信用できないため）
 # - git: `-C <dir> pull --ff-only` と、`-C <dir> ls-files --error-unmatch -- <名前>`（常に追跡なし。記録しない）だけ。失敗は本物と同じ形の `fatal: ...` を 128 で返す
 # - journalctl: `--user -u <unit> -n <N> --no-pager` だけ。履歴が無ければ本物と同じ `-- No entries --`
-# - systemctl: `--user is-active|is-enabled|stop|start <unit>` と `--user enable|disable --now <unit>`。stop / start / enable / disable は何も出さず 0
+# - systemctl: `--user is-active|is-enabled|stop|start <unit>` と `--user enable|disable --now <unit>`、`--user list-units|list-unit-files [--...] <glob>...`（FAKE_*_UNITS から組み立てる）。stop / start / enable / disable は何も出さず 0
 # - docker `restart|stop <id>...`: 状態を running / exited にする（ID は複数可）。無い ID は 1
 # - docker `inspect --format '{{index .Config.Labels "com.docker.compose.project"}}' <id>`: コンテナの compose のプロジェクト名（label が無ければ空）。
 #   `ps --filter label=com.docker.compose.project=<名>` でそのプロジェクトのコンテナを列挙する
@@ -439,11 +439,44 @@ case "${2:-}" in
     exit 0
     ;;
 esac
+case "${2:-}" in
+  list-units | list-unit-files)
+    # list-units は「ユニット LOAD ACTIVE SUB 説明」、list-unit-files は「ユニット STATE」。引数のうち -- で始まらないものは glob。
+    sub="$2"
+    shift 2
+    pats=()
+    for a in "$@"; do [[ "$a" == --* ]] || pats+=("$a"); done
+    emit() {
+      local kind="$1" state="$2" u pat
+      shift 2
+      for u in "$@"; do
+        for pat in "${pats[@]}"; do
+          # shellcheck disable=SC2053
+          if [[ "$u" == $pat ]]; then
+            if [[ "$kind" == units ]]; then echo "$u loaded $state running desc"; else echo "$u $state disabled"; fi
+          fi
+        done
+      done
+    }
+    if [[ "$sub" == list-units ]]; then
+      emit units active ${FAKE_ACTIVE_UNITS:-}
+      emit units activating ${FAKE_ACTIVATING_UNITS:-}
+      emit units failed ${FAKE_FAILED_UNITS:-}
+    else
+      emit files enabled ${FAKE_ENABLED_UNITS:-}
+      emit files enabled-runtime ${FAKE_ENABLED_RUNTIME_UNITS:-}
+    fi
+    exit 0
+    ;;
+esac
 [[ $# -eq 3 ]] || { echo "fake systemctl: 想定外の呼び出し: $*" >&2; exit 2; }
 case "$2" in
   is-enabled)
     for u in ${FAKE_ENABLED_UNITS:-}; do
       [[ "$u" == "$3" ]] && { echo enabled; exit 0; }
+    done
+    for u in ${FAKE_ENABLED_RUNTIME_UNITS:-}; do
+      [[ "$u" == "$3" ]] && { echo enabled-runtime; exit 0; }
     done
     echo disabled
     exit 1
@@ -3394,6 +3427,36 @@ expect_out_line '\[FAIL\] routes を読めません: .*知らないキーです'
 expect_out_line '\[OK  \] イメージ dev-runner:local があります'
 rt 0 "doctor --runner: routes が無い機械では routes の点検を出さない（従来どおり。0）" DEV_ROUTES_FILE="$WORK/conf/no-such-routes" FAKE_ACTIVE_UNITS="dev-runner@q1.service" -- doctor --runner q1
 if grep -q 'route ' "$OUT"; then ng "$CUR: routes が無いのに route の行が出ています"; fi
+# route のユニットが有効なのに routes が無い・そのラベルの行が無い
+rt 1 "doctor --runner: dev-route@ が enabled で routes が無ければ FAIL（判定は OK にならない）" DEV_ROUTES_FILE="$WORK/conf/no-such-routes" FAKE_ENABLED_UNITS="dev-route@rt1.service" FAKE_ACTIVE_UNITS="dev-runner@q1.service" -- doctor --runner q1
+expect_out_line '\[FAIL\] route rt1: ユニット（dev-route@rt1.service）は有効ですが、routes（.*no-such-routes）がありません'
+expect_out_line 'systemctl --user disable --now dev-route@rt1.service dev-route-sync@rt1.timer'
+if grep -q '判定: OK' "$OUT"; then ng "$CUR: routes が無くユニットが有効なのに判定が OK です"; fi
+rt 1 "doctor --runner: dev-route-sync のタイマーだけ active でも routes が無ければ FAIL" DEV_ROUTES_FILE="$WORK/conf/no-such-routes" FAKE_ACTIVE_UNITS="dev-runner@q1.service dev-route-sync@rt1.timer" -- doctor --runner q1
+expect_out_line '\[FAIL\] route rt1: ユニット（dev-route-sync@rt1.timer）は有効ですが'
+printf 'rt3 my-org group=my-group\n' >"$WORK/conf/routes-other"
+rt 1 "doctor --runner: routes にそのラベルの行が無く、ユニットが有効なら FAIL" DEV_ROUTES_FILE="$WORK/conf/routes-other" FAKE_ENABLED_UNITS="dev-route@rt1.service" FAKE_ACTIVE_UNITS="dev-runner@q1.service" -- doctor --runner q1
+expect_out_line '\[FAIL\] route rt1: ユニット（dev-route@rt1.service）は有効ですが、routes に rt1 の行がありません'
+rt 1 "doctor --runner: enable せず start して failed で止まったユニットも、routes が無ければ FAIL" DEV_ROUTES_FILE="$WORK/conf/no-such-routes" FAKE_FAILED_UNITS="dev-route@rt1.service" FAKE_ACTIVE_UNITS="dev-runner@q1.service" -- doctor --runner q1
+expect_out_line '\[FAIL\] route rt1: ユニット（dev-route@rt1.service）は有効ですが'
+expect_out_line 'systemctl --user reset-failed dev-route@rt1.service dev-route-sync@rt1.timer'
+rt 1 "doctor --runner: activating のユニットも、routes が無ければ FAIL" DEV_ROUTES_FILE="$WORK/conf/no-such-routes" FAKE_ACTIVATING_UNITS="dev-route@rt1.service" FAKE_ACTIVE_UNITS="dev-runner@q1.service" -- doctor --runner q1
+expect_out_line '\[FAIL\] route rt1: ユニット（dev-route@rt1.service）は有効ですが'
+rt 1 "doctor --runner: enabled-runtime のユニットも、routes が無ければ FAIL" DEV_ROUTES_FILE="$WORK/conf/no-such-routes" FAKE_ENABLED_RUNTIME_UNITS="dev-route@rt1.service" FAKE_ACTIVE_UNITS="dev-runner@q1.service" -- doctor --runner q1
+expect_out_line '\[FAIL\] route rt1: ユニット（dev-route@rt1.service）は有効ですが'
+expect_out_line '先に routes にその行を戻してから systemctl --user disable --now'
+rt 3 "doctor --runner: どのランナーの labels= にも無いラベルの有効なユニットは WARN（1 回）" DEV_ROUTES_FILE="$WORK/conf/no-such-routes" FAKE_ENABLED_UNITS="dev-route-sync@gone.timer" FAKE_ACTIVE_UNITS="dev-runner@q1.service dev-route-sync@gone.timer" -- doctor --runner q1
+expect_out_line '\[WARN\] route gone: ユニット dev-route-sync@gone.timer は有効ですが、runners のどのランナーの labels= にもこのラベルがありません'
+if [[ "$(grep -c 'route gone' "$OUT")" -ne 1 ]]; then ng "$CUR: どのランナーにも無いラベルの WARN が 1 回ではありません"; fi
+expect_out_line 'systemctl --user reset-failed dev-route@gone.service dev-route-sync@gone.timer'
+mkdir -p "$WORK/home/.config/systemd/user/default.target.wants"
+ln -s ../dev-route@.service "$WORK/home/.config/systemd/user/default.target.wants/dev-route@wantsonly.service"
+rt 3 "doctor --runner: wants のリンクだけがあるインスタンス（一覧に出ない）も WARN で拾う" DEV_ROUTES_FILE="$WORK/conf/no-such-routes" FAKE_ACTIVE_UNITS="dev-runner@q1.service" -- doctor --runner q1
+expect_out_line '\[WARN\] route wantsonly: ユニット dev-route@wantsonly.service は有効ですが'
+rm -rf "$WORK/home/.config/systemd/user/default.target.wants"
+rt 0 "doctor --runner: どのランナーの labels= にも無いラベルでも、ユニットが無効なら何も出さない" DEV_ROUTES_FILE="$WORK/conf/no-such-routes" FAKE_ACTIVE_UNITS="dev-runner@q1.service" -- doctor --runner q1
+rt 0 "doctor --runner: routes にそのラベルの行が無くても、ユニットが無効なら何も出さない" DEV_ROUTES_FILE="$WORK/conf/routes-other" FAKE_ACTIVE_UNITS="dev-runner@q1.service" -- doctor --runner q1
+if grep -q 'route rt1' "$OUT"; then ng "$CUR: ユニットが無効なのに route rt1 の行が出ています"; fi
 
 # ── help ──
 run 0 "help runner: route の説明がある" -- -- help runner
