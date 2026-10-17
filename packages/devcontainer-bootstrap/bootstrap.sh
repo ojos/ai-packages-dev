@@ -2329,16 +2329,19 @@ is_offline_rc() {
 # 「今日の印」(checked) は、取得をすべて終えたときだけ最後に書く。理由によらず、どれかの取得
 # （最新の版・タグ・CHANGELOG.md）が失敗したときは書かず（次の notify で取り直す）、
 # 取得できなかった部品の前の日のキャッシュを消す。
-# ただし、失敗した側が消す・差し替える前に checked を読み直し、すでに今日の日付なら
-# （並行する notify が先に成功した）、キャッシュに触らずに抜ける。
+# 呼び出し側は排他（acquire_lock）を取ってから呼ぶ（並行する更新が、成功した側のキャッシュを消さないため）。
+# $REFRESHED には、今回の呼び出しで最新の版を取得できた部品を入れる（"dcb playbook" の空白区切り）。
+# 取得できなかった部品は、前の日・同じ日のキャッシュがあっても使わない（upgrade はこれで判断する）。
 # 戻り値: 0 = 通信は通った / 1 = 通信ができずに抜けた、または作業用の場所を作れなかった。
 # 最新の版の取得先は部品で分ける。DCB は Release の最新（releases/latest）、
 # ai-playbook はタグだけを打って Release を作らないため、タグの一覧から vX.Y.Z の最大を取る。
 # latest-<部品> は版だけの 1 行。migrations-<部品> は「<版>=<移行の節がある版の空白区切り>」で、
 # 読む側は latest の版と一致するときだけ使う（rename は別々でも、組み合わせを読み違えない）。
+REFRESHED=""
 refresh_cache() {
   local dir c cur slug tag t list rc offline="" failed="" today
   local keep="" drop=""
+  REFRESHED=""
   dir="$(cache_dir)"
   mkdir -p "$dir" 2>/dev/null || return 1
   # 中断で残った作業用のファイルのうち、1 日より古いものを片づける（動いている別の取得のものは残す）。
@@ -2387,13 +2390,7 @@ refresh_cache() {
     fi
   done
   today="${UPDATE_CHECK_TODAY:-$(date +%Y-%m-%d)}"
-  # 失敗した側は、並行する notify が先に今日の分を書いていたら、その新しいキャッシュに触らない。
-  if [[ -n "$failed" && "$(cat "$dir/checked" 2>/dev/null || true)" == "$today" ]]; then
-    rm -rf "$RC_TMP" "$RC_STAGE"
-    RC_TMP="" RC_STAGE=""
-    [[ -z "$offline" ]] || return 1
-    return 0
-  fi
+  REFRESHED="${keep# }"
   # 差し替え。取得できた部品は rename で置き換え、消すべき部品だけを最後に消す。
   for c in $keep; do
     if [[ -f "$RC_STAGE/migrations-$c" ]]; then
@@ -2448,7 +2445,13 @@ cmd_notify() {
   local dir pend t c line="" cur latest
   dir="$(cache_dir)"
   if [[ "$(cat "$dir/checked" 2>/dev/null || true)" != "${UPDATE_CHECK_TODAY:-$(date +%Y-%m-%d)}" ]]; then
-    refresh_cache
+    # 更新は更新用の排他（refresh-lock）を取って行う（待たずに試し、取れなければ飛ばす。checked を書かないので、
+    # 次の接続で取り直す）。聞く側のロック（lock）は取らないので、prompt が問いかけ中でも更新でき、更新中でも
+    # prompt は問いかけられる。飛ばすのは更新だけで、通知は出す（キャッシュを読んで知らせるだけで、
+    # 更新は rename 差し替えなので、ほかの端末が更新・問いかけの最中でも一貫した状態を読める）。
+    if acquire_lock refresh-lock 8; then
+      refresh_cache || true
+    fi
   fi
   pend="$(pending_components)"
   [[ -n "$pend" ]] || return 0
@@ -2468,13 +2471,17 @@ tty_ok() {
 }
 
 # 排他を取る。複数の端末が同時に開いても、聞く・追従するのは 1 つだけにする。取れなければ 1。
+# $1 はロックの名前（既定 lock。聞く・追従する側）、$2 は flock の fd。キャッシュの更新（refresh_cache）は
+# 別の名前（refresh-lock）で排他する。更新のあいだに prompt が問いかけられなくなるのを避けるため
+# （prompt は更新の rename 差し替えのおかげで、更新中でも一貫したキャッシュを読める）。
 # flock があれば flock -n（プロセスの終了で解放される）。無ければロックのディレクトリで簡易に
 # 排他する（持ち主の pid が消えていれば奪う）。UPDATE_CHECK_NO_FLOCK=1 は試験用。
-LOCK_DIR=""
+LOCK_DIRS=()
 # refresh_cache の作業用のファイル。中断（Ctrl-C・接続の打ち切り）でも片づける。
 RC_TMP="" RC_STAGE=""
 cleanup_exit() {
-  [[ -z "$LOCK_DIR" ]] || rm -rf "$LOCK_DIR" 2>/dev/null
+  local d
+  for d in ${LOCK_DIRS[@]+"${LOCK_DIRS[@]}"}; do rm -rf "$d" 2>/dev/null; done
   [[ -z "$RC_TMP" ]] || rm -rf "$RC_TMP" 2>/dev/null
   [[ -z "$RC_STAGE" ]] || rm -rf "$RC_STAGE" 2>/dev/null
   return 0
@@ -2483,38 +2490,42 @@ trap cleanup_exit EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 acquire_lock() {
-  local dir pid
+  local name="${1:-lock}" fd="${2:-9}" dir pid
   dir="$(cache_dir)"
   mkdir -p "$dir" 2>/dev/null || return 1
   if [[ -z "${UPDATE_CHECK_NO_FLOCK:-}" ]] && command -v flock >/dev/null 2>&1; then
-    exec 9>"$dir/lock"
-    flock -n 9
+    # fd は 9（lock）か 8（refresh-lock）。
+    case "$fd" in
+      8) exec 8>"$dir/$name" ;;
+      *) exec 9>"$dir/$name" ;;
+    esac
+    flock -n "$fd"
     return $?
   fi
-  if ! mkdir "$dir/lock.d" 2>/dev/null; then
-    pid="$(cat "$dir/lock.d/pid" 2>/dev/null || true)"
+  if ! mkdir "$dir/$name.d" 2>/dev/null; then
+    pid="$(cat "$dir/$name.d/pid" 2>/dev/null || true)"
     if [[ -n "$pid" ]]; then
       # pid があって、そのプロセスが無いときだけ奪う。
       if kill -0 "$pid" 2>/dev/null; then
         return 1
       fi
-    elif [[ -z "$(find "$dir/lock.d" -maxdepth 0 -mmin +1 2>/dev/null)" ]]; then
+    elif [[ -z "$(find "$dir/$name.d" -maxdepth 0 -mmin +1 2>/dev/null)" ]]; then
       # pid がまだ無い（作った直後で、書くまでのあいだ）。十分古くなるまでは持ち主ありとみなす。
       return 1
     fi
     # 奪うのは名前の変更で 1 つだけを成功させる（rm してから作り直すと、同時に奪いに来た端末が、
     # 先に奪った側の新しいロックまで消せるため）。変えた先の pid が、古いと判断したものと違えば
     # （判断のあとに別の端末が奪って作り直した）、そのロックは生きているので戻して諦める。
-    mv "$dir/lock.d" "$dir/lock.d.stale.$$" 2>/dev/null || return 1
-    if [[ "$(cat "$dir/lock.d.stale.$$/pid" 2>/dev/null || true)" != "$pid" ]]; then
-      mv "$dir/lock.d.stale.$$" "$dir/lock.d" 2>/dev/null || rm -rf "$dir/lock.d.stale.$$"
+    mv "$dir/$name.d" "$dir/$name.d.stale.$$" 2>/dev/null || return 1
+    if [[ "$(cat "$dir/$name.d.stale.$$/pid" 2>/dev/null || true)" != "$pid" ]]; then
+      mv "$dir/$name.d.stale.$$" "$dir/$name.d" 2>/dev/null || rm -rf "$dir/$name.d.stale.$$"
       return 1
     fi
-    rm -rf "$dir/lock.d.stale.$$"
-    mkdir "$dir/lock.d" 2>/dev/null || return 1
+    rm -rf "$dir/$name.d.stale.$$"
+    mkdir "$dir/$name.d" 2>/dev/null || return 1
   fi
-  echo $$ > "$dir/lock.d/pid"
-  LOCK_DIR="$dir/lock.d"
+  echo $$ > "$dir/$name.d/pid"
+  LOCK_DIRS+=("$dir/$name.d")
   return 0
 }
 
@@ -2791,18 +2802,30 @@ cmd_upgrade() {
     echo "$LOG_PREFIX ほかの端末が聞いている、または追従しているため、追従しません。" >&2
     return 1
   fi
-  # 通信ができずに取得できなかったときは、前の日のキャッシュも消えている。「すでに最新」と言わずに失敗で終える。
-  if ! refresh_cache; then
-    echo "$LOG_PREFIX 最新の版を取得できなかったため、追従するか判断できません（オフライン・GitHub に到達できない）。時間をおいて、もう一度実行してください。" >&2
+  if ! acquire_lock refresh-lock 8; then
+    echo "$LOG_PREFIX ほかの端末が最新の版を問い合わせているため、追従しません。時間をおいて、もう一度実行してください。" >&2
     return 1
   fi
-  # 最新の版を取得できなかったら、「すでに最新」と言わずに失敗で終える（取得できない日は、追従するか判断できない）。
-  # どちらか一方でも取得できていれば、取得できたほうで判断する（片方の失敗で、もう片方の追従を止めない）。
-  if [[ ! -s "$(cache_dir)/latest-dcb" && ! -s "$(cache_dir)/latest-playbook" ]]; then
+  # 取得の結果は部品ごとに見る。今回取得できた部品だけを対象にする（取得できなかった部品は、
+  # 前の日・同じ日のキャッシュがあっても使わない）。どちらも取得できなければ、「すでに最新」と言わずに失敗で終える。
+  refresh_cache || true
+  if [[ -z "$REFRESHED" ]]; then
     echo "$LOG_PREFIX 最新の版を取得できなかったため、追従するか判断できません（オフライン・GitHub の不調・API の制限）。時間をおいて、もう一度実行してください。" >&2
     return 1
   fi
-  do_upgrade "$(pend_names "$(pending_components all)")"
+  local c names="" skipped=""
+  for c in $(pend_names "$(pending_components all)"); do
+    case " $REFRESHED " in *" $c "*) names="$names $c" ;; esac
+  done
+  for c in dcb playbook; do
+    [[ -n "$(comp_cur "$c")" ]] || continue
+    case " $REFRESHED " in *" $c "*) ;; *) skipped="$skipped $(comp_repo "$c")" ;; esac
+  done
+  if [[ -n "$skipped" ]]; then
+    echo "$LOG_PREFIX 最新の版を取得できなかったため、追従しません:${skipped}（時間をおいて、もう一度実行してください）。" >&2
+    [[ -n "$names" ]] || return 1
+  fi
+  do_upgrade "${names# }"
 }
 
 main() {

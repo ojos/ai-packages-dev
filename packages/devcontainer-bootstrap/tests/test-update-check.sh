@@ -39,6 +39,7 @@ while [[ $# -gt 0 ]]; do
 done
 echo "$url" >> "$FAKE_CURL_DIR/calls"
 [[ -z "${FAKE_CURL_FAIL:-}" ]] || exit "${FAKE_CURL_RC:-22}"
+[[ -z "${FAKE_CURL_OFFLINE_MATCH:-}" || "$url" != *"$FAKE_CURL_OFFLINE_MATCH"* ]] || exit 7
 f="$FAKE_CURL_DIR/$(printf '%s' "$url" | tr -c 'A-Za-z0-9' _)"
 [[ -f "$f" ]] || exit 22
 cp "$f" "$out"
@@ -637,17 +638,72 @@ set_changelog "ojos/devcontainer-bootstrap" "v0.99.0" "v0.99.0:1"
 run_uc "$CCL" notify >/dev/null
 if [[ "$ok1" == 1 && "$(cat "$CCL/checked" 2>/dev/null)" == "$TODAY" && -s "$CCL/migrations-dcb" ]]; then pass; else fail "ok1=$ok1 checked=$(cat "$CCL/checked" 2>/dev/null)"; fi
 
-it "並行する notify が先に今日の checked と latest を書いていたら、失敗する notify はそのキャッシュを消さない"
+it "更新用のロックを持つ別の端末がいるあいだ、notify は更新を飛ばし、checked も latest も変えず、通知はキャッシュから出す"
 reset_fixture; set_latest "$DCB_API" "v0.99.0"; set_changelog "ojos/devcontainer-bootstrap" "v0.99.0" "v0.99.0:0"
 CRC="$TEST_TMP_ROOT/crace"; run_uc "$CRC" notify >/dev/null
-# checked を古い日にして notify に取得を始めさせ、偽の curl が失敗する直前に、別の notify が成功した結果
-# （今日の checked）を書く。失敗した側は、latest を消さない。
-printf '%s\n' "$NEXTDAY" > "$CRC/checked"
-mkdir -p "$TEST_TMP_ROOT/stubbin4"
-printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$RACE_TODAY" > "$UPDATE_CHECK_CACHE_DIR/checked"\nexit 22\n' > "$TEST_TMP_ROOT/stubbin4/curl"
-chmod +x "$TEST_TMP_ROOT/stubbin4/curl"
-env PATH="$TEST_TMP_ROOT/stubbin4:$PATH" RACE_TODAY="$TODAY" UPDATE_CHECK_CACHE_DIR="$CRC" UPDATE_CHECK_TODAY="$TODAY" "$BASH_BIN" "$UC" notify </dev/null >/dev/null 2>&1
-if [[ "$(cat "$CRC/latest-dcb" 2>/dev/null)" == v0.99.0 && "$(cat "$CRC/checked")" == "$TODAY" ]]; then pass; else fail "latest=$(cat "$CRC/latest-dcb" 2>/dev/null) checked=$(cat "$CRC/checked")"; fi
+set_latest "$DCB_API" "v0.100.0"
+if command -v flock >/dev/null 2>&1; then
+  flock "$CRC/refresh-lock" sleep 3 &
+  holder=$!
+  sleep 1
+  n0="$(calls)"
+  o="$(run_uc "$CRC" notify UPDATE_CHECK_TODAY="$NEXTDAY")"
+  wait "$holder" 2>/dev/null
+  if [[ "$(calls)" == "$n0" && "$(cat "$CRC/checked")" == "$TODAY" && "$(cat "$CRC/latest-dcb")" == v0.99.0 && "$o" == *v0.99.0* ]]; then pass; else fail "calls $n0 -> $(calls) checked=$(cat "$CRC/checked") latest=$(cat "$CRC/latest-dcb") 出力: $o"; fi
+else
+  pass
+fi
+
+it "更新用のロックは、ロックのディレクトリの方式でも効く（持ち主が生きているあいだ更新を飛ばす）"
+CRD="$TEST_TMP_ROOT/crace2"; mkdir -p "$CRD/refresh-lock.d"
+sleep 5 & live=$!
+printf '%s\n' "$live" > "$CRD/refresh-lock.d/pid"
+n0="$(calls)"
+run_uc "$CRD" notify UPDATE_CHECK_NO_FLOCK=1 >/dev/null
+kill "$live" 2>/dev/null; wait "$live" 2>/dev/null
+if [[ "$(calls)" == "$n0" && ! -e "$CRD/checked" ]]; then pass; else fail "更新した"; fi
+
+it "聞く側のロック（lock）を別の端末が持っていても（問いかけ中でも）、notify は更新できる"
+reset_fixture; set_latest "$DCB_API" "v0.99.0"; set_changelog "ojos/devcontainer-bootstrap" "v0.99.0" "v0.99.0:0"
+CRE="$TEST_TMP_ROOT/crace3"; run_uc "$CRE" notify >/dev/null
+if command -v flock >/dev/null 2>&1; then
+  flock "$CRE/lock" sleep 3 &
+  holder=$!
+  sleep 1
+  set_latest "$DCB_API" "v0.100.0"; set_changelog "ojos/devcontainer-bootstrap" "v0.100.0" "v0.100.0:0"
+  run_uc "$CRE" notify UPDATE_CHECK_TODAY="$NEXTDAY" >/dev/null
+  wait "$holder" 2>/dev/null
+  if [[ "$(cat "$CRE/latest-dcb")" == v0.100.0 && "$(cat "$CRE/checked")" == "$NEXTDAY" ]]; then pass; else fail "聞いているあいだ更新されなかった"; fi
+else
+  pass
+fi
+
+# ── upgrade は、今回取得できた部品だけを対象にする ───────────────────────────
+it "upgrade: 同じ日のキャッシュがあっても、取得が HTTP エラーになった部品は追従しない（取得できた部品だけ追従する）"
+reset_fixture; set_tags "$PB_TAGS" "v9.0.0"; set_changelog "ojos/ai-playbook" "v9.0.0" "v9.0.0:0"
+put_assets_for v0.99.0; put_assets_for "$ORIGIN_VER"
+RU2="$(new_workdir)/p"; make_repo "$RU2"; set_origin_playbook "$RU2" tag v0.1.0
+CU2="$TEST_TMP_ROOT/cu2"; mkdir -p "$CU2"
+printf 'v0.99.0\n' > "$CU2/latest-dcb"; printf '%s\n' "$TODAY" > "$CU2/checked"
+: > "$BOOT_LOG"; : > "$FIX/calls"
+o="$(env PATH="$STUBBIN:$PATH" UPDATE_CHECK_CACHE_DIR="$CU2" UPDATE_CHECK_TODAY="$TODAY" FAKE_CURL_DIR="$FIX" FAKE_BOOT_LOG="$BOOT_LOG" "$BASH_BIN" "$RU2/scripts/update-check.sh" upgrade </dev/null 2>&1)"; rc=$?
+if [[ "$(cat "$BOOT_LOG")" == "--upgrade --output-dir $RU2 --playbook-version v9.0.0" ]] && ! grep -q 'download/v0.99.0' "$FIX/calls" \
+  && [[ "$o" == *"追従しません"*devcontainer-bootstrap* ]]; then pass; else fail "引数: $(cat "$BOOT_LOG") rc=$rc 出力: $o"; fi
+
+it "upgrade: 取得が HTTP エラーになった部品しか無いときは、同じ日のキャッシュがあっても追従せず失敗で終わる"
+reset_fixture; put_assets_for v0.99.0
+RU3="$(new_workdir)/p"; make_repo "$RU3"
+CU3="$TEST_TMP_ROOT/cu3"; mkdir -p "$CU3"; printf 'v0.99.0\n' > "$CU3/latest-dcb"; printf '%s\n' "$TODAY" > "$CU3/checked"
+: > "$BOOT_LOG"
+o="$(env PATH="$STUBBIN:$PATH" UPDATE_CHECK_CACHE_DIR="$CU3" UPDATE_CHECK_TODAY="$TODAY" FAKE_CURL_DIR="$FIX" FAKE_BOOT_LOG="$BOOT_LOG" "$BASH_BIN" "$RU3/scripts/update-check.sh" upgrade </dev/null 2>&1)"; rc=$?
+if [[ "$rc" != 0 && ! -s "$BOOT_LOG" && "$o" != *すでに最新* ]]; then pass; else fail "rc=$rc 出力: $o"; fi
+
+it "upgrade: DCB は取得できて ai-playbook が通信不能のとき、DCB だけ追従する"
+reset_fixture; set_latest "$DCB_API" "v0.99.0"; set_changelog "ojos/devcontainer-bootstrap" "v0.99.0" "v0.99.0:0"; put_assets_for v0.99.0
+RU4="$(new_workdir)/p"; make_repo "$RU4"; set_origin_playbook "$RU4" tag v0.1.0
+: > "$BOOT_LOG"
+o="$(env PATH="$STUBBIN:$PATH" UPDATE_CHECK_CACHE_DIR="$TEST_TMP_ROOT/cu4" UPDATE_CHECK_TODAY="$TODAY" FAKE_CURL_DIR="$FIX" FAKE_BOOT_LOG="$BOOT_LOG" FAKE_CURL_OFFLINE_MATCH=ai-playbook "$BASH_BIN" "$RU4/scripts/update-check.sh" upgrade </dev/null 2>&1)"; rc=$?
+if [[ "$(cat "$BOOT_LOG")" == "--upgrade --output-dir $RU4" && "$o" == *"追従しません"*ai-playbook* ]]; then pass; else fail "引数: $(cat "$BOOT_LOG") rc=$rc 出力: $o"; fi
 
 # 排他
 reset_fixture; set_latest "$DCB_API" "v0.99.0"
