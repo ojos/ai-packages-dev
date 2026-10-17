@@ -962,4 +962,34 @@ o="$( cd "$RIA" && printf 'n\n' | env PATH="$STUBBIN:$PATH" HOME="$RIAH" UPDATE_
 rm -f "$RIA/.env"
 if [[ -z "$o" && ! -f "$CIA5/declined-dcb" ]]; then pass; else fail "出力: $o"; fi
 
+it ".env に DCB_ENV_UPDATE_CHECK が書かれていても、退避した環境の off は上書きされない"
+printf 'DCB_ENV_UPDATE_CHECK=on\nUPDATE_CHECK=on\n' > "$RIA/.env"
+CIA6="$TEST_TMP_ROOT/cia6"; run_uc "$CIA6" notify >/dev/null
+o="$(sim_interactive "$CIA6" n UPDATE_CHECK=off)"
+rm -f "$RIA/.env"
+if [[ -z "$o" && ! -f "$CIA6/declined-dcb" ]]; then pass; else fail "出力: $o"; fi
+
+# nested_ask <cache> <子の環境の指定>: 親（UPDATE_CHECK 未設定・.env は on）が rc を読んだあと、子が rc を読む。
+nested_ask() {
+  local cache="$1" childenv="$2"
+  # 親の問いかけが子の答えと記録を奪わないよう、親は別のキャッシュで rc を読む。
+  printf '%s\n' "export UPDATE_CHECK_CACHE_DIR=\"$TEST_TMP_ROOT/cia-parent\"" ". \"$TEST_TMP_ROOT/ria-rc.sh\" </dev/null >/dev/null 2>&1" \
+    "export UPDATE_CHECK_CACHE_DIR=\"$cache\"" "exec env $childenv \"$BASH_BIN\" --norc \"$TEST_TMP_ROOT/ria-rc.sh\"" > "$TEST_TMP_ROOT/ria-nest2.sh"
+  ( cd "$RIA" && printf 'n\n' | env PATH="$STUBBIN:$PATH" HOME="$RIAH" UPDATE_CHECK_CACHE_DIR="$cache" \
+      UPDATE_CHECK_TODAY="$TODAY" UPDATE_CHECK_ASSUME_TTY=1 FAKE_CURL_DIR="$FIX" \
+      "$BASH_BIN" --norc "$TEST_TMP_ROOT/ria-nest2.sh" 2>&1 )
+}
+printf 'UPDATE_CHECK=on\n' > "$RIA/.env"
+
+it "親で未設定・.env が on の対話シェルの中で、UPDATE_CHECK=off を付けた入れ子のシェルは聞かない"
+CIA7="$TEST_TMP_ROOT/cia7"; run_uc "$CIA7" notify >/dev/null
+o="$(nested_ask "$CIA7" UPDATE_CHECK=off)"
+if [[ -z "$o" && ! -f "$CIA7/declined-dcb" ]]; then pass; else fail "出力: $o"; fi
+
+it "同じ入れ子でも、UPDATE_CHECK を付けなければ（親の値を受け継ぐだけなら）従来どおり聞く"
+CIA8="$TEST_TMP_ROOT/cia8"; run_uc "$CIA8" notify >/dev/null
+o="$(nested_ask "$CIA8" A_DUMMY=1)"
+rm -f "$RIA/.env"
+if [[ "$o" == *"追従しますか？"* ]]; then pass; else fail "出力: $o"; fi
+
 exit_with_result
