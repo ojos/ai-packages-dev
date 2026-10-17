@@ -20,6 +20,13 @@
 
 __load_project_env() {
   local project_root env_file line key val src
+  # .env で UPDATE_CHECK を上書きする前の値（環境で設定した値）を、最上位のシェルで一度だけ退避する。
+  # 対話シェルでは rc の自動読み込みが先に .env で上書きするため、update-check.sh は退避が無いと
+  # 環境の値を知れない。export するので、入れ子のシェル（tmux・bash）や子プロセスも同じ値を受け継ぎ、
+  # 子の読み込みで .env の値を退避し直すことが無い（${DCB_ENV_UPDATE_CHECK+x} が空のときだけ退避する）。
+  if [ -z "${DCB_ENV_UPDATE_CHECK+x}" ]; then
+    export DCB_ENV_UPDATE_CHECK="${UPDATE_CHECK-}"
+  fi
   # ソース中ファイルのパスを bash / zsh 双方で解決する。zsh には BASH_SOURCE が無いため
   # ${BASH_SOURCE[0]} は空になり CWD 依存へ化ける。実行シェルを判定して回避する。
   if [ -n "${BASH_VERSION:-}" ]; then

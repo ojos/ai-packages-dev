@@ -85,62 +85,23 @@ if ! bash "$HERE/setup-git-identity.sh"; then
   echo "[on-attach] WARN: 手動確認: bash $HERE/setup-git-identity.sh --check" >&2
 fi
 
-# rc の中の [start, end] の区間（印の行から終端の行まで）を content に揃える（冪等）。
-#   区間が無い            -> 末尾へ追記する（戻り値 10）
-#   区間が content と同じ -> 何もしない（戻り値 0）
-#   区間が古い形          -> その場で置き換える（戻り値 11。ほかの行・ほかのブロックには触れない）
-# 終端の行が見つからない区間は、どこまでが自分のブロックか分からないので書き換えない。
-# 印は行全体の一致で探す（$1=rc $2=開始の行 $3=終端の行 $4=新しい区間の全文）。
-sync_rc_block() {
-  local rc="$1" start="$2" end="$3" content="$4" existing tmp
-  if ! grep -qxF -- "$start" "$rc"; then
-    { echo ""; printf '%s\n' "$content"; } >> "$rc"
-    return 10
-  fi
-  existing="$(RC_S="$start" RC_E="$end" awk '
-    BEGIN { s = ENVIRON["RC_S"]; e = ENVIRON["RC_E"] }
-    !on && $0 == s { on = 1 }
-    on { print }
-    on && $0 == e { exit }
-  ' "$rc")"
-  if [[ "$(printf '%s\n' "$existing" | tail -n 1)" != "$end" ]]; then
-    echo "[on-attach] WARN: $rc の $start に終端の行が無いため書き換えません。" >&2
-    return 0
-  fi
-  [[ "$existing" == "$content" ]] && return 0
-  tmp="$(mktemp "${TMPDIR:-/tmp}/on-attach-rc.XXXXXX")"
-  RC_S="$start" RC_E="$end" RC_C="$content" awk '
-    BEGIN { s = ENVIRON["RC_S"]; e = ENVIRON["RC_E"] }
-    !done && !skip && $0 == s { print ENVIRON["RC_C"]; skip = 1; next }
-    skip { if ($0 == e) { skip = 0; done = 1 } ; next }
-    { print }
-  ' "$rc" > "$tmp" && cat "$tmp" > "$rc"
-  rm -f "$tmp"
-  return 11
-}
-
 # 対話シェルでプロジェクト .env を自動 override 読み込みするための rc 注入（冪等）。
 # これにより、ターミナルから起動する CLI（gemini 等）やスクリプトにも .env の値が効く。
-# 読み込みの前に、環境の UPDATE_CHECK を DCB_ENV_UPDATE_CHECK（export しないシェル変数）へ
-# 退避する。.env の値が環境の値を上書きしたあとでは、update-check.sh は環境の値を知れないため
-# （環境の値を優先する、という update-check の説明を対話シェルでも守る。#635）。
-# 古い形（退避の無い行）の区間は、新しい形へ置き換える。
 inject_env_autoload() {
-  local rc="$1" rc_status=0 content
+  local rc="$1"
   local marker="# >>> project .env autoload >>>"
   # rc が無いベースイメージでも autoload を効かせるため、存在しなければ作成する
   # （touch は既存ファイルを切り詰めない）。zsh 未導入環境で作られても無害（誰も読まない）。
   [[ -f "$rc" ]] || touch "$rc"
-  # パスは printf %q で引用する（$(...) などを含むパスが rc の起動時にコマンドにならないように）。
-  content="$marker
-if [[ -f $(printf '%q' "$HELPER") ]]; then DCB_ENV_UPDATE_CHECK=\"\${UPDATE_CHECK-}\"; . $(printf '%q' "$HELPER"); fi
-# <<< project .env autoload <<<"
-  sync_rc_block "$rc" "$marker" "# <<< project .env autoload <<<" "$content" || rc_status=$?
-  case "$rc_status" in
-    10) echo "[on-attach] injected project .env autoload into $rc" ;;
-    11) echo "[on-attach] updated project .env autoload in $rc" ;;
-  esac
-  return 0
+  grep -qF "$marker" "$rc" && return 0
+  {
+    echo ""
+    echo "$marker"
+    # パスは printf %q で引用する（$(...) などを含むパスが rc の起動時にコマンドにならないように）。
+    printf '%s\n' "if [[ -f $(printf '%q' "$HELPER") ]]; then . $(printf '%q' "$HELPER"); fi"
+    echo "# <<< project .env autoload <<<"
+  } >> "$rc"
+  echo "[on-attach] injected project .env autoload into $rc"
 }
 inject_env_autoload "$HOME/.bashrc"
 inject_env_autoload "$HOME/.zshrc"
@@ -154,23 +115,20 @@ UPDATE_CHECK_PROJECT="$(cd "$HERE/.." && pwd)"
 # パスは rc にシェルの語として書かれるので、printf %q で引用する（空白・引用符・$(...) を含むパスが
 # 対話シェルの起動時にコマンドとして解釈されないように。印のコメントの行も同じ）。
 inject_update_check_prompt() {
-  local rc="$1" q_proj q_script marker content rc_status=0
+  local rc="$1" q_proj q_script marker
   [[ -f "$UPDATE_CHECK_SCRIPT" ]] || return 0
   q_proj="$(printf '%q' "$UPDATE_CHECK_PROJECT")"
   q_script="$(printf '%q' "$UPDATE_CHECK_SCRIPT")"
   marker="# >>> dcb update check: $q_proj >>>"
   [[ -f "$rc" ]] || touch "$rc"
-  # (export DCB_ENV_UPDATE_CHECK; ...) は、自動読み込みが退避した環境の値を update-check.sh へ渡す
-  # （サブシェルの中だけで export するので、対話シェルの環境には残らない。#635）。
-  content="$marker
-case \"\$-\" in *i*) case \"\$PWD/\" in $q_proj/*) if [ -t 0 ] && [ -t 1 ] && [ -f $q_script ]; then (export DCB_ENV_UPDATE_CHECK; bash $q_script prompt) || true; fi ;; esac ;; esac
-# <<< dcb update check <<<"
-  sync_rc_block "$rc" "$marker" "# <<< dcb update check <<<" "$content" || rc_status=$?
-  case "$rc_status" in
-    10) echo "[on-attach] injected update check prompt into $rc" ;;
-    11) echo "[on-attach] updated update check prompt in $rc" ;;
-  esac
-  return 0
+  grep -qxF -- "$marker" "$rc" && return 0
+  {
+    echo ""
+    printf '%s\n' "$marker"
+    printf '%s\n' "case \"\$-\" in *i*) case \"\$PWD/\" in $q_proj/*) if [ -t 0 ] && [ -t 1 ] && [ -f $q_script ]; then bash $q_script prompt || true; fi ;; esac ;; esac"
+    echo "# <<< dcb update check <<<"
+  } >> "$rc"
+  echo "[on-attach] injected update check prompt into $rc"
 }
 inject_update_check_prompt "$HOME/.bashrc"
 inject_update_check_prompt "$HOME/.zshrc"
