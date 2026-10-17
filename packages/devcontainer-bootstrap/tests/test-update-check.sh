@@ -39,6 +39,7 @@ while [[ $# -gt 0 ]]; do
 done
 echo "$url" >> "$FAKE_CURL_DIR/calls"
 [[ -z "${FAKE_CURL_FAIL:-}" ]] || exit "${FAKE_CURL_RC:-22}"
+[[ -z "${FAKE_CURL_OFFLINE_MATCH:-}" || "$url" != *"$FAKE_CURL_OFFLINE_MATCH"* ]] || exit 7
 f="$FAKE_CURL_DIR/$(printf '%s' "$url" | tr -c 'A-Za-z0-9' _)"
 [[ -f "$f" ]] || exit 22
 cp "$f" "$out"
@@ -48,11 +49,21 @@ export FAKE_CURL_DIR="$FIX"
 
 fixture_path() { printf '%s/%s' "$FIX" "$(printf '%s' "$1" | tr -c 'A-Za-z0-9' _)"; }
 DCB_API="https://api.github.com/repos/ojos/devcontainer-bootstrap/releases"
-PB_API="https://api.github.com/repos/ojos/ai-playbook/releases"
+PB_TAGS="https://api.github.com/repos/ojos/ai-playbook/tags?per_page=100"
 
 # set_latest <API> <tag>: releases/latest の応答を置く。
 set_latest() {
   printf '{\n  "tag_name": "%s",\n  "draft": false,\n  "prerelease": false\n}\n' "$2" > "$(fixture_path "$1/latest")"
+}
+# set_tags <URL> <tag>...: tags の応答（ai-playbook は Release を作らないため、タグの一覧から取る）を置く。
+# 並びは与えた順（GitHub は新しい順を返すが、最大は並びによらず取る）。
+set_tags() {
+  local url="$1" t sep="" body="["; shift
+  for t in "$@"; do
+    body="$body$sep{\"name\":\"$t\",\"zipball_url\":\"https://x/zip/$t\",\"commit\":{\"sha\":\"0000\",\"url\":\"https://x/c\"},\"node_id\":\"n\"}"
+    sep=","
+  done
+  printf '%s]\n' "$body" > "$(fixture_path "$url")"
 }
 # set_changelog <owner/repo> <最新のタグ> <版:移行の節あり(1)/なし(0)>...: 配布先の CHANGELOG.md を置く。
 set_changelog() {
@@ -104,7 +115,7 @@ run_uc() {
 
 # ── 新しい版あり / 無し ──────────────────────────────────────────────────────
 reset_fixture
-set_latest "$DCB_API" "v0.99.0"
+set_latest "$DCB_API" "v0.99.0"; set_changelog "ojos/devcontainer-bootstrap" "v0.99.0" "v0.99.0:0"
 C1="$TEST_TMP_ROOT/c1"
 it "新しい版があれば、notify が通知を 1 行だけ出す（版を含む）"
 o="$(run_uc "$C1" notify)"
@@ -141,10 +152,10 @@ reset_fixture
 o="$(run_uc "$TEST_TMP_ROOT/c3" notify FAKE_CURL_FAIL=1)"; rc=$?
 if [[ -z "$o" && "$rc" == 0 ]]; then pass; else fail "rc=$rc 出力: $o"; fi
 
-it "失敗した日は、もう一度問い合わせない（1 日 1 回）"
+it "失敗した日は印を書かず、次の接続で取り直す"
 n0="$(calls)"
 run_uc "$TEST_TMP_ROOT/c3" notify FAKE_CURL_FAIL=1 >/dev/null
-if [[ "$(calls)" == "$n0" ]]; then pass; else fail "再度問い合わせた"; fi
+if [[ "$(calls)" -gt "$n0" && ! -e "$TEST_TMP_ROOT/c3/checked" ]]; then pass; else fail "問い合わせていない、または印がある"; fi
 
 # ── 端末なし ─────────────────────────────────────────────────────────────────
 reset_fixture; set_latest "$DCB_API" "v0.99.0"
@@ -350,7 +361,7 @@ o="$(yes_run "$R5" "$TEST_TMP_ROOT/cy5")"
 if [[ ! -s "$BOOT_LOG" && "$o" == *未コミット* ]]; then pass; else fail "出力: $o"; fi
 
 it "y: ai-playbook を tag で使っていて、新しい版があれば --playbook-version を渡す"
-reset_fixture; set_latest "$DCB_API" "v0.99.0"; set_latest "$PB_API" "v9.0.0"; put_release_assets ok
+reset_fixture; set_latest "$DCB_API" "v0.99.0"; set_tags "$PB_TAGS" "v9.0.0"; put_release_assets ok
 R6="$(new_workdir)/p"; make_repo "$R6"
 # 規範を tag で使う構成の ORIGIN にする（取得はしない: 偽の bootstrap.sh は何も取りに行かない）。
 sed 's/^input:playbook=none$/input:playbook=installed\ninput:playbook-source=tag\ninput:playbook-ref=v0.1.0/' "$R6/.devcontainer/ORIGIN" > "$R6/.devcontainer/ORIGIN.new"
@@ -361,7 +372,7 @@ o="$(yes_run "$R6" "$TEST_TMP_ROOT/cy6")"
 if [[ "$(cat "$BOOT_LOG")" == "--upgrade --output-dir $R6 --playbook-version v9.0.0" ]]; then pass; else fail "引数: $(cat "$BOOT_LOG") 出力: $o"; fi
 
 it "規範の取得元が tag でなければ（adjacent / local）、ai-playbook は確認しない"
-reset_fixture; set_latest "$DCB_API" "v0.99.0"; set_latest "$PB_API" "v9.0.0"
+reset_fixture; set_latest "$DCB_API" "v0.99.0"; set_tags "$PB_TAGS" "v9.0.0"
 R7="$(new_workdir)/p"; make_repo "$R7"
 sed 's/^input:playbook=none$/input:playbook=installed\ninput:playbook-source=adjacent/' "$R7/.devcontainer/ORIGIN" > "$R7/.devcontainer/ORIGIN.new"
 mv "$R7/.devcontainer/ORIGIN.new" "$R7/.devcontainer/ORIGIN"
@@ -390,7 +401,7 @@ notify_in() { # <out> <cache>
 }
 
 it "y: フォークの url で使う規範は、フォークのまま版だけ替えた url を --playbook-from で渡す"
-reset_fixture; set_latest "$DCB_API" "v0.99.0"; set_latest "https://api.github.com/repos/fork/ai-playbook/releases" "v9.0.0"; put_assets_for v0.99.0
+reset_fixture; set_latest "$DCB_API" "v0.99.0"; set_tags "https://api.github.com/repos/fork/ai-playbook/tags?per_page=100" "v9.0.0"; put_assets_for v0.99.0
 R9="$(new_workdir)/p"; make_repo "$R9"
 set_origin_playbook "$R9" url "https://github.com/fork/ai-playbook/archive/refs/tags/v0.1.0.tar.gz"
 notify_in "$R9" "$TEST_TMP_ROOT/cy9"
@@ -440,7 +451,7 @@ o="$(yes_run "$RDB" "$TEST_TMP_ROOT/cydb")"
 if [[ "$(git -C "$RDB" symbolic-ref --short HEAD)" == chore/update-dcb-v0.99.0 ]]; then pass; else fail "ブランチ: $(git -C "$RDB" symbolic-ref --short HEAD) 出力: $o"; fi
 
 it "今の DCB が最新より新しく ai-playbook だけ新しいとき、今の版の bootstrap.sh で追従する（DCB を下げない）"
-reset_fixture; set_latest "$DCB_API" "v0.99.0"; set_latest "$PB_API" "v9.0.0"; put_assets_for v0.99.0; put_assets_for v1.0.0
+reset_fixture; set_latest "$DCB_API" "v0.99.0"; set_tags "$PB_TAGS" "v9.0.0"; put_assets_for v0.99.0; put_assets_for v1.0.0
 R12="$(new_workdir)/p"; make_repo "$R12"
 sed 's/^version=.*$/version=v1.0.0/' "$R12/.devcontainer/ORIGIN" > "$R12/.devcontainer/ORIGIN.new"; mv "$R12/.devcontainer/ORIGIN.new" "$R12/.devcontainer/ORIGIN"
 set_origin_playbook "$R12" tag v0.1.0
@@ -450,7 +461,7 @@ if [[ "$(cat "$BOOT_LOG")" == "--upgrade --output-dir $R12 --playbook-version v9
   && grep -q 'download/v1.0.0/bootstrap.sh' "$FIX/calls" && ! grep -q 'download/v0.99.0/bootstrap.sh' "$FIX/calls"; then pass; else fail "引数: $(cat "$BOOT_LOG") 出力: $o"; fi
 
 it "N と答えた DCB の版は、ai-playbook の y の追従で一緒に上がらない（今の版の bootstrap.sh を使う）"
-reset_fixture; set_latest "$DCB_API" "v0.99.0"; set_latest "$PB_API" "v9.0.0"; put_assets_for v0.99.0; put_assets_for "$ORIGIN_VER"
+reset_fixture; set_latest "$DCB_API" "v0.99.0"; set_tags "$PB_TAGS" "v9.0.0"; put_assets_for v0.99.0; put_assets_for "$ORIGIN_VER"
 R13="$(new_workdir)/p"; make_repo "$R13"
 set_origin_playbook "$R13" tag v0.1.0
 notify_in "$R13" "$TEST_TMP_ROOT/cy13"
@@ -459,6 +470,243 @@ o="$(yes_run "$R13" "$TEST_TMP_ROOT/cy13")"
 if [[ "$(cat "$BOOT_LOG")" == "--upgrade --output-dir $R13 --playbook-version v9.0.0" ]] \
   && grep -q "download/$ORIGIN_VER/bootstrap.sh" "$FIX/calls" && ! grep -q 'download/v0.99.0/bootstrap.sh' "$FIX/calls" \
   && [[ "$o" != *"devcontainer-bootstrap $ORIGIN_VER ->"* ]]; then pass; else fail "引数: $(cat "$BOOT_LOG") 出力: $o"; fi
+
+# ── 見せた版だけが declined と追従の対象（#633） ────────────────────────────
+# 問いかけを出したあとで latest-dcb を書き換えてから、答えを返す。表示を待ってから書き換える。
+ask_with_rewrite() { # <out> <cache> <答え> <書き換える版> [env...]
+  local o="$1" cache="$2" ans="$3" newv="$4" outf="$TEST_TMP_ROOT/ask-out.$$" i; shift 4
+  : > "$outf"
+  : > "$BOOT_LOG"
+  {
+    for i in $(seq 100); do
+      if command grep -q '追従しますか' "$outf" 2>/dev/null; then break; fi
+      sleep 0.1
+    done
+    if [[ "$newv" == REMOVE ]]; then rm -f "$cache/latest-dcb"; else printf '%s\n' "$newv" > "$cache/latest-dcb"; fi
+    printf '%s\n' "$ans"
+  } | env PATH="$STUBBIN:$PATH" UPDATE_CHECK_CACHE_DIR="$cache" UPDATE_CHECK_TODAY="$TODAY" UPDATE_CHECK_ASSUME_TTY=1 \
+    FAKE_CURL_DIR="$FIX" FAKE_BOOT_LOG="$BOOT_LOG" "$@" "$BASH_BIN" "$o/scripts/update-check.sh" prompt > "$outf" 2>&1
+  cat "$outf"
+}
+
+it "問いかけの最中に latest が新しい版へ書き換わっても、N なら declined には表示した版が書かれる"
+reset_fixture; set_latest "$DCB_API" "v0.99.0"
+R33="$(new_workdir)/p"; make_repo "$R33"
+notify_in "$R33" "$TEST_TMP_ROOT/c33n"
+o="$(ask_with_rewrite "$R33" "$TEST_TMP_ROOT/c33n" n v0.100.0)"
+if [[ "$(cat "$TEST_TMP_ROOT/c33n/declined-dcb" 2>/dev/null)" == v0.99.0 ]]; then pass; else fail "declined=$(cat "$TEST_TMP_ROOT/c33n/declined-dcb" 2>/dev/null) 出力: $o"; fi
+
+it "その場合、書き換わった新しい版は、次の問いかけで聞かれる（declined に飲まれない）"
+o="$(ask "$TEST_TMP_ROOT/c33n" n)"
+if [[ "$o" == *"追従しますか？"* && "$o" == *v0.100.0* ]]; then pass; else fail "出力: $o"; fi
+
+it "問いかけの最中に latest が新しい版へ書き換わっても、y なら表示した版で追従する"
+reset_fixture; set_latest "$DCB_API" "v0.99.0"; put_assets_for v0.99.0; put_assets_for v0.100.0
+R33Y="$(new_workdir)/p"; make_repo "$R33Y"
+notify_in "$R33Y" "$TEST_TMP_ROOT/c33y"
+o="$(ask_with_rewrite "$R33Y" "$TEST_TMP_ROOT/c33y" y v0.100.0)"
+if [[ "$(cat "$BOOT_LOG")" == "--upgrade --output-dir $R33Y" ]] \
+  && grep -q 'download/v0.99.0/bootstrap.sh' "$FIX/calls" && ! grep -q 'download/v0.100.0/bootstrap.sh' "$FIX/calls" \
+  && [[ "$(git -C "$R33Y" symbolic-ref --short HEAD)" == chore/update-dcb-v0.99.0 ]]; then pass; else fail "引数: $(cat "$BOOT_LOG") 出力: $o"; fi
+
+# ── origin/HEAD が無いときは既定ブランチを推定しない（#634） ─────────────────
+branch_after_follow() { # <out> <cache>: y で流したあとのブランチ名
+  reset_fixture; set_latest "$DCB_API" "v0.99.0"; put_assets_for v0.99.0
+  notify_in "$1" "$2"
+  yes_run "$1" "$2" >/dev/null
+  git -C "$1" symbolic-ref --short HEAD
+}
+it "origin/HEAD が無く main と master の両方があるとき、master の上から追従すると作業用のブランチが切られる"
+R34A="$(new_workdir)/p"; make_repo "$R34A"; git -C "$R34A" branch -q master; git -C "$R34A" switch -q master
+b="$(branch_after_follow "$R34A" "$TEST_TMP_ROOT/c34a")"
+if [[ "$b" == chore/update-dcb-v0.99.0 ]]; then pass; else fail "ブランチ: $b"; fi
+
+it "同じく main の上から追従しても、作業用のブランチが切られる"
+R34B="$(new_workdir)/p"; make_repo "$R34B"; git -C "$R34B" branch -q master
+b="$(branch_after_follow "$R34B" "$TEST_TMP_ROOT/c34b")"
+if [[ "$b" == chore/update-dcb-v0.99.0 ]]; then pass; else fail "ブランチ: $b"; fi
+
+it "origin/HEAD が無く、main / master の上でもなければ、ブランチを切らない"
+R34C="$(new_workdir)/p"; make_repo "$R34C"; git -C "$R34C" branch -q master; git -C "$R34C" switch -q -c feature/y
+b="$(branch_after_follow "$R34C" "$TEST_TMP_ROOT/c34c")"
+if [[ "$b" == feature/y ]]; then pass; else fail "ブランチ: $b"; fi
+
+it "origin/HEAD があるときは従来どおり、それが指すブランチの上でだけ切る（master が既定なら main の上では切らない）"
+R34D="$(new_workdir)/p"; make_repo "$R34D"; git -C "$R34D" branch -q master
+git -C "$R34D" update-ref refs/remotes/origin/master master
+git -C "$R34D" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/master
+b1="$(branch_after_follow "$R34D" "$TEST_TMP_ROOT/c34d")"
+R34E="$(new_workdir)/p"; make_repo "$R34E"; git -C "$R34E" branch -q master
+git -C "$R34E" update-ref refs/remotes/origin/master master
+git -C "$R34E" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/master
+git -C "$R34E" switch -q master
+b2="$(branch_after_follow "$R34E" "$TEST_TMP_ROOT/c34e")"
+if [[ "$b1" == main && "$b2" == chore/update-dcb-v0.99.0 ]]; then pass; else fail "main の上: $b1 / master の上: $b2"; fi
+
+# ── 見落としの修正（オフライン・ページ・一体の差し替え・後始末） ─────────────
+it "オフラインの upgrade は、前の日のキャッシュが残っていても、「すでに最新」と言わず、古い版へ追従せず、失敗で終える"
+reset_fixture; set_latest "$DCB_API" "v0.99.0"; put_assets_for v0.99.0
+R35="$(new_workdir)/p"; make_repo "$R35"
+C35="$TEST_TMP_ROOT/c35"; mkdir -p "$C35"
+printf 'v0.99.0\n' > "$C35/latest-dcb"; printf 'v0.99.0=v0.99.0\n' > "$C35/migrations-dcb"; printf '%s\n' "$TODAY" > "$C35/checked"
+: > "$BOOT_LOG"
+o="$(env PATH="$STUBBIN:$PATH" UPDATE_CHECK_CACHE_DIR="$C35" UPDATE_CHECK_TODAY="$NEXTDAY" FAKE_CURL_DIR="$FIX" FAKE_BOOT_LOG="$BOOT_LOG" FAKE_CURL_FAIL=1 FAKE_CURL_RC=7 "$BASH_BIN" "$R35/scripts/update-check.sh" upgrade </dev/null 2>&1)"; rc=$?
+if [[ "$rc" != 0 && "$o" != *すでに最新* && ! -s "$BOOT_LOG" && ! -e "$C35/latest-dcb" && "$(cat "$C35/checked")" == "$TODAY" ]]; then pass; else fail "rc=$rc 出力: $o"; fi
+
+it "ai-playbook のタグが 100 件を超えるときは、ページをたどって最大を取る（2 ページ目に最大がある）"
+reset_fixture
+set_tags "$PB_TAGS" $(seq -f 'v0.0.%g' 1 100)
+set_tags "$PB_TAGS&page=2" "v10.0.0" "v1.0.0-rc1"
+RPG="$(new_workdir)/p"; make_repo "$RPG"; set_origin_playbook "$RPG" tag v0.1.0
+CPG="$TEST_TMP_ROOT/cpg"
+env PATH="$STUBBIN:$PATH" UPDATE_CHECK_CACHE_DIR="$CPG" UPDATE_CHECK_TODAY="$TODAY" FAKE_CURL_DIR="$FIX" "$BASH_BIN" "$RPG/scripts/update-check.sh" notify </dev/null >/dev/null 2>&1
+if [[ "$(cat "$CPG/latest-playbook" 2>/dev/null)" == v10.0.0 ]] && grep -q 'page=2' "$FIX/calls" && ! grep -q 'page=3' "$FIX/calls"; then pass; else fail "latest=$(cat "$CPG/latest-playbook" 2>/dev/null) calls: $(grep ai-playbook "$FIX/calls")"; fi
+
+it "問いかけの最中に latest が消えても、N なら表示した版が declined に書かれる"
+reset_fixture; set_latest "$DCB_API" "v0.99.0"
+R36="$(new_workdir)/p"; make_repo "$R36"
+notify_in "$R36" "$TEST_TMP_ROOT/c36n"
+o="$(ask_with_rewrite "$R36" "$TEST_TMP_ROOT/c36n" n REMOVE)"
+if [[ "$(cat "$TEST_TMP_ROOT/c36n/declined-dcb" 2>/dev/null)" == v0.99.0 ]]; then pass; else fail "declined=$(cat "$TEST_TMP_ROOT/c36n/declined-dcb" 2>/dev/null) 出力: $o"; fi
+
+it "問いかけの最中に latest が消えても、y なら表示した版で追従する（キャッシュへ戻らない）"
+reset_fixture; set_latest "$DCB_API" "v0.99.0"; put_assets_for v0.99.0
+R37="$(new_workdir)/p"; make_repo "$R37"
+notify_in "$R37" "$TEST_TMP_ROOT/c37y"
+o="$(ask_with_rewrite "$R37" "$TEST_TMP_ROOT/c37y" y REMOVE)"
+if [[ "$(cat "$BOOT_LOG")" == "--upgrade --output-dir $R37" ]] && grep -q 'download/v0.99.0/bootstrap.sh' "$FIX/calls"; then pass; else fail "引数: $(cat "$BOOT_LOG") 出力: $o"; fi
+
+it "latest と版の違う migrations（差し替えの途中の組み合わせ）は使わず、リリースノートを読む案内に留める"
+reset_fixture; set_latest "$DCB_API" "v0.99.0"
+CMX="$TEST_TMP_ROOT/cmx"; run_uc "$CMX" notify >/dev/null
+printf 'v0.50.0=v0.40.0 v0.45.0\n' > "$CMX/migrations-dcb"
+o="$(ask "$CMX" n)"
+if [[ "$o" != *"[注意]"* && "$o" == *リリースノート* ]]; then pass; else fail "出力: $o"; fi
+
+it "latest と版の合う migrations は使う"
+printf 'v0.99.0=v0.98.0 v0.99.0\n' > "$CMX/migrations-dcb"; rm -f "$CMX/declined-dcb"
+o="$(ask "$CMX" n)"
+if [[ "$o" == *"[注意]"* && "$o" == *v0.98.0* ]]; then pass; else fail "出力: $o"; fi
+
+it "取得の途中で TERM を受けても（中断しても）、作業用のファイル・ディレクトリを残さない"
+STUBBIN3="$TEST_TMP_ROOT/stubbin3"; mkdir -p "$STUBBIN3"
+printf '#!/usr/bin/env bash\nkill -TERM "$PPID"\nsleep 1\nexit 22\n' > "$STUBBIN3/curl"; chmod +x "$STUBBIN3/curl"
+CTR="$TEST_TMP_ROOT/ctrap"; mkdir -p "$CTR"
+env PATH="$STUBBIN3:$PATH" UPDATE_CHECK_CACHE_DIR="$CTR" UPDATE_CHECK_TODAY="$TODAY" "$BASH_BIN" "$UC" notify </dev/null >/dev/null 2>&1; rc=$?
+left="$(ls -A "$CTR" | command grep '^\.' || true)"
+if [[ "$rc" == 143 && -z "$left" && ! -e "$CTR/checked" ]]; then pass; else fail "rc=$rc 残り: $left"; fi
+
+it "1 日より古い作業用のファイル・ディレクトリは、取得の開始時に片づける（新しいものは残す）"
+CLN="$TEST_TMP_ROOT/cclean"; mkdir -p "$CLN/.stage.old" "$CLN/.stage.new"; : > "$CLN/.fetch.old"
+touch -t 200001010000 "$CLN/.stage.old" "$CLN/.fetch.old"
+reset_fixture; set_latest "$DCB_API" "v0.99.0"
+run_uc "$CLN" notify >/dev/null
+if [[ ! -e "$CLN/.stage.old" && ! -e "$CLN/.fetch.old" && -d "$CLN/.stage.new" ]]; then pass; else fail "残り: $(ls -A "$CLN" | tr '\n' ' ')"; fi
+
+it "origin/HEAD が無く main / master も無いときに切った場合、既定ブランチの上だったとは言わず、念のため切ったと言う"
+reset_fixture; set_latest "$DCB_API" "v0.99.0"; put_assets_for v0.99.0
+R38="$(new_workdir)/p"; make_repo "$R38"; git -C "$R38" branch -q -m main develop
+notify_in "$R38" "$TEST_TMP_ROOT/c38"
+o="$(yes_run "$R38" "$TEST_TMP_ROOT/c38")"
+if [[ "$o" == *念のため* && "$o" != *"既定ブランチ（"* ]]; then pass; else fail "出力: $o"; fi
+
+it "origin/HEAD が無く main の上だったときは、origin/HEAD が無いため main / master の上とみなして切ったと言う"
+reset_fixture; set_latest "$DCB_API" "v0.99.0"; put_assets_for v0.99.0
+R39="$(new_workdir)/p"; make_repo "$R39"
+notify_in "$R39" "$TEST_TMP_ROOT/c39"
+o="$(yes_run "$R39" "$TEST_TMP_ROOT/c39")"
+if [[ "$o" == *"origin/HEAD が無いため"* && "$o" != *念のため* ]]; then pass; else fail "出力: $o"; fi
+
+# ── 取得のどれかが失敗した日は印を書かない（#632 の acceptance） ─────────────
+it "DCB は成功し ai-playbook のタグが HTTP 500 のとき、checked は書かれず、DCB の差し替えは残り、次の notify で取り直す"
+reset_fixture; set_latest "$DCB_API" "v0.99.0"; set_changelog "ojos/devcontainer-bootstrap" "v0.99.0" "v0.99.0:0"
+RHE="$(new_workdir)/p"; make_repo "$RHE"; set_origin_playbook "$RHE" tag v0.1.0
+CHE="$TEST_TMP_ROOT/che"
+env PATH="$STUBBIN:$PATH" UPDATE_CHECK_CACHE_DIR="$CHE" UPDATE_CHECK_TODAY="$TODAY" FAKE_CURL_DIR="$FIX" "$BASH_BIN" "$RHE/scripts/update-check.sh" notify </dev/null >/dev/null 2>&1
+ok1=0; [[ ! -e "$CHE/checked" && "$(cat "$CHE/latest-dcb" 2>/dev/null)" == v0.99.0 && ! -e "$CHE/latest-playbook" ]] && ok1=1
+set_tags "$PB_TAGS" "v9.0.0"; set_changelog "ojos/ai-playbook" "v9.0.0" "v9.0.0:0"
+n0="$(calls)"
+env PATH="$STUBBIN:$PATH" UPDATE_CHECK_CACHE_DIR="$CHE" UPDATE_CHECK_TODAY="$TODAY" FAKE_CURL_DIR="$FIX" "$BASH_BIN" "$RHE/scripts/update-check.sh" notify </dev/null >/dev/null 2>&1
+if [[ "$ok1" == 1 && "$(calls)" -gt "$n0" && "$(cat "$CHE/checked" 2>/dev/null)" == "$TODAY" && "$(cat "$CHE/latest-playbook" 2>/dev/null)" == v9.0.0 ]]; then pass; else fail "ok1=$ok1 checked=$(cat "$CHE/checked" 2>/dev/null) calls $n0 -> $(calls)"; fi
+
+it "CHANGELOG.md の取得が失敗したら、checked は書かれず（移行の印は作らず）、次の notify で取り直す"
+reset_fixture; set_latest "$DCB_API" "v0.99.0"
+CCL="$TEST_TMP_ROOT/ccl"
+run_uc "$CCL" notify >/dev/null
+ok1=0; [[ ! -e "$CCL/checked" && ! -e "$CCL/migrations-dcb" && "$(cat "$CCL/latest-dcb" 2>/dev/null)" == v0.99.0 ]] && ok1=1
+set_changelog "ojos/devcontainer-bootstrap" "v0.99.0" "v0.99.0:1"
+run_uc "$CCL" notify >/dev/null
+if [[ "$ok1" == 1 && "$(cat "$CCL/checked" 2>/dev/null)" == "$TODAY" && -s "$CCL/migrations-dcb" ]]; then pass; else fail "ok1=$ok1 checked=$(cat "$CCL/checked" 2>/dev/null)"; fi
+
+it "更新用のロックを持つ別の端末がいるあいだ、notify は更新を飛ばし、checked も latest も変えず、通知はキャッシュから出す"
+reset_fixture; set_latest "$DCB_API" "v0.99.0"; set_changelog "ojos/devcontainer-bootstrap" "v0.99.0" "v0.99.0:0"
+CRC="$TEST_TMP_ROOT/crace"; run_uc "$CRC" notify >/dev/null
+set_latest "$DCB_API" "v0.100.0"
+if command -v flock >/dev/null 2>&1; then
+  flock "$CRC/refresh-lock" sleep 3 &
+  holder=$!
+  sleep 1
+  n0="$(calls)"
+  o="$(run_uc "$CRC" notify UPDATE_CHECK_TODAY="$NEXTDAY")"
+  wait "$holder" 2>/dev/null
+  if [[ "$(calls)" == "$n0" && "$(cat "$CRC/checked")" == "$TODAY" && "$(cat "$CRC/latest-dcb")" == v0.99.0 && "$o" == *v0.99.0* ]]; then pass; else fail "calls $n0 -> $(calls) checked=$(cat "$CRC/checked") latest=$(cat "$CRC/latest-dcb") 出力: $o"; fi
+else
+  pass
+fi
+
+it "更新用のロックは、ロックのディレクトリの方式でも効く（持ち主が生きているあいだ更新を飛ばす）"
+CRD="$TEST_TMP_ROOT/crace2"; mkdir -p "$CRD/refresh-lock.d"
+sleep 5 & live=$!
+printf '%s\n' "$live" > "$CRD/refresh-lock.d/pid"
+n0="$(calls)"
+run_uc "$CRD" notify UPDATE_CHECK_NO_FLOCK=1 >/dev/null
+kill "$live" 2>/dev/null; wait "$live" 2>/dev/null
+if [[ "$(calls)" == "$n0" && ! -e "$CRD/checked" ]]; then pass; else fail "更新した"; fi
+
+it "聞く側のロック（lock）を別の端末が持っていても（問いかけ中でも）、notify は更新できる"
+reset_fixture; set_latest "$DCB_API" "v0.99.0"; set_changelog "ojos/devcontainer-bootstrap" "v0.99.0" "v0.99.0:0"
+CRE="$TEST_TMP_ROOT/crace3"; run_uc "$CRE" notify >/dev/null
+if command -v flock >/dev/null 2>&1; then
+  flock "$CRE/lock" sleep 3 &
+  holder=$!
+  sleep 1
+  set_latest "$DCB_API" "v0.100.0"; set_changelog "ojos/devcontainer-bootstrap" "v0.100.0" "v0.100.0:0"
+  run_uc "$CRE" notify UPDATE_CHECK_TODAY="$NEXTDAY" >/dev/null
+  wait "$holder" 2>/dev/null
+  if [[ "$(cat "$CRE/latest-dcb")" == v0.100.0 && "$(cat "$CRE/checked")" == "$NEXTDAY" ]]; then pass; else fail "聞いているあいだ更新されなかった"; fi
+else
+  pass
+fi
+
+# ── upgrade は、今回取得できた部品だけを対象にする ───────────────────────────
+it "upgrade: 同じ日のキャッシュがあっても、取得が HTTP エラーになった部品は追従しない（取得できた部品だけ追従する）"
+reset_fixture; set_tags "$PB_TAGS" "v9.0.0"; set_changelog "ojos/ai-playbook" "v9.0.0" "v9.0.0:0"
+put_assets_for v0.99.0; put_assets_for "$ORIGIN_VER"
+RU2="$(new_workdir)/p"; make_repo "$RU2"; set_origin_playbook "$RU2" tag v0.1.0
+CU2="$TEST_TMP_ROOT/cu2"; mkdir -p "$CU2"
+printf 'v0.99.0\n' > "$CU2/latest-dcb"; printf '%s\n' "$TODAY" > "$CU2/checked"
+: > "$BOOT_LOG"; : > "$FIX/calls"
+o="$(env PATH="$STUBBIN:$PATH" UPDATE_CHECK_CACHE_DIR="$CU2" UPDATE_CHECK_TODAY="$TODAY" FAKE_CURL_DIR="$FIX" FAKE_BOOT_LOG="$BOOT_LOG" "$BASH_BIN" "$RU2/scripts/update-check.sh" upgrade </dev/null 2>&1)"; rc=$?
+if [[ "$(cat "$BOOT_LOG")" == "--upgrade --output-dir $RU2 --playbook-version v9.0.0" ]] && ! grep -q 'download/v0.99.0' "$FIX/calls" \
+  && [[ "$o" == *"追従しません"*devcontainer-bootstrap* ]]; then pass; else fail "引数: $(cat "$BOOT_LOG") rc=$rc 出力: $o"; fi
+
+it "upgrade: 取得が HTTP エラーになった部品しか無いときは、同じ日のキャッシュがあっても追従せず失敗で終わる"
+reset_fixture; put_assets_for v0.99.0
+RU3="$(new_workdir)/p"; make_repo "$RU3"
+CU3="$TEST_TMP_ROOT/cu3"; mkdir -p "$CU3"; printf 'v0.99.0\n' > "$CU3/latest-dcb"; printf '%s\n' "$TODAY" > "$CU3/checked"
+: > "$BOOT_LOG"
+o="$(env PATH="$STUBBIN:$PATH" UPDATE_CHECK_CACHE_DIR="$CU3" UPDATE_CHECK_TODAY="$TODAY" FAKE_CURL_DIR="$FIX" FAKE_BOOT_LOG="$BOOT_LOG" "$BASH_BIN" "$RU3/scripts/update-check.sh" upgrade </dev/null 2>&1)"; rc=$?
+if [[ "$rc" != 0 && ! -s "$BOOT_LOG" && "$o" != *すでに最新* ]]; then pass; else fail "rc=$rc 出力: $o"; fi
+
+it "upgrade: 同じ日の印があっても、再取得に失敗したら印を消し、次の notify で取り直す"
+if [[ ! -e "$CU3/checked" ]]; then pass; else fail "印が残った: $(cat "$CU3/checked")"; fi
+
+it "upgrade: DCB は取得できて ai-playbook が通信不能のとき、DCB だけ追従する"
+reset_fixture; set_latest "$DCB_API" "v0.99.0"; set_changelog "ojos/devcontainer-bootstrap" "v0.99.0" "v0.99.0:0"; put_assets_for v0.99.0
+RU4="$(new_workdir)/p"; make_repo "$RU4"; set_origin_playbook "$RU4" tag v0.1.0
+: > "$BOOT_LOG"
+o="$(env PATH="$STUBBIN:$PATH" UPDATE_CHECK_CACHE_DIR="$TEST_TMP_ROOT/cu4" UPDATE_CHECK_TODAY="$TODAY" FAKE_CURL_DIR="$FIX" FAKE_BOOT_LOG="$BOOT_LOG" FAKE_CURL_OFFLINE_MATCH=ai-playbook "$BASH_BIN" "$RU4/scripts/update-check.sh" upgrade </dev/null 2>&1)"; rc=$?
+if [[ "$(cat "$BOOT_LOG")" == "--upgrade --output-dir $RU4" && "$o" == *"追従しません"*ai-playbook* ]]; then pass; else fail "引数: $(cat "$BOOT_LOG") rc=$rc 出力: $o"; fi
 
 # 排他
 reset_fixture; set_latest "$DCB_API" "v0.99.0"
@@ -512,7 +760,7 @@ o3="$(printf 'n\n' | env PATH="$STUBBIN:$PATH" UPDATE_CHECK_CACHE_DIR="$CS" UPDA
 if [[ "$o1" == *"追従しますか？"* && -z "$o2" && -z "$o3" ]]; then pass; else fail "[$o1] [$o2] [$o3]"; fi
 
 it "DCB の問い合わせが（通信以外の理由で）失敗しても、ai-playbook の確認は止めない"
-reset_fixture; set_latest "$PB_API" "v9.0.0"
+reset_fixture; set_tags "$PB_TAGS" "v9.0.0"
 RP="$(new_workdir)/p"; make_repo "$RP"; set_origin_playbook "$RP" tag v0.1.0
 o="$(env PATH="$STUBBIN:$PATH" UPDATE_CHECK_CACHE_DIR="$TEST_TMP_ROOT/cpb" UPDATE_CHECK_TODAY="$TODAY" FAKE_CURL_DIR="$FIX" "$BASH_BIN" "$RP/scripts/update-check.sh" notify </dev/null 2>&1)"
 if [[ "$o" == *"ai-playbook v0.1.0 -> v9.0.0"* && "$o" != *"devcontainer-bootstrap"* ]]; then pass; else fail "出力: $o"; fi
@@ -521,6 +769,82 @@ it "通信ができない（curl の終了コード 7）と分かったら、残
 : > "$FIX/calls"
 env PATH="$STUBBIN:$PATH" UPDATE_CHECK_CACHE_DIR="$TEST_TMP_ROOT/cpb2" UPDATE_CHECK_TODAY="$TODAY" FAKE_CURL_DIR="$FIX" FAKE_CURL_FAIL=1 FAKE_CURL_RC=7 "$BASH_BIN" "$RP/scripts/update-check.sh" notify </dev/null >/dev/null 2>&1
 if [[ "$(calls)" == 1 ]]; then pass; else fail "問い合わせ回数 $(calls)"; fi
+
+# ── ai-playbook はタグから取る（#631） ───────────────────────────────────────
+it "ai-playbook の最新は、タグの一覧のうち vX.Y.Z の最大（並びによらず・プレリリースの形は採らない）で、notify が知らせる"
+reset_fixture; set_tags "$PB_TAGS" "v9.0.0-rc1" "v1.2.0" "v10.0.0" "v9.9.9" "v11.0.0-beta" "latest"
+RT="$(new_workdir)/p"; make_repo "$RT"; set_origin_playbook "$RT" tag v0.1.0
+CT="$TEST_TMP_ROOT/ctag"
+o="$(env PATH="$STUBBIN:$PATH" UPDATE_CHECK_CACHE_DIR="$CT" UPDATE_CHECK_TODAY="$TODAY" FAKE_CURL_DIR="$FIX" "$BASH_BIN" "$RT/scripts/update-check.sh" notify </dev/null 2>&1)"
+if [[ "$(cat "$CT/latest-playbook" 2>/dev/null)" == "v10.0.0" && "$o" == *"ai-playbook v0.1.0 -> v10.0.0"* ]]; then pass; else fail "latest=$(cat "$CT/latest-playbook" 2>/dev/null) 出力: $o"; fi
+
+it "ai-playbook は releases/latest を問い合わせない（タグの一覧だけ）"
+if ! grep -q 'ai-playbook/releases' "$FIX/calls" && grep -q 'ai-playbook/tags' "$FIX/calls" && ! grep -q 'page=2' "$FIX/calls"; then pass; else fail "calls: $(grep ai-playbook "$FIX/calls")"; fi
+
+it "ai-playbook のタグが形の合うものを 1 つも含まなければ、通知を出さず latest-playbook も書かない"
+reset_fixture; set_tags "$PB_TAGS" "v1.2.3-rc1" "main"
+CT2="$TEST_TMP_ROOT/ctag2"
+o="$(env PATH="$STUBBIN:$PATH" UPDATE_CHECK_CACHE_DIR="$CT2" UPDATE_CHECK_TODAY="$TODAY" FAKE_CURL_DIR="$FIX" "$BASH_BIN" "$RT/scripts/update-check.sh" notify </dev/null 2>&1)"
+if [[ -z "$o" && ! -e "$CT2/latest-playbook" ]]; then pass; else fail "出力: $o"; fi
+
+it "ai-playbook のタグの取得に失敗したら、通知を出さず 0 で終わる"
+reset_fixture
+CT3="$TEST_TMP_ROOT/ctag3"
+o="$(env PATH="$STUBBIN:$PATH" UPDATE_CHECK_CACHE_DIR="$CT3" UPDATE_CHECK_TODAY="$TODAY" FAKE_CURL_DIR="$FIX" "$BASH_BIN" "$RT/scripts/update-check.sh" notify </dev/null 2>&1)"; rc=$?
+if [[ -z "$o" && "$rc" == 0 && ! -e "$CT3/latest-playbook" ]]; then pass; else fail "rc=$rc 出力: $o"; fi
+
+it "ai-playbook でも、飛び越える版の「### 移行」の節を最新のタグの CHANGELOG.md から読む"
+reset_fixture; set_tags "$PB_TAGS" "v10.0.0" "v9.0.0" "v0.1.0"
+set_changelog "ojos/ai-playbook" "v10.0.0" "v10.0.0:1" "v9.0.0:1" "v0.1.0:1"
+CT4="$TEST_TMP_ROOT/ctag4"
+env PATH="$STUBBIN:$PATH" UPDATE_CHECK_CACHE_DIR="$CT4" UPDATE_CHECK_TODAY="$TODAY" FAKE_CURL_DIR="$FIX" "$BASH_BIN" "$RT/scripts/update-check.sh" notify </dev/null >/dev/null 2>&1
+if [[ "$(cat "$CT4/migrations-playbook" 2>/dev/null)" == "v10.0.0=v10.0.0 v9.0.0" ]]; then pass; else fail "migrations=$(cat "$CT4/migrations-playbook" 2>/dev/null)"; fi
+
+# ── notify のキャッシュ更新中の prompt（#632） ───────────────────────────────
+# 取得の途中（latest の書き直しの前）に prompt が読む状況を、偽の curl が呼ばれた時点で別に prompt を走らせて作る。
+STUBBIN2="$TEST_TMP_ROOT/stubbin2"; mkdir -p "$STUBBIN2"
+cat > "$STUBBIN2/curl" <<'STUB2'
+#!/usr/bin/env bash
+# 呼ばれた時点のキャッシュの内容を記録し、prompt を走らせて出力を残してから、通常の偽の curl に委ねる。
+if [[ -n "${MID_PROMPT_OUT:-}" && ! -e "$MID_PROMPT_OUT" ]]; then
+  ls -A "$UPDATE_CHECK_CACHE_DIR" > "$MID_PROMPT_OUT.ls" 2>/dev/null
+  printf 'n\n' | env UPDATE_CHECK_ASSUME_TTY=1 PATH="$ORIG_PATH" "$UC_BASH" "$UC_PATH" prompt > "$MID_PROMPT_OUT" 2>&1
+fi
+exec "$REAL_STUB" "$@"
+STUB2
+chmod +x "$STUBBIN2/curl"
+
+it "notify の取得の途中に prompt が読んでも、古い latest が見えて、問いかけの候補が空にならない"
+reset_fixture; set_latest "$DCB_API" "v0.99.0"
+CM="$TEST_TMP_ROOT/cmid"; run_uc "$CM" notify >/dev/null
+rm -f "$CM/declined-dcb"
+set_latest "$DCB_API" "v0.100.0"
+MID="$TEST_TMP_ROOT/mid-out"; rm -f "$MID" "$MID.ls"
+env PATH="$STUBBIN2:$STUBBIN:$PATH" ORIG_PATH="$STUBBIN:$PATH" REAL_STUB="$STUBBIN/curl" UC_BASH="$BASH_BIN" UC_PATH="$UC" MID_PROMPT_OUT="$MID" \
+  UPDATE_CHECK_CACHE_DIR="$CM" UPDATE_CHECK_TODAY="$NEXTDAY" FAKE_CURL_DIR="$FIX" "$BASH_BIN" "$UC" notify </dev/null >/dev/null 2>&1
+if [[ -f "$MID" && "$(cat "$MID")" == *"追従しますか？"* && "$(cat "$MID")" == *"-> v0.99.0"* ]] && grep -qx 'latest-dcb' "$MID.ls"; then pass; else fail "途中の prompt: [$(cat "$MID" 2>/dev/null)] ls: [$(cat "$MID.ls" 2>/dev/null)]"; fi
+
+it "取得が成功したあとは、latest・migrations・checked が新しい内容になり、作業用のファイルは残らない"
+set_changelog "ojos/devcontainer-bootstrap" "v0.100.0" "v0.100.0:1" "v0.99.0:1"
+rm -f "$CM/checked"
+run_uc "$CM" notify UPDATE_CHECK_TODAY="$NEXTDAY" >/dev/null
+if [[ "$(cat "$CM/latest-dcb")" == v0.100.0 && "$(cat "$CM/checked")" == "$NEXTDAY" && "$(cat "$CM/migrations-dcb")" == "v0.100.0=v0.100.0 v0.99.0" ]] \
+  && [[ -z "$(ls -A "$CM" | grep '^\.')" ]]; then pass; else fail "latest=$(cat "$CM/latest-dcb") checked=$(cat "$CM/checked") mig=$(cat "$CM/migrations-dcb" 2>/dev/null) ls=$(ls -A "$CM" | tr '\n' ' ')"; fi
+
+it "通信ができずに途中で抜けたら、checked は書かれず、前の日の latest も消え、次の notify で取り直す"
+CO="$TEST_TMP_ROOT/coff"; reset_fixture; set_latest "$DCB_API" "v0.99.0"; set_changelog "ojos/devcontainer-bootstrap" "v0.99.0" "v0.99.0:0"
+run_uc "$CO" notify >/dev/null
+run_uc "$CO" notify UPDATE_CHECK_TODAY="$NEXTDAY" FAKE_CURL_FAIL=1 FAKE_CURL_RC=7 >/dev/null
+gone=0; [[ ! -e "$CO/latest-dcb" && ! -e "$CO/migrations-dcb" ]] && gone=1
+n0="$(calls)"
+run_uc "$CO" notify UPDATE_CHECK_TODAY="$NEXTDAY" >/dev/null
+if [[ "$gone" == 1 && "$(cat "$CO/checked")" == "$NEXTDAY" && "$(calls)" -gt "$n0" && "$(cat "$CO/latest-dcb")" == v0.99.0 ]]; then pass; else fail "gone=$gone checked=$(cat "$CO/checked") calls $n0 -> $(calls)"; fi
+
+it "通信ができずに抜けた日は、checked が書かれない（前の日の印のまま）"
+CO2="$TEST_TMP_ROOT/coff2"; reset_fixture; set_latest "$DCB_API" "v0.99.0"; set_changelog "ojos/devcontainer-bootstrap" "v0.99.0" "v0.99.0:0"
+run_uc "$CO2" notify >/dev/null
+run_uc "$CO2" notify UPDATE_CHECK_TODAY="$NEXTDAY" FAKE_CURL_FAIL=1 FAKE_CURL_RC=7 >/dev/null
+if [[ "$(cat "$CO2/checked")" == "$TODAY" ]]; then pass; else fail "checked=$(cat "$CO2/checked")"; fi
 
 # ── lock.d の持ち主判定 ──────────────────────────────────────────────────────
 it "lock.d に pid がまだ無くても、作った直後は持ち主ありとみなして消さない"
