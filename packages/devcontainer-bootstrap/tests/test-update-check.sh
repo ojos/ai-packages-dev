@@ -992,4 +992,19 @@ o="$(nested_ask "$CIA8" A_DUMMY=1)"
 rm -f "$RIA/.env"
 if [[ "$o" == *"追従しますか？"* ]]; then pass; else fail "出力: $o"; fi
 
+# ── コマンドで明示した UPDATE_CHECK は、親のシェルの退避値に勝つ（#640） ─────────
+reset_fixture; set_latest "$DCB_API" "v0.99.0"
+
+it "退避が off・読んだ直後の値も off のシェルで、UPDATE_CHECK=on を明示すると通知が出る"
+o="$(run_uc "$TEST_TMP_ROOT/cex1" notify DCB_ENV_UPDATE_CHECK=off DCB_ENV_UPDATE_CHECK_LOADED=off UPDATE_CHECK=on)"
+if [[ "$o" == *"新しい版があります"* ]]; then pass; else fail "出力: $o"; fi
+
+it "退避が on・読んだ直後の値も on のシェルで、UPDATE_CHECK=off を明示すると止まる"
+o="$(run_uc "$TEST_TMP_ROOT/cex2" notify DCB_ENV_UPDATE_CHECK=on DCB_ENV_UPDATE_CHECK_LOADED=on UPDATE_CHECK=off)"
+if [[ -z "$o" ]]; then pass; else fail "出力: $o"; fi
+
+it "明示しない（今の値が読んだ直後の値と同じ）ときは、従来どおり退避値が勝つ"
+o="$(run_uc "$TEST_TMP_ROOT/cex3" notify DCB_ENV_UPDATE_CHECK=off DCB_ENV_UPDATE_CHECK_LOADED=on UPDATE_CHECK=on)"
+if [[ -z "$o" ]]; then pass; else fail "出力: $o"; fi
+
 exit_with_result
