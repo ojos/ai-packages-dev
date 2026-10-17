@@ -766,6 +766,8 @@ codex は、コマンドを読み取り専用などのサンドボックスの�
 
 - **実測した環境**: Ubuntu 26.04.1（カーネル 7.0.0-38、AppArmor 有効、`kernel.apparmor_restrict_unprivileged_userns = 1`）のネイティブの Docker Engine と、codex 0.160.0。既定と AppArmor だけ外した場合は `codex sandbox -- git status` が上の表の 1 行目で失敗し、2 つとも外すと通りました。ホストの `apparmor_restrict_unprivileged_userns` は、この失敗に関わっていませんでした。Docker Desktop（macOS）でも、既定のままでは同じ 1 行目で失敗し、2 つを外すと user namespace の作成と mount が通ることを確かめています。
 - **代償**: コンテナの中のプロセスが namespace を作り、mount できるようになります。Docker がコンテナに既定で掛けている隔離の 2 層を外すことになるので、`--with-codex` を選んだ構成に限っています。codex を使わなくなったら、`devcontainer.json` から `securityOpt`（とその説明のコメント）を消してください。
+- **第二意見（`scripts/second-opinion-review.sh --engine codex`）だけでも要るか**: 外せると言えないため、残しています。第二意見は codex を `env -i` で、ツールを `--disable` し、`--sandbox read-only` で起動するので、モデルのコマンドは走りません。それでも codex は起動のたびに、サンドボックスが使えるかの確認として `bwrap --unshare-user --unshare-net --ro-bind / / /bin/true` を起動します（codex 0.162.1 の第二意見 1 回を `strace -f -e trace=execve` で記録し、3 回の実行で bwrap が 3 回起動されることを確認）。この確認は namespace の作成を伴い、既定の seccomp が止める操作そのものです。緩和を外したコンテナでの実測は行っていないため、その場合に確認が失敗して第二意見が止まるのか、警告だけで動くのかは分かっていません。
+- **緩和を外してよいのは**、そのコンテナで codex を使わないときだけです（`--with-codex` を選ばない、または `devcontainer.json` から `securityOpt` を消す）。
 - **`systempaths=unconfined` は入れていません。** bwrap は `/proc` を新しく mount しようとして、Docker が `/proc` の一部を隠していることで拒まれますが、codex はこの失敗を自分で避けて動きます。外す範囲を広げずに済むので入れていません。
 - **Docker Desktop（macOS）** には AppArmor がなく、`apparmor=unconfined` は効き目がないだけで害はありません。止めているのは seccomp なので、Mac でもこの設定が要ります。
 

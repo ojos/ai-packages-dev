@@ -12084,6 +12084,10 @@ build_volume_section_block() {
 # 止める順は seccomp → AppArmor なので、AppArmor だけ外しても足りない）。Docker Desktop
 # には AppArmor が無く、apparmor=unconfined は効き目が無いだけで害は無い。
 # systempaths=unconfined は要らない（codex は /proc の mount の失敗を自分で避ける）。
+# 第二意見（second-opinion-review.sh）の起動のしかた（env -i、ツールを --disable、
+# --sandbox read-only）でも外せない: ツールのコマンドが走らなくても、codex は起動のたびに
+# bwrap を能力の確認として起動する（bwrap --unshare-user --unshare-net --ro-bind / / /bin/true。
+# codex 0.162.1 を strace で実測、#649）。緩和を外した環境での挙動は未実測。
 # 隔離を弱めるので、サンドボックスを使う codex を選んだ構成に限る。
 #
 # 置き場所が compose.yaml の security_opt ではなく devcontainer.json の securityOpt なのは、
@@ -12105,6 +12109,8 @@ build_security_opt_comment() {
   // ネイティブ Linux ではさらに AppArmor が mount を止める（片方だけ外しても動かない）。
   // コンテナの中から namespace の作成や mount ができるようになり、隔離が弱まる。
   // codex を使わなくなったら消してよい。
+  // 第二意見のようにツールを無効にした起動でも、codex は起動のたびに bwrap を
+  // 能力の確認として起動するので、codex を使う限りこの設定は残す。
   // compose.yaml の security_opt に置かないこと。go などの feature が同じ値を足すため、
   // Compose が重複を拒否してコンテナが起動しなくなる。
 BLK
