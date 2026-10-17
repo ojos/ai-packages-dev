@@ -908,4 +908,88 @@ o="$(env PATH="$STUBBIN:$PATH" UPDATE_CHECK_CACHE_DIR="$TEST_TMP_ROOT/cy8" UPDAT
 if grep -qx 'version=v0.99.0' "$R8/.devcontainer/ORIGIN" && [[ "$(git -C "$R8" rev-list --count HEAD)" == 1 ]] \
   && [[ "$(git -C "$R8" symbolic-ref --short HEAD)" == "chore/update-dcb-v0.99.0" ]]; then pass; else fail "出力: $o"; fi
 
+# ── 対話シェルでの環境の優先（#635） ─────────────────────────────────────────
+# 対話シェルでは rc の自動読み込みが先に .env で UPDATE_CHECK を上書きする。注入された rc の 2 つの
+# ブロックを取り出し、端末の検査（[ -t 0 ] && [ -t 1 ]）と対話の検査（*i*）だけを外して、そのまま動かす。
+RIA="$(new_workdir)/pia"; run_bootstrap "$RIA" >/dev/null 2>&1
+RIA="$(cd "$RIA" && pwd)"
+RIAH="$TEST_TMP_ROOT/riahome"; mkdir -p "$RIAH"
+env HOME="$RIAH" "$BASH_BIN" "$RIA/scripts/on-attach.sh" >/dev/null 2>&1 </dev/null
+sed -e 's/\*i\*/*/' -e 's/\[ -t 0 \] && \[ -t 1 \]/true/' "$RIAH/.bashrc" > "$TEST_TMP_ROOT/ria-rc.sh"
+# sim_interactive <cache> <答え> [env...]: プロジェクトの中で開いた対話シェルが rc を読む動きを模す。
+sim_interactive() {
+  local cache="$1" ans="$2"; shift 2
+  ( cd "$RIA" && printf '%s\n' "$ans" | env PATH="$STUBBIN:$PATH" HOME="$RIAH" UPDATE_CHECK_CACHE_DIR="$cache" \
+      UPDATE_CHECK_TODAY="$TODAY" UPDATE_CHECK_ASSUME_TTY=1 FAKE_CURL_DIR="$FIX" "$@" \
+      "$BASH_BIN" --norc "$TEST_TMP_ROOT/ria-rc.sh" 2>&1 )
+}
+reset_fixture; set_latest "$DCB_API" "v0.99.0"
+
+it "対話シェルを模して、環境に値が無く .env も無いときは聞く（模擬が動いている確認）"
+CIA0="$TEST_TMP_ROOT/cia0"; run_uc "$CIA0" notify >/dev/null
+o="$(sim_interactive "$CIA0" n)"
+if [[ "$o" == *"追従しますか？"* ]]; then pass; else fail "出力: $o"; fi
+
+it "環境が UPDATE_CHECK=off で .env が UPDATE_CHECK=on なら、対話シェルでも問いかけが出ない"
+printf 'UPDATE_CHECK=on\n' > "$RIA/.env"
+CIA1="$TEST_TMP_ROOT/cia1"; run_uc "$CIA1" notify >/dev/null
+o="$(sim_interactive "$CIA1" n UPDATE_CHECK=off)"
+rm -f "$RIA/.env"
+if [[ -z "$o" && ! -f "$CIA1/declined-dcb" ]]; then pass; else fail "出力: $o"; fi
+
+it "環境に値が無く .env が UPDATE_CHECK=off なら、対話シェルでも止まる"
+printf 'UPDATE_CHECK=off\n' > "$RIA/.env"
+CIA2="$TEST_TMP_ROOT/cia2"; run_uc "$CIA2" notify >/dev/null
+o="$(sim_interactive "$CIA2" n)"
+rm -f "$RIA/.env"
+if [[ -z "$o" ]]; then pass; else fail "出力: $o"; fi
+
+it "環境に値が無く .env が UPDATE_CHECK=on なら、対話シェルでは聞く"
+printf 'UPDATE_CHECK=on\n' > "$RIA/.env"
+CIA3="$TEST_TMP_ROOT/cia3"; run_uc "$CIA3" notify >/dev/null
+o="$(sim_interactive "$CIA3" n)"
+rm -f "$RIA/.env"
+if [[ "$o" == *"追従しますか？"* ]]; then pass; else fail "出力: $o"; fi
+
+it "入れ子のシェル（対話シェルの中で起動した bash）でも、環境の off が .env の on に勝つ"
+printf 'UPDATE_CHECK=on\n' > "$RIA/.env"
+CIA5="$TEST_TMP_ROOT/cia5"; run_uc "$CIA5" notify >/dev/null
+# 親が rc を読んで退避と上書きを済ませたあと、その環境のまま子が rc を読む。
+printf '%s\n' ". \"$TEST_TMP_ROOT/ria-rc.sh\" </dev/null >/dev/null 2>&1" "exec \"$BASH_BIN\" --norc \"$TEST_TMP_ROOT/ria-rc.sh\"" > "$TEST_TMP_ROOT/ria-nest.sh"
+o="$( cd "$RIA" && printf 'n\n' | env PATH="$STUBBIN:$PATH" HOME="$RIAH" UPDATE_CHECK_CACHE_DIR="$CIA5" \
+  UPDATE_CHECK_TODAY="$TODAY" UPDATE_CHECK_ASSUME_TTY=1 FAKE_CURL_DIR="$FIX" UPDATE_CHECK=off \
+  "$BASH_BIN" --norc "$TEST_TMP_ROOT/ria-nest.sh" 2>&1 )"
+rm -f "$RIA/.env"
+if [[ -z "$o" && ! -f "$CIA5/declined-dcb" ]]; then pass; else fail "出力: $o"; fi
+
+it ".env に DCB_ENV_UPDATE_CHECK が書かれていても、退避した環境の off は上書きされない"
+printf 'DCB_ENV_UPDATE_CHECK=on\nUPDATE_CHECK=on\n' > "$RIA/.env"
+CIA6="$TEST_TMP_ROOT/cia6"; run_uc "$CIA6" notify >/dev/null
+o="$(sim_interactive "$CIA6" n UPDATE_CHECK=off)"
+rm -f "$RIA/.env"
+if [[ -z "$o" && ! -f "$CIA6/declined-dcb" ]]; then pass; else fail "出力: $o"; fi
+
+# nested_ask <cache> <子の環境の指定>: 親（UPDATE_CHECK 未設定・.env は on）が rc を読んだあと、子が rc を読む。
+nested_ask() {
+  local cache="$1" childenv="$2"
+  # 親の問いかけが子の答えと記録を奪わないよう、親は別のキャッシュで rc を読む。
+  printf '%s\n' "export UPDATE_CHECK_CACHE_DIR=\"$TEST_TMP_ROOT/cia-parent\"" ". \"$TEST_TMP_ROOT/ria-rc.sh\" </dev/null >/dev/null 2>&1" \
+    "export UPDATE_CHECK_CACHE_DIR=\"$cache\"" "exec env $childenv \"$BASH_BIN\" --norc \"$TEST_TMP_ROOT/ria-rc.sh\"" > "$TEST_TMP_ROOT/ria-nest2.sh"
+  ( cd "$RIA" && printf 'n\n' | env PATH="$STUBBIN:$PATH" HOME="$RIAH" UPDATE_CHECK_CACHE_DIR="$cache" \
+      UPDATE_CHECK_TODAY="$TODAY" UPDATE_CHECK_ASSUME_TTY=1 FAKE_CURL_DIR="$FIX" \
+      "$BASH_BIN" --norc "$TEST_TMP_ROOT/ria-nest2.sh" 2>&1 )
+}
+printf 'UPDATE_CHECK=on\n' > "$RIA/.env"
+
+it "親で未設定・.env が on の対話シェルの中で、UPDATE_CHECK=off を付けた入れ子のシェルは聞かない"
+CIA7="$TEST_TMP_ROOT/cia7"; run_uc "$CIA7" notify >/dev/null
+o="$(nested_ask "$CIA7" UPDATE_CHECK=off)"
+if [[ -z "$o" && ! -f "$CIA7/declined-dcb" ]]; then pass; else fail "出力: $o"; fi
+
+it "同じ入れ子でも、UPDATE_CHECK を付けなければ（親の値を受け継ぐだけなら）従来どおり聞く"
+CIA8="$TEST_TMP_ROOT/cia8"; run_uc "$CIA8" notify >/dev/null
+o="$(nested_ask "$CIA8" A_DUMMY=1)"
+rm -f "$RIA/.env"
+if [[ "$o" == *"追従しますか？"* ]]; then pass; else fail "出力: $o"; fi
+
 exit_with_result
