@@ -2108,9 +2108,10 @@ TMPL
 #   - ORIGIN の version= が vX.Y.Z の形でない（リリースから取得した版ではない）
 #   - 端末が付いていない（prompt のみ。notify は標準出力へ 1 行出すだけで、聞かない）
 #
-# 問い合わせは 1 日 1 回（失敗した日も数える）。**例外は、通信ができない（名前を引けない・つながらない・
-# 時間切れ・curl が無い）と分かったとき**で、その日の印（checked）を書かず、前の日の最新の版の
-# キャッシュも消すので、オフラインのマシンでは接続のたびに問い合わせる（最大 2 秒。次に通信できたときに取り直すため）。
+# 問い合わせは 1 日 1 回。**取得をすべて終えた日だけ**その日の印（checked）を書く。どの部品の取得が
+# どんな理由（通信ができない・HTTP のエラー・形の不一致・CHANGELOG.md の取得の失敗）で失敗した日も、
+# 印を書かず、次の接続で取り直す。失敗した部品の前の日のキャッシュは消す。オフラインのマシンでは
+# 接続のたびに問い合わせる（最大 2 秒）。
 #
 # キャッシュ: ${XDG_CACHE_HOME:-~/.cache}/dcb-update-check/<プロジェクトごとの鍵>/ 。コミットしない。
 # 試験用の上書き: UPDATE_CHECK_CACHE_DIR（キャッシュ）/ UPDATE_CHECK_TODAY（今日の日付）/
@@ -2325,16 +2326,18 @@ is_offline_rc() {
 # 取得の結果は、いったん作業用のディレクトリへ集め、最後に rename で差し替える。
 # 取得のあいだ、prompt は古い（または新しい）キャッシュを一貫して読める（先に消さない）。
 # 今日の取得に失敗した部品・記録が無くなった部品の、前の日のキャッシュは使わない（最後に消す）。
-# 「今日の印」(checked) は取得を終えてから最後に書く。
-# 通信ができずに抜けたとき（オフライン）は、checked を書かず（次の notify で取り直す）、
-# 取得できなかった部品の前の日のキャッシュを、ほかの失敗と同じく消し、1 を返す。
-# 戻り値: 0 = 取得を終えた（checked を書いた） / 1 = 通信ができずに抜けた、または作業用の場所を作れなかった。
+# 「今日の印」(checked) は、取得をすべて終えたときだけ最後に書く。理由によらず、どれかの取得
+# （最新の版・タグ・CHANGELOG.md）が失敗したときは書かず（次の notify で取り直す）、
+# 取得できなかった部品の前の日のキャッシュを消す。
+# ただし、失敗した側が消す・差し替える前に checked を読み直し、すでに今日の日付なら
+# （並行する notify が先に成功した）、キャッシュに触らずに抜ける。
+# 戻り値: 0 = 通信は通った / 1 = 通信ができずに抜けた、または作業用の場所を作れなかった。
 # 最新の版の取得先は部品で分ける。DCB は Release の最新（releases/latest）、
 # ai-playbook はタグだけを打って Release を作らないため、タグの一覧から vX.Y.Z の最大を取る。
 # latest-<部品> は版だけの 1 行。migrations-<部品> は「<版>=<移行の節がある版の空白区切り>」で、
 # 読む側は latest の版と一致するときだけ使う（rename は別々でも、組み合わせを読み違えない）。
 refresh_cache() {
-  local dir c cur slug tag t list rc offline=""
+  local dir c cur slug tag t list rc offline="" failed="" today
   local keep="" drop=""
   dir="$(cache_dir)"
   mkdir -p "$dir" 2>/dev/null || return 1
@@ -2352,6 +2355,7 @@ refresh_cache() {
     esac
     if [[ $rc -ne 0 ]]; then
       if is_offline_rc "$rc"; then offline="yes"; fi
+      failed="yes"
       drop="$drop $c"
       continue
     fi
@@ -2360,20 +2364,36 @@ refresh_cache() {
       *)        tag="$(json_tag_name "$RC_TMP")" ;;
     esac
     # プレリリース・draft は latest に出ないはずだが、形の合わない値も取り込まない。
-    if ! is_semver "$tag"; then drop="$drop $c"; continue; fi
-    if ! printf '%s\n' "$tag" > "$RC_STAGE/latest-$c" 2>/dev/null; then drop="$drop $c"; continue; fi
+    if ! is_semver "$tag"; then failed="yes"; drop="$drop $c"; continue; fi
+    if ! printf '%s\n' "$tag" > "$RC_STAGE/latest-$c" 2>/dev/null; then failed="yes"; drop="$drop $c"; continue; fi
     keep="$keep $c"
     # 新しいときだけ、飛び越える版のうち「移行」の節がある版を、最新のタグの CHANGELOG.md から調べる
     # （読めなければ印を消し、案内に留める）。
-    if ver_lt "$cur" "$tag" && fetch "https://raw.githubusercontent.com/$slug/$tag/CHANGELOG.md" "$RC_TMP" 5; then
-      list=""
-      while IFS= read -r t; do
-        [[ -n "$t" ]] || continue
-        if ver_lt "$cur" "$t" && ! ver_lt "$tag" "$t"; then list="$list $t"; fi
-      done < <(changelog_migration_tags "$RC_TMP")
-      printf '%s=%s\n' "$tag" "${list# }" > "$RC_STAGE/migrations-$c" 2>/dev/null || rm -f "$RC_STAGE/migrations-$c"
+    if ver_lt "$cur" "$tag"; then
+      fetch "https://raw.githubusercontent.com/$slug/$tag/CHANGELOG.md" "$RC_TMP" 5
+      rc=$?
+      if [[ $rc -eq 0 ]]; then
+        list=""
+        while IFS= read -r t; do
+          [[ -n "$t" ]] || continue
+          if ver_lt "$cur" "$t" && ! ver_lt "$tag" "$t"; then list="$list $t"; fi
+        done < <(changelog_migration_tags "$RC_TMP")
+        printf '%s=%s\n' "$tag" "${list# }" > "$RC_STAGE/migrations-$c" 2>/dev/null || rm -f "$RC_STAGE/migrations-$c"
+      else
+        # 取得の失敗として扱う（checked を書かない）。移行の印は作らず、案内に留める。
+        failed="yes"
+        if is_offline_rc "$rc"; then offline="yes"; fi
+      fi
     fi
   done
+  today="${UPDATE_CHECK_TODAY:-$(date +%Y-%m-%d)}"
+  # 失敗した側は、並行する notify が先に今日の分を書いていたら、その新しいキャッシュに触らない。
+  if [[ -n "$failed" && "$(cat "$dir/checked" 2>/dev/null || true)" == "$today" ]]; then
+    rm -rf "$RC_TMP" "$RC_STAGE"
+    RC_TMP="" RC_STAGE=""
+    [[ -z "$offline" ]] || return 1
+    return 0
+  fi
   # 差し替え。取得できた部品は rename で置き換え、消すべき部品だけを最後に消す。
   for c in $keep; do
     if [[ -f "$RC_STAGE/migrations-$c" ]]; then
@@ -2389,8 +2409,10 @@ refresh_cache() {
   rm -rf "$RC_TMP" "$RC_STAGE"
   RC_TMP="" RC_STAGE=""
   [[ -z "$offline" ]] || return 1
-  # 今日の印は、取得を終えてから最後に書く。通信以外で失敗した日も数える（1 日 1 回）。
-  printf '%s\n' "${UPDATE_CHECK_TODAY:-$(date +%Y-%m-%d)}" > "$dir/checked" 2>/dev/null || true
+  # 失敗があった日は、印を書かない（次の接続で取り直す）。
+  [[ -z "$failed" ]] || return 0
+  # 今日の印は、取得をすべて終えたあとに最後に書く。
+  printf '%s\n' "$today" > "$dir/checked" 2>/dev/null || true
   return 0
 }
 

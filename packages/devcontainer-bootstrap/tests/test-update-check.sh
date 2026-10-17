@@ -114,7 +114,7 @@ run_uc() {
 
 # ── 新しい版あり / 無し ──────────────────────────────────────────────────────
 reset_fixture
-set_latest "$DCB_API" "v0.99.0"
+set_latest "$DCB_API" "v0.99.0"; set_changelog "ojos/devcontainer-bootstrap" "v0.99.0" "v0.99.0:0"
 C1="$TEST_TMP_ROOT/c1"
 it "新しい版があれば、notify が通知を 1 行だけ出す（版を含む）"
 o="$(run_uc "$C1" notify)"
@@ -151,10 +151,10 @@ reset_fixture
 o="$(run_uc "$TEST_TMP_ROOT/c3" notify FAKE_CURL_FAIL=1)"; rc=$?
 if [[ -z "$o" && "$rc" == 0 ]]; then pass; else fail "rc=$rc 出力: $o"; fi
 
-it "失敗した日は、もう一度問い合わせない（1 日 1 回）"
+it "失敗した日は印を書かず、次の接続で取り直す"
 n0="$(calls)"
 run_uc "$TEST_TMP_ROOT/c3" notify FAKE_CURL_FAIL=1 >/dev/null
-if [[ "$(calls)" == "$n0" ]]; then pass; else fail "再度問い合わせた"; fi
+if [[ "$(calls)" -gt "$n0" && ! -e "$TEST_TMP_ROOT/c3/checked" ]]; then pass; else fail "問い合わせていない、または印がある"; fi
 
 # ── 端末なし ─────────────────────────────────────────────────────────────────
 reset_fixture; set_latest "$DCB_API" "v0.99.0"
@@ -616,6 +616,39 @@ notify_in "$R39" "$TEST_TMP_ROOT/c39"
 o="$(yes_run "$R39" "$TEST_TMP_ROOT/c39")"
 if [[ "$o" == *"origin/HEAD が無いため"* && "$o" != *念のため* ]]; then pass; else fail "出力: $o"; fi
 
+# ── 取得のどれかが失敗した日は印を書かない（#632 の acceptance） ─────────────
+it "DCB は成功し ai-playbook のタグが HTTP 500 のとき、checked は書かれず、DCB の差し替えは残り、次の notify で取り直す"
+reset_fixture; set_latest "$DCB_API" "v0.99.0"; set_changelog "ojos/devcontainer-bootstrap" "v0.99.0" "v0.99.0:0"
+RHE="$(new_workdir)/p"; make_repo "$RHE"; set_origin_playbook "$RHE" tag v0.1.0
+CHE="$TEST_TMP_ROOT/che"
+env PATH="$STUBBIN:$PATH" UPDATE_CHECK_CACHE_DIR="$CHE" UPDATE_CHECK_TODAY="$TODAY" FAKE_CURL_DIR="$FIX" "$BASH_BIN" "$RHE/scripts/update-check.sh" notify </dev/null >/dev/null 2>&1
+ok1=0; [[ ! -e "$CHE/checked" && "$(cat "$CHE/latest-dcb" 2>/dev/null)" == v0.99.0 && ! -e "$CHE/latest-playbook" ]] && ok1=1
+set_tags "$PB_TAGS" "v9.0.0"; set_changelog "ojos/ai-playbook" "v9.0.0" "v9.0.0:0"
+n0="$(calls)"
+env PATH="$STUBBIN:$PATH" UPDATE_CHECK_CACHE_DIR="$CHE" UPDATE_CHECK_TODAY="$TODAY" FAKE_CURL_DIR="$FIX" "$BASH_BIN" "$RHE/scripts/update-check.sh" notify </dev/null >/dev/null 2>&1
+if [[ "$ok1" == 1 && "$(calls)" -gt "$n0" && "$(cat "$CHE/checked" 2>/dev/null)" == "$TODAY" && "$(cat "$CHE/latest-playbook" 2>/dev/null)" == v9.0.0 ]]; then pass; else fail "ok1=$ok1 checked=$(cat "$CHE/checked" 2>/dev/null) calls $n0 -> $(calls)"; fi
+
+it "CHANGELOG.md の取得が失敗したら、checked は書かれず（移行の印は作らず）、次の notify で取り直す"
+reset_fixture; set_latest "$DCB_API" "v0.99.0"
+CCL="$TEST_TMP_ROOT/ccl"
+run_uc "$CCL" notify >/dev/null
+ok1=0; [[ ! -e "$CCL/checked" && ! -e "$CCL/migrations-dcb" && "$(cat "$CCL/latest-dcb" 2>/dev/null)" == v0.99.0 ]] && ok1=1
+set_changelog "ojos/devcontainer-bootstrap" "v0.99.0" "v0.99.0:1"
+run_uc "$CCL" notify >/dev/null
+if [[ "$ok1" == 1 && "$(cat "$CCL/checked" 2>/dev/null)" == "$TODAY" && -s "$CCL/migrations-dcb" ]]; then pass; else fail "ok1=$ok1 checked=$(cat "$CCL/checked" 2>/dev/null)"; fi
+
+it "並行する notify が先に今日の checked と latest を書いていたら、失敗する notify はそのキャッシュを消さない"
+reset_fixture; set_latest "$DCB_API" "v0.99.0"; set_changelog "ojos/devcontainer-bootstrap" "v0.99.0" "v0.99.0:0"
+CRC="$TEST_TMP_ROOT/crace"; run_uc "$CRC" notify >/dev/null
+# checked を古い日にして notify に取得を始めさせ、偽の curl が失敗する直前に、別の notify が成功した結果
+# （今日の checked）を書く。失敗した側は、latest を消さない。
+printf '%s\n' "$NEXTDAY" > "$CRC/checked"
+mkdir -p "$TEST_TMP_ROOT/stubbin4"
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$RACE_TODAY" > "$UPDATE_CHECK_CACHE_DIR/checked"\nexit 22\n' > "$TEST_TMP_ROOT/stubbin4/curl"
+chmod +x "$TEST_TMP_ROOT/stubbin4/curl"
+env PATH="$TEST_TMP_ROOT/stubbin4:$PATH" RACE_TODAY="$TODAY" UPDATE_CHECK_CACHE_DIR="$CRC" UPDATE_CHECK_TODAY="$TODAY" "$BASH_BIN" "$UC" notify </dev/null >/dev/null 2>&1
+if [[ "$(cat "$CRC/latest-dcb" 2>/dev/null)" == v0.99.0 && "$(cat "$CRC/checked")" == "$TODAY" ]]; then pass; else fail "latest=$(cat "$CRC/latest-dcb" 2>/dev/null) checked=$(cat "$CRC/checked")"; fi
+
 # 排他
 reset_fixture; set_latest "$DCB_API" "v0.99.0"
 CL="$TEST_TMP_ROOT/clock"; run_uc "$CL" notify >/dev/null
@@ -740,7 +773,7 @@ if [[ "$(cat "$CM/latest-dcb")" == v0.100.0 && "$(cat "$CM/checked")" == "$NEXTD
   && [[ -z "$(ls -A "$CM" | grep '^\.')" ]]; then pass; else fail "latest=$(cat "$CM/latest-dcb") checked=$(cat "$CM/checked") mig=$(cat "$CM/migrations-dcb" 2>/dev/null) ls=$(ls -A "$CM" | tr '\n' ' ')"; fi
 
 it "通信ができずに途中で抜けたら、checked は書かれず、前の日の latest も消え、次の notify で取り直す"
-CO="$TEST_TMP_ROOT/coff"; reset_fixture; set_latest "$DCB_API" "v0.99.0"
+CO="$TEST_TMP_ROOT/coff"; reset_fixture; set_latest "$DCB_API" "v0.99.0"; set_changelog "ojos/devcontainer-bootstrap" "v0.99.0" "v0.99.0:0"
 run_uc "$CO" notify >/dev/null
 run_uc "$CO" notify UPDATE_CHECK_TODAY="$NEXTDAY" FAKE_CURL_FAIL=1 FAKE_CURL_RC=7 >/dev/null
 gone=0; [[ ! -e "$CO/latest-dcb" && ! -e "$CO/migrations-dcb" ]] && gone=1
@@ -749,7 +782,7 @@ run_uc "$CO" notify UPDATE_CHECK_TODAY="$NEXTDAY" >/dev/null
 if [[ "$gone" == 1 && "$(cat "$CO/checked")" == "$NEXTDAY" && "$(calls)" -gt "$n0" && "$(cat "$CO/latest-dcb")" == v0.99.0 ]]; then pass; else fail "gone=$gone checked=$(cat "$CO/checked") calls $n0 -> $(calls)"; fi
 
 it "通信ができずに抜けた日は、checked が書かれない（前の日の印のまま）"
-CO2="$TEST_TMP_ROOT/coff2"; reset_fixture; set_latest "$DCB_API" "v0.99.0"
+CO2="$TEST_TMP_ROOT/coff2"; reset_fixture; set_latest "$DCB_API" "v0.99.0"; set_changelog "ojos/devcontainer-bootstrap" "v0.99.0" "v0.99.0:0"
 run_uc "$CO2" notify >/dev/null
 run_uc "$CO2" notify UPDATE_CHECK_TODAY="$NEXTDAY" FAKE_CURL_FAIL=1 FAKE_CURL_RC=7 >/dev/null
 if [[ "$(cat "$CO2/checked")" == "$TODAY" ]]; then pass; else fail "checked=$(cat "$CO2/checked")"; fi
