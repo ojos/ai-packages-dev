@@ -471,6 +471,10 @@ if [[ "$(cat "$BOOT_LOG")" == "--upgrade --output-dir $R13 --playbook-version v9
   && grep -q "download/$ORIGIN_VER/bootstrap.sh" "$FIX/calls" && ! grep -q 'download/v0.99.0/bootstrap.sh' "$FIX/calls" \
   && [[ "$o" != *"devcontainer-bootstrap $ORIGIN_VER ->"* ]]; then pass; else fail "引数: $(cat "$BOOT_LOG") 出力: $o"; fi
 
+it "ai-playbook だけを追従するとき、作業用のブランチの名前に DCB の版を入れず、問いかけで示した名前と一致する"
+b13="$(git -C "$R13" symbolic-ref --short HEAD)"
+if [[ "$b13" == chore/update-playbook-v9.0.0 && "$o" == *"chore/update-playbook-v9.0.0"* && "$o" != *"chore/update-dcb-"* ]]; then pass; else fail "ブランチ: $b13 出力: $o"; fi
+
 # ── 見せた版だけが declined と追従の対象（#633） ────────────────────────────
 # 問いかけを出したあとで latest-dcb を書き換えてから、答えを返す。表示を待ってから書き換える。
 ask_with_rewrite() { # <out> <cache> <答え> <書き換える版> [env...]
