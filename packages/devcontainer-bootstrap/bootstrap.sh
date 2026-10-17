@@ -2150,7 +2150,13 @@ LOG_PREFIX="[update-check]"
 # 退避し、読んだあとで戻す（環境の値を優先する。.env の空の行で打ち消されない）。
 # 対話シェルでは、rc の自動読み込み（load-project-env.sh）が先に .env で UPDATE_CHECK を上書きしている。
 # そのため、ローダーが読み込み前に退避した DCB_ENV_UPDATE_CHECK が空でなければ、それを環境の値とする。
-ENV_UPDATE_CHECK="${DCB_ENV_UPDATE_CHECK:-${UPDATE_CHECK-}}"
+# ただし、今の UPDATE_CHECK がローダーの読んだ直後の値（DCB_ENV_UPDATE_CHECK_LOADED）と違えば、
+# このコマンドで利用者が明示したものとして今の値を採る（ローダーが退避し直す条件と同じ考え方）。
+if [[ -n "${DCB_ENV_UPDATE_CHECK-}" && "${UPDATE_CHECK-}" == "${DCB_ENV_UPDATE_CHECK_LOADED-}" ]]; then
+  ENV_UPDATE_CHECK="$DCB_ENV_UPDATE_CHECK"
+else
+  ENV_UPDATE_CHECK="${UPDATE_CHECK-}"
+fi
 if [[ -f "$HELPER" ]]; then
   # shellcheck source=/dev/null
   . "$HELPER" 2>/dev/null || true
