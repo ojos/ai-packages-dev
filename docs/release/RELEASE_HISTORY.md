@@ -9,7 +9,7 @@
 
 | パッケージ | リポジトリ | 現行バージョン | 配布形態 |
 |---|---|---|---|
-| devcontainer-bootstrap | `ojos/devcontainer-bootstrap` | v0.23.1 | GitHub Release + 資産 5 点（配布スクリプト 2: `bootstrap.sh` / `doctor.sh`、生成物 3: `SHA256SUMS` / `RELEASE-MANIFEST.json` / `PACKAGE_ARCHIVE.tar.gz`） |
+| devcontainer-bootstrap | `ojos/devcontainer-bootstrap` | v0.23.2 | GitHub Release + 資産 5 点（配布スクリプト 2: `bootstrap.sh` / `doctor.sh`、生成物 3: `SHA256SUMS` / `RELEASE-MANIFEST.json` / `PACKAGE_ARCHIVE.tar.gz`） |
 | ai-playbook | `ojos/ai-playbook` | v0.12.1 | git タグのみ |
 | devcontainer-host | `ojos/devcontainer-host` | v0.5.0 | GitHub Release + 資産 14 点（個別 11: `dev.sh` / `dev-up@.service` / `dev-runner@.service` / `dev-route@.service` / `dev-route-sync@.service` / `dev-route-sync@.timer` / `runner.Dockerfile` / `install.sh` / `projects.example` / `runners.example` / `routes.example`、生成物 3: `SHA256SUMS` / `RELEASE-MANIFEST.json` / `PACKAGE_ARCHIVE.tar.gz`） |
 
@@ -17,6 +17,7 @@
 
 | パッケージ | 版 | 公開日 | 要点 |
 |---|---|---|---|
+| devcontainer-bootstrap | v0.23.2 | 2026-10-17 | `scripts/update-check.sh` で、そのコマンドで明示した `UPDATE_CHECK` が、親のシェルが退避した値に負けていたのを直した（#640 / #641。v0.23.1 の #637 の続き） |
 | devcontainer-bootstrap | v0.23.1 | 2026-10-17 | **v0.23.0 の `scripts/update-check.sh` の不具合 5 件を直した**（#631〜#634 / #636、#635 / #637）。ai-playbook の新しい版を通知していなかった（Release を作らないので、タグの一覧から取る）。notify の更新中に問いかけが出ない・表示した版と追従する版がずれる・`origin/HEAD` が無いと main を既定ブランチと決めつける、を直した。対話シェルでも環境の `UPDATE_CHECK` を `.env` の値より優先する |
 | devcontainer-bootstrap | v0.23.0 | 2026-10-16 | **安全性の修正: `.env` の自動読み込みの `~/.bashrc` への差し込みが、プロジェクトのパスを引用していなかった**（#625 / #628。パスに `$(...)` を含むとシェルを開くたびにコマンドとして実行されていた。既に差し込まれた行は手で消して接続し直す）。**接続時に DCB と ai-playbook の新しい安定版を知らせ、対話のシェルで yes なら照合済みの `--upgrade` で追従する `scripts/update-check.sh`**（#625 / #628。既定で有効、`--no-update-check` か `UPDATE_CHECK=off` で止める）。`--second-opinion-engine`（#612）、`--absent` / `--no-absent`（#616）、`--claude-remote-control`（#620）を足した。`SESSION_HOST_LABEL` の説明（#611）、`xargs -r` の規則（#615）、パイプの後ろの `grep -q` の検査（#619）を直した |
 | devcontainer-host | v0.5.0 | 2026-10-16 | **自前のランナーが動けるあいだだけ `ACTIONS_RUNS_ON` をランナーのラベルへ向ける `dev runner route` と `dev-route@` / `dev-route-sync@` のユニット**（#621 / #622、#623 / #624。ランナーグループの対象を API から読み、GitHub 上で online のランナーが居なければ戻す。資産は 14 点）。**`dev up` / `dev attach` が、端末が付いているときだけ新しい安定版を知らせ、yes なら照合済みの `install.sh` で追従する**（#626 / #627） |
