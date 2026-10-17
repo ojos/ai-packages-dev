@@ -733,4 +733,78 @@ else
   assert_eq "$hook_re" "$land_re" "CI 抑止の綴り一覧（フック側 vs land 雛形側）"
 fi
 
+# ── 長いコマンドとマルチバイト（#647）──────────────────────────────────────────
+#
+# 走査は ${text:i:1} で 1 文字ずつ取り出すと、1 回ごとに先頭から数え直して長さの
+# 2 乗になる（LC_ALL=C でも同じ）。500 文字ごとに切り出した塊の中を読む形にして
+# 線形にし、さらに merge を含まないコマンドは走査せずに通す。検知の結果は変えない。
+
+# UTF-8 のロケールでフックへ流し込み、判定を返す（decision_for_command は
+# 呼び出し元のロケールのまま）。
+decision_utf8() {
+  local out_json
+  out_json="$(bash_payload "$1" | LC_ALL=C.UTF-8 LANG=C.UTF-8 bash "$HOOK")"
+  [[ -n "$out_json" ]] || return 0
+  printf '%s' "$out_json" | jq -r '.hookSpecificOutput.permissionDecision // "(no decision)"'
+}
+
+# C.UTF-8 が無い環境では、ロケールが黙って C に落ち、マルチバイトの経路を確かめない
+# まま通ってしまう。先に文字数が 1 と数えられることを確かめ、数えられなければ飛ばす。
+mb_probe="$(LC_ALL=C.UTF-8 bash -c 's=あ; echo ${#s}' 2>/dev/null || true)"
+
+# 行継続（\ + 改行）は bash が取り除く。空白にすると語が割れて検知を抜ける。
+# ロケールには依存しないので、先に確かめる。
+it "語の途中の行継続（gh pr mer\\<改行>ge）も検知する"
+assert_eq "$(decision_for_command $'gh pr mer\\\nge 1')" "ask" "判定"
+
+it "語の途中の行継続は REST の merge エンドポイントでも検知する"
+assert_eq "$(decision_for_command $'gh api --method PUT repos/o/r/pulls/1/mer\\\nge')" "ask" "判定"
+
+if [[ "$mb_probe" != "1" ]]; then
+  it "UTF-8 のロケール（C.UTF-8）を使うテストを飛ばした"
+  printf '  skip C.UTF-8 が使えないため、マルチバイトの経路のテストを飛ばした\n'
+else
+  it "マルチバイトを含むコマンドの gh pr merge を検知する（UTF-8 のロケール）"
+  assert_eq "$(decision_utf8 'echo 日本語の説明 "あ;い" && gh pr merge 1')" "ask" "判定"
+
+  it "マルチバイトの直後に続く REST の merge を検知する（UTF-8 のロケール）"
+  assert_eq "$(decision_utf8 'echo 日本語; gh api --method PUT repos/o/r/pulls/1/merge')" "ask" "判定"
+
+  it "マルチバイトを含む引用符の中の gh pr merge は検知しない（UTF-8 のロケール）"
+  assert_eq "$(decision_utf8 "echo 'あ;gh pr merge 1;い'")" "" "判定"
+
+  it "クォートで割った綴り（g\"h\" pr m\"er\"ge）も素通しにせず検知する"
+  assert_eq "$(decision_utf8 'g"h" pr m"er"ge 1')" "ask" "判定"
+
+  it "バックスラッシュで割った綴り（gh pr m\\erge）も素通しにせず検知する"
+  assert_eq "$(decision_utf8 'gh pr m\erge 1')" "ask" "判定"
+
+  it "mergePullRequest を含む graphql を検知する（素通しの条件から漏れない）"
+  assert_eq "$(decision_utf8 'gh api graphql -f query="mutation { mergePullRequest(input:{}) { clientMutationId } }"')" "ask" "判定"
+
+  long_cmd="$(jq -nr '[range(0;2000)|"echo 日本語のテキスト abc; "]|join("")|.[0:20000]')"
+
+  # 上限は目安（1 秒）より緩くする。CI の揺れで落ちないためで、修正前は同じ条件で
+  # 5 秒以上かかった。時間は date +%s の差（秒）で測る。
+  assert_fast() {
+    local label="$1" limit="$2" cmd="$3" expect="$4" t0 t1 got
+    t0="$(date +%s)"
+    got="$(decision_utf8 "$cmd")"
+    t1="$(date +%s)"
+    it "$label: 判定"
+    assert_eq "$got" "$expect" "判定"
+    it "$label: 所要時間が ${limit} 秒未満"
+    if (( t1 - t0 < limit )); then
+      pass
+    else
+      fail "所要時間 $((t1 - t0)) 秒（上限 ${limit} 秒）"
+    fi
+  }
+
+  assert_fast "20,000 文字のマルチバイト（merge を含まない）" 5 "$long_cmd" ""
+  assert_fast "20,000 文字のマルチバイト（末尾に ; echo merge）" 15 "$long_cmd ; echo merge" ""
+  assert_fast "20,000 文字のマルチバイト（末尾に ; gh pr merge 1 --squash）" 15 \
+    "$long_cmd ; gh pr merge 1 --squash" "ask"
+fi
+
 exit_with_result
