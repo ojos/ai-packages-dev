@@ -698,6 +698,9 @@ CU3="$TEST_TMP_ROOT/cu3"; mkdir -p "$CU3"; printf 'v0.99.0\n' > "$CU3/latest-dcb
 o="$(env PATH="$STUBBIN:$PATH" UPDATE_CHECK_CACHE_DIR="$CU3" UPDATE_CHECK_TODAY="$TODAY" FAKE_CURL_DIR="$FIX" FAKE_BOOT_LOG="$BOOT_LOG" "$BASH_BIN" "$RU3/scripts/update-check.sh" upgrade </dev/null 2>&1)"; rc=$?
 if [[ "$rc" != 0 && ! -s "$BOOT_LOG" && "$o" != *すでに最新* ]]; then pass; else fail "rc=$rc 出力: $o"; fi
 
+it "upgrade: 同じ日の印があっても、再取得に失敗したら印を消し、次の notify で取り直す"
+if [[ ! -e "$CU3/checked" ]]; then pass; else fail "印が残った: $(cat "$CU3/checked")"; fi
+
 it "upgrade: DCB は取得できて ai-playbook が通信不能のとき、DCB だけ追従する"
 reset_fixture; set_latest "$DCB_API" "v0.99.0"; set_changelog "ojos/devcontainer-bootstrap" "v0.99.0" "v0.99.0:0"; put_assets_for v0.99.0
 RU4="$(new_workdir)/p"; make_repo "$RU4"; set_origin_playbook "$RU4" tag v0.1.0

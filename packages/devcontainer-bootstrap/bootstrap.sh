@@ -2405,9 +2405,14 @@ refresh_cache() {
   done
   rm -rf "$RC_TMP" "$RC_STAGE"
   RC_TMP="" RC_STAGE=""
-  [[ -z "$offline" ]] || return 1
-  # 失敗があった日は、印を書かない（次の接続で取り直す）。
-  [[ -z "$failed" ]] || return 0
+  # 失敗があった日は印を書かず、すでにある今日の印も消す（次の接続で取り直す）。同じ日に先に
+  # 成功した notify の印が残ると、失敗で消した部品を、その日のうちに取り直さないため。
+  # 前の日の印は、どのみち今日の取り直しを止めないので、そのままにする。
+  if [[ -n "$offline" || -n "$failed" ]]; then
+    if [[ "$(cat "$dir/checked" 2>/dev/null)" == "$today" ]]; then rm -f "$dir/checked" 2>/dev/null; fi
+    [[ -z "$offline" ]] || return 1
+    return 0
+  fi
   # 今日の印は、取得をすべて終えたあとに最後に書く。
   printf '%s\n' "$today" > "$dir/checked" 2>/dev/null || true
   return 0
