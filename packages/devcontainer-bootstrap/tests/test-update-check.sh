@@ -470,6 +470,78 @@ if [[ "$(cat "$BOOT_LOG")" == "--upgrade --output-dir $R13 --playbook-version v9
   && grep -q "download/$ORIGIN_VER/bootstrap.sh" "$FIX/calls" && ! grep -q 'download/v0.99.0/bootstrap.sh' "$FIX/calls" \
   && [[ "$o" != *"devcontainer-bootstrap $ORIGIN_VER ->"* ]]; then pass; else fail "引数: $(cat "$BOOT_LOG") 出力: $o"; fi
 
+# ── 見せた版だけが declined と追従の対象（#633） ────────────────────────────
+# 問いかけを出したあとで latest-dcb を書き換えてから、答えを返す。表示を待ってから書き換える。
+ask_with_rewrite() { # <out> <cache> <答え> <書き換える版> [env...]
+  local o="$1" cache="$2" ans="$3" newv="$4" outf="$TEST_TMP_ROOT/ask-out.$$" i; shift 4
+  : > "$outf"
+  : > "$BOOT_LOG"
+  {
+    for i in $(seq 100); do
+      if command grep -q '追従しますか' "$outf" 2>/dev/null; then break; fi
+      sleep 0.1
+    done
+    printf '%s\n' "$newv" > "$cache/latest-dcb"
+    printf '%s\n' "$ans"
+  } | env PATH="$STUBBIN:$PATH" UPDATE_CHECK_CACHE_DIR="$cache" UPDATE_CHECK_TODAY="$TODAY" UPDATE_CHECK_ASSUME_TTY=1 \
+    FAKE_CURL_DIR="$FIX" FAKE_BOOT_LOG="$BOOT_LOG" "$@" "$BASH_BIN" "$o/scripts/update-check.sh" prompt > "$outf" 2>&1
+  cat "$outf"
+}
+
+it "問いかけの最中に latest が新しい版へ書き換わっても、N なら declined には表示した版が書かれる"
+reset_fixture; set_latest "$DCB_API" "v0.99.0"
+R33="$(new_workdir)/p"; make_repo "$R33"
+notify_in "$R33" "$TEST_TMP_ROOT/c33n"
+o="$(ask_with_rewrite "$R33" "$TEST_TMP_ROOT/c33n" n v0.100.0)"
+if [[ "$(cat "$TEST_TMP_ROOT/c33n/declined-dcb" 2>/dev/null)" == v0.99.0 ]]; then pass; else fail "declined=$(cat "$TEST_TMP_ROOT/c33n/declined-dcb" 2>/dev/null) 出力: $o"; fi
+
+it "その場合、書き換わった新しい版は、次の問いかけで聞かれる（declined に飲まれない）"
+o="$(ask "$TEST_TMP_ROOT/c33n" n)"
+if [[ "$o" == *"追従しますか？"* && "$o" == *v0.100.0* ]]; then pass; else fail "出力: $o"; fi
+
+it "問いかけの最中に latest が新しい版へ書き換わっても、y なら表示した版で追従する"
+reset_fixture; set_latest "$DCB_API" "v0.99.0"; put_assets_for v0.99.0; put_assets_for v0.100.0
+R33Y="$(new_workdir)/p"; make_repo "$R33Y"
+notify_in "$R33Y" "$TEST_TMP_ROOT/c33y"
+o="$(ask_with_rewrite "$R33Y" "$TEST_TMP_ROOT/c33y" y v0.100.0)"
+if [[ "$(cat "$BOOT_LOG")" == "--upgrade --output-dir $R33Y" ]] \
+  && grep -q 'download/v0.99.0/bootstrap.sh' "$FIX/calls" && ! grep -q 'download/v0.100.0/bootstrap.sh' "$FIX/calls" \
+  && [[ "$(git -C "$R33Y" symbolic-ref --short HEAD)" == chore/update-dcb-v0.99.0 ]]; then pass; else fail "引数: $(cat "$BOOT_LOG") 出力: $o"; fi
+
+# ── origin/HEAD が無いときは既定ブランチを推定しない（#634） ─────────────────
+branch_after_follow() { # <out> <cache>: y で流したあとのブランチ名
+  reset_fixture; set_latest "$DCB_API" "v0.99.0"; put_assets_for v0.99.0
+  notify_in "$1" "$2"
+  yes_run "$1" "$2" >/dev/null
+  git -C "$1" symbolic-ref --short HEAD
+}
+it "origin/HEAD が無く main と master の両方があるとき、master の上から追従すると作業用のブランチが切られる"
+R34A="$(new_workdir)/p"; make_repo "$R34A"; git -C "$R34A" branch -q master; git -C "$R34A" switch -q master
+b="$(branch_after_follow "$R34A" "$TEST_TMP_ROOT/c34a")"
+if [[ "$b" == chore/update-dcb-v0.99.0 ]]; then pass; else fail "ブランチ: $b"; fi
+
+it "同じく main の上から追従しても、作業用のブランチが切られる"
+R34B="$(new_workdir)/p"; make_repo "$R34B"; git -C "$R34B" branch -q master
+b="$(branch_after_follow "$R34B" "$TEST_TMP_ROOT/c34b")"
+if [[ "$b" == chore/update-dcb-v0.99.0 ]]; then pass; else fail "ブランチ: $b"; fi
+
+it "origin/HEAD が無く、main / master の上でもなければ、ブランチを切らない"
+R34C="$(new_workdir)/p"; make_repo "$R34C"; git -C "$R34C" branch -q master; git -C "$R34C" switch -q -c feature/y
+b="$(branch_after_follow "$R34C" "$TEST_TMP_ROOT/c34c")"
+if [[ "$b" == feature/y ]]; then pass; else fail "ブランチ: $b"; fi
+
+it "origin/HEAD があるときは従来どおり、それが指すブランチの上でだけ切る（master が既定なら main の上では切らない）"
+R34D="$(new_workdir)/p"; make_repo "$R34D"; git -C "$R34D" branch -q master
+git -C "$R34D" update-ref refs/remotes/origin/master master
+git -C "$R34D" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/master
+b1="$(branch_after_follow "$R34D" "$TEST_TMP_ROOT/c34d")"
+R34E="$(new_workdir)/p"; make_repo "$R34E"; git -C "$R34E" branch -q master
+git -C "$R34E" update-ref refs/remotes/origin/master master
+git -C "$R34E" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/master
+git -C "$R34E" switch -q master
+b2="$(branch_after_follow "$R34E" "$TEST_TMP_ROOT/c34e")"
+if [[ "$b1" == main && "$b2" == chore/update-dcb-v0.99.0 ]]; then pass; else fail "main の上: $b1 / master の上: $b2"; fi
+
 # 排他
 reset_fixture; set_latest "$DCB_API" "v0.99.0"
 CL="$TEST_TMP_ROOT/clock"; run_uc "$CL" notify >/dev/null

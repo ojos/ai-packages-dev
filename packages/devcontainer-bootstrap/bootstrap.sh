@@ -2456,16 +2456,19 @@ prepare_branch() {
   cur="$(git -C "$ROOT" symbolic-ref --quiet --short HEAD 2>/dev/null)" || return 0
   def="$(git -C "$ROOT" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null)" || def=""
   def="${def#origin/}"
-  # origin/HEAD が無ければ、手元に main / master のブランチがあれば、それを既定ブランチとみなす。
-  if [[ -z "$def" ]]; then
-    local b
-    for b in main master; do
-      if git -C "$ROOT" show-ref --verify --quiet "refs/heads/$b"; then def="$b"; break; fi
-    done
-  fi
-  # それでも判定できない（origin/HEAD が無く、main / master のブランチも無い）ときは、念のため作業用のブランチを切る
+  # origin/HEAD が無ければ、既定ブランチを推定しない（main と master が両方あると取り違えるため。
+  # リモートへ問い合わせて通信を増やすこともしない）。main / master のどちらかの上にいれば、
+  # 作業用のブランチを切る。どちらも手元に無いときも、念のため切る
   # （切って困ることは無く、切らずに既定ブランチの作業ツリーへ差分を置くほうが困るため）。
-  [[ -z "$def" || "$cur" == "$def" ]] || return 0
+  if [[ -z "$def" ]]; then
+    local b has_default=""
+    for b in main master; do
+      if git -C "$ROOT" show-ref --verify --quiet "refs/heads/$b"; then has_default="yes"; fi
+    done
+    [[ -z "$has_default" || "$cur" == main || "$cur" == master ]] || return 0
+  elif [[ "$cur" != "$def" ]]; then
+    return 0
+  fi
   name="$want"; n=1
   while git -C "$ROOT" show-ref --verify --quiet "refs/heads/$name"; do
     n=$((n + 1)); name="$want-$n"
@@ -2476,7 +2479,7 @@ prepare_branch() {
   fi
   BRANCH_MADE="$name"
   BRANCH_ORIG="$cur"
-  echo "$LOG_PREFIX 既定ブランチ（${def:-判定できないため念のため}）の上だったので、作業用のブランチ $name を切りました。"
+  echo "$LOG_PREFIX 既定ブランチ（${def:-origin/HEAD が無いため main / master とみなす}）の上だったので、作業用のブランチ $name を切りました。"
   return 0
 }
 
@@ -2516,8 +2519,10 @@ follow_blocker() {
 # 失敗は 1（何も実行していないか、止めた理由を出している）。
 # DCB を上げないとき（N と答えた・すでに最新・最新より新しい）は、今の版の bootstrap.sh を使い、
 # 生成物の DCB の版を動かさない。
+# $2 / $3 は、利用者に見せた DCB / ai-playbook の版（prompt から渡す）。渡されたらキャッシュを読み直さず、その版で追従する。
+# 渡されなければ（手で呼ぶ upgrade）、キャッシュの最新を読む。
 do_upgrade() {
-  local want="$1" dir latest_dcb="" latest_pb="" want_dcb="" want_pb="" use_tag blocker
+  local want="$1" shown_dcb="${2:-}" shown_pb="${3:-}" dir latest_dcb="" latest_pb="" want_dcb="" want_pb="" use_tag blocker
   local work base wantbranch expected actual rc branch_hint changed
   local -a pbargs
   pbargs=()
@@ -2536,12 +2541,12 @@ do_upgrade() {
   fi
   use_tag="$CUR_DCB"
   if [[ -n "$want_dcb" ]]; then
-    latest_dcb="$(cat "$dir/latest-dcb" 2>/dev/null)" || latest_dcb=""
+    if [[ -n "$shown_dcb" ]]; then latest_dcb="$shown_dcb"; else latest_dcb="$(cat "$dir/latest-dcb" 2>/dev/null)" || latest_dcb=""; fi
     is_semver "$latest_dcb" || { echo "$LOG_PREFIX 最新の版がまだ分かりません（問い合わせに失敗した）。あとでもう一度試してください。" >&2; return 1; }
     use_tag="$latest_dcb"
   fi
   if [[ -n "$want_pb" ]]; then
-    latest_pb="$(cat "$dir/latest-playbook" 2>/dev/null)" || latest_pb=""
+    if [[ -n "$shown_pb" ]]; then latest_pb="$shown_pb"; else latest_pb="$(cat "$dir/latest-playbook" 2>/dev/null)" || latest_pb=""; fi
     is_semver "$latest_pb" || { echo "$LOG_PREFIX ai-playbook の最新の版がまだ分かりません。あとでもう一度試してください。" >&2; return 1; }
     # 取得元の種類と、フォークの owner を保つ（--playbook-version は既定の配布元の URL に展開されるため）。
     case "$PB_KIND" in
@@ -2628,9 +2633,17 @@ do_upgrade() {
   return 0
 }
 
+# 表示した部品 $1 の版（cmd_prompt の shown_<部品>）を、declined へ書く。キャッシュは読み直さない。
+decline_shown() {
+  local v="shown_$1" dir
+  dir="$(cache_dir)"
+  printf '%s\n' "${!v}" > "$dir/declined-$1" 2>/dev/null || true
+}
+
 # 端末で聞く。聞くのは表示した部品だけで、y で上げるのも、その部品だけ。
 cmd_prompt() {
   local dir pend c cur latest mig n ans blocker
+  local shown_dcb="" shown_playbook=""
   tty_ok || return 0
   # ほかの端末が聞いている・追従しているあいだは、この端末では聞かない。
   acquire_lock || return 0
@@ -2641,6 +2654,9 @@ cmd_prompt() {
   for c in $pend; do
     cur="$(comp_cur "$c")"
     latest="$(cat "$dir/latest-$c")"
+    # 見せた版を持つ。以後の declined への記録と追従は、キャッシュを読み直さずこの版を使う
+    # （待っているあいだに、別の接続の notify が latest を書き換えうるため）。
+    printf -v "shown_$c" '%s' "$latest"
     echo "  $(comp_repo "$c"): $cur -> $latest"
     if [[ -f "$dir/migrations-$c" ]]; then
       mig="$(cat "$dir/migrations-$c" 2>/dev/null)"
@@ -2659,7 +2675,7 @@ cmd_prompt() {
     # 自動では追従できない。案内を 1 回出し、この版のあいだは聞かない。
     echo "  [自動では追従できません] $blocker"
     for c in $pend; do
-      cat "$dir/latest-$c" > "$dir/declined-$c" 2>/dev/null || true
+      decline_shown "$c"
     done
     return 0
   fi
@@ -2668,12 +2684,12 @@ cmd_prompt() {
   read -r ans || ans=""
   case "$ans" in
     y|Y|yes|YES|Yes)
-      do_upgrade "$pend" || true
+      do_upgrade "$pend" "$shown_dcb" "$shown_playbook" || true
       ;;
     *)
       # N の版は、その版のあいだ聞かない。
       for c in $pend; do
-        cat "$dir/latest-$c" > "$dir/declined-$c" 2>/dev/null || true
+        decline_shown "$c"
       done
       echo "$LOG_PREFIX 追従しません。この版のあいだは聞きません（あとで追従するときは bash scripts/update-check.sh upgrade）。"
       ;;
