@@ -379,12 +379,20 @@ cp "$repo/.env.example" "$repo/.env"
 run_check "$repo"
 assert_pass "キー一致"
 
-it "キー整合: .env にしか無いキーは落とす（雛形が設定項目を伝えていない）"
+it "キー整合: .env にしか無い値のあるキーは落とす（雛形が設定項目を伝えていない）"
 repo="$(new_repo)"
 cp "$repo/.env.example" "$repo/.env"
-printf '\nONLY_IN_ENV=\n' >> "$repo/.env"
+printf '\nONLY_IN_ENV=1\n' >> "$repo/.env"
 run_check "$repo"
 assert_fail "片側追加（.env 側）" "ONLY_IN_ENV"
+
+it "キー整合: .env にしか無い値の空のキーは NOTICE に留めて通す（雛形からキーを消した版へ追従した直後。#652）"
+repo="$(new_repo)"
+cp "$repo/.env.example" "$repo/.env"
+# 雛形（このテストの .env.example）に無いキー名を使う。
+printf '\nREMOVED_FROM_TEMPLATE_API_KEY=\n' >> "$repo/.env"
+run_check "$repo"
+if [[ "$CHECK_RC" -eq 0 && "$CHECK_OUT" == *"NOTICE .env にある値の空のキー"*REMOVED_FROM_TEMPLATE_API_KEY* ]]; then pass; else fail "rc=$CHECK_RC 出力: $CHECK_OUT"; fi
 
 it "キー整合: 雛形にしか無いキーは NOTICE に留めて通す"
 # 雛形へキーが増えた直後は、各環境の .env が追いつくまで必ずこの状態を通る。
