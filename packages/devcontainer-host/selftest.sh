@@ -2780,7 +2780,7 @@ if grep -qE '^(COPY|ADD) ' "$DF"; then ng "Dockerfile が COPY / ADD を使っ�
 # 足す apt リポジトリは、どれも https で、signed-by で鍵を限る（システムの鍵すべてを信頼させない）。
 deb_lines="$(grep -oE '"deb [^"]*"' "$DF" || true)"
 [[ -n "$deb_lines" ]] || ng "Dockerfile に apt リポジトリの行（deb ...）が見つかりません（照合の前提）"
-if printf '%s\n' "$deb_lines" | grep -vqE '^"deb \[[^]]*signed-by=/etc/apt/keyrings/[^] ]+[^]]*\] https://'; then
+if printf '%s\n' "$deb_lines" | grep -vE '^"deb \[[^]]*signed-by=/etc/apt/keyrings/[^] ]+[^]]*\] https://' >/dev/null; then
   ng "Dockerfile の apt リポジトリに、signed-by で鍵を限らない行か https でない行があります"
 fi
 # Dockerfile の apt の一覧と、README の「イメージ」の列挙（runner-apt の印の間）が一致すること。
