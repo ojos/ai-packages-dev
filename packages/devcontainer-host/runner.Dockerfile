@@ -36,6 +36,11 @@
 # 【展開の道具】xz-utils・zstd・bzip2。GitHub がホストするランナーには最初からあり、公式のランナーのイメージには無い。
 # 無いと、ワークフローが道具を .tar.xz / .tar.zst / .tar.bz2 で落として展開する段（curl ... | tar -xJ など）が、
 # 自前のランナーでだけ「xz: Cannot exec」で落ちる。zstd は actions/cache も使う（無いと gzip に落ちて遅くなる）。
+# 【node】PATH 上の node。GitHub がホストするランナーにはあり、公式のランナーのイメージには無い（同梱の node は
+# /home/runner/externals にあるだけで PATH に無い）。無いと、node のシバンを持つ道具や run: から呼ぶ node が、自前のランナーでだけ
+# 「env: 'node': No such file or directory」（終了コード 127）で落ちる（例: hashicorp/setup-terraform の既定のラッパー）。
+# uses: の JS アクションは同梱の node で動くので影響を受けない。NodeSource の署名つき apt リポジトリ（node_24.x）から入れる。
+# 系列は 24.x に固定し、パッチはビルドのたびに追従する。
 # 足りない道具は、この Dockerfile を編集せず、利用側で用意する(編集は install.sh の更新で上書きされる)。
 ARG RUNNER_VERSION=2.338.0
 FROM ghcr.io/actions/actions-runner:${RUNNER_VERSION}
@@ -44,6 +49,7 @@ USER root
 # 配るワークフローに要るもの: git（公式にもある。明示）と gh（下で公式の apt リポジトリから足す）
 # 利用側の acceptance.sh のために入れておくもの: jq・shellcheck・curl・unzip・gawk（ca-certificates・gnupg は gh の導入に使う）
 # 展開の道具: xz-utils・zstd・bzip2
+# node: nodejs（NodeSource の公式の鍵だけを signed-by で信頼する）
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         bzip2 ca-certificates curl gawk git gnupg jq shellcheck unzip xz-utils zstd \
@@ -53,6 +59,11 @@ RUN apt-get update \
     && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list \
     && apt-get update \
     && apt-get install -y --no-install-recommends gh \
+    && curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg \
+    && chmod go+r /etc/apt/keyrings/nodesource.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_24.x nodistro main" > /etc/apt/sources.list.d/nodesource.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
 
 USER runner
