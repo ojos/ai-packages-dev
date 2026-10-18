@@ -760,6 +760,23 @@ assert_eq "$(decision_for_command $'gh pr mer\\\nge 1')" "ask" "判定"
 it "語の途中の行継続は REST の merge エンドポイントでも検知する"
 assert_eq "$(decision_for_command $'gh api --method PUT repos/o/r/pulls/1/mer\\\nge')" "ask" "判定"
 
+# 行継続の除去は、bash と同じくクォートの外（と二重引用符の中）だけに効く（#659）。
+# シングルクォートの中の \ + 改行は文字のまま残り、マージにならない。
+it "シングルクォートの中の行継続（gh pr 'mer\\<改行>ge' 1）は確認を出さない"
+assert_eq "$(decision_for_command $'gh pr \'mer\\\nge\' 1')" "" "判定"
+
+it "クォートの外の行継続（gh pr mer\\<改行>ge 1）は従来どおり ask"
+assert_eq "$(decision_for_command $'gh pr mer\\\nge 1')" "ask" "判定"
+
+it "二重引用符の中の行継続（gh pr \"mer\\<改行>ge\" 1）は ask（bash は取り除く）"
+assert_eq "$(decision_for_command $'gh pr "mer\\\nge" 1')" "ask" "判定"
+
+it "シングルクォートを閉じたあとの行継続は ask（echo 'a'; gh pr mer\\<改行>ge 1 の形）"
+assert_eq "$(decision_for_command $'echo \'a\'; gh pr mer\\\nge 1')" "ask" "判定"
+
+it "シングルクォートの中の CRLF 行継続も確認を出さない"
+assert_eq "$(decision_for_command $'gh pr \'mer\\\r\nge\' 1')" "" "判定"
+
 if [[ "$mb_probe" != "1" ]]; then
   it "UTF-8 のロケール（C.UTF-8）を使うテストを飛ばした"
   printf '  skip C.UTF-8 が使えないため、マルチバイトの経路のテストを飛ばした\n'

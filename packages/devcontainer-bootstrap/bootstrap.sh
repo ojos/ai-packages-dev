@@ -8580,6 +8580,72 @@ may_contain_merge() {
   [[ "$stripped" == *merge* ]]
 }
 
+# バックスラッシュ行継続（\ + 改行、\ + CR + LF）を、bash と同じくクォートの外と二重引用符の
+# 中だけで取り除く。シングルクォートの中（と $'...' の中）では \ + 改行は文字のまま残る
+# ので、`gh pr 'mer\<改行>ge' 1` はマージにならない。クォートの状態は先頭から追う。
+# 結果は stripped_target に入れる（$(...) で受けると末尾の改行が落ちて、判定する文字列が
+# 変わるため、関数の戻り値にしない）。継続が無い入力は文字ごとの走査を避けて、そのまま返す。
+# クォートの状態を追う実装なので、閉じていないクォートの先は取り除かずに残す（bash では
+# 構文エラーになる形で、マージは走らない）。
+strip_line_continuations() {
+  local LC_ALL=C
+  local s="$1" out="" i=0 n=${#1} c nx state=""
+  if [[ "$s" != *$'\\\n'* ]] && [[ "$s" != *$'\\\r\n'* ]]; then
+    stripped_target="$s"
+    return 0
+  fi
+  while ((i < n)); do
+    c="${s:i:1}"
+    if [[ "$state" == s ]]; then
+      # シングルクォートの中。次の ' まですべて文字のまま。
+      out+="$c"
+      i=$((i + 1))
+      [[ "$c" != "'" ]] || state=""
+    elif [[ "$state" == a ]]; then
+      # $'...' の中。\ は次の 1 文字とひと組で、\' では閉じない。
+      if [[ "$c" == "\\" ]]; then
+        out+="${s:i:2}"
+        i=$((i + 2))
+      else
+        out+="$c"
+        i=$((i + 1))
+        [[ "$c" != "'" ]] || state=""
+      fi
+    elif [[ "$c" == "\\" ]]; then
+      # クォートの外か二重引用符の中。継続なら落とし、ほかはひと組で残す。
+      nx="${s:i+1:1}"
+      if [[ "$nx" == $'\n' ]]; then
+        i=$((i + 2))
+      elif [[ "$nx" == $'\r' && "${s:i+2:1}" == $'\n' ]]; then
+        i=$((i + 3))
+      else
+        out+="${s:i:2}"
+        i=$((i + 2))
+      fi
+    elif [[ "$state" == d ]]; then
+      out+="$c"
+      i=$((i + 1))
+      [[ "$c" != '"' ]] || state=""
+    elif [[ "$c" == "'" ]]; then
+      out+="$c"
+      i=$((i + 1))
+      state=s
+    elif [[ "$c" == '"' ]]; then
+      out+="$c"
+      i=$((i + 1))
+      state=d
+    elif [[ "$c" == '$' && "${s:i+1:1}" == "'" ]]; then
+      out+="\$'"
+      i=$((i + 2))
+      state=a
+    else
+      out+="$c"
+      i=$((i + 1))
+    fi
+  done
+  stripped_target="$out"
+}
+
 payload="$(cat)"
 
 reason=""
@@ -8621,8 +8687,12 @@ else
   # CRLF を先に処理する。LF だけを落とすと \ + CR が残り、CR が語末境界として働いて
   # 判定が外れる。CRLF がこのフックへ届く経路は実測できていないが、置換 1 行で
   # 恒久的に問いを消せるため入れておく。
-  norm_target="${target//$'\\\r\n'/}"
-  norm_target="${norm_target//$'\\\n'/}"
+  #
+  # 取り除くのはクォートの外と二重引用符の中だけで、シングルクォートの中では取り除かない
+  # （strip_line_continuations。bash は 'mer\<改行>ge' を mer\<改行>ge のまま渡すので、
+  # マージにならない）。
+  strip_line_continuations "$target"
+  norm_target="$stripped_target"
 
   # 走査の前の素通し（#647）。検知する 3 つの綴り（gh pr merge / pulls/<n>/merge と
   # PUT / mergePullRequest）はどれも、語として merge を含む。語はクォートと
