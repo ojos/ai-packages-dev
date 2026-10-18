@@ -4313,8 +4313,11 @@ fi
 if [[ -z "$env_keys" ]]; then
   printf '[secrets] .env からキーを取得できないため、キー整合はスキップします（CI など .env が無い環境）。\n'
 else
+  # UPDATE_CHECK は .env だけにあっても数えない。ローダーは UPDATE_CHECK を読み飛ばすため（優先順位は
+  # 環境の値 > .env）、雛形ではコメントの行（# UPDATE_CHECK=off）で案内する。コメントの行はキーに入らず、
+  # 案内どおりに .env へ書くと整合検査が必ず「雛形に無い」と読んでしまう。
   only_env="$(comm -23 \
-    <(printf '%s\n' "$env_keys" | sort) \
+    <(printf '%s\n' "$env_keys" | sed '/^UPDATE_CHECK$/d' | sort) \
     <(printf '%s\n' "$example_keys" | sort))"
   only_example="$(comm -13 \
     <(printf '%s\n' "$env_keys" | sort) \
