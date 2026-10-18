@@ -362,8 +362,11 @@ journalctl --user -u dev-runner@<名前>.service -n 20
   利用側の `acceptance.sh` が使うことが多いので、配るワークフローには要らないが入れてあります。xz-utils・zstd・bzip2 は、
   GitHub がホストするランナーにはあって公式のランナーのイメージには無い展開の道具です。無いと、道具を `.tar.xz` などで落として
   展開する段が、自前のランナーでだけ落ちます。apt で入れるもの（`selftest.sh` が `runner.Dockerfile` と照合します）:
-  <!-- runner-apt:begin -->`bzip2` `ca-certificates` `curl` `gawk` `gh` `git` `gnupg` `jq` `shellcheck` `unzip` `xz-utils` `zstd`<!-- runner-apt:end -->
-  （`gh` は GitHub CLI の公式の apt リポジトリから入れ、`ca-certificates`・`gnupg` はその導入に使います）。
+  <!-- runner-apt:begin -->`bzip2` `ca-certificates` `curl` `gawk` `gh` `git` `gnupg` `jq` `nodejs` `shellcheck` `unzip` `xz-utils` `zstd`<!-- runner-apt:end -->
+  （`gh` は GitHub CLI の公式の apt リポジトリから入れます。`ca-certificates` は gh と node の取得に、`gnupg` は apt の署名の検証に使います）。
+  `nodejs` は PATH 上の node です。GitHub がホストするランナーにはあって公式のランナーのイメージには無い（同梱の node は `/home/runner/externals` にあるだけで PATH に無い）ため、
+  無いと node のシバンを持つ道具や `run:` から呼ぶ node が、自前のランナーでだけ落ちます（例: `hashicorp/setup-terraform` の既定のラッパー。`uses:` の JS アクションは同梱の node で動くので影響を受けません）。
+  NodeSource の署名つき apt リポジトリ（`node_24.x`）から入れ、信頼する鍵はその公式の鍵だけを `signed-by` で限ります。系列は 24.x に固定し、パッチはビルドのたびに追従します。
 - **更新。** 新しい版へは `install.sh` を再実行します（`runner.Dockerfile` が変わったら、`dev runner build` でイメージを作り直します）。
   `dev self-update` はユニットや `runner.Dockerfile` を書き換えず、古いときに案内だけを出します。
 - **変数の切り替え。** ランナーが止まったときにジョブが待ちのまま止まらないようにする仕組みは、次の「変数の切り替え（ACTIONS_RUNS_ON）」にあります。

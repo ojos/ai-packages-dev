@@ -2777,6 +2777,12 @@ grep -qE '^FROM ghcr\.io/actions/actions-runner:\$\{RUNNER_VERSION\}$' "$DF" || 
 grep -qE '^ARG RUNNER_VERSION=[0-9]+\.[0-9]+\.[0-9]+$' "$DF" || ng "Dockerfile のランナーの版が固定されていません（ARG RUNNER_VERSION=X.Y.Z）"
 if grep -qF 'download.docker.com' "$DF"; then ng "Dockerfile が Docker のリポジトリを足しています（公式のイメージが docker の CLI と buildx を持つ）"; fi
 if grep -qE '^(COPY|ADD) ' "$DF"; then ng "Dockerfile が COPY / ADD を使っています（ビルドの文脈は渡さない）"; fi
+# 足す apt リポジトリは、どれも https で、signed-by で鍵を限る（システムの鍵すべてを信頼させない）。
+deb_lines="$(grep -oE '"deb [^"]*"' "$DF" || true)"
+[[ -n "$deb_lines" ]] || ng "Dockerfile に apt リポジトリの行（deb ...）が見つかりません（照合の前提）"
+if printf '%s\n' "$deb_lines" | grep -vE '^"deb \[[^]]*signed-by=/etc/apt/keyrings/[^] ]+[^]]*\] https://' >/dev/null; then
+  ng "Dockerfile の apt リポジトリに、signed-by で鍵を限らない行か https でない行があります"
+fi
 # Dockerfile の apt の一覧と、README の「イメージ」の列挙（runner-apt の印の間）が一致すること。
 # README は一覧の写しなので、片方だけに道具を足すと食い違う。その食い違いをここで落とす。
 # 使い方: apt_list_check <Dockerfile> <README>。食い違えば理由を標準エラーへ出して 1 を返す。
