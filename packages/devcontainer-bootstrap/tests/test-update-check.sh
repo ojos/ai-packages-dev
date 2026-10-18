@@ -1129,6 +1129,50 @@ it "upgrade の取得が失敗しても、notify が取得したキャッシュ�
 o="$(run_uc "$CUP" upgrade FAKE_CURL_FAIL=1)"; rc=$?
 if [[ $rc -ne 0 && -f "$CUP/latest-dcb" && "$(cat "$CUP/checked" 2>/dev/null)" == "$TODAY" ]]; then pass; else fail "rc=$rc 出力: $o"; fi
 
+# ── 追従は、ブランチを切る前に台帳で他のセッションの git の登録を確かめる（#658） ──────
+UC_SID="uc-test-session"
+it "他のセッションの git の登録があれば、ブランチを切らず、--upgrade も流さず、何も変えずに止める"
+reset_fixture; set_latest "$DCB_API" "v0.99.0"; put_assets_for v0.99.0
+RL1="$(new_workdir)/p"; make_repo "$RL1"
+notify_in "$RL1" "$TEST_TMP_ROOT/cyl1"
+env SESSION_LEDGER_ID=other-session SESSION_LEDGER_PID=$$ "$BASH_BIN" "$RL1/scripts/session-ledger.sh" claim git "$RL1" >/dev/null 2>&1
+o="$(yes_run "$RL1" "$TEST_TMP_ROOT/cyl1" SESSION_LEDGER_ID="$UC_SID")"
+if [[ "$(git -C "$RL1" symbolic-ref --short HEAD)" == main && -z "$(git -C "$RL1" branch --list 'chore/*')" && ! -s "$BOOT_LOG" \
+  && ! -e "$RL1/upgraded-marker" && -z "$(git -C "$RL1" status --porcelain)" && "$o" == *ほかのセッション*other-session* && "$o" == *何も変えずに止め* ]]; then
+  pass
+else
+  fail "ブランチ: $(git -C "$RL1" symbolic-ref --short HEAD) boot: $(cat "$BOOT_LOG") 出力: $o"
+fi
+
+it "手で呼ぶ upgrade も、他のセッションの git の登録があれば止まる（失敗で終わる）"
+o="$(env PATH="$STUBBIN:$PATH" UPDATE_CHECK_CACHE_DIR="$TEST_TMP_ROOT/cyl1" UPDATE_CHECK_TODAY="$TODAY" FAKE_CURL_DIR="$FIX" FAKE_BOOT_LOG="$BOOT_LOG" SESSION_LEDGER_ID="$UC_SID" "$BASH_BIN" "$RL1/scripts/update-check.sh" upgrade </dev/null 2>&1)"; rc=$?
+if [[ "$rc" != 0 && "$(git -C "$RL1" symbolic-ref --short HEAD)" == main && ! -e "$RL1/upgraded-marker" && "$o" == *ほかのセッション* ]]; then pass; else fail "rc=$rc 出力: $o"; fi
+
+it "相手が解放すれば追従でき、終わったあとに自分の git の登録が残らない"
+env SESSION_LEDGER_ID=other-session SESSION_LEDGER_PID=$$ "$BASH_BIN" "$RL1/scripts/session-ledger.sh" release git "$RL1" >/dev/null 2>&1
+o="$(yes_run "$RL1" "$TEST_TMP_ROOT/cyl1" SESSION_LEDGER_ID="$UC_SID")"
+left="$(env SESSION_LEDGER_ID=probe-session SESSION_LEDGER_PID=$$ "$BASH_BIN" "$RL1/scripts/session-ledger.sh" list --others 2>&1)"
+chk="$(env SESSION_LEDGER_ID=probe-session SESSION_LEDGER_PID=$$ "$BASH_BIN" "$RL1/scripts/session-ledger.sh" check git "$RL1" 2>&1)"
+if [[ "$(git -C "$RL1" symbolic-ref --short HEAD)" == chore/update-dcb-v0.99.0 && -e "$RL1/upgraded-marker" \
+  && "$left" != *"$UC_SID"* && "$chk" == LEDGER_OK* ]]; then pass; else fail "list: $left check: $chk 出力: $o"; fi
+
+it "--upgrade が失敗しても、自分の git の登録は残らない"
+reset_fixture; set_latest "$DCB_API" "v0.99.0"; put_assets_for v0.99.0
+RL2="$(new_workdir)/p"; make_repo "$RL2"
+notify_in "$RL2" "$TEST_TMP_ROOT/cyl2"
+o="$(yes_run "$RL2" "$TEST_TMP_ROOT/cyl2" SESSION_LEDGER_ID="$UC_SID" FAKE_BOOT_RC=1 FAKE_BOOT_NOWRITE=1)"
+chk="$(env SESSION_LEDGER_ID=probe-session SESSION_LEDGER_PID=$$ "$BASH_BIN" "$RL2/scripts/session-ledger.sh" check git "$RL2" 2>&1)"
+if [[ "$o" == *失敗しました* && "$chk" == LEDGER_OK* ]]; then pass; else fail "check: $chk 出力: $o"; fi
+
+it "台帳（session-ledger.sh）が無くても、警告して追従する（fail-open）"
+reset_fixture; set_latest "$DCB_API" "v0.99.0"; put_assets_for v0.99.0
+RL3="$(new_workdir)/p"; make_repo "$RL3"
+git -C "$RL3" rm -q -f scripts/session-ledger.sh
+git -C "$RL3" -c user.name=t -c user.email=t@example.com commit -q -m "drop ledger"
+notify_in "$RL3" "$TEST_TMP_ROOT/cyl3"
+o="$(yes_run "$RL3" "$TEST_TMP_ROOT/cyl3" SESSION_LEDGER_ID="$UC_SID")"
+if [[ -e "$RL3/upgraded-marker" && "$o" == *警告*台帳* ]]; then pass; else fail "出力: $o"; fi
+
 it "通知の文言が、環境の値、無ければ .env の値という優先順位を示す"
 reset_fixture; set_latest "$DCB_API" "v0.99.0"
 o="$(run_uc "$TEST_TMP_ROOT/cmsg" notify)"

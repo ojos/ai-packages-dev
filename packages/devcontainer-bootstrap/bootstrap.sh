@@ -2126,7 +2126,10 @@ TMPL
 #
 # 追従の処理: 新しい bootstrap.sh と SHA256SUMS を取得して照合し、既定ブランチの上なら作業用の
 # ブランチを切ってから、ORIGIN を引き継ぐ --upgrade を流す。差分を作業ツリーに残して止め、
-# 変わったファイルと次の手順を出す。コミット・push・PR はしない。
+# 変わったファイルと次の手順を出す。コミット・push・PR はしない。ブランチを切る前に台帳
+# （session-ledger.sh）で、同じ作業ツリーの git の登録が他のセッションに無いかを確かめ、あれば
+# 何も変えずに止める。実行のあいだは自分の git の登録を持ち、終わったら（失敗でも）解放する。
+# 台帳の不具合は警告して通す（fail-open）。
 #
 # 何もしない条件（黙って 0 で終わる）:
 #   - 環境変数 UPDATE_CHECK が off（0 / false / no / disabled も同じ）
@@ -2520,10 +2523,56 @@ tty_ok() {
 # flock があれば flock -n（プロセスの終了で解放される）。無ければロックのディレクトリで簡易に
 # 排他する（持ち主の pid が消えていれば奪う）。UPDATE_CHECK_NO_FLOCK=1 は試験用。
 LOCK_DIRS=()
+
+# 追従のあいだの、作業ツリーでの git 操作の登録（共有の台帳。ai-playbook の「セッション間の協調」）。
+# 追従は prepare_branch の git switch と --upgrade の書き込みで作業ツリーを変える。人の対話シェルから
+# 走るため session-coord-hook.sh の対象外で、ここで自分から確かめる。台帳が無い・読み書きに失敗した
+# ときは警告して通す（fail-open。台帳の不具合で追従を止めない）。止めるのは、同じ作業ツリーに
+# 他のセッションの git の登録があるときだけ。
+LEDGER_SCRIPT="$HERE/session-ledger.sh"
+LEDGER_CALL="update-check-$$"
+LEDGER_HELD=""
+# 作業ツリー $ROOT の git の登録を確かめて、登録する。他のセッションの登録があれば案内を出して 1 を返す
+# （何も変えない）。登録できたら LEDGER_HELD を立てる。
+ledger_guard() {
+  local out rc
+  # git の作業ツリーでなければ、台帳の置き場所（git の共通ディレクトリ）が無い。確かめる対象も無い。
+  git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 0
+  if [[ ! -f "$LEDGER_SCRIPT" ]]; then
+    echo "$LOG_PREFIX 警告: $LEDGER_SCRIPT が無いため、台帳を確かめずに進めます。" >&2
+    return 0
+  fi
+  out="$(bash "$LEDGER_SCRIPT" check git "$ROOT" 2>&1)"; rc=$?
+  if [[ $rc -eq 0 ]]; then
+    out="$(bash "$LEDGER_SCRIPT" claim --call "$LEDGER_CALL" git "$ROOT" 2>&1)"; rc=$?
+  fi
+  if [[ $rc -eq 3 ]]; then
+    echo "$LOG_PREFIX 同じ作業ツリー（$ROOT）で git を操作している、ほかのセッションの登録があります。ブランチを切らず、何も変えずに止めます。" >&2
+    printf '%s\n' "$out" | sed 's/^/  /' >&2
+    echo "$LOG_PREFIX 相手が終わって登録を解放してから、もう一度実行してください（拒否を迂回して通しません）。" >&2
+    return 1
+  fi
+  if [[ $rc -ne 0 || "$out" == LEDGER_SKIP* ]]; then
+    echo "$LOG_PREFIX 警告: 台帳を読み書きできませんでした（終了コード $rc）。台帳を確かめずに進めます。" >&2
+    return 0
+  fi
+  LEDGER_HELD="yes"
+  return 0
+}
+# ledger_guard で登録した git の登録を解放する（登録していなければ何もしない）。失敗の経路でも呼ぶ。
+release_git_claim() {
+  [[ -n "$LEDGER_HELD" ]] || return 0
+  LEDGER_HELD=""
+  bash "$LEDGER_SCRIPT" release --call "$LEDGER_CALL" git "$ROOT" >/dev/null 2>&1 \
+    || echo "$LOG_PREFIX 警告: 台帳の git の登録を解放できませんでした（一定時間で失効します）。" >&2
+  return 0
+}
+
 # refresh_cache の作業用のファイル。中断（Ctrl-C・接続の打ち切り）でも片づける。
 RC_TMP="" RC_STAGE=""
 cleanup_exit() {
   local d
+  release_git_claim
   for d in ${LOCK_DIRS[@]+"${LOCK_DIRS[@]}"}; do rm -rf "$d" 2>/dev/null; done
   [[ -z "$RC_TMP" ]] || rm -rf "$RC_TMP" 2>/dev/null
   [[ -z "$RC_STAGE" ]] || rm -rf "$RC_STAGE" 2>/dev/null
@@ -2767,7 +2816,13 @@ do_upgrade() {
   wantbranch="$(follow_branch_name "${want_dcb:+$latest_dcb}" "${want_pb:+$latest_pb}")"
   # 問いかけを経ない（手で呼ぶ upgrade）ときは、追従を始める前に何が起きるかを 1 行出す。
   [[ -n "$from_prompt" ]] || echo "$LOG_PREFIX $(branch_plan_text "$wantbranch")。"
+  # 作業ツリーを変える前に、台帳で他のセッションの git の登録を確かめる（あれば何も変えずに止める）。
+  if ! ledger_guard; then
+    rm -rf "$work"
+    return 1
+  fi
   if ! prepare_branch "$wantbranch"; then
+    release_git_claim
     rm -rf "$work"
     return 1
   fi
@@ -2793,8 +2848,10 @@ do_upgrade() {
     else
       restore_branch
     fi
+    release_git_claim
     return 1
   fi
+  release_git_claim
   branch_hint=""
   [[ -z "$BRANCH_MADE" ]] || branch_hint="（作業用のブランチ $BRANCH_MADE に切り替え済みです）"
   if git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
