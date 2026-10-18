@@ -394,6 +394,20 @@ printf '\nREMOVED_FROM_TEMPLATE_API_KEY=\n' >> "$repo/.env"
 run_check "$repo"
 if [[ "$CHECK_RC" -eq 0 && "$CHECK_OUT" == *"NOTICE .env にある値の空のキー"*REMOVED_FROM_TEMPLATE_API_KEY* ]]; then pass; else fail "rc=$CHECK_RC 出力: $CHECK_OUT"; fi
 
+it "キー整合: .env に UPDATE_CHECK=off を書いても通す（雛形ではコメントの案内。#657）"
+repo="$(new_repo)"
+cp "$repo/.env.example" "$repo/.env"
+printf '\nUPDATE_CHECK=off\n' >> "$repo/.env"
+run_check "$repo"
+assert_pass "UPDATE_CHECK は整合検査の対象外"
+
+it "キー整合: UPDATE_CHECK を外しても、ほかのキーが .env にしか無ければ落とす（#657）"
+repo="$(new_repo)"
+cp "$repo/.env.example" "$repo/.env"
+printf '\nUPDATE_CHECK=off\nONLY_IN_ENV=1\n' >> "$repo/.env"
+run_check "$repo"
+assert_fail "UPDATE_CHECK と併記でも検知が弱まらない" "ONLY_IN_ENV"
+
 it "キー整合: 雛形にしか無いキーは NOTICE に留めて通す"
 # 雛形へキーが増えた直後は、各環境の .env が追いつくまで必ずこの状態を通る。
 # ここで落とすと配布物の更新のたびに全利用者のゲートが赤くなる。
@@ -604,12 +618,12 @@ printf 'UPDATE_CHECK=off\nONLY_IN_ENV=1\n' > "$repo/.env"
 run_check "$repo"
 if [[ "$CHECK_RC" -ne 0 && "$CHECK_OUT" == *"ONLY_IN_ENV"* && "$CHECK_OUT" != *"黙って欠ける）: UPDATE_CHECK"* ]]; then pass; else fail "rc=$CHECK_RC 出力: $CHECK_OUT"; fi
 
-it ".env にだけ UPDATE_CHECK があれば、雛形に無いキーとして落ちる"
+it ".env にだけ UPDATE_CHECK があっても、雛形に無いキーとして落とさない（雛形ではコメントの案内。#657）"
 repo="$(new_repo)"
 printf 'OTHER_KEY=\n' > "$repo/.env.example"
 printf 'UPDATE_CHECK=off\n' > "$repo/.env"
 run_check "$repo"
-if [[ "$CHECK_RC" -ne 0 && "$CHECK_OUT" == *"黙って欠ける）: UPDATE_CHECK"* ]]; then pass; else fail "rc=$CHECK_RC 出力: $CHECK_OUT"; fi
+if [[ "$CHECK_RC" -eq 0 && "$CHECK_OUT" != *"黙って欠ける）: UPDATE_CHECK"* ]]; then pass; else fail "rc=$CHECK_RC 出力: $CHECK_OUT"; fi
 
 # ── 呼び出し元（verify.sh から直接呼ぶ） ─────────────────────────────────────
 

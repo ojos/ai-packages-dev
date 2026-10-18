@@ -760,6 +760,100 @@ assert_eq "$(decision_for_command $'gh pr mer\\\nge 1')" "ask" "判定"
 it "語の途中の行継続は REST の merge エンドポイントでも検知する"
 assert_eq "$(decision_for_command $'gh api --method PUT repos/o/r/pulls/1/mer\\\nge')" "ask" "判定"
 
+# 行継続の除去は、bash と同じくクォートの外（と二重引用符の中）だけに効く（#659）。
+# シングルクォートの中の \ + 改行は文字のまま残り、マージにならない。
+it "シングルクォートの中の行継続（gh pr 'mer\\<改行>ge' 1）は確認を出さない"
+assert_eq "$(decision_for_command $'gh pr \'mer\\\nge\' 1')" "" "判定"
+
+it "クォートの外の行継続（gh pr mer\\<改行>ge 1）は従来どおり ask"
+assert_eq "$(decision_for_command $'gh pr mer\\\nge 1')" "ask" "判定"
+
+it "二重引用符の中の行継続（gh pr \"mer\\<改行>ge\" 1）は ask（bash は取り除く）"
+assert_eq "$(decision_for_command $'gh pr "mer\\\nge" 1')" "ask" "判定"
+
+it "シングルクォートを閉じたあとの行継続は ask（echo 'a'; gh pr mer\\<改行>ge 1 の形）"
+assert_eq "$(decision_for_command $'echo \'a\'; gh pr mer\\\nge 1')" "ask" "判定"
+
+#   $$ は PID で、2 文字目の $ は続く ' と ANSI-C 引用を作らない。$$'a\' は $$ と通常の単引用符
+#   'a\'（単引用符の中の \ はエスケープにならず、\' の ' で閉じる）。ANSI-C 引用と読み違えると
+#   クォートが閉じていないと誤判定して、後ろの行継続を残し、マージを見逃す。
+it "\$\$'a\\' のあとの行継続（echo \$\$'a\\' ; gh pr mer\\<改行>ge 1 #'）は ask"
+assert_eq "$(decision_for_command $'echo $$\'a\\\' ; gh pr mer\\\nge 1 #\'')" "ask" "判定"
+
+it "\$\$'x\\' のあとの行継続（&& の形）は ask"
+assert_eq "$(decision_for_command $'echo $$\'x\\\' && gh pr mer\\\nge 1 && echo \'done\'')" "ask" "判定"
+
+it "\$ が偶数個（\$\$\$\$'x\\'）でも、通常の単引用符として読み、あとの行継続は ask"
+assert_eq "$(decision_for_command $'echo $$$$\'x\\\' ; gh pr mer\\\nge 1 #\'')" "ask" "判定"
+
+it "\$ が奇数個（\$\$\$'x\\'）でも、\$ を含む入力は全体置換の経路で、あとの行継続は ask"
+assert_eq "$(decision_for_command $'echo $$$\'x\\\' ; gh pr mer\\\nge 1 #\'')" "ask" "判定"
+
+# コメント・ヒアドキュメントの本文の $' は、bash では読まれない。クォートを追うと読み違えて行継続を
+# 残し、マージを見逃す。# << $ ` を含む入力は、クォートを追わず、継続を全体から取り除く。
+it "コメントの本文の \$'（echo hi # \$'\\'）のあとの行継続は ask"
+assert_eq "$(decision_for_command $'echo hi # $\'\\\'\ngh pr mer\\\nge 1')" "ask" "判定"
+
+it "ヒアドキュメントの本文の \$'（引用符なしの区切り語）のあとの行継続は ask"
+assert_eq "$(decision_for_command $'cat <<EOF\n$\'\\\'\nEOF\ngh pr mer\\\nge 1')" "ask" "判定"
+
+it "ヒアドキュメントの本文の \$'（引用符つきの区切り語）のあとの行継続は ask"
+assert_eq "$(decision_for_command $'cat <<\'EOF\'\n$\'\\\'\nEOF\ngh pr mer\\\nge 1')" "ask" "判定"
+
+# 4 つの文字をそれぞれ含み、単引用符の中に継続を持つ入力は、main と同じく ask（全体置換の経路）。
+it "\$ を含み、単引用符の中に継続を持つ入力は ask（全体置換の経路）"
+assert_eq "$(decision_for_command $'echo $x; gh pr \'mer\\\nge\' 1')" "ask" "判定"
+it "# を含み、単引用符の中に継続を持つ入力は ask（全体置換の経路）"
+assert_eq "$(decision_for_command $'echo a # c\ngh pr \'mer\\\nge\' 1')" "ask" "判定"
+it "<< を含み、単引用符の中に継続を持つ入力は ask（全体置換の経路）"
+assert_eq "$(decision_for_command $'cat <<EOF\nx\nEOF\ngh pr \'mer\\\nge\' 1')" "ask" "判定"
+it "バッククォートを含み、単引用符の中に継続を持つ入力は ask（全体置換の経路）"
+assert_eq "$(decision_for_command $'echo `true`; gh pr \'mer\\\nge\' 1')" "ask" "判定"
+
+it "\$\$'x'（\\' 無し）のあとの行継続は ask"
+assert_eq "$(decision_for_command $'echo $$\'x\' ; gh pr mer\\\nge 1')" "ask" "判定"
+
+it "シングルクォートの中の CRLF 行継続も確認を出さない"
+assert_eq "$(decision_for_command $'gh pr \'mer\\\r\nge\' 1')" "" "判定"
+
+# 行継続を多く含む長い入力（100KB 程度のヒアドキュメント）でも遅くならない（クォートを追う走査が
+# 長さの 2 乗にならない）。修正前は 160KB で 25 秒かかった。上限は 2 段にする。merge を含まない入力
+# （よくある大きなヒアドキュメント）は近道で抜けるので速くあるべきで、5 秒（実測は 1 秒未満）。merge を
+# 含む入力は for_each_clause の既存の費用が乗り（実測で数秒）、めったに無い形なので、CI の揺れで落ちない
+# よう 30 秒にする。時間は date +%s の差（秒）で測る。引数の長さの上限（128KB）を避けるため、
+# ペイロードは標準入力から組み立てる。
+long_continuation_body="$(yes $'echo some text here \\\nmore text here and more 12345' | head -n 3000)"
+decision_for_long() { # <末尾に足す文字列>
+  # heredoc は << を含むので全体置換の経路、plain は # << $ ` を含まないのでクォートを追う走査の経路を通る。
+  if [[ "${long_wrap:-heredoc}" == plain ]]; then
+    printf '%s' "$long_continuation_body"$'\n'"$1"
+  else
+    printf '%s' "cat <<'EOF'"$'\n'"$long_continuation_body"$'\nEOF\n'"$1"
+  fi \
+    | jq -Rs '{hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command: . }}' \
+    | bash "$HOOK" | jq -r '.hookSpecificOutput.permissionDecision // empty'
+}
+assert_long() { # <ラベル> <末尾> <期待する判定>
+  local long_label="$1" long_tail="$2" long_expect="$3" t0 t1 got limit=30
+  [[ -n "$long_tail" ]] || limit=5
+  t0="$(date +%s)"
+  got="$(decision_for_long "$long_tail")"
+  t1="$(date +%s)"
+  it "長い入力（約 100KB・行継続が多い）: $long_label: 判定"
+  assert_eq "$got" "$long_expect" "判定"
+  it "長い入力（約 100KB・行継続が多い）: $long_label: 所要時間が ${limit} 秒未満"
+  if (( t1 - t0 < limit )); then pass; else fail "所要時間 $((t1 - t0)) 秒（上限 ${limit} 秒）"; fi
+}
+assert_long "merge を含まない" "" ""
+assert_long "merge を含む（クォートの外の gh pr merge）" "gh pr merge 1" "ask"
+assert_long "末尾がシングルクォートの中の行継続（<< を含むので全体置換の経路。ask）" $'gh pr \'mer\\\nge\' 1' "ask"
+assert_long "末尾がクォートの外の行継続（マージになる）" $'gh pr mer\\\nge 1' "ask"
+long_wrap=plain
+assert_long "走査の経路・merge を含まない" "" ""
+assert_long "走査の経路・merge を含む（クォートの外の gh pr merge）" "gh pr merge 1" "ask"
+assert_long "走査の経路・末尾がシングルクォートの中の行継続（マージにならない）" $'gh pr \'mer\\\nge\' 1' ""
+long_wrap=heredoc
+
 if [[ "$mb_probe" != "1" ]]; then
   it "UTF-8 のロケール（C.UTF-8）を使うテストを飛ばした"
   printf '  skip C.UTF-8 が使えないため、マルチバイトの経路のテストを飛ばした\n'
