@@ -777,6 +777,31 @@ assert_eq "$(decision_for_command $'echo \'a\'; gh pr mer\\\nge 1')" "ask" "判�
 it "シングルクォートの中の CRLF 行継続も確認を出さない"
 assert_eq "$(decision_for_command $'gh pr \'mer\\\r\nge\' 1')" "" "判定"
 
+# 行継続を多く含む長い入力（150KB 程度のヒアドキュメント）でも遅くならない（クォートを追う走査が
+# 長さの 2 乗にならない）。修正前は 160KB で 25 秒かかった。上限は CI の揺れで落ちないよう緩くし
+# （目安は 1 秒台）、時間は date +%s の差（秒）で測る。引数の長さの上限（128KB）を避けるため、
+# ペイロードは標準入力から組み立てる。
+long_continuation_body="$(yes $'echo some text here \\\nmore text here and more 12345' | head -n 3000)"
+decision_for_long() { # <末尾に足す文字列>
+  printf '%s' "cat <<'EOF'"$'\n'"$long_continuation_body"$'\nEOF\n'"$1" \
+    | jq -Rs '{hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command: . }}' \
+    | bash "$HOOK" | jq -r '.hookSpecificOutput.permissionDecision // empty'
+}
+assert_long() { # <ラベル> <末尾> <期待する判定>
+  local long_label="$1" long_tail="$2" long_expect="$3" t0 t1 got
+  t0="$(date +%s)"
+  got="$(decision_for_long "$long_tail")"
+  t1="$(date +%s)"
+  it "長い入力（約 150KB・行継続が多い）: $long_label: 判定"
+  assert_eq "$got" "$long_expect" "判定"
+  it "長い入力（約 150KB・行継続が多い）: $long_label: 所要時間が 10 秒未満"
+  if (( t1 - t0 < 10 )); then pass; else fail "所要時間 $((t1 - t0)) 秒"; fi
+}
+assert_long "merge を含まない" "" ""
+assert_long "merge を含む（クォートの外の gh pr merge）" "gh pr merge 1" "ask"
+assert_long "末尾がシングルクォートの中の行継続（マージにならない）" $'gh pr \'mer\\\nge\' 1' ""
+assert_long "末尾がクォートの外の行継続（マージになる）" $'gh pr mer\\\nge 1' "ask"
+
 if [[ "$mb_probe" != "1" ]]; then
   it "UTF-8 のロケール（C.UTF-8）を使うテストを飛ばした"
   printf '  skip C.UTF-8 が使えないため、マルチバイトの経路のテストを飛ばした\n'

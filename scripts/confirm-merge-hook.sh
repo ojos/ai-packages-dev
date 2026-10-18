@@ -810,14 +810,23 @@ may_contain_merge() {
 # クォートの状態を追う実装なので、閉じていないクォートの先は取り除かずに残す（bash では
 # 構文エラーになる形で、マージは走らない）。
 strip_line_continuations() {
-  local LC_ALL=C
   local s="$1" out="" i=0 n=${#1} c nx state=""
   if [[ "$s" != *$'\\\n'* ]] && [[ "$s" != *$'\\\r\n'* ]]; then
     stripped_target="$s"
     return 0
   fi
+  # ${s:i:1} は 1 回ごとに先頭から i まで数えるため、1 文字ずつ取り出すと走査全体が長さの
+  # 2 乗になる（#647。for_each_clause と同じ事情）。そこで 512 文字の塊 blk を切り出し、塊の
+  # 中の位置 k で読む。塊の取り直しは 500 文字ごとなので、先読み（k + 2）も塊の中に収まる。
+  # ロケールは変えない（for_each_clause と同じ単位で読み、2 つの段でクォートの解釈をずらさない）。
+  local blk="" blk_start=0 k=0
   while ((i < n)); do
-    c="${s:i:1}"
+    if ((i == 0 || i - blk_start >= 500)); then
+      blk_start=$i
+      blk="${s:i:512}"
+    fi
+    k=$((i - blk_start))
+    c="${blk:k:1}"
     if [[ "$state" == s ]]; then
       # シングルクォートの中。次の ' まですべて文字のまま。
       out+="$c"
@@ -826,7 +835,7 @@ strip_line_continuations() {
     elif [[ "$state" == a ]]; then
       # $'...' の中。\ は次の 1 文字とひと組で、\' では閉じない。
       if [[ "$c" == "\\" ]]; then
-        out+="${s:i:2}"
+        out+="${blk:k:2}"
         i=$((i + 2))
       else
         out+="$c"
@@ -835,13 +844,13 @@ strip_line_continuations() {
       fi
     elif [[ "$c" == "\\" ]]; then
       # クォートの外か二重引用符の中。継続なら落とし、ほかはひと組で残す。
-      nx="${s:i+1:1}"
+      nx="${blk:k+1:1}"
       if [[ "$nx" == $'\n' ]]; then
         i=$((i + 2))
-      elif [[ "$nx" == $'\r' && "${s:i+2:1}" == $'\n' ]]; then
+      elif [[ "$nx" == $'\r' && "${blk:k+2:1}" == $'\n' ]]; then
         i=$((i + 3))
       else
-        out+="${s:i:2}"
+        out+="${blk:k:2}"
         i=$((i + 2))
       fi
     elif [[ "$state" == d ]]; then
@@ -856,7 +865,7 @@ strip_line_continuations() {
       out+="$c"
       i=$((i + 1))
       state=d
-    elif [[ "$c" == '$' && "${s:i+1:1}" == "'" ]]; then
+    elif [[ "$c" == '$' && "${blk:k+1:1}" == "'" ]]; then
       out+="\$'"
       i=$((i + 2))
       state=a
@@ -913,6 +922,14 @@ else
   # 取り除くのはクォートの外と二重引用符の中だけで、シングルクォートの中では取り除かない
   # （strip_line_continuations。bash は 'mer\<改行>ge' を mer\<改行>ge のまま渡すので、
   # マージにならない）。
+  # 先に、継続をすべて取り除いた文字列で merge の有無を見る（安い。取り除く量が多い側なので、
+  # merge を見落とす側には振れない）。merge が無ければ、クォートを追う走査へ進まない。
+  # 走査は 1 文字ずつ読むため、長い入力（ヒアドキュメントなど）で遅くしない。
+  norm_target="${target//$'\\\r\n'/}"
+  norm_target="${norm_target//$'\\\n'/}"
+  if ! may_contain_merge "$norm_target"; then
+    exit 0
+  fi
   strip_line_continuations "$target"
   norm_target="$stripped_target"
 
