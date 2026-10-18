@@ -6,6 +6,19 @@ devhost（SSH で届く外部の機械で devcontainer を保つ道具。コマ�
 >
 > 同じ理由で、issue 参照は `ojos/ai-packages-dev#NNN` の形で書いてください。裸の `#NNN` は GitHub のオートリンクが**配布先リポジトリの issue** として解決するため、配布後は存在しない issue や無関係な issue を指します。
 
+## v0.6.0
+
+### Summary
+- **自前のランナーのイメージに、PATH 上の `node`（Node.js 24.x）を足した**（ojos/ai-packages-dev#656）。GitHub がホストするランナーにはあり、公式のランナーのイメージには無い。同梱の node は `/home/runner/externals` にあるだけで、PATH にはない。そのため、node のシバンを持つ道具や `run:` から呼ぶ node が、自前のランナーでだけ `env: 'node': No such file or directory`（終了コード 127）で落ちていた。例は `hashicorp/setup-terraform` の既定のラッパー。`uses:` の JS アクションは、同梱の node で動くので影響を受けない。
+  - NodeSource の署名つき apt リポジトリ（`node_24.x`）から入れる。信頼する鍵はその公式の鍵だけで、`signed-by` で範囲を限る。系列は 24.x に固定し、パッチはビルドのたびに追従する。
+  - `selftest.sh` が、`runner.Dockerfile` の apt リポジトリの行がすべて `signed-by` と https を持つことを照合するようにした。
+- **適用には `install.sh` で更新したあと、`dev runner build` でイメージを作り直し、ランナーのユニットを起こし直す。**
+
+### 移行
+
+- **自前のランナーを使っている場合は、更新後に `dev runner build` でイメージを作り直し、ランナーのユニットを起こし直す**（`systemctl --user restart dev-runner@<名前>.service`）。作り直すまでは、イメージに node が入らない。
+- node が無いために `terraform_wrapper: false` などで避けていたワークフローは、作り直したあとなら元に戻してよい（戻さなくても動く）。
+
 ## v0.5.1
 
 ### Summary
