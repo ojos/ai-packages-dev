@@ -774,6 +774,24 @@ assert_eq "$(decision_for_command $'gh pr "mer\\\nge" 1')" "ask" "判定"
 it "シングルクォートを閉じたあとの行継続は ask（echo 'a'; gh pr mer\\<改行>ge 1 の形）"
 assert_eq "$(decision_for_command $'echo \'a\'; gh pr mer\\\nge 1')" "ask" "判定"
 
+#   $$ は PID で、2 文字目の $ は続く ' と ANSI-C 引用を作らない。$$'a\' は $$ と通常の単引用符
+#   'a\'（単引用符の中の \ はエスケープにならず、\' の ' で閉じる）。ANSI-C 引用と読み違えると
+#   クォートが閉じていないと誤判定して、後ろの行継続を残し、マージを見逃す。
+it "\$\$'a\\' のあとの行継続（echo \$\$'a\\' ; gh pr mer\\<改行>ge 1 #'）は ask"
+assert_eq "$(decision_for_command $'echo $$\'a\\\' ; gh pr mer\\\nge 1 #\'')" "ask" "判定"
+
+it "\$\$'x\\' のあとの行継続（&& の形）は ask"
+assert_eq "$(decision_for_command $'echo $$\'x\\\' && gh pr mer\\\nge 1 && echo \'done\'')" "ask" "判定"
+
+it "\$ が偶数個（\$\$\$\$'x\\'）でも、通常の単引用符として読み、あとの行継続は ask"
+assert_eq "$(decision_for_command $'echo $$$$\'x\\\' ; gh pr mer\\\nge 1 #\'')" "ask" "判定"
+
+it "\$ が奇数個（\$\$\$'x\\' ）は ANSI-C 引用で、\\' では閉じない（中の行継続は残り、確認なし）"
+assert_eq "$(decision_for_command $'echo $$$\'x\\\'\\\nmerge\' ; gh pr \'mer\\\nge\' 1')" "" "判定"
+
+it "\$\$'x'（\\' 無し）のあとの行継続は ask"
+assert_eq "$(decision_for_command $'echo $$\'x\' ; gh pr mer\\\nge 1')" "ask" "判定"
+
 it "シングルクォートの中の CRLF 行継続も確認を出さない"
 assert_eq "$(decision_for_command $'gh pr \'mer\\\r\nge\' 1')" "" "判定"
 
