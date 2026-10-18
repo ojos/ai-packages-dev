@@ -786,8 +786,29 @@ assert_eq "$(decision_for_command $'echo $$\'x\\\' && gh pr mer\\\nge 1 && echo 
 it "\$ が偶数個（\$\$\$\$'x\\'）でも、通常の単引用符として読み、あとの行継続は ask"
 assert_eq "$(decision_for_command $'echo $$$$\'x\\\' ; gh pr mer\\\nge 1 #\'')" "ask" "判定"
 
-it "\$ が奇数個（\$\$\$'x\\' ）は ANSI-C 引用で、\\' では閉じない（中の行継続は残り、確認なし）"
-assert_eq "$(decision_for_command $'echo $$$\'x\\\'\\\nmerge\' ; gh pr \'mer\\\nge\' 1')" "" "判定"
+it "\$ が奇数個（\$\$\$'x\\'）でも、\$ を含む入力は全体置換の経路で、あとの行継続は ask"
+assert_eq "$(decision_for_command $'echo $$$\'x\\\' ; gh pr mer\\\nge 1 #\'')" "ask" "判定"
+
+# コメント・ヒアドキュメントの本文の $' は、bash では読まれない。クォートを追うと読み違えて行継続を
+# 残し、マージを見逃す。# << $ ` を含む入力は、クォートを追わず、継続を全体から取り除く。
+it "コメントの本文の \$'（echo hi # \$'\\'）のあとの行継続は ask"
+assert_eq "$(decision_for_command $'echo hi # $\'\\\'\ngh pr mer\\\nge 1')" "ask" "判定"
+
+it "ヒアドキュメントの本文の \$'（引用符なしの区切り語）のあとの行継続は ask"
+assert_eq "$(decision_for_command $'cat <<EOF\n$\'\\\'\nEOF\ngh pr mer\\\nge 1')" "ask" "判定"
+
+it "ヒアドキュメントの本文の \$'（引用符つきの区切り語）のあとの行継続は ask"
+assert_eq "$(decision_for_command $'cat <<\'EOF\'\n$\'\\\'\nEOF\ngh pr mer\\\nge 1')" "ask" "判定"
+
+# 4 つの文字をそれぞれ含み、単引用符の中に継続を持つ入力は、main と同じく ask（全体置換の経路）。
+it "\$ を含み、単引用符の中に継続を持つ入力は ask（全体置換の経路）"
+assert_eq "$(decision_for_command $'echo $x; gh pr \'mer\\\nge\' 1')" "ask" "判定"
+it "# を含み、単引用符の中に継続を持つ入力は ask（全体置換の経路）"
+assert_eq "$(decision_for_command $'echo a # c\ngh pr \'mer\\\nge\' 1')" "ask" "判定"
+it "<< を含み、単引用符の中に継続を持つ入力は ask（全体置換の経路）"
+assert_eq "$(decision_for_command $'cat <<EOF\nx\nEOF\ngh pr \'mer\\\nge\' 1')" "ask" "判定"
+it "バッククォートを含み、単引用符の中に継続を持つ入力は ask（全体置換の経路）"
+assert_eq "$(decision_for_command $'echo `true`; gh pr \'mer\\\nge\' 1')" "ask" "判定"
 
 it "\$\$'x'（\\' 無し）のあとの行継続は ask"
 assert_eq "$(decision_for_command $'echo $$\'x\' ; gh pr mer\\\nge 1')" "ask" "判定"
@@ -801,7 +822,12 @@ assert_eq "$(decision_for_command $'gh pr \'mer\\\r\nge\' 1')" "" "判定"
 # ペイロードは標準入力から組み立てる。
 long_continuation_body="$(yes $'echo some text here \\\nmore text here and more 12345' | head -n 3000)"
 decision_for_long() { # <末尾に足す文字列>
-  printf '%s' "cat <<'EOF'"$'\n'"$long_continuation_body"$'\nEOF\n'"$1" \
+  # heredoc は << を含むので全体置換の経路、plain は # << $ ` を含まないのでクォートを追う走査の経路を通る。
+  if [[ "${long_wrap:-heredoc}" == plain ]]; then
+    printf '%s' "$long_continuation_body"$'\n'"$1"
+  else
+    printf '%s' "cat <<'EOF'"$'\n'"$long_continuation_body"$'\nEOF\n'"$1"
+  fi \
     | jq -Rs '{hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command: . }}' \
     | bash "$HOOK" | jq -r '.hookSpecificOutput.permissionDecision // empty'
 }
@@ -817,8 +843,13 @@ assert_long() { # <ラベル> <末尾> <期待する判定>
 }
 assert_long "merge を含まない" "" ""
 assert_long "merge を含む（クォートの外の gh pr merge）" "gh pr merge 1" "ask"
-assert_long "末尾がシングルクォートの中の行継続（マージにならない）" $'gh pr \'mer\\\nge\' 1' ""
+assert_long "末尾がシングルクォートの中の行継続（<< を含むので全体置換の経路。ask）" $'gh pr \'mer\\\nge\' 1' "ask"
 assert_long "末尾がクォートの外の行継続（マージになる）" $'gh pr mer\\\nge 1' "ask"
+long_wrap=plain
+assert_long "走査の経路・merge を含まない" "" ""
+assert_long "走査の経路・merge を含む（クォートの外の gh pr merge）" "gh pr merge 1" "ask"
+assert_long "走査の経路・末尾がシングルクォートの中の行継続（マージにならない）" $'gh pr \'mer\\\nge\' 1' ""
+long_wrap=heredoc
 
 if [[ "$mb_probe" != "1" ]]; then
   it "UTF-8 のロケール（C.UTF-8）を使うテストを飛ばした"
