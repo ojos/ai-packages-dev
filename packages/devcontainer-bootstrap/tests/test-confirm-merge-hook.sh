@@ -816,9 +816,11 @@ assert_eq "$(decision_for_command $'echo $$\'x\' ; gh pr mer\\\nge 1')" "ask" "�
 it "シングルクォートの中の CRLF 行継続も確認を出さない"
 assert_eq "$(decision_for_command $'gh pr \'mer\\\r\nge\' 1')" "" "判定"
 
-# 行継続を多く含む長い入力（150KB 程度のヒアドキュメント）でも遅くならない（クォートを追う走査が
-# 長さの 2 乗にならない）。修正前は 160KB で 25 秒かかった。上限は CI の揺れで落ちないよう緩くし
-# （目安は 1 秒台）、時間は date +%s の差（秒）で測る。引数の長さの上限（128KB）を避けるため、
+# 行継続を多く含む長い入力（100KB 程度のヒアドキュメント）でも遅くならない（クォートを追う走査が
+# 長さの 2 乗にならない）。修正前は 160KB で 25 秒かかった。上限は 2 段にする。merge を含まない入力
+# （よくある大きなヒアドキュメント）は近道で抜けるので速くあるべきで、5 秒（実測は 1 秒未満）。merge を
+# 含む入力は for_each_clause の既存の費用が乗り（実測で数秒）、めったに無い形なので、CI の揺れで落ちない
+# よう 30 秒にする。時間は date +%s の差（秒）で測る。引数の長さの上限（128KB）を避けるため、
 # ペイロードは標準入力から組み立てる。
 long_continuation_body="$(yes $'echo some text here \\\nmore text here and more 12345' | head -n 3000)"
 decision_for_long() { # <末尾に足す文字列>
@@ -832,14 +834,15 @@ decision_for_long() { # <末尾に足す文字列>
     | bash "$HOOK" | jq -r '.hookSpecificOutput.permissionDecision // empty'
 }
 assert_long() { # <ラベル> <末尾> <期待する判定>
-  local long_label="$1" long_tail="$2" long_expect="$3" t0 t1 got
+  local long_label="$1" long_tail="$2" long_expect="$3" t0 t1 got limit=30
+  [[ -n "$long_tail" ]] || limit=5
   t0="$(date +%s)"
   got="$(decision_for_long "$long_tail")"
   t1="$(date +%s)"
-  it "長い入力（約 150KB・行継続が多い）: $long_label: 判定"
+  it "長い入力（約 100KB・行継続が多い）: $long_label: 判定"
   assert_eq "$got" "$long_expect" "判定"
-  it "長い入力（約 150KB・行継続が多い）: $long_label: 所要時間が 10 秒未満"
-  if (( t1 - t0 < 10 )); then pass; else fail "所要時間 $((t1 - t0)) 秒"; fi
+  it "長い入力（約 100KB・行継続が多い）: $long_label: 所要時間が ${limit} 秒未満"
+  if (( t1 - t0 < limit )); then pass; else fail "所要時間 $((t1 - t0)) 秒（上限 ${limit} 秒）"; fi
 }
 assert_long "merge を含まない" "" ""
 assert_long "merge を含む（クォートの外の gh pr merge）" "gh pr merge 1" "ask"
