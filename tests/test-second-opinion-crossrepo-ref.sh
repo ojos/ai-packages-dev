@@ -13,6 +13,14 @@ echo "test-second-opinion-crossrepo-ref"
 unset SECOND_OPINION_ENGINE SECOND_OPINION_RUNS SECOND_OPINION_MODEL \
       GEMINI_REVIEW_MODEL GEMINI_REVIEW_RUNS
 
+# 被検査スクリプトの resolve_referenced_context が jq で author_association を読む。
+# 無いと参照がすべて「引けない」扱いになり、原因の分からない失敗になるので先に止める。
+if ! command -v jq >/dev/null 2>&1; then
+  it "前提: jq がある"
+  fail "jq がありません（被検査スクリプトが参照の文脈を読むのに使う）"
+  exit_with_result
+fi
+
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/test-so-crossrepo.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
 
@@ -51,7 +59,7 @@ chmod +x "$FAKE_BIN/gh" "$FAKE_BIN/gemini"
 
 # 断りの文面（改行を除いた PROMPT に対して固定文字列で探す）。
 NOTE1="本文で別のリポジトリを指した番号が、このリポジトリの同じ番号の別物として"
-NOTE2="食い違いの根拠にしないでください"
+NOTE2="報告は省かず、別のリポジトリの番号か、番号の書き誤りのどちらかであることを添えてください"
 
 # 使い方: check_script <表示名> <被検査スクリプト>
 check_script() {
