@@ -13,7 +13,7 @@
 # 要らない。所要時間も秒単位に収める。scripts/acceptance.sh はこれを DCB テスト
 # （約 4 分）より前に置き、安い検査から落ちるようにしている。
 #
-# 例外が 4 つある。いずれも持ち込んでいるのは検査対象スクリプト自身の依存で、
+# 例外が 5 つある。いずれも持ち込んでいるのは検査対象スクリプト自身の依存で、
 # テスト側が増やした依存ではない。どれもネットワークへは出ない。
 #
 #   test-devcontainer-host-install.sh
@@ -32,6 +32,9 @@
 #   test-release-anchor-slug.sh
 #                              scripts/release-packages.sh のアンカー検証が python3 で
 #                              書かれているため python3 を要する。
+#   test-second-opinion-crossrepo-ref.sh
+#                              second-opinion-review.sh の参照の文脈が author_association を jq で
+#                              読むため jq を要する。gh / gemini は PATH 上の偽物で、ネットワークには出ない。
 
 set -uo pipefail
 
