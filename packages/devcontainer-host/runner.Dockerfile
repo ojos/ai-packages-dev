@@ -28,6 +28,7 @@
 #   - GNU coreutils 相当: date -u -d、base64 -d、tr、mktemp、sort、comm など（BusyBox の date は不可）
 #   - sed、grep
 # 公式のイメージ(ubuntu ベース)が最初から持つのは bash・GNU coreutils・sed・grep・git で、足すのは gh だけ。
+# (配るワークフローの外で足す道具は、下の【展開の道具】と【node】。外部の apt リポジトリは GitHub CLI と NodeSource の 2 つ)
 #
 # 【利用側の acceptance.sh のために入れておくもの】配るワークフローには要らない。利用側の acceptance.sh
 # (プロジェクトが所有し、言語や検査で道具が変わる)が使うことが多いので残す: jq・shellcheck・curl・unzip・gawk。
@@ -47,7 +48,7 @@ FROM ghcr.io/actions/actions-runner:${RUNNER_VERSION}
 
 USER root
 # 配るワークフローに要るもの: git（公式にもある。明示）と gh（下で公式の apt リポジトリから足す）
-# 利用側の acceptance.sh のために入れておくもの: jq・shellcheck・curl・unzip・gawk（ca-certificates・gnupg は gh の導入に使う）
+# 利用側の acceptance.sh のために入れておくもの: jq・shellcheck・curl・unzip・gawk（ca-certificates は gh と node の取得に、gnupg は apt の署名の検証に使う）
 # 展開の道具: xz-utils・zstd・bzip2
 # node: nodejs（NodeSource の公式の鍵だけを signed-by で信頼する）
 RUN apt-get update \
@@ -57,13 +58,11 @@ RUN apt-get update \
     && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o /etc/apt/keyrings/githubcli-archive-keyring.gpg \
     && chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg \
     && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list \
+    && curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key -o /etc/apt/keyrings/nodesource.asc \
+    && chmod go+r /etc/apt/keyrings/nodesource.asc \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/nodesource.asc] https://deb.nodesource.com/node_24.x nodistro main" > /etc/apt/sources.list.d/nodesource.list \
     && apt-get update \
-    && apt-get install -y --no-install-recommends gh \
-    && curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg \
-    && chmod go+r /etc/apt/keyrings/nodesource.gpg \
-    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_24.x nodistro main" > /etc/apt/sources.list.d/nodesource.list \
-    && apt-get update \
-    && apt-get install -y --no-install-recommends nodejs \
+    && apt-get install -y --no-install-recommends gh nodejs \
     && rm -rf /var/lib/apt/lists/*
 
 USER runner
