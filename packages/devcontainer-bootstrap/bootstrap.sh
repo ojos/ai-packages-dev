@@ -2797,15 +2797,17 @@ do_upgrade() {
       *) echo "$LOG_PREFIX 規範の取得元を読めないため、追従しません。" >&2; return 1 ;;
     esac
   fi
-  # 差分を読めるよう、作業ツリーが汚れているときは止める（追従の差分と混ざるため）。
-  if git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
-    && [[ -n "$(git -C "$ROOT" status --porcelain 2>/dev/null)" ]]; then
-    echo "$LOG_PREFIX 作業ツリーに未コミットの変更があるため、追従しません（差分が混ざるため）。コミットか退避をしてからやり直してください。" >&2
-    return 1
-  fi
   # 取得（最大 60 秒ずつ）の前に、台帳で他のセッションの git の登録を確かめる（あれば何も変えずに止める）。
   # 以降の失敗の経路では、登録を解放してから戻る。
   ledger_guard || return 1
+  # 差分を読めるよう、作業ツリーが汚れているときは止める（追従の差分と混ざるため）。登録のあとで確かめる。
+  # 先に確かめると、確かめてから登録するまでに別のセッションが書き込んで解放したとき、汚れたまま進む（#666）。
+  if git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
+    && [[ -n "$(git -C "$ROOT" status --porcelain 2>/dev/null)" ]]; then
+    echo "$LOG_PREFIX 作業ツリーに未コミットの変更があるため、追従しません（差分が混ざるため）。コミットか退避をしてからやり直してください。" >&2
+    release_git_claim
+    return 1
+  fi
 
   work="$(mktemp -d "${TMPDIR:-/tmp}/dcb-update-upgrade.XXXXXX" 2>/dev/null)" || { release_git_claim; return 1; }
   base="https://github.com/$DCB_SLUG/releases/download/$use_tag"

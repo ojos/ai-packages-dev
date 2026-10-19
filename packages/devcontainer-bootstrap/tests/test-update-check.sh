@@ -1173,6 +1173,21 @@ o="$(yes_run "$RL2" "$TEST_TMP_ROOT/cyl2" SESSION_LEDGER_ID="$UC_SID" FAKE_BOOT_
 chk="$(ledger_in "$RL2" probe-session check git "$RL2" 2>&1)"
 if [[ "$o" == *失敗しました* && "$chk" == LEDGER_OK* ]]; then pass; else fail "check: $chk 出力: $o"; fi
 
+it "未コミットの変更で止まったとき、自分の git の登録は残らない（#666）"
+reset_fixture; set_latest "$DCB_API" "v0.99.0"; put_assets_for v0.99.0
+RL5="$(new_workdir)/p"; make_repo "$RL5"
+notify_in "$RL5" "$TEST_TMP_ROOT/cyl5"
+echo dirty > "$RL5/dirty.txt"
+o="$(yes_run "$RL5" "$TEST_TMP_ROOT/cyl5" SESSION_LEDGER_ID="$UC_SID")"
+chk="$(ledger_in "$RL5" probe-session check git "$RL5" 2>&1)"
+if [[ ! -s "$BOOT_LOG" && "$o" == *未コミット* && "$chk" == LEDGER_OK* ]]; then pass; else fail "check: $chk 出力: $o"; fi
+
+it "汚れの確認は台帳の登録のあと: 汚れていて他のセッションの登録もあれば、台帳の拒否で止まる（#666）"
+ledger_in "$RL5" other-session claim git "$RL5" >/dev/null 2>&1
+o="$(yes_run "$RL5" "$TEST_TMP_ROOT/cyl5" SESSION_LEDGER_ID="$UC_SID")"
+ledger_in "$RL5" other-session release git "$RL5" >/dev/null 2>&1
+if [[ ! -s "$BOOT_LOG" && "$o" == *ほかのセッション*other-session* && "$o" != *未コミット* ]]; then pass; else fail "出力: $o"; fi
+
 it "台帳（session-ledger.sh）が無くても、警告して追従する（fail-open）"
 reset_fixture; set_latest "$DCB_API" "v0.99.0"; put_assets_for v0.99.0
 RL3="$(new_workdir)/p"; make_repo "$RL3"
