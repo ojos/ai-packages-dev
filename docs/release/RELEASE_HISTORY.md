@@ -9,7 +9,7 @@
 
 | パッケージ | リポジトリ | 現行バージョン | 配布形態 |
 |---|---|---|---|
-| devcontainer-bootstrap | `ojos/devcontainer-bootstrap` | v0.23.5 | GitHub Release + 資産 5 点（配布スクリプト 2: `bootstrap.sh` / `doctor.sh`、生成物 3: `SHA256SUMS` / `RELEASE-MANIFEST.json` / `PACKAGE_ARCHIVE.tar.gz`） |
+| devcontainer-bootstrap | `ojos/devcontainer-bootstrap` | v0.23.6 | GitHub Release + 資産 5 点（配布スクリプト 2: `bootstrap.sh` / `doctor.sh`、生成物 3: `SHA256SUMS` / `RELEASE-MANIFEST.json` / `PACKAGE_ARCHIVE.tar.gz`） |
 | ai-playbook | `ojos/ai-playbook` | v0.12.2 | git タグのみ |
 | devcontainer-host | `ojos/devcontainer-host` | v0.6.0 | GitHub Release + 資産 14 点（個別 11: `dev.sh` / `dev-up@.service` / `dev-runner@.service` / `dev-route@.service` / `dev-route-sync@.service` / `dev-route-sync@.timer` / `runner.Dockerfile` / `install.sh` / `projects.example` / `runners.example` / `routes.example`、生成物 3: `SHA256SUMS` / `RELEASE-MANIFEST.json` / `PACKAGE_ARCHIVE.tar.gz`） |
 
@@ -17,6 +17,7 @@
 
 | パッケージ | 版 | 公開日 | 要点 |
 |---|---|---|---|
+| devcontainer-bootstrap | v0.23.6 | 2026-10-19 | `update-check.sh` の追従で、未コミットの変更の確認を台帳への git の登録より後にした（#666。確認と登録のあいだに別のセッションが書き込むと、汚れたまま追従が進んでいた） |
 | devcontainer-bootstrap | v0.23.5 | 2026-10-18 | **`.env` の `UPDATE_CHECK=off` で `check-no-secrets.sh` が `SECRETS_FAIL` になっていたのを直した**（#657）。**`update-check.sh` の追従が、台帳を確かめてからブランチを切るようにした**（#658。他のセッションの git の登録があれば止める）。**`confirm-merge-hook.sh` が、シングルクォートの中の行継続で確認を出していたのを直した**（#659。読みが確実な単純な形だけ。`#`・`<<`・`$`・バッククォートを含めば今までどおり）。勧める ai-playbook は v0.12.2。破壊的変更なし |
 | ai-playbook | v0.12.2 | 2026-10-18 | **共通規範に、別のリポジトリの issue / PR は `owner/repo#N` と書く決まりを足した**（#660）。**`second-opinion-review.sh` の参照の文脈に、同じ番号の別物かもしれない旨の断りを足した**（報告は省かず、可能性を添える）。破壊的変更なし。雛形は 17 種のまま |
 | devcontainer-host | v0.6.0 | 2026-10-18 | **自前のランナーのイメージに、PATH 上の `node`（NodeSource の Node.js 24.x）を足した**（#656）。node のシバンを持つ道具（`hashicorp/setup-terraform` の既定のラッパーなど）が、自前のランナーでだけ終了コード 127 で落ちていた。`selftest.sh` が apt リポジトリの `signed-by` と https を照合する。**更新後に `dev runner build` でイメージを作り直す** |
