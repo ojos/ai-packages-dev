@@ -26,6 +26,7 @@
 | `scripts/check-no-secrets.sh` | 機密混入の検知ゲート（追跡前 / 追跡済みの 2 経路 + `.env.example` の機密値 + `.env` とのキー整合）。判定の正本で、`verify.sh` と CI が共用する。 |
 | `scripts/check-control-chars.sh` | 追跡ファイルへの表示されない制御文字（C0 制御文字と DEL。TAB / LF / CR は除く）混入の検知ゲート。`acceptance.sh` が呼ぶ。 |
 | `scripts/check-doc-links.sh` | 追跡している Markdown の相対リンクが、追跡対象として実在することの検知ゲート。`DOC_LINKS_EXCLUDE`（コロン区切りのパスプレフィックス）でスキャン対象の文書を除外できる。`acceptance.sh` が呼ぶ。 |
+| `scripts/check-git-config.sh` | エージェントに任意のコードを実行させうる git の設定（`core.fsmonitor` / `core.hooksPath` など）を、読み取りだけで検出して知らせる。許可の一覧は `.git-config-allow`（コミット済みの中身だけを読む）。SessionStart のフック（`--hook`）と `doctor.sh`（`--summary`）が、値を出さない形で呼ぶ。 |
 | `scripts/check-shell-portability.sh` | 「この環境では通るが BSD 系（macOS）では落ちる」綴りの検知ゲート。追跡している `*.sh` と `*.md`（フェンス内）を走査し、`# bsd-ok: 理由` を逃げ道とする。`acceptance.sh` が呼ぶ。 |
 | `scripts/check-table-breaks.sh` | Markdown の表の途中へ段落が差し込まれ、続く行が表として描画されなくなっていないかの検知ゲート。`acceptance.sh` が呼ぶ。 |
 | `scripts/check-release-commit-verified.sh` | 配ろうとしているコミットの CI が緑で完了しているかを、実行の一覧から決定的に判定する。`release.yml` が副作用へ到達する前に呼ぶ。標準入力を受けるだけで API は叩かない。 |

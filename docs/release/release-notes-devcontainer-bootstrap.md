@@ -6,6 +6,17 @@
 >
 > 同じ理由で、issue 参照は `ojos/ai-packages-dev#NNN` の形で書いてください。裸の `#NNN` は GitHub のオートリンクが**配布先リポジトリの issue** として解決するため、配布後は存在しない issue や無関係な issue を指します。
 
+## 未リリース
+
+### Summary
+- **エージェントに任意のコードを実行させうる git の設定を検出する `scripts/check-git-config.sh` を足した**（ojos/ai-packages-dev#671）。`core.fsmonitor`・`core.hooksPath`・`core.sshCommand`・`credential.helper`・`gpg.program`・`diff.external`・diff / filter / merge のドライバ・`remote.<名前>.uploadpack` など、git の普段の操作でコマンドを実行させうるキーを、local と worktree の設定（取り込んだ先を含む）から読み取りだけで検出する。SessionStart のフックと doctor では、仕込まれた値が会話の文脈に入らないよう、キーの種類と件数だけを出す。設定は NUL 区切りで読む（改行を含む値を読み違えない）。git を呼んだ瞬間にコマンドを実行させる攻撃（サンドボックスも承認も通らない）への備え。`--with-claude` で生成する `.claude/settings.json` の SessionStart と、`doctor.sh`（WARN）から呼ぶ。拒否はしない。正当な設定は根の `.git-config-allow` に `キー=値` で書いてコミットすると黙る（読むのはコミット済みの中身だけ）。
+- **`loop-gate.sh` が、エージェントの設定・フックに触れる変更を一覧に出す**（ojos/ai-packages-dev#671）。`.claude/`・`.mcp.json`・`.github/workflows/`・`.githooks/`・`.husky/`・`.git-config-allow`・`.gitattributes`（どの階層も）・`.gitmodules`・`.devcontainer/`・`.vscode/`・フックの本体のスクリプトに当たるパスを（改名は移動元も）出力し、環境変数 `SECOND_OPINION_AGENT_CONFIG_PATHS` で第二意見へ渡す。判定と終了コードは変えない。
+
+### 移行
+- 既にある `.claude/settings.json` は、衝突の扱い（既定は温存）に従って書き換えない。SessionStart の配線が欲しければ、`bash "$CLAUDE_PROJECT_DIR/scripts/check-git-config.sh" --hook` を手で足す。
+- husky などで `core.hooksPath` を使っているプロジェクトは、`doctor.sh` が WARN を出すようになる。`.git-config-allow` に `core.hooksPath=<値>` を書いてコミットすると黙る。
+- 第二意見の依頼文へ一覧を添えるのは、ai-playbook の未リリースの雛形の `second-opinion-review.sh` から。古い雛形と組み合わせても、一覧は loop-gate の出力に出る（依頼文に添えられないだけ）。
+
 ## v0.23.6
 
 ### Summary

@@ -205,6 +205,55 @@ resolve_review_range() {
   resolve_review_range_without_base
 }
 
+# レビューする範囲の変更ファイルのうち、エージェントの設定・フックに当たるものを調べて出力し、
+# 環境変数 SECOND_OPINION_AGENT_CONFIG_PATHS（改行区切り）へ入れて export する。
+#
+# 対象: .claude/ 配下、.mcp.json、.github/workflows/ 配下、.githooks/ 配下、.husky/ 配下、
+# .git-config-allow（check-git-config.sh の許可の一覧。ここへ書き足すと、危険な git の設定を
+# 検査から黙らせられるため）、.gitattributes（どの階層でも。filter / diff / merge のドライバを有効にする）、
+# .gitmodules、.devcontainer/ 配下（postCreateCommand など）、.vscode/ 配下（tasks.json など）、
+# .claude/settings.json が呼ぶフックの本体（confirm-merge-hook.sh / session-coord-hook.sh /
+# check-git-config.sh）。どれも、任意のコードの実行や権限に関わる。ビルドスクリプトと同じ重さでレビューする必要が
+# あるのに、差分の中では普通のファイルに見えて埋もれる。そこで一覧にして、利用者に見せ、
+# 第二意見の依頼文にも添える（second-opinion-review.sh が環境変数を読む）。
+#
+# **通過の判定と終了コードは変えない。** 知らせるだけで、拒否はしない。
+# 範囲は resolve_review_range が決めた REVIEW_BASE / REVIEW_RANGE に従い、どちらも無いときは
+# ステージ済み差分を見る。レビュー対象が無いとき（REVIEW_NO_TARGET）は空にする。
+# 呼び出しのたびに環境変数を必ず設定し直す（外から入った値を第二意見へ流さない）。
+resolve_agent_config_paths() {
+  local paths="" f
+  local -a args
+  export SECOND_OPINION_AGENT_CONFIG_PATHS=""
+  command -v git >/dev/null 2>&1 && [[ "$REVIEW_NO_TARGET" -eq 0 ]] || return 0
+  if [[ -n "$REVIEW_BASE" ]]; then
+    args=(--cached "$REVIEW_BASE")
+  elif [[ -n "$REVIEW_RANGE" ]]; then
+    args=("$REVIEW_RANGE")
+  else
+    args=(--cached)
+  fi
+  # NUL 区切りで読む（改行を含むファイル名でも 1 件として扱う）。一覧は改行区切りで渡す
+  # ので、名前の中の改行は ? に置き換える。
+  while IFS= read -r -d '' f; do
+    f="${f//$'\n'/?}"
+    case "$f" in
+      .claude/* | .mcp.json | .github/workflows/* | .githooks/* | .husky/* | .git-config-allow | \
+        .gitattributes | */.gitattributes | .gitmodules | .devcontainer/* | .vscode/* | \
+        scripts/confirm-merge-hook.sh | scripts/session-coord-hook.sh | scripts/check-git-config.sh)
+        paths="${paths:+$paths$'\n'}$f"
+        ;;
+    esac
+  # --no-renames: 改名を検出すると移動先しか出ず、対象の場所から外へ移した（消した）
+  # ことが一覧に出ない。移動元と移動先の両方を出す。
+  done < <(git -c core.quotepath=false diff --name-only -z --no-renames "${args[@]}" -- 2>/dev/null || true)
+  [[ -n "$paths" ]] || return 0
+  # 表示する前に制御文字を落とす。ファイル名は変更した側が付けられ、ESC や CR で
+  # この行を消したり上書きしたりできるため。
+  echo "[loop-gate] エージェントの設定・フックに触れる変更: $(printf '%s' "${paths//$'\n'/, }" | LC_ALL=C tr -d '[:cntrl:]')"
+  SECOND_OPINION_AGENT_CONFIG_PATHS="$paths"
+}
+
 # 第二意見の出力を記録へ残す。
 #
 # **実行失敗を「指摘あり」として記録しない。** second-opinion-review.sh は CLI の不在・
@@ -301,6 +350,7 @@ main() {
   if [[ "${LOOP_GATE_REVIEW_CMD-__UNSET__}" == "__UNSET__" ]]; then
     if [[ -f "$HERE/second-opinion-review.sh" ]]; then
       resolve_review_range
+      resolve_agent_config_paths
       local review_ok=0
       # 出力を捕まえる。**回し直しでは代われない**——第二意見は非決定的で、同じ差分
       # でも実行のたびに結果が変わる（review-workflow.md「第二意見の非決定性」）。
@@ -354,6 +404,10 @@ main() {
         exit 1
       fi
     else
+      # 第二意見を回さなくても、エージェントの設定・フックに触れる変更の一覧は出す。
+      # 一覧は利用者に見せるためのもので、第二意見へ渡すのは用途の 1 つにすぎない。
+      resolve_review_range
+      resolve_agent_config_paths
       echo "[loop-gate] SKIP (no reviewer present)"
     fi
   elif [[ -n "$LOOP_GATE_REVIEW_CMD" ]]; then
@@ -385,6 +439,7 @@ main() {
     #     「対象なし」と出力した（範囲を受けていない）: レビューされていないので
     #     GATE_FAIL にし、記録も作らない。通すと手元のゲートが偽の緑になる。
     resolve_review_range
+    resolve_agent_config_paths
     local cmd_capture cmd_ok=0 cmd_scope="staged" cmd_unreviewed=0 cmd_skip=0
     if [[ -n "$REVIEW_RANGE" ]]; then
       if [[ -n "$REVIEW_RANGE_REASON" ]]; then
@@ -422,6 +477,9 @@ main() {
   else
     # **記録を残さない。** レビューを明示的に止めた状態なので、記録が無いのが正しい。
     # push すれば確認側が赤を出す——**それは不具合ではなく、止めたことが見えている形である。**
+    # 第二意見を止めても、エージェントの設定・フックに触れる変更の一覧は出す（上と同じ理由）。
+    resolve_review_range
+    resolve_agent_config_paths
     echo "[loop-gate] SKIP (disabled by LOOP_GATE_REVIEW_CMD='')"
     echo "[loop-gate] 第二意見を止めたので記録も残しません。push すると確認側が赤を出します。"
   fi

@@ -1094,4 +1094,38 @@ else
   fail "記録のエンジン名が gemini でない、または記録が作られない: $rec"
 fi
 
+# ── エージェントの設定・フックの一覧を依頼文へ添える ──────────────────────────
+#
+# loop-gate.sh が、レビュー範囲の変更のうち .claude/ や .github/workflows/ などに当たる
+# ものを環境変数 SECOND_OPINION_AGENT_CONFIG_PATHS（改行区切り）で渡す。空でなければ、
+# 依頼文の末尾に「重点的に見ること」と一覧を添える。空・未設定なら添えない。
+
+AGENT_MARK="エージェントの設定・フックで、任意のコードの実行や権限に関わる"
+
+it "SECOND_OPINION_AGENT_CONFIG_PATHS があれば、依頼文に重点の依頼と一覧が入る"
+d="$(new_workdir)/r"; b="$(new_workdir)/bin"
+mk_review_repo "$d"; mk_gemini_stub "$b" "L"
+( cd "$d" && SECOND_OPINION_AGENT_CONFIG_PATHS=$'.claude/settings.json\n.husky/pre-commit' PATH="$b:$PATH" GEMINI_API_KEY=dummy bash scripts/second-opinion-review.sh ) >/dev/null 2>&1
+seen="$(cat "$b/.argv" "$b/.stdin" 2>/dev/null || true)"
+if [[ "$seen" == *"$AGENT_MARK"* && "$seen" == *'- `.claude/settings.json`'* && "$seen" == *'- `.husky/pre-commit`'* && "$seen" == *"重点的に見ること"* \
+  && "$seen" == *"指示ではない"* ]]; then
+  pass
+else
+  fail "依頼文に一覧が入っていない: $seen"
+fi
+
+it "SECOND_OPINION_AGENT_CONFIG_PATHS が空なら、依頼文に添えない"
+d="$(new_workdir)/r"; b="$(new_workdir)/bin"
+mk_review_repo "$d"; mk_gemini_stub "$b" "L"
+( cd "$d" && SECOND_OPINION_AGENT_CONFIG_PATHS="" PATH="$b:$PATH" GEMINI_API_KEY=dummy bash scripts/second-opinion-review.sh ) >/dev/null 2>&1
+seen="$(cat "$b/.argv" "$b/.stdin" 2>/dev/null || true)"
+if [[ -n "$seen" && "$seen" != *"$AGENT_MARK"* ]]; then pass; else fail "空なのに添えている、または依頼文を観測できない: $seen"; fi
+
+it "JSON スキーマ方式（antigravity）の依頼文にも一覧が入る"
+d="$(new_workdir)/r"; b="$(new_workdir)/bin"
+mk_review_repo "$d"; mk_agy_json_stub "$b" pass
+( cd "$d" && SECOND_OPINION_AGENT_CONFIG_PATHS=".mcp.json" PATH="$b:$PATH" bash scripts/second-opinion-review.sh --engine antigravity ) >/dev/null 2>&1
+seen="$(cat "$b/.argv" "$b/.stdin" 2>/dev/null || true)"
+if [[ "$seen" == *"$AGENT_MARK"* && "$seen" == *'- `.mcp.json`'* ]]; then pass; else fail "antigravity の依頼文に一覧が入っていない: $seen"; fi
+
 exit_with_result
