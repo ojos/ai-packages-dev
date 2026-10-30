@@ -104,6 +104,15 @@ else
   fail "判定トークンの指示が無い"
 fi
 
+it "プロンプトが反証の立場と失敗の筋書きを求めている"
+if printf '%s\n' "$argv" | grep -F '反証しにいく' >/dev/null \
+  && printf '%s\n' "$argv" | grep -F '失敗の筋書き' >/dev/null \
+  && printf '%s\n' "$argv" | grep -F '具体的に書けない懸念は、指摘に数えないでください' >/dev/null; then
+  pass
+else
+  fail "反証の立場、失敗の筋書きの要求、または書けない懸念を参考として残す指示が依頼文に無い"
+fi
+
 it "枝の名前から issue 番号を取れない場合は、文脈なしで続行する（レビュー自体は落とさない）"
 # gh を PATH から外すのは codex のテストと同じ理由で割に合わないため、gh 不在相当
 # （常に失敗する仕込み）で代替する。

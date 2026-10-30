@@ -228,7 +228,7 @@ fi
 
 it "落とす指摘（bug）の回では findings reported by で始まる完了行が出る"
 rc=0
-FAKE_CODEX_ANSWER='{"reviewed":true,"findings":[{"category":"bug","file":"a.ts","line":1,"what":"x","why":"y"}]}' \
+FAKE_CODEX_ANSWER='{"reviewed":true,"findings":[{"category":"bug","file":"a.ts","line":1,"what":"x","why":"y","failure_scenario":"s"}]}' \
   run_review || rc=$?
 if [[ "$rc" -eq 1 ]] && grep -qE '^\[second-opinion\] findings reported by ' "$WORK/both" 2>/dev/null; then
   pass
@@ -355,7 +355,7 @@ rm -f "$REPO/.env"
 
 it "落とさない category（promise-mismatch・other）だけでは通過する"
 rc=0
-FAKE_CODEX_ANSWER='{"reviewed":true,"findings":[{"category":"promise-mismatch","file":"a.ts","line":1,"what":"x","why":"y"},{"category":"other","file":"a.ts","line":2,"what":"x","why":"y"}]}' \
+FAKE_CODEX_ANSWER='{"reviewed":true,"findings":[{"category":"promise-mismatch","file":"a.ts","line":1,"what":"x","why":"y","failure_scenario":"s"},{"category":"other","file":"a.ts","line":2,"what":"x","why":"y","failure_scenario":"s"}]}' \
   run_review || rc=$?
 if [[ "$rc" -eq 0 ]] && grep -q 'promise-mismatch' "$WORK/out"; then
   pass
@@ -366,10 +366,38 @@ fi
 for category in bug vulnerability type-error edge-case; do
   it "category=$category は落とす"
   rc=0
-  FAKE_CODEX_ANSWER="{\"reviewed\":true,\"findings\":[{\"category\":\"$category\",\"file\":\"a.ts\",\"line\":1,\"what\":\"x\",\"why\":\"y\"}]}" \
+  FAKE_CODEX_ANSWER="{\"reviewed\":true,\"findings\":[{\"category\":\"$category\",\"file\":\"a.ts\",\"line\":1,\"what\":\"x\",\"why\":\"y\",\"failure_scenario\":\"s\"}]}" \
     run_review || rc=$?
   assert_eq "$rc" "1" "exit code"
 done
+
+it "筋書きのあるゲート対象の指摘で落ち、出力に筋書きが表示される"
+rc=0
+FAKE_CODEX_ANSWER='{"reviewed":true,"findings":[{"category":"bug","file":"a.ts","line":1,"what":"x","why":"y","failure_scenario":"空配列を渡すと添字 0 を読んで undefined を返す"}]}' \
+  run_review || rc=$?
+if [[ "$rc" -eq 1 ]] && grep -qF '失敗の筋書き: 空配列を渡すと添字 0 を読んで undefined を返す' "$WORK/both"; then
+  pass
+else
+  fail "exit=$rc（1 を期待）、または筋書きが出力に出ていない: $(cat "$WORK/both")"
+fi
+
+it "ゲート対象で筋書きが空（空白だけを含む）なら、筋書きの欠落と示して失敗する"
+for scenario in '' '  '; do
+  rc=0
+  FAKE_CODEX_ANSWER="{\"reviewed\":true,\"findings\":[{\"category\":\"bug\",\"file\":\"a.ts\",\"line\":1,\"what\":\"x\",\"why\":\"y\",\"failure_scenario\":\"$scenario\"}]}" \
+    run_review || rc=$?
+  if [[ "$rc" -eq 1 ]] && grep -q '失敗の筋書き（failure_scenario）がありません' "$WORK/err"; then
+    pass
+  else
+    fail "exit=$rc、または形の不一致として扱われていない: $(cat "$WORK/err")"
+  fi
+done
+
+it "報告だけの種類は、筋書きが空でも失敗にならない"
+rc=0
+FAKE_CODEX_ANSWER='{"reviewed":true,"findings":[{"category":"promise-mismatch","file":"a.ts","line":1,"what":"x","why":"y","failure_scenario":""},{"category":"other","file":"a.ts","line":2,"what":"x","why":"y","failure_scenario":""}]}' \
+  run_review || rc=$?
+assert_eq "$rc" "0" "exit code"
 
 it "JSON として読めない回答は落とす"
 rc=0
@@ -387,7 +415,7 @@ assert_eq "$rc" "1" "exit code"
 
 it "スキーマに無い category（綴り違い）は指摘なしへ倒さず落とす"
 rc=0
-FAKE_CODEX_ANSWER='{"reviewed":true,"findings":[{"category":"bugs","file":"a.ts","line":1,"what":"x","why":"y"}]}' \
+FAKE_CODEX_ANSWER='{"reviewed":true,"findings":[{"category":"bugs","file":"a.ts","line":1,"what":"x","why":"y","failure_scenario":"s"}]}' \
   run_review || rc=$?
 assert_eq "$rc" "1" "exit code"
 
@@ -398,7 +426,7 @@ assert_eq "$rc" "1" "exit code"
 
 it "file / line が欠けた回答は、検証（形）が理由で落ちる"
 rc=0
-FAKE_CODEX_ANSWER='{"reviewed":true,"findings":[{"category":"bug","what":"x","why":"y"}]}' run_review || rc=$?
+FAKE_CODEX_ANSWER='{"reviewed":true,"findings":[{"category":"bug","what":"x","why":"y","failure_scenario":"s"}]}' run_review || rc=$?
 if [[ "$rc" -eq 1 ]] && grep -q 'JSON として読めませんでした' "$WORK/err"; then
   pass
 else
@@ -407,7 +435,7 @@ fi
 
 it "line が数でない回答は、検証（形）が理由で落ちる"
 rc=0
-FAKE_CODEX_ANSWER='{"reviewed":true,"findings":[{"category":"bug","file":"a.ts","line":"3行目","what":"x","why":"y"}]}' \
+FAKE_CODEX_ANSWER='{"reviewed":true,"findings":[{"category":"bug","file":"a.ts","line":"3行目","what":"x","why":"y","failure_scenario":"s"}]}' \
   run_review || rc=$?
 if [[ "$rc" -eq 1 ]] && grep -q 'JSON として読めませんでした' "$WORK/err"; then
   pass
@@ -435,7 +463,7 @@ it "reviewed:false の回答は、指摘の中身によらず落とし、理由�
 # 実際に起きた形をそのまま当てる。codex がサンドボックスの失敗で git diff を
 # 叩けず、「レビューを実施できませんでした」を other の指摘 1 件として返した。
 rc=0
-FAKE_CODEX_ANSWER='{"reviewed":false,"findings":[{"category":"other","file":"","line":0,"what":"レビューを実施できませんでした。","why":"git diff が bwrap: Failed to make / slave: Permission denied で失敗しました。"}]}' \
+FAKE_CODEX_ANSWER='{"reviewed":false,"findings":[{"category":"other","file":"","line":0,"what":"レビューを実施できませんでした。","why":"git diff が bwrap: Failed to make / slave: Permission denied で失敗しました。","failure_scenario":""}]}' \
   run_review || rc=$?
 if [[ "$rc" -eq 1 ]] \
   && grep -q '差分を読めなかったと答えました' "$WORK/err" \
@@ -454,6 +482,20 @@ else
   pass
 fi
 cp "$WORK/both" "$WORK/unreviewed-capture"
+
+it "reviewed:false の回答は、筋書きの無いゲート対象の指摘があっても「読めなかった」と示す"
+# 筋書きの検査は差分を読めた回答にだけかける。読めなかった回答で筋書きの欠落と
+# 示すと、本当の原因（サンドボックス等で差分を読めなかった）が隠れる。
+rc=0
+FAKE_CODEX_ANSWER='{"reviewed":false,"findings":[{"category":"bug","file":"","line":0,"what":"x","why":"y","failure_scenario":""}]}' \
+  run_review || rc=$?
+if [[ "$rc" -eq 1 ]] \
+  && grep -q '差分を読めなかったと答えました' "$WORK/err" \
+  && ! grep -q '失敗の筋書き（failure_scenario）がありません' "$WORK/err"; then
+  pass
+else
+  fail "exit=$rc、または理由が「読めなかった」になっていない: $(cat "$WORK/err")"
+fi
 
 it "対照: 指摘なしの出力には完了の行（LGTM）が出る（検査が空振りしていないことの前提）"
 rc=0
@@ -504,13 +546,13 @@ fi
 it "回答は指摘なし・stdout は落とす指摘でも exit 0（stdout で判定していない）"
 rc=0
 FAKE_CODEX_ANSWER='{"reviewed":true,"findings":[]}' \
-FAKE_CODEX_STDOUT='{"reviewed":true,"findings":[{"category":"bug","file":"a.ts","line":1,"what":"x","why":"y"}]}' \
+FAKE_CODEX_STDOUT='{"reviewed":true,"findings":[{"category":"bug","file":"a.ts","line":1,"what":"x","why":"y","failure_scenario":"s"}]}' \
   run_review || rc=$?
 assert_eq "$rc" "0" "exit code"
 
 it "回答は落とす指摘・stdout は指摘なしだと exit 1（-o を見落としていない）"
 rc=0
-FAKE_CODEX_ANSWER='{"reviewed":true,"findings":[{"category":"bug","file":"a.ts","line":1,"what":"x","why":"y"}]}' \
+FAKE_CODEX_ANSWER='{"reviewed":true,"findings":[{"category":"bug","file":"a.ts","line":1,"what":"x","why":"y","failure_scenario":"s"}]}' \
 FAKE_CODEX_STDOUT='{"reviewed":true,"findings":[]}' \
   run_review || rc=$?
 assert_eq "$rc" "1" "exit code"

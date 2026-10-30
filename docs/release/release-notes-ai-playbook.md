@@ -6,6 +6,17 @@
 >
 > 同じ理由で、issue 参照は `ojos/ai-packages-dev#NNN` の形で書いてください。裸の `#NNN` は GitHub のオートリンクが**配布先リポジトリの issue** として解決するため、配布後は存在しない issue や無関係な issue を指します。
 
+## 未リリース
+
+### Summary
+- **第二意見に、反証を試みる立場でレビューさせ、指摘ごとに失敗の筋書きを求めるようにした**（ojos/ai-packages-dev#670）。依頼文は、変更が正しいことの確認ではなく、壊れる入力・状態を探すよう求め、筋書き（どんな入力・状態のとき、どんな誤った結果になるか）を書けない懸念は、ゲートを落とす種類にせず、報告だけの種類（gemini では判定に数えない参考）として出させる。懸念そのものは捨てさせない。`review-workflow.md`「② 第二意見」に、この立場と、筋書きを求めても指摘の正しさは保証されないことを書き足した。
+- **`second-opinion-schema.json` の指摘に `failure_scenario` を必須で足した**（ojos/ai-packages-dev#670）。`second-opinion-review.sh` は、ゲート対象の 4 種類（bug / vulnerability / type-error / edge-case）で筋書きが空の回答を失敗にし、「失敗の筋書き（failure_scenario）がありません」と、形の崩れと区別して示す。報告だけの種類（promise-mismatch / other）は空でよい。差分を読めなかった回答（`reviewed: false`）は、従来どおり「読めなかった」と示す。出力には筋書きも表示する。`--runs` が 2 以上でも、筋書きの無い回答が 1 回出た時点で失敗する（形の崩れた回答と同じ扱い）。判定トークンの方式（gemini）は依頼文で求めるだけで、判定は変えていない。
+- 雛形の種類は 17 種のまま。
+
+### 移行
+- **`second-opinion-schema.json` と `second-opinion-review.sh` は組で更新する。** 新しいスキーマは `failure_scenario` を必須にするので、古い `second-opinion-review.sh` と組み合わせると、モデルの回答は筋書きを含むようになるが、空かどうかは検査されない。逆に、新しい `second-opinion-review.sh` と古いスキーマを組み合わせると、モデルが筋書きを返さないので、指摘を 1 件でも含む回答が失敗になる（指摘の無い回答は通る）。
+- 雛形から写したファイルに手を入れていなければ、規範の更新で置き換わる（DCB で規範を配置している場合は `bootstrap.sh --upgrade --playbook-version <新しい版>` で追従する）。
+
 ## v0.12.2
 
 ### Summary

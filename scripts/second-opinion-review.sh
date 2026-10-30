@@ -387,6 +387,15 @@ if [[ "$ENGINE_JSON" -eq 1 ]]; then
       exit 1
     fi
   done
+  # 回答の検査（answer_is_valid / blocking_count / answer_lacks_scenario）が jq へ
+  # 渡す形。不変なので回答ごとに組み立て直さない。空のまま検査へ渡すと、jq の失敗が
+  # 「該当なし」と読まれて黙って通るため、ここで止める。
+  ALLOWED_JSON="$(printf '%s\n' "$ALL_CATEGORIES" | jq -R . | jq -s -c .)"
+  BLOCKING_JSON="$(printf '%s' "$BLOCKING_CATEGORIES" | jq -R -c 'split(" ") | map(select(. != ""))')"
+  if [[ -z "$ALLOWED_JSON" || -z "$BLOCKING_JSON" || "$BLOCKING_JSON" == "[]" ]]; then
+    echo "error: category の一覧を JSON にできませんでした" >&2
+    exit 1
+  fi
 fi
 
 if [[ -n "$RANGE" ]]; then
@@ -744,6 +753,14 @@ read -r -d '' REPORT_RULES_JSON <<'EOF' || true
 - 命名や可読性の軽微な提案
 - 差分と関係のない既存コードの問題
 
+立場:
+- あなたは、この変更が正しいという主張を**反証しにいく**立場です。変更が正しいことを確認するのではなく、壊れる入力・状態を探してください。
+- 各指摘には、`failure_scenario` に**失敗の筋書き**（どんな入力・状態のとき、どんな誤った結果になるか）を書いてください。
+  ゲート対象の 4 種類では必須で、空にできません（空だと回答ごと失敗として扱います）。
+- **筋書きを具体的に書けない懸念は、ゲート対象の 4 種類にせず `other` で報告してください。** 捨てないでください。
+  推測や漠然とした不安でゲートを落とさないための区別で、懸念を黙らせるためではありません。
+  `promise-mismatch` / `other` の筋書きは空文字でかまいません。
+
 出力:
 - **JSON だけを返してください。** 指摘が無ければ `findings` は空の配列です。
 - **通す / 落とすの判定は書かないでください。** `category` を見てこちらで決めます。
@@ -767,6 +784,8 @@ if [[ "$ENGINE_JSON" -eq 0 ]]; then
   # 1 個の改行に固定している箇所の前提と食い違う。
   PROMPT="上記は git の差分です。コードレビューを行ってください。
 
+あなたは、この変更が正しいという主張を**反証しにいく**立場です。変更が正しいことを確認するのではなく、壊れる入力・状態を探してください。
+
 指摘対象は次の 4 点に限定します。それ以外は報告しないでください。
 - 致命バグ
 - 脆弱性
@@ -784,7 +803,8 @@ if [[ "$ENGINE_JSON" -eq 0 ]]; then
 - **出力の最後の行**に、次のいずれかの判定トークンを必ず 1 行で書いてください。
   - 上記 4 点に該当する指摘が 1 件もない場合: \`VERDICT: LGTM\`
   - 指摘がある場合: \`VERDICT: FINDINGS\`
-- 指摘がある場合は、判定トークンより前に、各指摘について「該当ファイルと行」「何が問題か」「なぜ問題か（再現条件や影響）」を簡潔に記述してください。
+- 指摘がある場合は、判定トークンより前に、各指摘について「該当ファイルと行」「何が問題か」「なぜ問題か（再現条件や影響）」「失敗の筋書き（どんな入力・状態のとき、どんな誤った結果になるか）」を簡潔に記述してください。
+- **失敗の筋書きを具体的に書けない懸念は、指摘に数えないでください。** 捨てずに「参考（判定に数えない）」として判定トークンより前に書き、参考しか無ければ \`VERDICT: LGTM\` にしてください。
 - 通過判定は最後の行だけで行います。判定トークンの無い出力は指摘ありとして扱います。"
 else
   # JSON スキーマ方式（antigravity / codex）。ツールは解禁しない。差分はプロンプトへ
@@ -1136,9 +1156,7 @@ extract_answer_json() {
 # ゲートが緑になる。知らない category は「重さが分からない」ので、指摘なしへ
 # 倒さず、読めなかったものとして落とす。
 answer_is_valid() {
-  local allowed
-  allowed="$(printf '%s\n' "$ALL_CATEGORIES" | jq -R . | jq -s -c .)"
-  printf '%s' "$1" | jq -e --argjson allowed "$allowed" '
+  printf '%s' "$1" | jq -e --argjson allowed "$ALLOWED_JSON" '
     type == "object"
     and (.reviewed | type == "boolean")
     and (.findings | type == "array")
@@ -1147,23 +1165,17 @@ answer_is_valid() {
              and (.category as $c | $allowed | index($c) != null)
              and (.what | type == "string")
              and (.why | type == "string")
+             and (.failure_scenario | type == "string")
              and (.file | type == "string")
              and (.line | type == "number")))
   ' >/dev/null 2>&1
 }
 
-# 落とす指摘の数。`paste -sd ' or '` のような区切り文字の連結は使わない——`-d` は
-# 「区切り文字の並び」を 1 文字ずつ循環して使う指定なので、複数文字の区切りを渡すと
-# 壊れた並びになる。filter は jq 式として自前で組み立てる。
+# 落とす指摘の数。ゲート対象の判定は BLOCKING_JSON 1 つに寄せる（answer_lacks_scenario と
+# 同じ一覧で数える。別々に組み立てると、片方だけ直ったときに数え方が食い違う）。
 blocking_count() {
-  local filter="" category
-  for category in $BLOCKING_CATEGORIES; do
-    if [[ -n "$filter" ]]; then
-      filter="$filter or "
-    fi
-    filter="$filter.category == \"$category\""
-  done
-  printf '%s' "$1" | jq "[.findings[] | select($filter)] | length"
+  printf '%s' "$1" | jq --argjson blocking "$BLOCKING_JSON" \
+    '[.findings[] | select(.category as $c | $blocking | index($c) != null)] | length'
 }
 
 # 人が読む形にする。報告は 4 点の外（promise-mismatch / other）も出す。
@@ -1171,7 +1183,24 @@ print_findings() {
   printf '%s' "$1" | jq -r '.findings[] |
     "  [" + .category + "] " + (if .file == "" then "(場所の特定なし)" else .file + ":" + (.line | tostring) end) + "\n" +
     "    何が: " + .what + "\n" +
-    "    なぜ: " + .why'
+    "    なぜ: " + .why + "\n" +
+    "    失敗の筋書き: " + (if (.failure_scenario | test("\\S")) then .failure_scenario else "(なし)" end)'
+}
+
+# ゲート対象（BLOCKING_CATEGORIES）の指摘に、失敗の筋書き（failure_scenario）が
+# 空白だけのものがあるか。answer_is_valid を通った（形の整った）回答にだけ使う。
+# 差分を読めなかった回答（reviewed: false）には使わない——そちらは後段で
+# 「読めなかった」と示すべきで、筋書きの欠落に原因をすり替えない。
+# 筋書きを書けない指摘は反証できていない推測で、通過を左右させない。報告だけの
+# 種類は空でよい。形の崩れとは理由を分けて示す——原因の読み取れない赤は、偽の赤と
+# 同じようにゲートへの信頼を削る。
+answer_lacks_scenario() {
+  printf '%s' "$1" | jq -e --argjson blocking "$BLOCKING_JSON" '
+    .reviewed == true
+    and any(.findings[];
+        (.category as $c | $blocking | index($c) != null)
+        and (.failure_scenario | test("\\S") | not))
+  ' >/dev/null 2>&1
 }
 
 # 過半数。N=1 なら 1、N=2 なら 2、N=3 なら 2、N=4 なら 3。
@@ -1316,10 +1345,16 @@ $PROMPT" --output-format json --json-schema "$SCHEMA_FILE")
     # category（上記「ここから JSON スキーマ方式」）。
     if [[ "$ENGINE_JSON" -eq 1 ]]; then
       answer_json="$(extract_answer_json "$output")"
+      answer_problem=""
       if ! answer_is_valid "$answer_json"; then
+        answer_problem="回答を JSON として読めませんでした"
+      elif answer_lacks_scenario "$answer_json"; then
+        answer_problem="ゲート対象の指摘に失敗の筋書き（failure_scenario）がありません"
+      fi
+      if [[ -n "$answer_problem" ]]; then
         # **「読めなかった」を「指摘なし」に倒さない。** レビューしていないものを
-        # 緑として報告することになる。
-        echo "error: 回答を JSON として読めませんでした（engine=$ENGINE, run $run/$RUNS$( [[ "$chunk_count" -gt 1 ]] && echo ", chunk $chunk_idx/$chunk_count" )）。生の出力:" >&2
+        # 緑として報告することになる。筋書きの無い指摘も、同じく回答ごと失敗にする。
+        echo "error: ${answer_problem}（engine=$ENGINE, run $run/$RUNS$( [[ "$chunk_count" -gt 1 ]] && echo ", chunk $chunk_idx/$chunk_count" )）。生の出力:" >&2
         printf '%s\n' "$output" >&2
         if [[ -s "$stderr_file" ]]; then
           echo "--- CLI の診断 ---" >&2
