@@ -1,40 +1,23 @@
 # プロジェクト共通 AI ルール
 
-このリポジトリは、パッケージ中立性を厳密に維持します。
+このファイルは常時載る「地図」です。持つのは、禁止事項・既定の動作・ファイルを読まずに実行する場面で要る手順だけです。理由・経緯・実測・詳しい手順は `.claude/rules/` の規則へ置き、`paths:` に一致するファイルに触れたときだけ載せます（規則の中で `@` の取り込みは使いません。`paths:` 付きの規則の中の `@` は起動時から載り、条件付きにならないためです。#676）。
 
 ## 参照先
 
 - 全体共通ルール: `.ai-playbook/shared-ai-rules.md`
 - プロジェクト固有の最上位定義: `.github/PROJECT_DEFINITION.md`
-- ロール責務: `.ai-playbook/role-contracts/`
-- タスク手順: `.ai-playbook/task-playbooks/`
-- レビュー運用: `.ai-playbook/review-workflow.md`
-- ループ運用（受け入れ検証の機械ゲート化・収束）: `.ai-playbook/loop-workflow.md`
-- intake 規律・判定根拠: `.ai-playbook/intake/`
+- ロール責務 `.ai-playbook/role-contracts/` / タスク手順 `.ai-playbook/task-playbooks/` / レビュー運用 `.ai-playbook/review-workflow.md` / ループ運用 `.ai-playbook/loop-workflow.md` / intake 規律 `.ai-playbook/intake/`
 
-実行環境の入口ファイル（`CLAUDE.md` / `AGENTS.md` / `.github/copilot-instructions.md`）はこのファイルを参照し、最小差分のみを記述します。
+実行環境の入口ファイルはこのファイルを参照し、最小差分のみを記述します。
 
 ## 常時適用
 
-- `.github/PROJECT_DEFINITION.md` をプロジェクト固有の最上位定義として読み、必ず従います。
+- `.github/PROJECT_DEFINITION.md` を最上位定義として読み、必ず従います。利便性のための編集よりも優先します。
 - 汎用ルール（言語方針・命名規則）は `.ai-playbook/shared-ai-rules.md` を参照します。
-- 利便性のための編集よりも、上記ポリシーを優先します。
-- `packages/**` に固有名詞を混入し得る編集は、ユーザー確認なしで実施しません。
-
-## 必須挙動
-
-- パッケージ層（`packages/**`）は汎用・再利用可能に保ちます。
-- 固有値はプロジェクト層ファイルにのみ配置します。
-- Dev Container の環境差は、パッケージ既定値の変更ではなく、プロジェクト層（`.env` / `.devcontainer/`）の設定で吸収します。ホスト OS の資格情報を運ぶ生成時オプションは廃止済みで、指定すると `bootstrap.sh` が停止します（`--github-profiles` / `--gemini-key-env`）。
-- 主要ドキュメント更新時は、日本語での一貫性を維持します。
-
-## このプロジェクト固有の値
-
-固有値の正本は `.github/PROJECT_DEFINITION.md` です。値をこのファイルへ複製しません。
-
-- パッケージ中立性のクイック検証コマンドと期待結果: `.github/PROJECT_DEFINITION.md`「クイック検証（パッケージ中立性）」。同じ判定は `.github/workflows/ci.yml` の `neutrality` ジョブと `scripts/acceptance.sh` の `(neutrality)` 検査が持ちます。
-- git identity の値（`GIT_IDENTITY_NAME` / `GIT_IDENTITY_EMAIL`）: 人の操作は `.env`、release workflow は Actions のリポジトリ変数 `RELEASE_BOT_NAME` / `RELEASE_BOT_EMAIL`（下記「Git identity」）。値の一覧と設定先は `docs/release/RELEASE_EXECUTION_RUNBOOK.md`「前提条件（リポジトリ設定）」。
-- Git フックによるワークフロー強制は行いません。push 前のゲートは `scripts/loop-gate.sh`、リモート側は CI と `.github/workflows/` の各ワークフローが担います。
+- `packages/**` に固有名詞を混入し得る編集は、ユーザー確認なしで実施しません。パッケージ層は汎用・再利用可能に保ち、固有値はプロジェクト層ファイルにのみ置きます（詳細: `.claude/rules/packages-layer.md`）。
+- Dev Container の環境差は、パッケージ既定値ではなくプロジェクト層（`.env` / `.devcontainer/`）で吸収します。ホスト OS の資格情報を運ぶ生成時オプション（`--github-profiles` / `--gemini-key-env`）は廃止済みです。
+- 主要ドキュメントの更新時は日本語での一貫性を維持します。Git フックによるワークフロー強制は行いません（push 前のゲートは `scripts/loop-gate.sh`、リモート側は CI）。
+- パッケージ中立性の検証コマンドと期待結果は `.github/PROJECT_DEFINITION.md`「クイック検証（パッケージ中立性）」。同じ判定を `ci.yml` の `neutrality` ジョブと `scripts/acceptance.sh` が持ちます。
 
 ## 機密の具体化
 
@@ -44,7 +27,7 @@
 - 追跡除外: `.env` および `.env.*`（`.gitignore` 済み）
 - 共有する雛形: 値のない `.env.example` のみ
 - ホスト OS の資格情報をコンテナへ注入しません。`devcontainer.json` の `remoteEnv` が運ぶのは `LOCAL_WORKSPACE_FOLDER` のみで、CI の `Self devcontainer credential isolation` ジョブがこれを検査します
-- GitHub の認証だけは例外で、PAT を `.env` の `GH_TOKEN` へ置きます（理由と運用は「[GitHub 認証（gh CLI）](#github-認証gh-cli)」）。`GH_TOKEN` を空にし、かつ `GITHUB_TOKEN` も設定しない環境は従来どおり、コンテナ内の `gh auth login` と `gh-storage` volume で動きます。どちらの場合も、gh が `~/.config/gh/hosts.yml` に持つ状態を volume の外へ写しません
+- GitHub の認証だけは例外で、PAT を `.env` の `GH_TOKEN` へ置きます（理由と運用は`.claude/rules/github-auth.md`「GitHub 認証（gh CLI）」）。`GH_TOKEN` を空にし、かつ `GITHUB_TOKEN` も設定しない環境は従来どおり、コンテナ内の `gh auth login` と `gh-storage` volume で動きます。どちらの場合も、gh が `~/.config/gh/hosts.yml` に持つ状態を volume の外へ写しません
 - リリース実行時、シークレットの値をリリース資産へ含めません
 
 ## 生成物の具体化
@@ -66,82 +49,13 @@
 
 再生成できる大容量の生成物・メディアはリポジトリへ置きません。共有が必要な場合はリポジトリ外の手段を使います。
 
-## Git identity（コミット作者情報）
 
-`ojos/*` リポジトリへの git 操作の名義は、**操作の主体**で分けます。例外を積み上げるより、主体で分けるほうが機構が増えても破綻しないためです。
+## Git identity と GitHub 認証
 
-| 主体 | 名義 | 適用範囲 |
-|---|---|---|
-| 人の操作 | `user.name` = `.env` の `GIT_IDENTITY_NAME`（= `Ido`） / `user.email` = `.env` の `GIT_IDENTITY_EMAIL`（= `ido@ojos.jp`） | commit / tag / push のすべて（既定） |
-| 機構の操作 | GitHub App の bot（`ojos-release-bot[bot]`） | **公開リポジトリへの release snapshot コミットのみ** |
-
-機構の名義を分けるのは、実行主体とコミット名義を一致させるためです。人の名義を機械が打つと、履歴が実態と乖離します。
-bot の適用範囲は上表のとおりで、本モノレポへは bot がコミットしません（リリース後の `README.md` 更新も人が行います。`docs/release/RELEASE_EXECUTION_RUNBOOK.md`「事後確認」）。
-
-順守事項:
-
-- global の identity には依存しません。`scripts/setup-git-identity.sh` が global の `user.name` / `user.email` を削除し、`user.useConfigOnly=true` を立てます。Dev Container はホストの `~/.gitconfig`（別アカウントの identity の場合がある）をコピーするため、そこへ落ちる経路を残しません。
-- コンテナ接続時に `scripts/on-attach.sh` が `setup-git-identity.sh` を再適用します（リビルドのたびに ~/.gitconfig が再生成されるため）。`bash scripts/setup-git-identity.sh --check` で状態を検証できます。
-- local 設定を持たないリポジトリでは `git commit` が exit 128 で止まります。これは設計どおりです。黙って別名義のコミットが通るより、止まって気づくほうを選びます。
-- リポジトリ外の一時クローンでコミットするスクリプトは、`git -c user.name=... -c user.email=...` で identity を明示します（`scripts/release-packages.sh`）。CI の `Self devcontainer credential isolation` ジョブが明示を検査します。値の供給元は主体で変わります（release workflow は bot の値を渡し、それ以外は `.env` が供給元です）。
-- push / リリース実行の前に `bash scripts/verify-commit-identity.sh` で作者情報を検証します。別 identity を検出した場合は中断し、`bash scripts/setup-git-identity.sh` を適用したうえで該当コミットを `git rebase` で author ごと作り直します。単発の目視確認には `git log -1 --format='%an <%ae>'` を使います。
-
-### commit identity の検証層
-
-判定ロジックは `scripts/verify-commit-identity.sh` に置き、CI と手元で同じコードを走らせます。手元で先に落とせるようにするためです。
-
-```bash
-bash scripts/verify-commit-identity.sh              # 既定: origin/main..HEAD（取得できなければ HEAD の全履歴）
-bash scripts/verify-commit-identity.sh <range>      # 任意の範囲
-bash scripts/verify-commit-identity.sh --full       # HEAD の全履歴
-```
-
-- 終了コード 0 = `IDENTITY_PASS` / 1 = `IDENTITY_FAIL`（許可外の identity を検出、または範囲・許可 email を解決できない）。
-- 判定は名前ではなく **email** で行います（GitHub の Contributors は既定ブランチのコミット author の email で集計されるため）。対象は author / committer / `Co-Authored-By` の 3 つです。
-- committer には `noreply@github.com` を、`Co-Authored-By` にはさらに `noreply@anthropic.com` を追加で許可します（squash merge / web UI コミット、および AI コーディング規約の trailer に対応）。
-- 許可 author email の解決順は、`ALLOWED_AUTHOR_EMAILS`（カンマまたは空白区切り）→ `.env` の `GIT_IDENTITY_EMAIL`。どちらでも解決できない場合は「検査対象が無いので通過」にせず、fail-closed で落とします。
-- 許可エントリは既定で完全一致です。加えて `@example.com` / `*@example.com` の **2 形だけ**をドメイン一括指定として解釈します。任意の glob を許さないのは、設定ミスの `*` 1 文字で全 email が通り、検知層が黙って無効化されるためです（`*` 単体は何も許可しません）。ローカル部は 1 文字以上を要求し、`@` を含む形（`attacker@untrusted.com@example.com`）は通しません。
-- committer が `noreply@github.com` のコミットに限り、author が `<login>@users.noreply.github.com` の形であれば許可します。GitHub 側でメール非公開を有効にした利用者の PR マージ・web UI 編集がこの形になるためです。許可を committer に縛るのは、適用漏れが通る範囲を狭めるためです。committer / author の email はローカルで自由に設定できるため、**この許可は偽装を防ぎません**（ローカルで作ったコミットでも、この 2 つを GitHub の形に設定すれば通ります）。この検査の目的は identity の適用漏れ（別アカウントの email の混入）の検出で、意図的な偽装への対策は、書き込み権限の管理と、必要なら署名の検証（GitHub の verified な web-flow の署名）が担います。署名の検証を入れると、手元で数 ms で落とすという性質を失うため、判定は変えません。書き込み権限を持つアカウントが Contributors に現れることは許容し、誰に権限を与えるかはリポジトリ側の責務として切り分けます（偽装を防がないことも、同じ側の判断です）。
-- 同じ条件（`is_github_authored`）を `Co-Authored-By` にも適用します。マージした人と PR の作者が違う squash merge では、GitHub がマージの瞬間に作者を `Co-authored-by` として足すためです（PR の検査では見えず、`push(main)` の全履歴検査で初めて現れます）。この許可も committer を縛るだけで、偽装は防ぎません（上の項目と同じです）。
-- `scripts/verify-commit-identity-selftest.sh` が判定ロジックの自己試験です。1 コミットだけの仕込みのリポジトリで、通すべき形と落とすべき形の両方を確かめます。本物の履歴だけでは落ちるべき形がほとんど現れないため、`identity-guard.yml` は `verify-commit-identity.sh` の検証より前にこれを呼びます。
-- CI の検知層は `.github/workflows/identity-guard.yml` です。`pull_request`（`opened` / `synchronize` / `reopened`）では PR に含まれる全コミットを、`push`（`main`）では main の全履歴を検査します。PR を経由しない直接 push こそが混入の原因なので、後者を省略しません。
-- 許可 email は生成物へ焼き込まず、**リポジトリ変数** `ALLOWED_AUTHOR_EMAILS`（Settings > Secrets and variables > Actions > Variables）で渡します。CI には `.env` が無いため、これを設定しないと identity-guard は fail-closed で必ず失敗します。
-- **release workflow の bot は許可 email に加えません。** bot が名義を持つのは公開リポジトリへの release snapshot だけで、本モノレポへはコミットしないためです（identity-guard の検査対象は本モノレポのみ）。今は使わない許可を先回りして広げると、その分だけ fail-closed の検知力が落ちます。必要になった時点で加えます。
-
-## GitHub 認証（gh CLI）
-
-gh CLI の認証はコンテナ内で行い、その状態を named volume に残します。ホスト OS からトークンを持ち込みません。**ただし PAT を `.env` の `GH_TOKEN` へ置く経路だけは、下記の理由で認めます。**
-
-順守事項:
-
-- 認証は次のどちらかです。両方を満たす必要はありません。
-  - **PAT モード（推奨）**: `.env` の `GH_TOKEN` に PAT を置きます。gh はこの環境変数を最優先で読みます。
-  - **保存済み認証モード**: `GH_TOKEN` を空にし（かつ `GITHUB_TOKEN` も設定せず）、`gh auth login` をコンテナ内で 1 度実行します。状態は `gh-storage` volume（`/home/vscode/.config/gh`）に残り、リビルドを跨いで有効です。
-- **`GH_TOKEN` だけは `.env` へ書き写します。** gh の OAuth App には「ユーザー × アプリ × scope あたり 10 トークン」の上限があり、上限に達した状態でどこかの環境が認証すると GitHub が既存のトークンを 1 本破棄します（理由コード `max_for_app`）。溜まる単位は環境ではなく認証の回数で、`gh auth login` も `gh auth refresh` も自分の古い枠を返しません。失効に気づいた環境が再認証し、それがまた別の環境を失効させる連鎖になるため、運用ルールでは回避できません。PAT は OAuth App の認可ではないため、この枠の外にあります。
-- 名前は gh 自身が読む `GH_TOKEN` をそのまま使います。`GIT_IDENTITY_*` を別名にしているのと方針が逆に見えますが、理由が違います。git は自身が読む名前を環境へ置くと `user.useConfigOnly` の保護が無効になるため別名にします。gh には、環境変数を置くことで無効化される保護がありません。
-- **PAT の種別は fine-grained を使います。** `.env` へ置くトークンには有効期限が要るためです（classic は無期限を選べてしまいます）。期限切れ時は再発行して `.env` を差し替えます。値をコミット・issue・PR 説明・ログへ混入させません。
-- 必要な権限は、このリポジトリで現に行う操作から起こした次の対応とします。**Actions の行（手動実行）だけは実測済みで（下記）、ほかの行は実際に PAT を発行して確かめたものではありません。** 発行時に不足・過剰を確認し、この表を実測で置き換えてください。
-
-  | 行う操作 | fine-grained PAT の repository permission |
-  |---|---|
-  | clone / push | Contents: Read and write |
-  | PR の作成・コメント | Pull requests: Read and write |
-  | issue の起票・コメント | Issues: Read and write |
-  | `.github/workflows/` を含む push | Workflows: Read and write |
-  | `gh run list` 等の CI 状態確認、`second-opinion-gate` の手動実行（`gh workflow run`。`second-opinion-record.sh post` と `/land` の再判定） | Actions: Read and write |
-  | `second-opinion-gate` の commit status 確認 | Commit statuses: Read |
-  | （必須・自動付与） | Metadata: Read |
-
-  **Checks は fine-grained PAT では選べません。** 非公開リポジトリでは `commits/<sha>/check-runs` と `gh pr checks` が 403 になるため、CI の確認は上の Actions と Commit statuses で行います（`/land` の雛形もそうしています）。例の表は `packages/devcontainer-bootstrap/README.md`「資格情報の扱い」にもあります。
-
-  **手動実行の権限（Actions: Read and write）は、2026-10-12 に実測で確かめました**（ojos/ai-packages-dev#545）。この表の権限だけを持つ fine-grained PAT で、Actions を Read and write にすると `gh workflow run` が通り、Read-only に下げると `HTTP 403: Resource not accessible by personal access token` で拒否されました（実行の一覧などの読み取りは、どちらでも通ります）。GitHub の公式ドキュメント（「Permissions required for fine-grained personal access tokens」の Actions の節。`POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches` は write）とも一致します。権限が足りないと `second-opinion-record.sh post` は、記録の投稿後に手動実行できなかったとして非 0 で終わり、手で起こすコマンドを示します。
-
-- **`GH_TOKEN` を設定しているあいだ `gh auth login` を実行しません。** gh 2.96.0 で実測したところ、値が設定されているあいだ gh はログインを拒否します（`--with-token` / `--web` のいずれでも `The value of the GH_TOKEN environment variable is being used for authentication.` で終了し、通信もしません）。危ないのはその先で、拒否メッセージ（`first clear the value from the environment`）に従って値を空にしてログインすると上限枠を 1 つ消費し、上限に達していれば他環境のトークンが 1 本失効します。この拒否は制約ではなく安全装置として扱います。
-- **`GITHUB_TOKEN` を恒久的に設定しません。** gh は `GH_TOKEN` → `GITHUB_TOKEN` の順に環境変数を読み、**空文字だけを読み飛ばします**。したがって `GH_TOKEN` を空にすることは `GITHUB_TOKEN` に対する盾になりません。gh 2.96.0 での実測: `GITHUB_TOKEN=" " gh api user` は `Bad credentials`、`GITHUB_TOKEN=" " GH_TOKEN="" gh api user` も `Bad credentials`（一方 `GITHUB_TOKEN="" gh api user` と `GH_TOKEN= gh api user` はどちらも保存済み認証で成功）。**手元のシェル・rc・`.env` のいずれにも `GITHUB_TOKEN` を置きません。**
-- ワークフローの `env: GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}` はこの話と別です。Actions のランナーに `.env` は無く、ジョブ限りのトークンなので上限枠も消費しません。**手元のシェルで `GITHUB_TOKEN` を設定してよい根拠にはなりません**（上記）。
-- git の push 認証は `scripts/setup-git-identity.sh` が global の `credential.helper` を「空 → `!gh auth git-credential`」に固定して gh へ向けます。空文字がヘルパー一覧をリセットするため、`/etc/gitconfig` 側やエディタが注入したヘルパーは応答しません。
-- `gh auth status --active` が失敗した場合、それが「資格情報が無効」なのか「GitHub へ到達できていない」のかは gh の出力から区別できません（到達できないときも `The token in GH_TOKEN is invalid.` と言います）。`scripts/on-attach.sh` はどちらとも断定せず、環境変数のトークン（`GH_TOKEN` / `GITHUB_TOKEN` のいずれかが非空）が効いているあいだは `gh auth login` を案内しません。PAT モードなら `.env` の `GH_TOKEN` と疎通を、保存済み認証モードならコンテナ内での `gh auth login` を確認します。
-- Docker レジストリの資格情報も同様です。ホスト側 VS Code で `dev.containers.dockerCredentialHelper: false` を設定してください。`scripts/on-attach.sh` が接続ごとに `~/.docker/config.json` の `credsStore` と `credHelpers` の両方を除去します（前者はレジストリ横断、後者はレジストリ個別にホストのヘルパーを指すため、片方だけでは塞がりません）。ただし書き込み順序によっては間に合わないため、ホスト側の設定が本体で、この除去は多層防御の 1 枚です。
+- 人の操作の名義は `.env` の `GIT_IDENTITY_NAME` / `GIT_IDENTITY_EMAIL`（commit / tag / push のすべて）。bot の名義は公開リポジトリへの release snapshot だけです。global の identity に依存しません。
+- push / リリース実行の前に `bash scripts/verify-commit-identity.sh` で作者情報を検証します。別 identity を検出したら中断し、`bash scripts/setup-git-identity.sh` を適用して該当コミットを `git rebase` で作り直します。
+- `GITHUB_TOKEN` を手元のシェル・rc・`.env` に置きません。`GH_TOKEN` を設定しているあいだ `gh auth login` を実行しません（OAuth の上限枠を消費し、他環境のトークンを失効させるため）。PAT は fine-grained を使い、値をコミット・issue・PR・ログへ混入させません。
+- 詳細: `.claude/rules/git-identity.md` / `.claude/rules/github-auth.md`
 
 ## 作業状況の記録先
 
@@ -153,207 +67,48 @@ gh CLI の認証はコンテナ内で行い、その状態を named volume に�
 
 ## 外部サービスの状態管理
 
-共通規範「外部サービスの状態管理」を、このリポジトリで具体化します。
+- リリースは GitHub Actions（`release.yml` の `workflow_dispatch`）でだけ実行し、ローカルから `--execute` しません（`scripts/release-packages.sh` が Actions 外を拒否します）。手動の `gh` / `git push` は状態確認・調査に留めます。
+- 公開リポジトリの存在と設定は Terraform（`infra/github/`）で宣言し、apply は `main` の Actions からだけです。公開リポジトリを消す plan は apply しません。
+- このモノレポ自身の脆弱性報告の窓口は手で有効にし、設定を変えたときとリリースの前に `bash scripts/check-repo-security.sh` で照合します。
+- 詳細（手順・資格情報・脆弱性の通知）: `.claude/rules/external-services.md`
 
-- 対象の外部状態: 公開リポジトリ（`ojos/devcontainer-bootstrap` / `ojos/ai-playbook` / `ojos/devcontainer-host`。存在と設定は `infra/github/` の Terraform、中身の反映は `scripts/release-packages.sh`）、GitHub Release、タグ
-- 宣言・適用の手段: `scripts/release-packages.sh`。ソースの反映・タグ付け・Release 作成を冪等に行い、公開済みバージョンの再公開を preflight で拒否します（不変性）
-- **実行場所は GitHub Actions（`.github/workflows/release.yml` の `workflow_dispatch`）です。ローカルからのリリース実行は行いません。** 実行環境を一本化し、手元の環境差に起因する失敗経路を残さないためです。手順は `docs/release/RELEASE_EXECUTION_RUNBOOK.md`
-- この禁止は文書ではなく機構で担保します。`scripts/release-packages.sh` は `GITHUB_ACTIONS` を見て、Actions 外での `--execute` を preflight より前に拒否します。副作用を持たない dry-run と `--audit` はローカルでも実行できます
-- 手動 `gh` / `git push` は状態確認・調査に留めます。リリースの恒久的操作はスクリプトを通します
-- やむを得ず手動で公開状態を変えた場合は、スクリプト側の前提（README の固定バージョン等）へ後追いで反映します
-- **公開リポジトリそのもの（存在と設定）は Terraform で宣言します（`infra/github/`。#487）。** 上のリリースのスクリプトが扱うのは公開物の中身（ソース・タグ・Release）で、リポジトリを作る・設定を変えることはしません。この 2 つの関心を分けます
-  - 対象: 配布先の公開リポジトリ（`infra/github/repositories.tf` の一覧）。このモノレポ自身と、配布物以外の `ojos/*` は対象外です
-  - 状態ファイルは HCP Terraform（組織 `OJOS` / ワークスペース `github-ai-packages-dev`）に置きます。Execution Mode は Local で、HCP は置き場所としてだけ使います
-  - **実行場所は GitHub Actions（`.github/workflows/terraform.yml`）です。** PR で plan を出して PR へコメントし、`main` へのマージで apply します。fmt / validate は資格情報が要らないので `ci.yml` の `terraform` ジョブ（`scripts/acceptance.sh` がミラー）で回します
-  - **apply を `main` の Actions からだけにすることは、資格情報の置き場所で担保します。** 書き込みの fine-grained PAT（`TF_GITHUB_PAT`）は、配備先を `main` に絞った Environment `terraform-apply` の secret にだけ置き、`.env` にもリポジトリの secret にも置きません。terraform のコマンドは手元からも打てるのでスクリプトで拒否しても迂回でき、PR のワークフローは PR のブランチで書き換えられるので、ワークフローの記述でも担保できないためです。PR の plan には、読み取りの PAT（`TF_GITHUB_PAT_READ`）を使います。一覧と設定の手順は `infra/github/README.md`「資格情報」
-  - **公開リポジトリを消す plan は apply しません。** リポジトリに `prevent_destroy` と `archive_on_destroy` を付け、`terraform.yml` も plan の中にリポジトリの削除・作り直しがあれば apply の前に落とします（`scripts/terraform-refuse-destroy.sh`）。PAT の Administration: write は削除もできる権限だからです
-  - リリースの GitHub App を新しいリポジトリへ install することは、手作業のまま残します（個人のアカウントでは PAT で扱えない見込みのため。#487 の scope.out）
+## レビューとゲート
 
-### 脆弱性の報告と通知
+push / PR 作成の前に、次の順で通します。
 
-公開リポジトリなので、脆弱性を見つけた人が非公開で知らせる窓口と、依存の脆弱性の通知を有効にしておきます（#394）。報告の宛先としての説明は、リポジトリ直下の `SECURITY.md` が持ちます。
+1. 主レビュー: `/code-review`（セキュリティに関わる差分は `/security-review` も）でステージ済み差分をレビューし、その場で修正する。受け入れ条件を満たした後・主レビューの前に、コードに限り `/simplify` を 1 回だけ使える（Markdown は対象外）。
+2. `bash scripts/loop-gate.sh`: commit identity 検証 → `scripts/verify.sh`（受け入れ検証）→ 第二意見（`scripts/second-opinion-review.sh`）を直列化する。終了コード 0 = `GATE_PASS`（push 可）。
+3. push 後、PR を作ったら `bash scripts/second-opinion-record.sh post` で記録を投稿し、修正を push し直すたびに打ち直す。PR を作ったら `/land` を使う（マージ直前の承認はフックが保証する）。
 
-- 対象の設定は 3 つです: Private vulnerability reporting（非公開の報告窓口）、Dependabot alerts、Dependabot security updates
-- **配布先の公開リポジトリでは、この 3 つを Terraform で有効にします（`infra/github/security.tf`）。** Dependabot の 2 つは provider の資源で宣言します。Private vulnerability reporting は provider が扱えないため、`terraform_data` から `gh api` の `PUT` を打ちます。こちらは実行がリポジトリを作ったときに限られ、外で無効にされても plan に差分が出ません
-- **このモノレポ自身は Terraform の対象外なので、手で有効にします**（下のコマンド）。リリースのスクリプトの関心（公開物の反映）とは別で、一度有効にすれば変える理由が無いためです
-- どちらの場合も、`scripts/check-repo-security.sh` で照合します（引数で `owner/repo` を渡せます）。`SECURITY.md` が案内する窓口が閉じたまま、案内だけが残る状態を塞ぐためです
-- 有効にするにも照合するにも、リポジトリの管理者権限のトークンが要ります（fine-grained PAT なら Administration。読むだけなら read、有効にするなら write）。`.env` の `GH_TOKEN` に権限が無いときは、`env -u GH_TOKEN` で `gh auth login` 済みの資格情報を使います
-- 照合は CI のゲートに入れません。CI の `GITHUB_TOKEN` では Dependabot の 2 つを読めないためです。設定を変えたときと、リリースの前に持ち主が回します
-- Dependabot の version updates（`.github/dependabot.yml`）は入れていません。security updates は脆弱性があるときだけ PR を出します
+- 第二意見のエンジンは `--engine` で渡す（`SECOND_OPINION_ENGINE` の前置は `.env` に負ける）。コマンドの差し替えは `LOOP_GATE_REVIEW_CMD`。範囲は `LOOP_GATE_REVIEW_RANGE` で受ける。
+- 却下できるのはレビュー指摘だけ。コマンドと出力をそのまま PR 本文またはコメントへ記録し、第二意見を却下して通すときは記録後に `LOOP_GATE_REVIEW_CMD= bash scripts/loop-gate.sh` で回し、その使用も PR へ記録する。`verify.sh` と CI の失敗は却下せず、`VERIFY_ACCEPTANCE` の差し替えで迂回しない。
+- `ci.yml` / `identity-guard.yml` を変更したら `scripts/acceptance.sh` も同じ内容へ追随させる。
+- 1 回の `LGTM` は重大な指摘が無いことの証明ではなく、主レビューを省略してよい根拠にもならない。
+- 詳細（オプション表・判定方式・限界・リモート最終ゲート）: `.claude/rules/review-gate.md`
 
-```bash
-# 有効にする（どれも冪等）
-gh api -X PUT repos/ojos/ai-packages-dev/private-vulnerability-reporting
-gh api -X PUT repos/ojos/ai-packages-dev/vulnerability-alerts
-gh api -X PUT repos/ojos/ai-packages-dev/automated-security-fixes   # alerts が有効でないと失敗する
+## リモート最終ゲート（置かない）
 
-# 照合する（0 = 3 つとも有効 / 1 = 無効がある / 2 = 読めない＝前提の不成立）
-bash scripts/check-repo-security.sh
-bash scripts/check-repo-security.sh ojos/devcontainer-bootstrap   # 配布先も同じく照合できる
-```
+push / PR 作成後のリモート最終ゲート（Copilot code review の要求・確認）は置きません。標準の機構層（第二意見の記録と確認側 `second-opinion-gate.yml`、CI による受け入れ検証の再実行）で運用します。失う性質と受け入れる理由は `.claude/rules/review-gate.md`「リモート最終ゲート（置かない）」にあります。
 
-## レビューの起動方法
+## ドキュメント・issue・質問
 
-共通規範「レビューワークフロー」（`.ai-playbook/review-workflow.md`）のクロスモデル二段ゲートと、「ループ運用」（`.ai-playbook/loop-workflow.md`）のローカル事前ゲートを、このリポジトリで具体化します。
+- README は `packages/**/README.md` を単一の正本とし、翻訳版を足すときは意味の一致を確認する。GitHub issue（実装委譲 issue を含む）は日本語で統一し、規範・判定基準・受け入れ条件は日本語で明確に書く。
+- AI からの確認事項は、一問ずつ・質問意図付き・選択肢優先（推奨順、最後に自由入力欄）で行う。
+- ユーザー意図とポリシーが衝突するときは、パッケージ編集前に焦点化した確認質問を行う。
+- ディレクトリ構造（`src` / `docs` / `tests` など）は新規生成時の推奨で、既存プロジェクトには強制せず非破壊で運用する。サブディレクトリ構造は強制しない。既定と異なる生成が要るときは理由を明示して最小変更で対応する。適用はレビューで担保し、設定ファイルやウィザードの機構は持たない。
+- 作業終了時は、実装済み issue を理由と検証結果付きでクローズし、採用 PR はマージ、不要 PR は理由付きでクローズして、open の issue / PR を確認する。`production` / `mainline` 向けは milestone / Project の更新を必須とする（詳細: `.claude/rules/issue-operations.md`）。
+- Issue scope が不明確なとき、レビューの要否や判定に迷うときは、独断で進めずユーザーへ確認・エスカレーションする。
 
-下記 1 の主レビューの前に、共通規範「品質整理（任意の前段）」（`.ai-playbook/review-workflow.md`）を置けます。ここでいう「受け入れ条件を満たした後」は、手元で `scripts/verify.sh` が緑になった後を指します。下記 2 の受け入れ検証は、整理後の差分に対して `loop-gate.sh` が改めて通します。位置・回数・非ゲートの制約は同節に従い、ここでは起動手段と対象範囲だけを定めます。
+## Issue クローズ方針
 
-- **起動手段**: Claude Code の `/simplify` を、受け入れ条件を満たした後・主レビューの前に 1 回だけ実行します。`loop-gate.sh` には含めません。
-- **対象はコードに限ります。** このリポジトリでは `*.sh`（`scripts/` / `tests/` / `packages/` / `.ai-playbook/templates/` 配下を含む）と、`.github/workflows/` の YAML が該当します。
-- **Markdown は対象外です。** `.sh` の中にヒアドキュメントで埋め込まれ、配布先へ文書として書き出される本文も文章として扱い、対象から外します。規範の理由文が簡素化で削られるのを防ぐためです。`/simplify` がこれらへ触れる修正を出したら取り込みません。
-
-push / PR 作成の前に、次の 3 段を通します。
-
-1. **主レビュー**: Claude Code の `/code-review`（セキュリティに関わる差分は `/security-review` も）でステージ済み差分をレビューし、その場で修正します。
-2. **受け入れ検証**: `scripts/verify.sh` が受け入れ条件を機械判定します。
-3. **第二意見**: 別ベンダーのモデル（`scripts/second-opinion-review.sh`）でクロスチェックします。
-
-2 と 3 は**単一入口** `scripts/loop-gate.sh` が直列化します。push / PR 作成の前にこれを通します。
-
-```bash
-bash scripts/loop-gate.sh
-```
-
-- **`loop-gate.sh` は、上の 3 段の手前で commit identity の検証（`scripts/verify-commit-identity.sh`）を挟みます。** 許可外の identity が混じったコミットを、他のどの段よりも安く・早く（判定は数 ms）検知するためです。ここでいう「3 段」は規範が定める段（主レビュー / 受け入れ検証 / 第二意見）を指し、`loop-gate.sh` 内部の実行順（commit identity → verify → 第二意見という実装上の step 1/2/3）とは別の軸です。両者を混同しないでください。
-- 終了コード 0 = `GATE_PASS`（push 可） / 1 = `GATE_FAIL`（いずれかの段が未通過、または実行不能）。
-- **レビューする範囲がエージェントの設定・フック（対象の一覧は `packages/devcontainer-bootstrap/README.md`「危険な git の設定の検査」）に触れるときは、そのパスの一覧を出力し、第二意見の依頼文にも重点的に見るよう添えます**（`SECOND_OPINION_AGENT_CONFIG_PATHS`）。任意のコードの実行や権限に関わるのに、差分の中では埋もれるためです。判定は変えません（#671）。
-- 第二意見コマンドは環境変数 `LOOP_GATE_REVIEW_CMD` で差し替え（任意のコマンド）・無効化（空文字）できます。未設定のときは `scripts/second-opinion-review.sh` があれば実行し、無ければスキップします。
-- **`LOOP_GATE_REVIEW_CMD` で差し替えたコマンドへは、解決した範囲を環境変数 `LOOP_GATE_REVIEW_RANGE` で渡します。** ステージ済み差分が空のときだけ commit 済み範囲（`<起点>..HEAD`）が入り、ステージ済みがあるとき・レビュー対象が無いときは空です。差し替えたコマンドが範囲を受けないと、commit 済みのブランチでは空のステージ済み差分を見て「対象なし」で 0 を返します。`loop-gate.sh` は、レビュー対象が実在するのにその出力（`[second-opinion] no diff to review`）を見たときは、レビューされていないので **`GATE_FAIL` にし、記録も残しません**。レビュー対象が本当に無いと解決したときは、差し替えたコマンドを実行せず、記録なしで通過します（既定の経路と同じ）。
-- **限界として、loop-gate が「レビューしていない」と判定できるのは、差し替えたコマンドが `[second-opinion] no diff to review` を出力したときだけです。** 範囲を使わず、この文言も出さない任意のコマンド（例: `true`）は、何もレビューしていなくても `GATE_PASS` と記録が出ます。差し替えるコマンドは、範囲を `LOOP_GATE_REVIEW_RANGE` で受け取るか、自分で範囲を決めて自分で記録を残してください。
-- **エンジンだけを変えたいときは、範囲を受ける形で `--engine` を CLI 引数で渡します。**
-
-  ```bash
-  LOOP_GATE_REVIEW_CMD='bash scripts/second-opinion-review.sh --engine antigravity ${LOOP_GATE_REVIEW_RANGE:+--range "$LOOP_GATE_REVIEW_RANGE"}' bash scripts/loop-gate.sh
-  ```
-
-  - 範囲の受け口（`${LOOP_GATE_REVIEW_RANGE:+--range "$LOOP_GATE_REVIEW_RANGE"}`）を省くと、commit 済みのブランチでは何もレビューされないため、`GATE_FAIL` になります。
-  - **環境変数 `SECOND_OPINION_ENGINE=...` を前置する方法は使いません。** `scripts/second-opinion-review.sh` は `scripts/load-project-env.sh` 経由で `.env` を読み、`.env` の値が既存の環境変数を上書きします（優先順位は CLI 引数 > `.env` > 環境変数 > 既定）。`.env` に `SECOND_OPINION_ENGINE` があると、前置した値は無視されます。
-  - 差し替えたコマンドが自分で範囲を決める場合は、従来どおり自分で記録を残します（`scripts/second-opinion-record.sh save`）。
-- ステージ済み差分が空のときは、`loop-gate.sh` が第二意見の対象を commit 済み範囲へ自動で切り替えます。commit 後にゲートを回すと第二意見が実質スキップされ、偽の緑が出るためです。
-- **既定の対象は PR 全体です。** 起点は、`origin/HEAD` → `origin/main` → `origin/master` の順で解決した既定ブランチと HEAD の分岐点（merge-base）にします。ステージ済み差分があるときは `--base <起点>`（起点から索引まで）、空のときは `--range <起点>..HEAD` を渡します（上流があっても上流からではありません）。差分しか見えないエンジンに、修正分だけの小さな差分を渡すと、差分に現れない既存のコードについて誤った前提を立てて落ちるためです。入力が増える分、トークンの消費は増えます。
-- 既定ブランチの追跡枝を解決できないときだけ、従来の決め方に戻ります（ステージ済みがあれば reviewer の既定、空なら上流との分岐点 → HEAD。上流が無いとき、または上流との差分が空のとき（push 済みなど）は空ツリー → HEAD。差分が空なのに「対象なし」で通すと、偽の緑になるためです）。追跡枝は fetch しないので、手元が古ければ起点も古くなります。
-- 起点と HEAD に差分が無いときは、`no reviewable diff` を出力したうえで `GATE_PASS` とします。空を一律 `GATE_FAIL` にすると、差分の無い状態でのゲート実行が落ちるためです。
-- 両段（主レビュー・第二意見）とも対象は致命バグ・脆弱性・型エラー・エッジケースの見落としに限ります。修正は 1 イテレーションで完結させます。
-
-### 指摘の却下
-
-事実誤認の指摘を却下する条件と記録要件は `.ai-playbook/review-workflow.md`「指摘の却下」に従います。このリポジトリでの具体化は次のとおりです。
-
-- **記録の置き先は PR 本文またはその PR へのコメント**です。主レビュー・第二意見のいずれの指摘でも同じ場所へ残します。差分と却下の判断を同じ画面で追えるようにするためです。
-- 記録には、実行したコマンドと出力をそのまま含めます。要約だけを書きません。
-- **第二意見を却下したうえで `GATE_PASS` を得るときは、記録を残してから `LOOP_GATE_REVIEW_CMD=` で無効化して回します。**
-
-  ```bash
-  LOOP_GATE_REVIEW_CMD= bash scripts/loop-gate.sh
-  ```
-
-  この経路を使ったことも PR へ記録します。記録の無い無効化は、ゲートを通したのか迂回したのかを区別できなくします。
-- **却下できるのはレビュー指摘だけです。** 受け入れ検証（`scripts/verify.sh`）や CI の失敗は却下の対象外で、`VERIFY_ACCEPTANCE` の差し替えで迂回しません。あちらは人の判断を挟まずに合否を生む機械ゲートで、迂回できないことがゲートたる理由だからです。
-
-### 受け入れ検証（verify / acceptance）
-
-```bash
-bash scripts/verify.sh
-```
-
-- 終了コード 0 = `VERIFY_PASS` / 1 = `VERIFY_FAIL`（未達、または受け入れ条件が未定義）。
-- 受け入れ条件の実体は `scripts/acceptance.sh`（プロジェクトが所有・編集します）。環境変数 `VERIFY_ACCEPTANCE` で差し替えられます（例: `VERIFY_ACCEPTANCE=scripts/acceptance-fast.sh bash scripts/verify.sh`）。
-- `scripts/acceptance.sh` は `.github/workflows/ci.yml` の 8 ジョブと `.github/workflows/identity-guard.yml` を完全ミラーします。「ローカルが緑なら CI も緑」を保つための構成で、部分ミラーは採りません。
-- identity 検査は `scripts/verify-commit-identity.sh` を引数なしで呼び、同スクリプトの既定範囲解決（`origin/main..HEAD`、解決できなければ HEAD の全履歴）に委ねます。CI の 2 系統（`pull_request` の base..head / `push`(main) の `--full`）とそのまま対応します。
-- **`ci.yml` / `identity-guard.yml` を変更したら `scripts/acceptance.sh` も同じ内容へ追随させます。** 追随漏れを機械で検知する仕組みは無く、食い違うとローカルゲートは CI の予行演習でなくなります。
-
-### 第二意見（クロスモデル）
-
-```bash
-bash scripts/second-opinion-review.sh                          # ステージ済み差分
-bash scripts/second-opinion-review.sh --range main..HEAD       # 範囲指定
-bash scripts/second-opinion-review.sh --runs 3                 # 実行回数
-bash scripts/second-opinion-review.sh --engine antigravity     # エンジン切り替え
-bash scripts/second-opinion-review.sh --engine codex           # エンジン切り替え（codex）
-```
-
-| オプション | 環境変数 | 既定 | 意味 |
-|---|---|---|---|
-| `--range <git-range>` | — | ステージ済み差分 | レビュー対象の差分範囲 |
-| `--base <rev>` | — | — | 索引と `<rev>` の差（コミット済みとステージ済みの両方）をレビュー対象にする。`--range` と併用できない。`loop-gate.sh` は、ステージ済み差分があるとき既定ブランチとの分岐点を渡す |
-| `--engine <name>` | `SECOND_OPINION_ENGINE` | `gemini` | レビューを実行する CLI（`gemini` / `antigravity` / `codex`）。どちらでも指定せず `agy` か `codex` が PATH にあるときは、既定の gemini を使う旨を stderr に知らせる（判定は変えない） |
-| `--model <name>` | `SECOND_OPINION_MODEL` | 各 CLI の既定 | 使用モデル |
-| `--runs <n>` | `SECOND_OPINION_RUNS` | `1` | 実行回数（1 以上の整数。不正値は実行前に停止） |
-| — | `SECOND_OPINION_AGENT_CONFIG_PATHS` | 未設定 | `loop-gate.sh` が渡す、レビュー範囲のうちエージェントの設定・フックに当たるパスの一覧（改行区切り）。空でなければ依頼文の末尾に、重点的に見るよう添える |
-
-- **エンジンの指定が無いまま既定の gemini で回るとき、`agy` か `codex` が見つかれば、`[second-opinion] notice:` で始まる 2 行を stderr に出します。** 両方を入れた構成で `.env` を写し忘れた作業ツリーが、黙って gemini で回るのを防ぐためです。終了コードと判定は変わらず、gemini だけの構成では出しません。文面に `(engine=` の形を含めないのは、`loop-gate.sh` が出力の最初の `(engine=` から記録のエンジン名を読むためです。
-- 優先順位は CLI 引数 > `.env` > 既定です。`.env` は既に設定済みの環境変数も上書きするため、環境変数でエンジンを前置しても `.env` に負けます（`--engine` を使います）。
-- 環境変数の旧名 `GEMINI_REVIEW_MODEL` / `GEMINI_REVIEW_RUNS` も後方互換で受理します。新名が設定されていればそちらが勝ちます。ただし `GEMINI_REVIEW_MODEL` は gemini 用のモデル名なので、エンジンが `gemini` のときだけ引き継ぎます（`codex` / `antigravity` へ渡すと、そのエンジンでは実行できないためです）。それらのエンジンでは、`SECOND_OPINION_MODEL` も `--model` も無ければ、各エンジンの既定のモデルになります。`GEMINI_REVIEW_RUNS` はエンジンに依らず受理します。
-- 判定は多数決です。指摘を報告した run が**過半数**（`floor(N/2)+1`）に達したときだけ落とします。既定の `1` では閾値も 1 で、従来と同じ挙動になります。
-- 過半数に届かなかった指摘も出力に残ります。誤検出とは限らないため、内容を確認して採否を判断します。
-- 通過判定はエンジンによって方式が違います。`gemini` は構造化出力を強制する旗を持たないため、モデル出力の**最後の行**に置かれた判定トークン `VERDICT: LGTM` で判定します（`.ai-playbook/review-workflow.md`「第二意見の非決定性」）。前置き（作業ナレーション）が付いても判定は変わりません。判定トークンが無い出力は指摘あり扱いとし、その旨を出力へ明示します。`antigravity` / `codex` は構造化出力を強制できるため、判定トークンの解析はせず **JSON スキーマ**（`scripts/second-opinion-schema.json`）で判定します。モデルには通過・不通過そのものを出させず、指摘の種別（`category`）が `bug` / `vulnerability` / `type-error` / `edge-case` のいずれかで 1 件以上あれば落とします。JSON として読めない回答・スキーマの形を満たさない回答・差分を読めなかったと答えた回答（`reviewed: false` または欠落）も、指摘の中身によらず同じ扱い（失敗）にします。読めなかったものを LGTM として通さないためです。
-- **どのエンジンにも、反証を試みる立場で依頼し、指摘ごとに失敗の筋書き（入力 → 誤った結果）を求めます**（`.ai-playbook/review-workflow.md`「② 第二意見」）。JSON スキーマの方式では筋書き（`failure_scenario`）を必須の項目にし、ゲート対象の 4 種類で筋書きが空の回答は失敗にします。そのときは「失敗の筋書き（failure_scenario）がありません」と示し、形の崩れ（「JSON として読めませんでした」）や、差分を読めなかった回答（`reviewed: false`。こちらの検査が先です）と区別します。筋書きを書けない懸念は、捨てさせずに `other` で報告させます（`promise-mismatch` / `other` の筋書きは空でかまいません）。`gemini` では、書けない懸念を判定に数えない参考として書かせるよう依頼文で求めるだけで、判定は変えません。**限界として、`--runs` が 2 以上でも、筋書きの無い回答が 1 回出た時点で、多数決を待たずに失敗します**（形の崩れた回答と同じ扱いです）。
-- 終了コード 0 = `LGTM`（指摘を報告した run が閾値未満） / 1 = 重大な指摘あり、または実行不能。
-- エンジンごとに認証手段が違います。`gemini` は `GEMINI_API_KEY` が必要です（`scripts/load-project-env.sh` が `.env` から読み込みます）。`antigravity`（`agy`）は **OAuth のみ**で API キーに対応せず、`.env` へ資格情報を書き写す経路を持ちません。ログイン状態は `~/.gemini` 配下（named volume `gemini-storage`）に残るため rebuild しても消えません。`codex`（Codex CLI）は ChatGPT アカウントの OAuth 認証（または API キー）です。初回はコンテナの中で対話で `codex login` を通してください（資格情報をコンテナの外から注入する経路は持ちません）。ログイン状態は `~/.codex` 配下（named volume `codex-storage`）に残るため rebuild しても消えません。いずれの CLI も `scripts/install-ai-tools.sh` が導入します。
-- **`codex` は、渡す環境変数・作業場所・ツールを最小にして起動します。** `.env` を読み込む前の環境から、許可リストの変数だけを `env -i` で渡すので、`.env` に書いたプロキシと `OPENAI_API_KEY` は届きません。`~/.codex/config.toml` も効きません（`--ignore-user-config`）。認証は `codex login` で保存した資格情報を使います。どのエンジンにもツールは使わせず、差分はプロンプトに埋め込んで渡します。
-- **`agy` のテレメトリはプロビジョニングで無効化します。** `scripts/install-ai-tools.sh` が `~/.gemini/antigravity-cli/settings.json` へ `"enableTelemetry": false` をマージするため、コンテナを作り直した直後からオプトアウト済みになります。環境変数によるオプトアウトは存在せず、この設定ファイルが唯一の手段です。**効くのは CLI だけです**（Antigravity IDE を使う場合は IDE 側に別途同等の設定があります）。既存コンテナへ後追いで適用する場合は `agy` を終了してから `bash scripts/install-ai-tools.sh` を実行してください（起動中の `agy` はセッション終了時に設定を書き戻すことがあります）。
-- **`antigravity` で `--model` に `claude` 系を選ばないでください。** このプロジェクトの実装モデルは Claude で、同じベンダーのモデルで第二意見を取ると「別ベンダーで独立にクロスチェックする」という前提が壊れます（`.ai-playbook/review-workflow.md`）。`agy models` には `claude-*` も並びます。
-- **`codex` は版の下限があります。** 第二意見の既定モデル `gpt-6-sol` は、ある版から CLI の一覧に出るようになったため、`scripts/install-ai-tools.sh` が導入時に版を見て、古ければ入れ替えます（`CODEX_MIN_VERSION`）。
-- このレビューは非決定的です。1 回の `LGTM` は重大な指摘が無いことの証明ではなく、主レビューを省略してよい根拠にもなりません。
-
-### リモート最終ゲート（置かない）
-
-push / PR 作成後のリモート最終ゲートは、このリポジトリでは**置きません**（`.ai-playbook/review-workflow.md`「リモート最終ゲート（任意の層）」）。以前は要求側 `.github/workflows/copilot-review.yml` と確認側 `.github/workflows/review-gate.yml` の 2 本を採用していましたが、撤退しました。
-
-- リモート最終ゲートの有無にかかわらず置く標準の機構層として、下記「第二意見（クロスモデル）」の記録と確認側（`.github/workflows/second-opinion-gate.yml`）、および CI（`ci.yml` / `identity-guard.yml`）の受け入れ検証の再実行を、標準の機構層とします。
-- **失う性質**は、著者の操作なしに記録が作られること・記録を著者が消せないこと・内容が著者を通らないことの 3 つです（`.ai-playbook/review-workflow.md`「リモート最終ゲート（任意の層）」の表）。このリポジトリは外部からの PR を受け付けない方針（`CONTRIBUTING.md`）で、既定ブランチへ入るコミットの author は常に許可した identity に限られるため、この妥協を受け入れます。
-- **push のたびに、記録を投稿します。** `scripts/loop-gate.sh` が第二意見の実行直後に記録（`save`）を自動で残しますが、PR へ投稿する `post` は push が終わり、PR を作ってからでないと打てません（記録は head SHA に紐づき、投稿先の PR が要るため）。
-
-  ```bash
-  bash scripts/second-opinion-record.sh post
-  ```
-
-  修正を push し直したら、そのたびに `post` も打ち直します。`.claude/skills/land/SKILL.md` の 2・7 がこれを手順に含めています。
-- 指摘の打ち切りは `.ai-playbook/review-workflow.md` の収束規則に従います。2 巡目以降の軽微な指摘は人間が却下し、AI 同士を往復させません。
-
-### ドキュメント分離運用
-
-- `packages/**/README.md` を正本として扱います。
-- README は `README.md` を単一の正本として運用します。
-- 翻訳版を追加する場合は、正本更新時に意味の一致を確認します。
-
-### Issue 言語運用
-
-- GitHub issue は日本語で統一します。
-- 実装委譲 issue（`implementation:` / `feature:`）も日本語で統一します。
-- 規範・判定基準・受け入れ条件は日本語で明確に記述します。
-
-### AI からの質問運用
-
-- AI からの確認事項は、一度に複数件を並べず、一問ずつ質疑応答で進めます。
-- 各質問には、質問文と質問意図を必ずセットで示します。
-- 回答は選択肢を優先して提示し、選択肢は推奨順に並べます。
-- 選択肢の最後には、自由入力で答えられる欄を必ず用意します。
-
-## 衝突時の扱い
-
-- ユーザー意図とポリシーが衝突する場合、パッケージ編集前に焦点化した確認質問を行います。
-
-## ディレクトリ構造テンプレート方針
-
-- トップレベル構造（例: `src` / `docs` / `tests`）は推奨として扱います。
-- 推奨構造は「新規生成時」に適用し、既存プロジェクトには強制しません。
-- 既存プロジェクト適用時は既存ディレクトリ構造を優先し、非破壊で運用します。
-- サブディレクトリ構造（`src/features` など）は細かく強制せず、オプションの推奨に留めます。
-- 既定構造と異なる生成が必要な場合は、理由を明示して最小変更で対応します。
-- 本方針は文書上の規範として扱い、適用はレビューで担保します。設定ファイルやウィザードによる機構は持ちません。
+- Issue をクローズする際は、必ずクローズ理由をコメントで明示します。
+- クローズ理由は `completed`, `superseded`, `duplicate`, `invalid`, `deferred` のいずれかに分類します。
+- `superseded` / `duplicate` では置き換え先 issue 番号を明記します。
+- 実装系 issue のクローズ時は、検証結果（テスト/実行結果）を最低1行含めます。
 
 ## 実装委譲パターン
 
-**判定の正本は `.ai-playbook/shared-ai-rules.md` 13 章「実装委譲パターン」です。** 委譲対象と自実装対象の区分、「調査を委譲する条件」の 3 条件、「委譲の閾値」、「サブエージェントの戻り値」、「サブエージェントが読む規範の範囲」はそちらに定義されています。ここでは複製せず、このプロジェクト固有の具体化だけを扱います。
-
-この節が持つのは次の 3 つです。
-
-- ユーザーコマンドの解釈（このプロジェクトで使う言い回しと動作の対応）
-- 委譲可能な役割とモデル配分（`.claude/agents/` の定義の写しと、親セッションが担う役割）
-- 並列実行時の作業分離の具体的な機構と、統合検証の手順
-
-### ユーザーコマンド解釈
+判定の正本は `.ai-playbook/shared-ai-rules.md` 13 章「実装委譲パターン」です（ここでは複製しません）。
 
 | コマンド | 意図 | エージェント動作 |
 |---|---|---|
@@ -362,166 +117,24 @@ push / PR 作成後のリモート最終ゲートは、このリポジトリで�
 | 確認して | 分析・レビューのみ | 委譲なしで実施 |
 | #N を実装して | 特定 issue の実装 | Issue scope 確認後、委譲判定 |
 
-### 委譲可能な役割とモデル配分
-
-委譲先のモデルとツールは、運用ルールの文言ではなく `.claude/agents/` の frontmatter で
-固定します。指示文による呼びかけは迂回できますが、frontmatter は実行環境が読む機構
-なので迂回できません（`.ai-playbook/shared-ai-rules.md` の「機構化の判断基準」）。
-
-この表は `.claude/agents/` の定義の写しです。`tests/test-subagent-roles.sh` が両者の
-一致を機械照合するため、片方だけを変更すると赤になります。
+委譲先のモデルとツールは `.claude/agents/` の frontmatter で固定します。次の表はその写しで、`tests/test-subagent-roles.sh` が機械照合します。
 
 | 役割 | model | tools | 契約の正本 |
 |---|---|---|---|
 | `explorer` | `haiku` | 編集系を外す | プロジェクト層で定義（共有層の契約は未整備） |
 | `implementer` | `sonnet` | 編集系を含む | `.ai-playbook/role-contracts/implementer.md` |
 
-**機構で固定できるのは `model` と `tools` の一覧までです。** `Edit` / `Write` /
-`NotebookEdit` を外せば専用の編集経路は塞げますが、調査に必要な `Bash` を残す以上、
-`sed -i` やリダイレクトを経由した書き込みは塞げません。「編集系を外す」を「編集できない」
-と読まないでください。そこから先は指示による制約です（各定義に同じ断りを置いています）。
-
-次の役割は親セッションが担い、サブエージェントとして定義しません。
-
-| 役割 | 親セッションが担う理由 |
-|---|---|
-| intake-manager | 人間との直接対話窓口であり、窓口が複数あると合意範囲を追跡できなくなります |
-| orchestrator | 委譲判定と統合検証の主体そのものです |
-| closer | merge / close の最終判断は手動承認を既定とします |
-| consult-facilitator | 横断相談はユーザーとの対話で進行します |
-| planner | 計画の出力は親が全量を必要とするため、要約して受け取る余地がありません。委譲しても親の文脈は減らず、規範の読み込み分だけ高くなります。加えて計画は intake とユーザー対話に絡むため、intake-manager と同じ理由で窓口を分けられません |
-| reviewer | 第二意見は別ベンダーのモデルで取ります。`scripts/second-opinion-review.sh` が担います |
-
-`planner` は当初サブエージェントとして定義していましたが、上記の理由で親セッション担当へ
-移しました（ojos/ai-packages-dev#289）。**契約 `.ai-playbook/role-contracts/planner.md` は
-存続します。** この表の他の役割と同じく、契約は活動の規範であってサブエージェントの定義
-ではありません。
-
-### 並列実行時の作業分離
-
-共有層の同名の節を、このプロジェクトの実行環境で具体化します。
-
-- 実装を伴うサブエージェントへ並列委譲する場合、親セッションが `isolation: "worktree"` を指定します。これがエージェント単位の作業ツリー分離を保証する機構です。
-- 読み取り専用の調査エージェントには不要です。
-
-#### 統合検証
-
-- **並列実装を統合したら、統合後のツリーで各レーンの受け入れ条件を再実行します。** レーン単位の緑と、統合後の緑は別物です。
-- 各レーンが緑で、`git merge-tree` が衝突を報告しなくても、統合すると意味が壊れることがあります。衝突は同じ行への変更しか見ないため、「一方が実装の一覧を変え、他方が文書の一覧を変えなかった」形の破れは検出できません。
-- この工程は目視の照合に依存しません。実測では、統合検証を実施したうえで 3 件中 1 件を見逃し、リモート最終ゲートが拾いました。**文書が実装の一覧を書き写している箇所は、機械照合（`tests/` のプロジェクト層テスト）へ載せます。**
-
-### Issue クローズ方針
-
-- Issue をクローズする際は、必ずクローズ理由をコメントで明示します。
-- クローズ理由は `completed`, `superseded`, `duplicate`, `invalid`, `deferred` のいずれかに分類します。
-- `superseded` / `duplicate` では置き換え先 issue 番号を明記します。
-- 実装系 issue のクローズ時は、検証結果（テスト/実行結果）を最低1行含めます。
-
-### 終了時整理方針
-
-- 実行中は `issue:PR:merge` が一時的に 1:1:1 でなくても許容します。
-- ただし作業終了時には、未採用 PR・実装済み Issue を必ず整理してクリーン状態へ戻します。
-- 実装済み issue は理由と検証結果を付けてクローズします。
-- 採用 PR はマージし、不要 PR は理由付きでクローズします。
-- 終了前に open issue / open PR の状態を確認します。
-- 最終判定の基準は「再開可能かつ追跡可能なクリーン状態」です。
-
-### 運用厳格度方針
-
-- `production` / `mainline` 向けの作業では、Issue 管理に milestone / GitHub Project の更新を必須とします。
-- `spike` / `hotfix` / 小規模タスクでは、実行中の milestone / Project 更新は任意とします。
-- 任意運用を選んだ場合でも、作業終了時には終了時整理方針に従って必ず正規化します。
-- 途中の簡略運用を行った場合は、クローズ時コメントに「後追い正規化」の実施結果を明記します。
-
-### エラーハンドリング
-
-- Issue scope が不明確な場合: 委譲前にユーザーへ scope 確認を求めます。
-- レビューの要否や判定に迷う場合: 独断で進めず、ユーザーへエスカレーションします。
+- 「編集系を外す」は「編集できない」ではありません（`Bash` 経由の書き込みは塞げません）。
+- intake-manager / orchestrator / closer / consult-facilitator / planner / reviewer は親セッションが担い、サブエージェントにしません。
+- 実装を伴うサブエージェントへ並列委譲するときは、親が `isolation: "worktree"` を指定します。並列実装を統合したら、統合後のツリーで各レーンの受け入れ条件を再実行します。
+- 詳細（親が担う理由・統合検証）: `.claude/rules/delegation.md`
 
 ## intake フロー
 
-Intake Manager フローには 2 つの起動経路があります。
+起動経路は 2 つです。起動手段は実行環境に依存し（Claude Code では `/intake` スキル）、この節は起動後の挙動だけを規定します。
 
-1. **明示起動**: ユーザーが起動を明示要求した場合、確認なしにフローを起動します。
-2. **自動提案**: 要件らしい発話を検出した場合、エージェントが intake 化を提案し、ユーザーの承認を得てからフローを起動します。
-
-### トリガー条件（明示起動）
-
-- ユーザーが intake フローの起動を明示要求した場合、直ちに起動します。
-- **起動手段は実行環境に依存します。** 起動機構を持つ実行環境では、その機構を用います（Claude Code では `/intake` スキル）。機構を持たない実行環境では、明示的な依頼文が起動要求にあたります。この節は起動手段を規定せず、起動後の挙動のみを規定します。
-
-### トリガー条件（自動提案）
-
-- 会話内容から、実装・変更を伴う「やりたいこと」（新機能／修正／設計変更 等）が具体的に述べられたと判断した場合、明示的な起動要求が無くても intake 化を提案します。
-- 提案は「これは要件定義（intake）として進めますか？」の 1 問に留め、選択肢を提示します（`.github/project-ai-rules.md` の質問運用に従う）。
-- ユーザーが承認した場合のみ Step 1 以降へ進みます。直近のユーザー発話を要件テキストとして使用します。
-- 承認されない場合は通常会話を継続し、フローには入りません。
-
-### 提案しない条件（探索的会話の保護）
-
-- 以下は要件確定を目的としないため、自動提案しません（探索的会話を妨げないため）:
-  - 質問・調査・説明依頼・雑談
-  - 既存コードの読解・レビュー・分析のみの依頼（「確認して」等）
-  - 実現したいことが未確定で、対話で発散させている段階
-- 一度提案して見送られた要件については、ユーザーの明確な再要求があるまで再提案しません（過剰提案の抑制）。
-- 判断に迷う場合は、フローを起動せず提案に留めます。起動の可否はユーザーが決めます。
-
-### 実行フロー
-
-```
-Step 1: 要件テキストの確定
-  - 起動要求に要件テキストが添えられている場合、そのテキストをそのまま使用する
-  - 要件テキストが添えられていない場合、要件を対話で引き出す
-  - 自動提案から承認された場合、承認の根拠となった直近のユーザー発話を要件テキストとして使用する
-
-Step 2: 意図の解釈・確認（インプット確認）
-  - 入力テキストの内容を解釈し、以下をユーザーに提示して確認する:
-      - 解釈した目的（何を実現したいか）
-      - 想定する変更の範囲・種別（新機能/修正/設計変更 等）
-      - 不明点があれば質問する
-  - ユーザーが「合っている」と確認するまで次へ進まない
-
-Step 3: 設計妥当性の相談（条件付き）
-  - 以下のいずれかに該当する場合のみ相談を起動する:
-      - 設計方針に曖昧さ・矛盾がある
-      - スコープ境界が不明確（何が in/out か判断できない）
-      - 責務・型契約に影響する懸念がある
-      - 優先順位の判断が難しい
-  - 上記に該当しない場合はスキップしてよい
-  - 相談の結論は goal / scope.in / acceptance に反映してから次へ進む
-  - 進行と記録は consult-facilitator ロール契約に従う
-
-Step 4: intake 票の下書き
-  - .ai-playbook/intake/intake-template.md の必須構造を埋める
-  - 必須: goal / scope.in / acceptance / priority
-  - 任意: scope.out / constraints
-
-Step 5: intake 確認ブロックをユーザーに提示・確認
-  - goal / scope.in / scope.out / constraints / acceptance / priority をチャット上で表示
-  - ユーザーが修正・承認するまで次へ進まない
-
-Step 6: 計画整合性レビュー（必須）
-  - 確認ブロックの内容を .ai-playbook/task-playbooks/plan-review.md の観点 A で審査する
-    （観点の一覧と、指摘の出し方はそちらが正本。ここへ複製しない）
-  - 矛盾・漏れを発見した場合は、同手順の出し方（問題と修正案の表、修正の差分）で提示し、
-    Step 5 へ差し戻す（Step 5 の承認のやり直しが、同手順の「承認し直し」にあたる）
-  - 機械で判定できない作業の扱いと、「レビュー通過」の明示も同手順に従う
-
-Step 7: 最終意図確認（実行前ゲート）
-  - issue 化の直前に、以下を要約してユーザーへ確認する:
-      - 作成予定の issue タイトルと内容サマリー
-      - 「この内容で進めてよいか？」を明示的に確認する
-  - ユーザーが承認するまで issue を作成しない
-
-Step 8: ユーザー承認後に issue 化
-
-Step 9: 実装委譲へ移行
-  - issue 作成完了後、「実装委譲パターン」へ引き継ぐ
-```
-
-### 制約
-
-- Step 7（ユーザー承認）なしに issue を作成してはなりません。
-- intake の要否判定と、その根拠の分類は `.ai-playbook/intake/REASON_CODES.md` に従います。
-- intake-manager の権限境界（`.ai-playbook/role-contracts/intake-manager.md`）に従います。
-- intake はループコーディングの入口フェーズを担います。ループ対象の作業は、Step 6 で機械判定できる acceptance を確定してから実装委譲へ移します（`.ai-playbook/loop-workflow.md`）。ループ非対象と判定した作業は、その旨を intake 票に明記します。
+- **明示起動**: ユーザーが起動を明示要求したら、確認なしに直ちに起動する。
+- **自動提案**: 実装・変更を伴う「やりたいこと」が具体的に述べられたと判断したら、「これは要件定義（intake）として進めますか？」の 1 問だけを選択肢つきで提案する。承認された場合のみ Step 1 へ進み、承認されなければ通常会話を続ける。
+- **提案しない**: 質問・調査・説明依頼・雑談、既存コードの読解・レビュー・分析のみの依頼、実現したいことが未確定で発散させている段階。一度見送られた要件は、明確な再要求があるまで再提案しない。迷うときは起動せず提案に留め、可否はユーザーが決める。
+- Step 7（ユーザー承認）なしに issue を作成しない。ループ対象の作業は、Step 6 で機械判定できる acceptance を確定してから実装委譲へ移す。
+- 詳細（Step 1〜9 と制約）: `.claude/rules/intake-flow.md`

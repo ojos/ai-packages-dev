@@ -1,4 +1,4 @@
-# Dependabot alerts。SECURITY.md の窓口と対で有効にする（.github/project-ai-rules.md
+# Dependabot alerts。SECURITY.md の窓口と対で有効にする（.claude/rules/external-services.md
 # 「脆弱性の報告と通知」）。github_repository の vulnerability_alerts は非推奨のため、
 # 専用の資源で持つ。
 resource "github_repository_vulnerability_alerts" "public" {

@@ -2,7 +2,7 @@
 # CI のジョブ構成と、それを写している 2 か所が食い違っていないことを検査する。
 #
 #   1. scripts/acceptance.sh — CI を完全ミラーするローカル事前ゲート
-#   2. .github/project-ai-rules.md — ミラー対象のジョブ数を規範として記述している箇所
+#   2. .claude/rules/review-gate.md — ミラー対象のジョブ数を規範として記述している箇所
 #
 # acceptance.sh 自身が冒頭で「ci.yml とここが食い違うと、ローカルゲートは『CI の
 # 予行演習』ではなくなり、通っても意味を持たなくなる」「追随漏れを機械で検知する
@@ -24,7 +24,7 @@ echo "test-ci-mirror"
 
 CI="$REPO_ROOT/.github/workflows/ci.yml"
 ACCEPTANCE="$REPO_ROOT/scripts/acceptance.sh"
-RULES="$REPO_ROOT/.github/project-ai-rules.md"
+RULES="$REPO_ROOT/.claude/rules/review-gate.md"
 
 # ── 抽出 ──────────────────────────────────────────────────────────────────────
 
@@ -99,11 +99,11 @@ fi
 it "ci.yml のジョブと acceptance.sh のミラーが一致する"
 assert_same_set "$CI_JOB_NAMES" "$ACCEPTANCE_SECTIONS" "ci.yml" "acceptance.sh"
 
-it "project-ai-rules が記述するジョブ数が ci.yml と一致する"
+it "review-gate.md が記述するジョブ数が ci.yml と一致する"
 if [[ -z "$RULES_COUNT" ]]; then
-  fail "project-ai-rules から「ci.yml の N ジョブ」を抽出できなかった"
+  fail "review-gate.md から「ci.yml の N ジョブ」を抽出できなかった"
 else
-  assert_eq "$RULES_COUNT" "$CI_JOB_COUNT" "project-ai-rules が記述するジョブ数"
+  assert_eq "$RULES_COUNT" "$CI_JOB_COUNT" "review-gate.md が記述するジョブ数"
 fi
 
 # ── 手動起動の口が残っていること ────────────────────────────────────────────

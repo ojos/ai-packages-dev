@@ -1,6 +1,6 @@
 # infra/github — 公開リポジトリの宣言
 
-`ojos` の公開リポジトリ（配布先）の存在と設定を、Terraform で宣言的に管理します（#487）。共通規範「外部サービスの状態管理」（`.ai-playbook/shared-ai-rules.md` 4 章）のこのリポジトリでの具体化で、方針は `.github/project-ai-rules.md`「外部サービスの状態管理」にあります。
+`ojos` の公開リポジトリ（配布先）の存在と設定を、Terraform で宣言的に管理します（#487）。共通規範「外部サービスの状態管理」（`.ai-playbook/shared-ai-rules.md` 4 章）のこのリポジトリでの具体化で、方針は `.claude/rules/external-services.md`「外部サービスの状態管理」にあります。
 
 | 項目 | 内容 |
 |---|---|

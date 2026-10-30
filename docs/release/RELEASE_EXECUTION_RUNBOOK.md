@@ -28,7 +28,7 @@
 | 資産監査 | `bash scripts/release-packages.sh --owner ojos --audit` | 公開済み Release の資産を取得し、SHA256 を再計算して整合性を検証する（直近 10 件。件数は `AUDIT_RELEASE_LIMIT` で変える） |
 
 git identity は workflow が GitHub App の bot として渡す。実行者が `.env` に identity を用意する必要はない
-（`.github/project-ai-rules.md`「Git identity」）。
+（`.claude/rules/git-identity.md`「Git identity（コミット作者情報）」）。
 
 ## 前提条件（リポジトリ設定）
 
@@ -45,7 +45,7 @@ workflow は認証と identity をリポジトリ設定から解決する。値�
 
 - App は `ojos/devcontainer-bootstrap`・`ojos/ai-playbook`・`ojos/devcontainer-host` の 3 リポジトリへ install し、権限は `contents: write` のみを与える。**`ojos/devcontainer-host` への install は、利用者の手作業である**（リポジトリそのものは `infra/github/` の Terraform が作るが、App の install は個人のアカウントでは PAT で扱えない見込みのため Terraform の範囲外。#487）。トークンの対象リポジトリは、公開する側だけに絞る（`release.yml` の手前のステップが、`host-version` を指定したときだけ `devcontainer-host` を加える）。install 前でも、DCB だけ・ai-playbook だけのリリースは通る。`host-version` を指定したときに install を忘れていると、トークンの発行で落ちる。Actions の `GITHUB_TOKEN` は自リポジトリにしかスコープが効かず、クロスリポジトリ push ができないため。
 - bot ユーザー ID は install 後に `gh api '/users/ojos-release-bot[bot]' --jq '.id'` で取得する。**App ID とは別番号**で、コミットを bot アカウントへ紐付けるのはこちら。
-- **配布先の公開リポジトリそのもの（存在と設定）は、このワークフローではなく `infra/github/` の Terraform が作る**（#487。`.github/project-ai-rules.md`「外部サービスの状態管理」）。新しい配布先を足すときは、先にそちらの PR で作ってから、App の install（手作業）とこのワークフローの対応を行う。
+- **配布先の公開リポジトリそのもの（存在と設定）は、このワークフローではなく `infra/github/` の Terraform が作る**（#487。`.claude/rules/external-services.md`「外部サービスの状態管理」）。新しい配布先を足すときは、先にそちらの PR で作ってから、App の install（手作業）とこのワークフローの対応を行う。
 
 ### artifact attestation（#340）
 

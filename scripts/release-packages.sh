@@ -748,7 +748,7 @@ init_and_push_release_repo() {
     # 持たない。setup-git-identity.sh が global identity を削除し
     # user.useConfigOnly=true を立てているため、明示しないと git が exit 128 で止まる
     # （黙って別名義でコミットされるより安全側に倒した設計。
-    #  .github/project-ai-rules.md「Git identity」）。
+    #  .claude/rules/git-identity.md「Git identity（コミット作者情報）」）。
     git -c user.name="$RELEASE_AUTHOR_NAME" -c user.email="$RELEASE_AUTHOR_EMAIL" \
       commit -m "chore: release snapshot"
   fi
