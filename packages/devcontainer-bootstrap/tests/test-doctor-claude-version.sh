@@ -51,6 +51,23 @@ else
   pass
 fi
 
+it "後置き付きの版（2.2.0-beta.1）と v 付きの版（v2.1.400）も、先頭の X.Y.Z で比べる"
+run_doctor "$(make_fake_claude '2.2.0-beta.1 (Claude Code)')"
+assert_contains "$DOC_OUT" "[OK] claude 2.2.0 supports" "後置き付きの版"
+run_doctor "$(make_fake_claude 'v2.1.400')"
+assert_contains "$DOC_OUT" "[OK] claude 2.1.400 supports" "v 付きの版"
+
+it "blockWritesOutsideWorkingDirectories が false なら検査しない"
+FALSESET="$(new_workdir)/falseset"
+mkdir -p "$FALSESET/.claude"
+printf '{"permissions":{"blockWritesOutsideWorkingDirectories":false}}\n' >"$FALSESET/.claude/settings.json"
+DOC_OUT="$(PATH="$(make_fake_claude '2.1.296 (Claude Code)'):/usr/bin:/bin" bash "$DOCTOR" --target-dir "$FALSESET" 2>&1)"
+if printf '%s' "$DOC_OUT" | command grep 'claude [0-9]\|claude version' >/dev/null; then
+  fail "false の設定で版の検査の行が出た"
+else
+  pass
+fi
+
 it "版を読めないとき（出力が版でない）は WARN"
 run_doctor "$(make_fake_claude 'unknown')"
 assert_contains "$DOC_OUT" "claude version could not be determined" "読めない版"

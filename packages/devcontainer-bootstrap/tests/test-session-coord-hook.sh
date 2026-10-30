@@ -99,7 +99,8 @@ if jq -e . "$SETTINGS" >/dev/null 2>&1; then pass; else fail "JSON として読�
 it "settings.json: permissions は締める側のキーだけを持つ（許可リストを clone した全員へ配らない）"
 # 許してよいキーは締める側のものだけ。allow / ask / deny / additionalDirectories / defaultMode は含めない。
 bad="$(jq -r --argjson ok '["blockWritesOutsideWorkingDirectories"]' \
-  '(.permissions // {}) | keys[] | select(. as $k | $ok | index($k) | not)' "$SETTINGS" 2>&1)"
+  '(.permissions // {}) | if type == "object" then keys[] | select(. as $k | $ok | index($k) | not) else "(object でない permissions)" end' "$SETTINGS" 2>/dev/null \
+  || echo "(JSON として読めない)")"
 if [[ -z "$bad" ]]; then pass; else fail "許可されないキー: $bad"; fi
 
 it "settings.json: blockWritesOutsideWorkingDirectories が true"
