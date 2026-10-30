@@ -1062,7 +1062,7 @@ OAuth トークン（`CLAUDE_CODE_OAUTH_TOKEN`）を `remoteEnv` へ注入する
 - `scripts/session-coord-hook.sh`（並行セッションの共有台帳を操作の直前に確かめるフックの本体。下記「[セッション協調フック](#セッション協調フックclaude-code)」参照）
 - `scripts/claude-session-wrapper.sh`（セッションの宛先名に場所と作業ツリーを自動で含める起動ラッパー。`.devcontainer/devcontainer.json` が VS Code の設定 `claudeCode.claudeProcessWrapper` へ、作業ツリーの外の固定パス（`/home/vscode/.local/bin/claude-session-launcher`）で配線します。このラッパーを直接指すと、ファイルが無いブランチへ切り替えただけで Claude Code が起動しなくなるため、極小の起動役（ラッパーが実行可能ならそれを、無ければ引数をそのまま exec する）を挟みます。起動役は、`devcontainer.json` の `onCreateCommand` が `scripts/on-attach.sh` を呼ばずに直接書き出し（一時ファイルへ書いて置き換える冪等な設置。失敗しても作成は止めず警告する）、`scripts/on-attach.sh` も接続のたびに冪等に設置します（既存のコンテナへの後追い）。2 つの経路が置く起動役の中身は同じですが、動きは同じではありません（`onCreateCommand` は無条件に設置し、`on-attach.sh` はラッパーが無ければ設置しません）。配線と設置が同じファイルにあるので、`--upgrade` で `on-attach.sh` だけが古いまま残っても、起動役は置かれます。拡張は設定値をそのまま実行ファイルのパスにし、`${workspaceFolder}` や `~` を展開しないため、絶対パスで書きます。`.env` の `SESSION_HOST_LABEL` が空なら宛先名を変えず、どんな失敗でも本体の起動まで進みます。宛先名の末尾は通常、起動ごとに変わる PID の 16 進です。ただし起動の引数に `--resume=<会話の識別子>` または `--resume <会話の識別子>`（UUID の形）があれば、識別子の先頭 8 桁（最初のハイフンの前）を使います。会話を再開しても宛先名が変わらず、ほかのセッションが覚えた宛先名へ再起動の後も送れます。`--resume` の直後が UUID の形でないとき（例: `--resume --verbose`）は PID の 16 進です。新しい会話の最初の起動の引数に識別子が含まれない場合は、その最初の起動だけ PID の名前になり、最初の再開のときに 1 回だけ名前が変わります。識別子の先頭 8 桁は、同じ作業ツリーの別の会話と重なる確率は小さいもののゼロではありません。重なると同じ宛先名のセッションが並び、宛先名だけでは送り分けられません（`/peers` の `resolve` は複数件として候補を出しますが、どれを選んでも宛先名は同じです）。そのときは、片方の会話を開き直して新しい会話にしてください）
 - `scripts/session-peers.sh`（同じプロジェクトで動くほかのセッションの一覧・宛先の解決・送信元の署名。`.claude/skills/peers/SKILL.md` の `/peers` が呼びます。`~/.claude/sessions/*.json` は公開された仕様ではないため、読めなければ警告して `ListAgents` を案内します）
-- `.claude/settings.json`（上記 2 つのフックの配線。既存ファイルは既定ポリシー `skip` で温存します）
+- `.claude/settings.json`（上記 2 つのフックの配線と、締める側の設定 2 つ。既存ファイルは既定ポリシー `skip` で温存します。下記「[生成する settings.json の締める側の設定](#生成する-settingsjson-の締める側の設定)」参照）
 - `.claude/.gitignore`（`settings.local.json` を追跡しない）
 
 規範を配置する場合（`--with-playbook` / `--playbook-version` / `--playbook-from`）は、加えて次を出力します。
@@ -1394,6 +1394,17 @@ github/gitignore のテンプレートは言語・OS・エディタの生成物�
 - **確認の対象:** ORIGIN の `version=` が `vX.Y.Z` のときの DCB（取得元は `ojos/devcontainer-bootstrap`）。ai-playbook は、取得元が `tag`、またはリリースのタグの tarball の URL（`https://github.com/<owner>/ai-playbook/archive/refs/tags/<版>.tar.gz`）のときだけで、ほかの取得元（`adjacent` / `local` など）は確認しません。ORIGIN が無い、`version=` がリリースの版でない環境（この開発リポジトリを含む）では何もしません。
 - **止め方:** 生成時の `--no-update-check`（ORIGIN に記録し、`--upgrade` で引き継ぎます。戻すのは `--upgrade --update-check`）、または `UPDATE_CHECK=off`（`0` / `false` / `no` / `disabled` も同じ）。環境変数で設定すれば止まります。`UPDATE_CHECK` に値（空でない）があれば、環境の値でも、コマンドで明示した値（`UPDATE_CHECK=off bash scripts/update-check.sh notify` など）でも、それを採ります。通知の末尾の「止めるには」も同じ順で、`UPDATE_CHECK=off`（環境の値。無ければ .env の値）と案内します。`.env` の `UPDATE_CHECK` は、`UPDATE_CHECK` に値が無いときだけ `update-check.sh` がローダーの値取得の関数（`__load_project_env_value`。変数は変えません）で読みます（`.env` の自動読み込み `load-project-env.sh` は `UPDATE_CHECK` だけ上書きしません。このキーを読むのは `update-check.sh` だけなので、対話のシェルの `UPDATE_CHECK` は `.env` の値を映しません）。`.env` に書くときは、`.env.example` のコメントの行の `#` を外します。
 
+## 生成する settings.json の締める側の設定
+
+`--with-claude` で生成する `.claude/settings.json` は、フックの配線に加えて、権限を**締める側**の設定を 2 つ持ちます。許可リスト（`allow` / `ask` / `deny` / `additionalDirectories` / `defaultMode`）は持ちません。許可リストをコミットすると、対話中に許可した操作が clone した全員へ配られるためです。
+
+- `permissions.blockWritesOutsideWorkingDirectories: true`: ファイル編集ツール（Write / Edit など）による、作業ディレクトリの外への書き込みを止めます。実測（2.1.314）では、許可ルール（例: `Edit(//外/**)`）で明示的に許した外への書き込みも拒否し、設定が無いと同じ書き込みは通りました。追加の作業ディレクトリ（`--add-dir`）への書き込みは、設定があっても通ります。**確かめたのはファイル編集ツールだけで、Bash のリダイレクト（`echo > 外`）などを止めるかは確かめていません**（Bash を経た書き込みも止めるとは言えません）。**Claude Code 2.1.314 以上で効きます。古い版では、設定ファイルは捨てられませんが、エラーも警告も出ずに黙って効きません**（2.1.296 で確かめました）。`doctor.sh` が版を検査します（下記）。
+- 確認フック（`confirm-merge-hook.sh`）の hook にだけ `"onFailure": "block"` を付けます。フック自体が失敗（異常終了・起動不能）したとき、通さずに止めるためです。マージの確認は承認を機構で保証するもので、フックが壊れて素通りになると保証が黙って消えます。**セッション協調フック（`session-coord-hook.sh`）には付けません。** 台帳は排他制御ではなく合図で、台帳の不具合ですべての操作を止めないこと（fail-open）が規範だからです。
+
+`doctor.sh` は、`claude` が PATH にあるときだけ `claude --version` の先頭の版を読み、下限 2.1.314 と数値で比べます（古ければ `[WARN]`。版を読めないときも判定できないので `[WARN]`。`claude` が無ければ検査しません）。
+
+既存の `.claude/settings.json` は温存されるため、この 2 つは足されません。必要なら手で足してください。
+
 ## Doctor 自己診断
 
 生成後、生成先を対象に実行して構成を検証します。公開リリースから `doctor.sh` を入手する手順は [doctor.sh を後から取得する](#doctorsh-を後から取得する) を参照してください。
@@ -1412,7 +1423,7 @@ github/gitignore のテンプレートは言語・OS・エディタの生成物�
 - `--strict`（既定: 無効。WARN があれば非 0 で終了する）
 - `-h` / `--help`
 
-検査は 5 カテゴリです。
+検査は 6 カテゴリです。
 
 | カテゴリ | 検査内容 |
 |---|---|
@@ -1421,6 +1432,7 @@ github/gitignore のテンプレートは言語・OS・エディタの生成物�
 | 衛生検査の配線 | 生成先に衛生検査 4 本（`check-control-chars.sh` / `check-table-breaks.sh` / `check-doc-links.sh` / `check-shell-portability.sh`）のいずれかがあり、`scripts/acceptance.sh` がそのファイル名を参照していなければ `[WARN]`（件数と配線の例を添える。`--strict` では非 0）。ファイル名がコメントにあるだけでも参照と見なすので、意図して呼ばない検査はファイル名と理由をコメントで書けば WARN が出ない。`acceptance.sh` が無いときは判定しない。`doctor.sh` は単体で取得されうるため、4 本の一覧は自前で持つ（`bootstrap.sh` と同じ内容。`tests/test-hygiene-wiring.sh` が照合する） |
 | 生成物の由来（下記） | `.devcontainer/ORIGIN`（[生成物の由来の記録](#生成物の由来の記録devcontainerorigin)）と現物を突き合わせ、生成時からの変更・記録した版が古いことを検出する |
 | 実行時コマンドの可用性 | `bash` / `jq` / `perl` / `gh`。`devcontainer.json` の features から検出した言語ランタイム（`rust` は feature 名と実行ファイル名が異なるため `cargo` で判定。`ruby` は一致するため `ruby` で判定）。`--with-aws` / `--with-gcp` で配線した cloud CLI（`aws` / `gcloud` / `terraform`）。`docker-outside-of-docker` を配線していれば `docker`。いずれも不在は WARN |
+| Claude Code の版 | `claude` が PATH にあるときだけ、`claude --version` を下限 2.1.314 と数値比較する。古い（`blockWritesOutsideWorkingDirectories` が黙って無視される）または読めなければ WARN |
 
 **`${localEnv:` の検出がこの診断の中核です。** 「[資格情報の扱い](#資格情報の扱い)」で述べたホスト資格情報の非注入は、方針を書いただけでは守られません。`remoteEnv` へホスト環境変数の参照が復活していないことを doctor が機械的に検査し、見つけたら FAIL にします。作業ディレクトリの受け渡し（`${localWorkspaceFolder}`）は `localEnv` ではないため対象外です。
 

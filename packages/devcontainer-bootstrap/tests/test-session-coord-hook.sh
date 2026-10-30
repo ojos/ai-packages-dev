@@ -93,8 +93,23 @@ first_cmd="$(jq -r '.hooks.PreToolUse[0].hooks[0].command // empty' "$SETTINGS" 
 first_matcher="$(jq -r '.hooks.PreToolUse[0].matcher // empty' "$SETTINGS" 2>/dev/null)"
 if [[ "$first_cmd" == *confirm-merge-hook.sh* && "$first_matcher" == "Bash" ]]; then pass; else fail "matcher=$first_matcher cmd=$first_cmd"; fi
 
-it "settings.json: permissions を持たない"
-assert_eq "$(jq -r 'has("permissions")' "$SETTINGS" 2>/dev/null)" "false" "permissions の有無"
+it "settings.json: JSON として読める"
+if jq -e . "$SETTINGS" >/dev/null 2>&1; then pass; else fail "JSON として読めない"; fi
+
+it "settings.json: permissions は締める側のキーだけを持つ（許可リストを clone した全員へ配らない）"
+# 許してよいキーの一覧はここだけ。allow / ask / deny / additionalDirectories / defaultMode は含めない。
+bad="$(jq -r --argjson ok '["blockWritesOutsideWorkingDirectories"]' \
+  '(.permissions // {}) | keys[] | select(. as $k | $ok | index($k) | not)' "$SETTINGS" 2>&1)"
+if [[ -z "$bad" ]]; then pass; else fail "許可されないキー: $bad"; fi
+
+it "settings.json: blockWritesOutsideWorkingDirectories が true"
+assert_eq "$(jq -r '.permissions.blockWritesOutsideWorkingDirectories // empty' "$SETTINGS" 2>/dev/null)" "true" "blockWritesOutsideWorkingDirectories"
+
+it "settings.json: 確認フックの hook には onFailure=block があり、セッション協調フックの hook には無い"
+confirm_of="$(jq -r '[.. | objects | select((.command? // "") | contains("confirm-merge-hook.sh")) | .onFailure // "none"] | unique | join(",")' "$SETTINGS" 2>/dev/null)"
+coord_of="$(jq -r '[.. | objects | select((.command? // "") | contains("session-coord-hook.sh")) | .onFailure // "none"] | unique | join(",")' "$SETTINGS" 2>/dev/null)"
+assert_eq "$confirm_of" "block" "確認フックの onFailure"
+assert_eq "$coord_of" "none" "セッション協調フックの onFailure"
 
 it "settings.json: 配線の呼び出し先がすべて生成物の中に実在する"
 missing=""

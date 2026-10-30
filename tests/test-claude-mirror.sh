@@ -232,32 +232,60 @@ else
   fail "git ls-files .claude/settings.json が $tracked_lines 行（1 行であるべき）"
 fi
 
-# permissions キーの有無を判定する関数。自己テストにも同じものを使う。
-has_permissions_key() {
+# permissions に許してよいキー（締める側のキーだけ）。ここが唯一の定義。
+# 許可リスト（allow / ask / deny）や、アクセス範囲を広げるキー（additionalDirectories /
+# defaultMode など）は含めない。
+ALLOWED_PERMISSION_KEYS='["blockWritesOutsideWorkingDirectories"]'
+
+# 許可されていない permissions のキーを 1 行 1 キーで出す。permissions が無ければ何も出さない。
+# 判定は jq で行う（文字列一致ではなく JSON の構造で見る）。JSON として読めなければ 2 を返す。
+disallowed_permission_keys() {
   local f="$1"
-  grep -q '"permissions"' "$f"
+  jq -r --argjson ok "$ALLOWED_PERMISSION_KEYS" \
+    '(.permissions // {}) | if type == "object" then keys[] | select(. as $k | $ok | index($k) | not) else "(object でない permissions)" end' "$f" 2>/dev/null
+  [[ "${PIPESTATUS[0]}" -eq 0 ]] || return 2
 }
 
-it "追跡された .claude/settings.json が permissions を持たない"
+# 許可されていないキーがあれば 0（問題あり）、無ければ 1。読めないときも 0（通さない）。
+has_disallowed_permissions() {
+  local f="$1" out rc=0
+  out="$(disallowed_permission_keys "$f")" || rc=$?
+  [[ "$rc" -ne 0 || -n "$out" ]]
+}
+
+it "追跡された .claude/settings.json の permissions が、締める側のキーだけである"
 # 許可リストが混入すると、対話中に許可した操作が clone した全員へ配られる形になる
 # （.gitignore のコメントが説明する事故そのもの）。許可リストは settings.local.json
-# （追跡しない）側に置く。
+# （追跡しない）側に置く。締める側のキー（blockWritesOutsideWorkingDirectories）は、
+# 全員へ配っても権限を広げないので持ってよい。
 if [[ ! -f "$SETTINGS" ]]; then
   fail "$SETTINGS が存在しない"
-elif has_permissions_key "$SETTINGS"; then
-  fail "$SETTINGS に permissions キーが含まれている（許可リストの混入。settings.local.json 側へ移すこと）"
+elif has_disallowed_permissions "$SETTINGS"; then
+  fail "$SETTINGS の permissions に許可されないキーがある: $(disallowed_permission_keys "$SETTINGS" | tr '\n' ' ')（許可リストの混入。settings.local.json 側へ移すこと）"
 else
   pass
 fi
 
-it "permissions キーの検出ロジックが実際に検出できる（意図的な乖離フィクスチャ）"
+it "permissions の検出ロジックが実際に検出できる（意図的な乖離フィクスチャ）"
 PERM_FIXTURE="$TMP_ROOT/settings-with-permissions.json"
 printf '{"hooks":{},"permissions":{"allow":[]}}\n' >"$PERM_FIXTURE"
-if has_permissions_key "$PERM_FIXTURE"; then
+PERM_MIXED="$TMP_ROOT/settings-with-mixed-permissions.json"
+printf '{"permissions":{"blockWritesOutsideWorkingDirectories":true,"allow":["Bash"]}}\n' >"$PERM_MIXED"
+PERM_OK="$TMP_ROOT/settings-with-tightening-permissions.json"
+printf '{"permissions":{"blockWritesOutsideWorkingDirectories":true}}\n' >"$PERM_OK"
+if has_disallowed_permissions "$PERM_FIXTURE" && has_disallowed_permissions "$PERM_MIXED" && ! has_disallowed_permissions "$PERM_OK"; then
   pass
 else
-  fail "permissions キーを含むフィクスチャを検出できなかった（照合が空振りしている）"
+  fail "allow だけ・締める側と allow の混在を落とし、締める側だけを通す、のいずれかが成立しない（照合が空振りしている）"
 fi
+
+it "settings.json: permissions.blockWritesOutsideWorkingDirectories が true（作業ディレクトリの外への書き込みを止める）"
+assert_eq "$(jq -r '.permissions.blockWritesOutsideWorkingDirectories // empty' "$SETTINGS" 2>/dev/null)" "true" "blockWritesOutsideWorkingDirectories"
+
+it "settings.json: 確認フックの hook に onFailure=block があり、セッション協調フックの hook には無い（fail-open を保つ）"
+confirm_of="$(jq -r '[.. | objects | select((.command? // "") | contains("confirm-merge-hook.sh")) | .onFailure // "none"] | unique | join(",")' "$SETTINGS" 2>/dev/null)"
+coord_of="$(jq -r '[.. | objects | select((.command? // "") | contains("session-coord-hook.sh")) | .onFailure // "none"] | unique | join(",")' "$SETTINGS" 2>/dev/null)"
+if [[ "$confirm_of" == "block" && "$coord_of" == "none" ]]; then pass; else fail "confirm=$confirm_of coord=$coord_of"; fi
 
 # ── フックの配線（確認フックとセッション協調フック）─────────────────────────────
 

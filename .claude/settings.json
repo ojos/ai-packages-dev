@@ -1,4 +1,7 @@
 {
+  "permissions": {
+    "blockWritesOutsideWorkingDirectories": true
+  },
   "hooks": {
     "SessionStart": [
       {
@@ -20,7 +23,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$CLAUDE_PROJECT_DIR/scripts/confirm-merge-hook.sh\""
+            "command": "bash \"$CLAUDE_PROJECT_DIR/scripts/confirm-merge-hook.sh\"",
+            "onFailure": "block"
           },
           {
             "type": "command",

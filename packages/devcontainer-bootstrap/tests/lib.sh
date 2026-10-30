@@ -17,6 +17,19 @@ PLAYBOOK_SRC="$REPO_ROOT/.ai-playbook"
 # 各テストが使う一時領域。run-tests.sh が最後に掃除する。
 : "${TEST_TMP_ROOT:?TEST_TMP_ROOT must be set by the runner}"
 
+# 実行者の claude の版に結果を左右されないよう、新しい版を名乗る偽の claude を PATH の先頭へ置く。
+# doctor.sh は claude の版が下限より古いと WARN を出すため、古い claude が入った環境では
+# doctor.sh --strict を使うテストが落ちる。版の検査そのものは test-doctor-claude-version.sh が
+# 自前の PATH で確かめる。
+FAKE_CLAUDE_BIN="$TEST_TMP_ROOT/fake-claude-bin"
+if [[ ! -x "$FAKE_CLAUDE_BIN/claude" ]]; then
+  mkdir -p "$FAKE_CLAUDE_BIN"
+  printf '#!/bin/sh\necho "99.0.0 (Claude Code)"\n' >"$FAKE_CLAUDE_BIN/claude"
+  chmod +x "$FAKE_CLAUDE_BIN/claude"
+fi
+PATH="$FAKE_CLAUDE_BIN:$PATH"
+export PATH
+
 # ── 実行環境からの隔離 ────────────────────────────────────────────────────────
 #
 # 生成物のスクリプトは、ここに挙げた環境変数を実行時に読む。テストは生成物を
