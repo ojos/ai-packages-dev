@@ -325,6 +325,22 @@ run_bootstrap_auto() {
     --output-dir "$out" "$@"
 }
 
+# 偽の claude を置くディレクトリを作って、そのパスを返す。呼び出し側は
+# PATH="$dir:$PATH" で先頭に置く。$1 を `claude --version` の出力として返す。
+# $1 が空なら、--version が失敗する claude にする。
+make_fake_claude() {
+  local dir
+  dir="$(new_workdir)/fakebin"
+  mkdir -p "$dir"
+  if [[ -n "$1" ]]; then
+    printf '#!/usr/bin/env bash\necho "%s"\n' "$1" > "$dir/claude"
+  else
+    printf '#!/usr/bin/env bash\nexit 1\n' > "$dir/claude"
+  fi
+  chmod +x "$dir/claude"
+  printf '%s\n' "$dir"
+}
+
 # 偽の docker を置くディレクトリを作って、そのパスを返す。呼び出し側は
 # PATH="$dir:$PATH" で先頭に置く。本物と同じ形の出力を返すのは次の 2 つだけで、
 # ほかのサブコマンドは失敗（exit 1）にする。

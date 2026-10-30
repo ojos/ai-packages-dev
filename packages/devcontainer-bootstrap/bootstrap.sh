@@ -11515,8 +11515,15 @@ TMPL
       #
       # 既存ファイルは衝突ポリシー（既定 skip）で温存される。既に settings.json を
       # 持つプロジェクトへ後から入れる場合は、この hooks 節を手で足すことになる。
+      #
+      # permissions は「締める側」のキー blockWritesOutsideWorkingDirectories だけを持つ。
+      # 許可リスト（allow など）は持たない。確認フックの hook にだけ onFailure=block を付ける
+      # （フックが失敗したとき通さず止める）。セッション協調フックは fail-open が規範なので付けない。
       cat <<'TMPL'
 {
+  "permissions": {
+    "blockWritesOutsideWorkingDirectories": true
+  },
   "hooks": {
     "SessionStart": [
       {
@@ -11538,7 +11545,8 @@ TMPL
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$CLAUDE_PROJECT_DIR/scripts/confirm-merge-hook.sh\""
+            "command": "bash \"$CLAUDE_PROJECT_DIR/scripts/confirm-merge-hook.sh\"",
+            "onFailure": "block"
           },
           {
             "type": "command",

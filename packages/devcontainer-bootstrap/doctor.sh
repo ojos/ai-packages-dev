@@ -661,6 +661,34 @@ check_git_config() {
 section "Git config (arbitrary code execution)"
 check_git_config
 
+# 対象の .claude/settings.json が permissions.blockWritesOutsideWorkingDirectories を true で持つとき、
+# この版より古い claude では黙って無視される（エラーも警告も出ない）。確認フックの onFailure
+# （2.1.295 から）もこの下限に含まれる。設定を持たない対象と、
+# claude が PATH に無い環境（CI など）では検査しない。版を読めないときは、効くかどうか
+# 判定できないので WARN。
+CLAUDE_MIN_VERSION="2.1.314"
+
+check_claude_version() {
+  jq -e '.permissions.blockWritesOutsideWorkingDirectories == true' \
+    "$TARGET_DIR/.claude/settings.json" >/dev/null 2>&1 || return 0
+  command -v claude >/dev/null 2>&1 || return 0
+  local out ver=""
+  out="$(claude --version 2>/dev/null)" || out=""
+  # 先頭の X.Y.Z だけを取る（v の接頭辞や -beta.1 などの後置きは落とす）。
+  # dcb_version_lt は数値でない区分を 0 とみなすので、取れなければ判定できない扱いにする
+  if [[ "$out" =~ ^v?([0-9]+\.[0-9]+\.[0-9]+) ]]; then ver="${BASH_REMATCH[1]}"; fi
+  if [[ -z "$ver" ]]; then
+    warn "claude version could not be determined: 判定できません（blockWritesOutsideWorkingDirectories が効くのは $CLAUDE_MIN_VERSION 以上）"
+  elif dcb_version_lt "$ver" "$CLAUDE_MIN_VERSION"; then
+    warn "claude $ver is older than $CLAUDE_MIN_VERSION: blockWritesOutsideWorkingDirectories is silently ignored (no error, no warning)"
+  else
+    ok "claude $ver supports blockWritesOutsideWorkingDirectories (>= $CLAUDE_MIN_VERSION)"
+  fi
+}
+
+section "Claude Code version"
+check_claude_version
+
 section "Generation origin"
 check_origin_record
 check_dcb_new_leftover
