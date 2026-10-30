@@ -291,12 +291,15 @@ else
   fail "SessionStart=$a PostToolUse=$b SessionEnd=$c PostToolUseFailure=$f"
 fi
 
+it "settings.json: SessionStart から check-git-config.sh --hook を呼ぶ（任意のコードを実行させうる git 設定の検出）"
+if [[ "$(wired_cmds '.hooks.SessionStart')" == *'scripts/check-git-config.sh" --hook'* ]]; then pass; else fail "SessionStart=$(wired_cmds '.hooks.SessionStart')"; fi
+
 it "settings.json の配線が、DCB が --with-claude で生成する雛形と一致する"
 TEMPLATE_SETTINGS="$(awk -v q="'" '$0=="    " q ".claude/settings.json" q ")"{seen=1;next} seen&&$0=="      cat <<" q "TMPL" q{inside=1;seen=0;next} inside&&$0=="TMPL"{exit} inside{print}' "$REPO_ROOT/packages/devcontainer-bootstrap/bootstrap.sh")"
 if [[ -n "$TEMPLATE_SETTINGS" && "$(cat "$SETTINGS")" == "$TEMPLATE_SETTINGS" ]]; then pass; else fail "雛形と食い違っている（雛形が空の場合も含む）"; fi
 
-it "配線の呼び出し先（scripts/ の 2 本）が実在する"
-if [[ -f "$REPO_ROOT/scripts/confirm-merge-hook.sh" && -f "$REPO_ROOT/scripts/session-coord-hook.sh" ]]; then pass; else fail "フック本体が無い"; fi
+it "配線の呼び出し先（scripts/ の 3 本）が実在する"
+if [[ -f "$REPO_ROOT/scripts/confirm-merge-hook.sh" && -f "$REPO_ROOT/scripts/session-coord-hook.sh" && -f "$REPO_ROOT/scripts/check-git-config.sh" ]]; then pass; else fail "フック本体が無い"; fi
 
 it ".devcontainer/devcontainer.json の onCreateCommand が、DCB が --with-claude で生成するものと一致する"
 GEN_DC="$TMP_ROOT/gen-claude"

@@ -625,6 +625,42 @@ check_hygiene_wiring() {
 section "Hygiene checks wiring"
 check_hygiene_wiring
 
+# 任意のコードを実行させうる git の設定（core.fsmonitor / core.hooksPath など）の検出。
+# 検査は scripts/check-git-config.sh が持つ。あれば呼び、1（検出）は WARN、2（判定できない）も
+# WARN で知らせる。FAIL にはしない（husky の core.hooksPath のように正当な設定もあり、
+# 許可の一覧 .git-config-allow で黙らせられるため）。スクリプトが無い構成では何もしない。
+check_git_config() {
+  local script="$TARGET_DIR/scripts/check-git-config.sh" out rc=0
+  [[ -f "$script" ]] || return 0
+  # まだ git のリポジトリになっていない生成先は、検査する設定が無いので判定しない
+  # （生成直後は正常な状態で、WARN にすると --strict が通らなくなる）。生成先が別の
+  # リポジトリの中にあると rev-parse は親を見つけるので、根が生成先そのものかで確かめる
+  # （親リポジトリの設定を、生成先の設定として検査しない）。
+  # rev-parse は設定ファイルが壊れていても失敗するので、失敗だけで「リポジトリでない」と
+  # 決めない。git の文言を英語に固定し、出力の 1 行目が `fatal: not a git repository` で
+  # 始まるときだけを見分ける（含むかで見ると、エラー文に入る取り込み先のファイル名へこの
+  # 語句を仕込まれる）。それ以外の失敗は検査へ進めて「判定できない」の WARN にする。
+  local top
+  if top="$(LC_ALL=C git -C "$TARGET_DIR" rev-parse --show-toplevel 2>&1)"; then
+    [[ "$(cd "$top" && pwd -P)" == "$(cd "$TARGET_DIR" && pwd -P)" ]] || return 0
+  elif [[ "${top%%$'\n'*}" == "fatal: not a git repository"* ]]; then
+    return 0
+  fi
+  # --summary: 値・<名前>・取り出し元を出さない。doctor の出力はエージェントが読むことがあり、
+  # 仕込まれた値をそのまま出すと、指示に見える文が届く経路になる。値は人が直接
+  # bash scripts/check-git-config.sh を実行して確かめる。
+  out="$(cd "$TARGET_DIR" && bash "$script" --summary 2>&1)" || rc=$?
+  case "$rc" in
+    0) ok "no git config entries that can run arbitrary code (scripts/check-git-config.sh)" ;;
+    1) warn "git config has entries that can run arbitrary code (scripts/check-git-config.sh)" ;;
+    *) warn "git config could not be checked (scripts/check-git-config.sh exit $rc): 判定できません" ;;
+  esac
+  [[ "$rc" -eq 0 ]] || printf '%s\n' "$out" | sed 's/^/  /'
+}
+
+section "Git config (arbitrary code execution)"
+check_git_config
+
 section "Generation origin"
 check_origin_record
 check_dcb_new_leftover

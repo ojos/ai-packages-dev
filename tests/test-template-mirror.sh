@@ -137,6 +137,7 @@ BOOTSTRAP="$REPO_ROOT/packages/devcontainer-bootstrap/bootstrap.sh"
 #   /peers が配布物と違う挙動になる。
 MIRRORED_RELS='scripts/check-control-chars.sh
 scripts/check-doc-links.sh
+scripts/check-git-config.sh
 scripts/check-no-secrets.sh
 scripts/check-shell-portability.sh
 scripts/check-table-breaks.sh

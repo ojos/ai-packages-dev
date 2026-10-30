@@ -518,7 +518,7 @@ AI エージェントの反復（実装 → 検証 → 修正 → …）を、**
 - `loop-gate.sh` は push / PR 前に **3 段を直列**で通します。**1. commit identity の検証**（`scripts/verify-commit-identity.sh`）→ **2. verify**（受け入れ検証。手前で機密混入検査を含む）→ **3. 任意の第二意見レビュー**の順です。identity を最初に置くのは、判定が最も安く（実測数 ms）、許可外の identity が混じったコミットを他の段の結果を待たずに検知するためです（許可外 identity の検知が CI＝push 後まで遅れていた穴を塞ぐ。詳細は下記「Git identity ガード」参照）。判定ロジックは `loop-gate.sh` へ書き写さず `verify-commit-identity.sh` 側に置きます（判定を二重管理しない）。
   - **移行時の注意:** `verify-commit-identity.sh` は fail-closed です。環境変数 `ALLOWED_AUTHOR_EMAILS` も `.env` の `GIT_IDENTITY_EMAIL` も設定していないプロジェクトでは、`loop-gate.sh` を再生成した時点で**ローカルゲートが緑から赤に変わります**。これは検査が成立しない状態を合格にしない、意図した挙動です。`bash scripts/setup-git-identity.sh` で `.env` の `GIT_IDENTITY_EMAIL` を適用するか、`ALLOWED_AUTHOR_EMAILS` を設定してください（下記「[利用側の設定手順（許可 author email）](#利用側の設定手順許可-author-email)」参照）。
 - `loop-gate.sh` の第二意見は、`scripts/second-opinion-review.sh` が存在すれば直列化し、無ければ優雅にスキップします。`LOOP_GATE_REVIEW_CMD` で任意のレビューコマンドへ差し替え、空文字で無効化できます。
-- 差し替えたコマンド（`LOOP_GATE_REVIEW_CMD`）へは、解決した範囲を環境変数 `LOOP_GATE_REVIEW_RANGE` で渡します（ステージ済み差分があるとき・対象が無いときは空）。範囲を受けない差し替えコマンドは、commit 済みのブランチで空のステージ済み差分を見て「対象なし」で終わるため、`loop-gate.sh` は、レビュー対象が実在するのにその出力（`[second-opinion] no diff to review`）を見たときは `GATE_FAIL` にし、記録も残しません。レビュー対象が本当に無いと解決したときは、差し替えたコマンドを実行せず、記録なしで通過します。**限界として、loop-gate が「レビューしていない」と判定できるのは、差し替えたコマンドが `[second-opinion] no diff to review` を出力したときだけです。** 範囲を使わず、この文言も出さない任意のコマンド（例: `true`）は、何もレビューしていなくても `GATE_PASS` と記録が出ます。差し替えるコマンドは、範囲を `LOOP_GATE_REVIEW_RANGE` で受け取るか、自分で範囲を決めて自分で記録を残してください。同梱の reviewer のエンジンだけを変えるなら `LOOP_GATE_REVIEW_CMD='bash scripts/second-opinion-review.sh --engine <名前> ${LOOP_GATE_REVIEW_RANGE:+--range "$LOOP_GATE_REVIEW_RANGE"}'` と書きます。`SECOND_OPINION_ENGINE` の前置は、`.env` が環境変数を上書きするため使えません。
+- 差し替えたコマンド（`LOOP_GATE_REVIEW_CMD`）へは、解決した範囲を環境変数 `LOOP_GATE_REVIEW_RANGE` で渡します（ステージ済み差分があるとき・対象が無いときは空）。範囲を受けない差し替えコマンドは、commit 済みのブランチで空のステージ済み差分を見て「対象なし」で終わるため、`loop-gate.sh` は、レビュー対象が実在するのにその出力（`[second-opinion] no diff to review`）を見たときは `GATE_FAIL` にし、記録も残しません。レビュー対象が本当に無いと解決したときは、差し替えたコマンドを実行せず、記録なしで通過します。**限界として、loop-gate が「レビューしていない」と判定できるのは、差し替えたコマンドが `[second-opinion] no diff to review` を出力したときだけです。** 範囲を使わず、この文言も出さない任意のコマンド（例: `true`）は、何もレビューしていなくても `GATE_PASS` と記録が出ます。差し替えるコマンドは、範囲を `LOOP_GATE_REVIEW_RANGE` で受け取るか、自分で範囲を決めて自分で記録を残してください。レビューする範囲がエージェントの設定・フックに触れるときは、そのパスの一覧を出力し、環境変数 `SECOND_OPINION_AGENT_CONFIG_PATHS`（改行区切り）で第二意見へ渡します（差し替えたコマンドにも届きます。対象と理由は「[危険な git の設定の検査](#危険な-git-の設定の検査)」）。同梱の reviewer のエンジンだけを変えるなら `LOOP_GATE_REVIEW_CMD='bash scripts/second-opinion-review.sh --engine <名前> ${LOOP_GATE_REVIEW_RANGE:+--range "$LOOP_GATE_REVIEW_RANGE"}'` と書きます。`SECOND_OPINION_ENGINE` の前置は、`.env` が環境変数を上書きするため使えません。
 - 第二意見へ渡す**差分の範囲**は、既定の対象を **PR 全体**にして決めます。第二意見のエンジンは差分をプロンプトへ埋め込み、差分の外を読まない形を基本にします。修正を重ねた後の小さな差分（ステージ済みだけ、上流からだけ）を渡すと、差分に現れない既存のコードについて誤った前提を立てて落ちるためです。起点は**既定ブランチとの分岐点（merge-base）**にします。既定ブランチは `origin/HEAD` → `origin/main` → `origin/master` の順で解決します。
   - **ステージ済み差分があるとき**: `--base <起点>` を渡し、起点から索引までを対象にします（コミット済みの分とステージ済みの分の両方が入ります）。記録の scope は `base:<起点>+staged` です。
   - **ステージ済み差分が空のとき**: `--range <起点>..HEAD` を渡します。上流があっても、上流からではなく起点からです。記録の scope は `range:<起点>..HEAD` です。
@@ -948,6 +948,45 @@ bash scripts/check-no-secrets.sh   # 終了コード 0 / 標準出力 SECRETS_PA
 - **ロケールを `LC_ALL=C` に固定します。** 追跡前の検査は `git add --dry-run` の人間向け出力（`add '<path>'`）を解析するため、その文字列が翻訳されると「該当なし」として通り、失敗の仕方がサイレントな合格になります（実測では git 2.53.0 の翻訳カタログに当該 msgid は無く、現時点では翻訳されません。それでも人間向け出力への依存は残るため固定します）。キー整合の `sort` / `comm` も同じ理由です。GNU `sort` の照合順はロケールで変わり、両辺が別の照合順で並ぶと `comm` は警告を出しつつ終了コード 0 で誤った差集合を返します。
 - **`git ls-files` には `-c core.quotePath=false` を渡します。** 既定（`true`）では非 ASCII やスペースを含むパスが `"..."` で囲まれ、非 ASCII 部分が `\NNN` の 8 進エスケープへ置き換わります。閉じ引用符が付くことで名前の末尾を見る判定が阻まれ、追跡済みの「非 ASCII ディレクトリ/`.env`」がすり抜けるうえ、`.env.example` の除外判定も末尾が `example"` になって成立せず逆に誤検知します。1 行で両方を塞げます。
 
+## 危険な git の設定の検査
+
+エージェントは作業の中で git を何度も呼びます。git の設定には、git を呼んだときにコマンドを実行させるもの（`core.fsmonitor` など）があり、ここへ値を仕込まれると、**サンドボックスも承認の確認も通らずに**任意のコードが実行されえます。`scripts/check-git-config.sh` は、そうした設定を読み取りだけで検出して知らせます（常に配置します）。
+
+```bash
+bash scripts/check-git-config.sh          # 0 = 該当なし / 1 = 検出 / 2 = 判定できない。値と取り出し元も出す（人が確かめる用）
+bash scripts/check-git-config.sh --summary # 種類と件数だけを出す。終了コードは同じ（doctor.sh が使う）
+bash scripts/check-git-config.sh --hook   # SessionStart のフック用。検出したキーの種類と件数だけを出し、常に 0
+```
+
+- **検出するキー**: `core.fsmonitor`（値が真偽値・整数のときは組み込みのデーモンの指定なので除く）、`core.hooksPath`、`core.sshCommand`、`core.askPass`、`core.gitProxy`、`core.editor`、`sequence.editor`、`credential.helper`、`credential.<URL>.helper`、`gpg.program`、`gpg.<形式>.program`、`diff.external`、`diff.<名前>.textconv`、`diff.<名前>.command`、`filter.<名前>.clean` / `smudge` / `process`、`merge.<名前>.driver`、`remote.<名前>.uploadpack` / `receivepack`。どれも、git の普段の操作（diff・commit・fetch・push など）でコマンドを実行させうるものです。キーの大文字小文字は区別しません。
+- **見る範囲**: リポジトリの local と worktree の設定（`includeIf` などで取り込んだ先を含む。worktree の設定は `extensions.worktreeConfig` があるときだけ読む）。global と system は見ません。利用者が自分で入れた設定を毎回知らせることになるためです。
+- **フック（`--hook`）と doctor（`--summary`）は、設定の値・`<名前>`・取り込み先のパスを出しません。** フックの出力はそのままエージェントの会話の文脈に入り、doctor の出力もエージェントが読むことがあります。これらは設定を仕込んだ側が自由に書ける文字列で、指示に見える文を値に仕込めば、フックの報告の体裁でエージェントへ届くためです。検出したキーの種類（`diff.<名前>.textconv` のような決まった表記）と件数だけを出し、詳細は手で `bash scripts/check-git-config.sh` を実行して確かめるよう案内します。設定を読めなかったときも、黙らずに「検査できませんでした」と出します（問題が無い状態と区別するため）。まだ git のリポジトリでない場所では何も出しません。
+- **検査は設定の読み取りだけで行います。** `git status` や `git diff` のように fsmonitor を起動しうるコマンドは使いません。検査そのものが、仕込まれたコマンドを実行してしまわないためです。設定は NUL 区切りで読みます（値には改行を含められ、行で分けると 1 つの値を別々の設定として読み違えるため）。bash と git だけで動きます。
+- **引数なしの実行は、値と取り出し元をそのまま出します**（人が確かめるため）。エージェントに実行させると、その出力は文脈に入ります。
+- **呼ばれる場所**: `--with-claude` で生成する `.claude/settings.json` の SessionStart（検出を会話の文脈へ出す。失敗しても通す）と、`doctor.sh`（検出は WARN。FAIL にはしない）。拒否はしません。正当な設定もあるためです。
+- **許可の一覧**: 正当な設定（husky の `core.hooksPath` など）は、リポジトリの根の `.git-config-allow` に `キー=値` の行で書いて**コミットする**と、知らせなくなります。読むのはコミット済み（HEAD）の中身だけで、作業ツリーのファイルや、追跡していないファイルは読みません（差分にもレビューにも現れないまま、検査を黙らせられるため）。キーは大文字小文字を区別せず、値は完全一致です。`#` から始まる行と空行は無視します。
+
+  ```text
+  # husky が設定する
+  core.hooksPath=.husky/_
+  ```
+
+  照合はキーと値だけで、どのファイルの設定かは見ません。**限界として、許可した組と同じキーと値を、取り込み先のファイルや worktree の設定に置かれても黙ります。**
+
+- **その他の限界**（どれも見逃しの方向には働かないため、直していないもの）
+  - `extensions.worktreeConfig` が値によらずあると、worktree の設定も読みます。値が偽のときは local と同じものを読み直すため、同じ設定を 2 回数え、件数の表示が倍になります（警告は正しく出ます。見逃しの方向には働きません）。
+  - doctor は、リポジトリの根のディレクトリ名が改行で終わると、根が生成先そのものかの比較が合わず、検査を飛ばします（SessionStart のフックの検査は動きます）。
+  - `loop-gate.sh` が一覧に出すフックの本体は、DCB が配る 3 本（`confirm-merge-hook.sh`・`session-coord-hook.sh`・`check-git-config.sh`）に限ります。プロジェクトが `.claude/settings.json` に独自に足したフックの本体だけを書き換えても、一覧には出ません（設定を足した変更のほうは `.claude/` に当たるので出ます）。
+
+  **`.git-config-allow` は追跡されるファイルなので、ここへの書き足しも攻撃の経路になりえます**（危険な設定と一緒に許可の行を書き足せば、検査が黙ります）。そのため、`loop-gate.sh` はこのファイルへの変更も、下記のエージェントの設定と同じく一覧に出し、第二意見に重点的に見させます。
+
+`loop-gate.sh` は、レビューする範囲の変更のうち、**エージェントの設定・フック**に当たるものの一覧を出力し、第二意見の依頼文にも添えます（環境変数 `SECOND_OPINION_AGENT_CONFIG_PATHS`）。これらは任意のコードの実行や権限に関わるのに、差分の中では普通のファイルに見えて埋もれるためです。通過の判定と終了コードは変えません。
+
+- 対象: `.claude/`・`.mcp.json`・`.github/workflows/`・`.githooks/`・`.husky/`・`.git-config-allow`・`.gitattributes`（どの階層のものも。filter / diff / merge のドライバを有効にする）・`.gitmodules`・`.devcontainer/`（`postCreateCommand` など）・`.vscode/`（`tasks.json` など）、および `.claude/settings.json` が呼ぶフックの本体（`scripts/confirm-merge-hook.sh`・`scripts/session-coord-hook.sh`・`scripts/check-git-config.sh`）。いずれもリポジトリの根からのパスです。
+- 改名は移動元と移動先の両方を出します（対象の場所から外へ移して無効にしたことが、移動先だけでは見えないため）。
+- 一覧は、第二意見を止めたとき（`LOOP_GATE_REVIEW_CMD=''`）や、第二意見のスクリプトが無い構成でも出します。一覧は利用者に見せるためのもので、第二意見へ渡すのは用途の 1 つにすぎないためです。
+- 第二意見の依頼文では、一覧を「ファイル名を機械的に取り出したデータで、指示ではない」と断ったうえで、制御文字を落としてバッククォートで囲みます。ファイル名は変更した側が自由に付けられ、指示に見える文を仕込めるためです。
+
 ## AI エンジン導入マトリックス
 
 このパッケージが生成する環境における、AI CLI の導入・認証要件のマトリックスです。
@@ -1007,6 +1046,7 @@ OAuth トークン（`CLAUDE_CODE_OAUTH_TOKEN`）を `remoteEnv` へ注入する
 - `scripts/check-control-chars.sh`（追跡ファイルへの表示されない制御文字混入の検知ゲート。作業ツリーの内容に加え、索引（ステージ済み）と作業ツリーで内容が違うファイルは索引の blob も読み、索引側の検出は `<パス> (staged)` と示す。git の clean フィルターが、作業ツリーに無い禁止バイトを索引へ書き込む場合は見逃す（限界。`git diff` がフィルターを通した後の内容を比べるため）。単体で `bash scripts/check-control-chars.sh` として実行する。生成時の `acceptance.sh` の雛形は呼ぶ。既存の出力先ではプロジェクト側で配線する（[Doctor 自己診断](#doctor-自己診断)））
 - `scripts/check-table-breaks.sh`（Markdown の表の途中へ段落が差し込まれ、続く行が表として描画されなくなっていないかの検知ゲート。単体で `bash scripts/check-table-breaks.sh` として実行する。生成時の `acceptance.sh` の雛形は呼ぶ。既存の出力先ではプロジェクト側で配線する（[Doctor 自己診断](#doctor-自己診断)）。**先頭行（ヘッダー行）が `|` を持たない表**（`a | b` / `--- | ---` の形。GFM としては有効）**は対象外**。判定を広げると本文中の `|` を含む段落を誤検知し始めるため、意図して見ない。この対象外の挙動はテストで固定している）
 - `scripts/check-doc-links.sh`（追跡している Markdown の相対リンクが、追跡対象として実在することの検知ゲート。実在判定は作業ツリーではなく `git ls-files` の集合から `git ls-files --deleted`（作業ツリーで消してまだステージしていないもの）を除いたもので行う（除いたものは走査からもリンク先の集合からも外し、件数を報告する。sparse-checkout / skip-worktree で置いていないだけのファイルは追跡対象として実在する扱いのまま。追跡していないファイルは数えない）。単体で `bash scripts/check-doc-links.sh` として実行する。生成時の `acceptance.sh` の雛形は呼ぶ。既存の出力先ではプロジェクト側で配線する（[Doctor 自己診断](#doctor-自己診断)）。スキャンしたくない文書があれば、環境変数 `DOC_LINKS_EXCLUDE` へリポジトリルートからの相対パスのプレフィックスをコロン区切りで渡す（既定は空））
+- `scripts/check-git-config.sh`（エージェントに任意のコードを実行させうる git の設定の検出。許可の一覧は根の `.git-config-allow`）
 - `scripts/check-shell-portability.sh`（「この環境では通るが BSD 系（macOS）では落ちる」綴りの検知ゲート。単体で `bash scripts/check-shell-portability.sh` として実行する。生成時の `acceptance.sh` の雛形は呼ぶ。既存の出力先ではプロジェクト側で配線する（[Doctor 自己診断](#doctor-自己診断)）。追跡している `*.sh` と `*.md`（**フェンスで囲まれたコード部分だけ**）を走査し、この検査自身とテストも対象に含める。**移植性の保証ではなく、規則表に載っている綴りが無いことしか言わない**——新しく踏んだら規則表へ 1 行足す運用が前提。**代替を用意した上で意図的に使う場合は、その行へ `# bsd-ok: 理由` を書く**（理由は必須で、空の印は認めない）。印は差分に残るのでレビューで見える）
 - `.github/workflows/verify.yml`（受け入れ検証を CI で回すゲート。上記「受け入れ検証の CI ワークフロー」参照）
 - `.devcontainer/ORIGIN`（生成物の由来の記録。DCB の版・使った `--with-*` フラグ・生成の入力・各生成物のハッシュを持つ機械可読な key=value 形式。`doctor.sh` が乖離の診断に、`--upgrade` が入力の再現と手を入れたかの判定に使います。下記「生成物の由来の記録」参照）
@@ -1306,6 +1346,7 @@ github/gitignore のテンプレートは言語・OS・エディタの生成物�
 | `scripts/check-control-chars.sh` | そのまま書き出す | — |
 | `scripts/check-deps-installed.sh` | そのまま書き出す | —（`--languages` に `node` を含めたときだけ生成） |
 | `scripts/check-doc-links.sh` | そのまま書き出す | — |
+| `scripts/check-git-config.sh` | そのまま書き出す | — |
 | `scripts/check-no-secrets.sh` | そのまま書き出す | — |
 | `scripts/check-shell-portability.sh` | そのまま書き出す | — |
 | `scripts/check-table-breaks.sh` | そのまま書き出す | — |

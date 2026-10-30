@@ -216,6 +216,7 @@ bash scripts/loop-gate.sh
 
 - **`loop-gate.sh` は、上の 3 段の手前で commit identity の検証（`scripts/verify-commit-identity.sh`）を挟みます。** 許可外の identity が混じったコミットを、他のどの段よりも安く・早く（判定は数 ms）検知するためです。ここでいう「3 段」は規範が定める段（主レビュー / 受け入れ検証 / 第二意見）を指し、`loop-gate.sh` 内部の実行順（commit identity → verify → 第二意見という実装上の step 1/2/3）とは別の軸です。両者を混同しないでください。
 - 終了コード 0 = `GATE_PASS`（push 可） / 1 = `GATE_FAIL`（いずれかの段が未通過、または実行不能）。
+- **レビューする範囲がエージェントの設定・フック（対象の一覧は `packages/devcontainer-bootstrap/README.md`「危険な git の設定の検査」）に触れるときは、そのパスの一覧を出力し、第二意見の依頼文にも重点的に見るよう添えます**（`SECOND_OPINION_AGENT_CONFIG_PATHS`）。任意のコードの実行や権限に関わるのに、差分の中では埋もれるためです。判定は変えません（#671）。
 - 第二意見コマンドは環境変数 `LOOP_GATE_REVIEW_CMD` で差し替え（任意のコマンド）・無効化（空文字）できます。未設定のときは `scripts/second-opinion-review.sh` があれば実行し、無ければスキップします。
 - **`LOOP_GATE_REVIEW_CMD` で差し替えたコマンドへは、解決した範囲を環境変数 `LOOP_GATE_REVIEW_RANGE` で渡します。** ステージ済み差分が空のときだけ commit 済み範囲（`<起点>..HEAD`）が入り、ステージ済みがあるとき・レビュー対象が無いときは空です。差し替えたコマンドが範囲を受けないと、commit 済みのブランチでは空のステージ済み差分を見て「対象なし」で 0 を返します。`loop-gate.sh` は、レビュー対象が実在するのにその出力（`[second-opinion] no diff to review`）を見たときは、レビューされていないので **`GATE_FAIL` にし、記録も残しません**。レビュー対象が本当に無いと解決したときは、差し替えたコマンドを実行せず、記録なしで通過します（既定の経路と同じ）。
 - **限界として、loop-gate が「レビューしていない」と判定できるのは、差し替えたコマンドが `[second-opinion] no diff to review` を出力したときだけです。** 範囲を使わず、この文言も出さない任意のコマンド（例: `true`）は、何もレビューしていなくても `GATE_PASS` と記録が出ます。差し替えるコマンドは、範囲を `LOOP_GATE_REVIEW_RANGE` で受け取るか、自分で範囲を決めて自分で記録を残してください。
@@ -278,6 +279,7 @@ bash scripts/second-opinion-review.sh --engine codex           # エンジン切
 | `--engine <name>` | `SECOND_OPINION_ENGINE` | `gemini` | レビューを実行する CLI（`gemini` / `antigravity` / `codex`）。どちらでも指定せず `agy` か `codex` が PATH にあるときは、既定の gemini を使う旨を stderr に知らせる（判定は変えない） |
 | `--model <name>` | `SECOND_OPINION_MODEL` | 各 CLI の既定 | 使用モデル |
 | `--runs <n>` | `SECOND_OPINION_RUNS` | `1` | 実行回数（1 以上の整数。不正値は実行前に停止） |
+| — | `SECOND_OPINION_AGENT_CONFIG_PATHS` | 未設定 | `loop-gate.sh` が渡す、レビュー範囲のうちエージェントの設定・フックに当たるパスの一覧（改行区切り）。空でなければ依頼文の末尾に、重点的に見るよう添える |
 
 - **エンジンの指定が無いまま既定の gemini で回るとき、`agy` か `codex` が見つかれば、`[second-opinion] notice:` で始まる 2 行を stderr に出します。** 両方を入れた構成で `.env` を写し忘れた作業ツリーが、黙って gemini で回るのを防ぐためです。終了コードと判定は変わらず、gemini だけの構成では出しません。文面に `(engine=` の形を含めないのは、`loop-gate.sh` が出力の最初の `(engine=` から記録のエンジン名を読むためです。
 - 優先順位は CLI 引数 > `.env` > 既定です。`.env` は既に設定済みの環境変数も上書きするため、環境変数でエンジンを前置しても `.env` に負けます（`--engine` を使います）。
