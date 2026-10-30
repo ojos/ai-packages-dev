@@ -41,9 +41,13 @@
           "why": {
             "type": "string",
             "description": "なぜ問題か。再現条件や影響を具体に。"
+          },
+          "failure_scenario": {
+            "type": "string",
+            "description": "失敗の筋書き: どんな入力・状態のとき、どんな誤った結果（誤動作・脆弱性の悪用・型の破綻）になるか。ゲート対象の 4 種類（bug / vulnerability / type-error / edge-case）では必須で、空にしない。promise-mismatch / other では空文字でよい。"
           }
         },
-        "required": ["category", "file", "line", "what", "why"],
+        "required": ["category", "file", "line", "what", "why", "failure_scenario"],
         "additionalProperties": false
       }
     }

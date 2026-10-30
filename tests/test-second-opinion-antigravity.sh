@@ -107,7 +107,7 @@ fi
 
 it "落とす指摘（bug）の回では findings reported by で始まる完了行が出る"
 rc=0
-FAKE_AGY_ANSWER='{"reviewed":true,"findings":[{"category":"bug","file":"a.ts","line":1,"what":"x","why":"y"}]}' \
+FAKE_AGY_ANSWER='{"reviewed":true,"findings":[{"category":"bug","file":"a.ts","line":1,"what":"x","why":"y","failure_scenario":"s"}]}' \
   run_review || rc=$?
 if [[ "$rc" -eq 1 ]] && grep -qE '^\[second-opinion\] findings reported by ' "$WORK/both" 2>/dev/null; then
   pass
@@ -148,7 +148,7 @@ fi
 
 it "落とさない category（promise-mismatch）だけでは通過する"
 rc=0
-FAKE_AGY_ANSWER='{"reviewed":true,"findings":[{"category":"promise-mismatch","file":"a.ts","line":1,"what":"x","why":"y"}]}' \
+FAKE_AGY_ANSWER='{"reviewed":true,"findings":[{"category":"promise-mismatch","file":"a.ts","line":1,"what":"x","why":"y","failure_scenario":"s"}]}' \
   run_review || rc=$?
 if [[ "$rc" -eq 0 ]] && grep -q 'promise-mismatch' "$WORK/out"; then
   pass
@@ -159,10 +159,38 @@ fi
 for category in bug vulnerability type-error edge-case; do
   it "category=$category は落とす"
   rc=0
-  FAKE_AGY_ANSWER="{\"reviewed\":true,\"findings\":[{\"category\":\"$category\",\"file\":\"a.ts\",\"line\":1,\"what\":\"x\",\"why\":\"y\"}]}" \
+  FAKE_AGY_ANSWER="{\"reviewed\":true,\"findings\":[{\"category\":\"$category\",\"file\":\"a.ts\",\"line\":1,\"what\":\"x\",\"why\":\"y\",\"failure_scenario\":\"s\"}]}" \
     run_review || rc=$?
   assert_eq "$rc" "1" "exit code"
 done
+
+it "筋書きのあるゲート対象の指摘で落ち、出力に筋書きが表示される"
+rc=0
+FAKE_AGY_ANSWER='{"reviewed":true,"findings":[{"category":"bug","file":"a.ts","line":1,"what":"x","why":"y","failure_scenario":"空配列を渡すと添字 0 を読んで undefined を返す"}]}' \
+  run_review || rc=$?
+if [[ "$rc" -eq 1 ]] && grep -qF '失敗の筋書き: 空配列を渡すと添字 0 を読んで undefined を返す' "$WORK/both"; then
+  pass
+else
+  fail "exit=$rc（1 を期待）、または筋書きが出力に出ていない: $(cat "$WORK/both")"
+fi
+
+it "ゲート対象で筋書きが空（空白だけを含む）なら、筋書きの欠落と示して失敗する"
+for scenario in '' '  '; do
+  rc=0
+  FAKE_AGY_ANSWER="{\"reviewed\":true,\"findings\":[{\"category\":\"bug\",\"file\":\"a.ts\",\"line\":1,\"what\":\"x\",\"why\":\"y\",\"failure_scenario\":\"$scenario\"}]}" \
+    run_review || rc=$?
+  if [[ "$rc" -eq 1 ]] && grep -q '失敗の筋書き（failure_scenario）がありません' "$WORK/err"; then
+    pass
+  else
+    fail "exit=$rc、または形の不一致として扱われていない: $(cat "$WORK/err")"
+  fi
+done
+
+it "報告だけの種類は、筋書きが空でも失敗にならない"
+rc=0
+FAKE_AGY_ANSWER='{"reviewed":true,"findings":[{"category":"promise-mismatch","file":"a.ts","line":1,"what":"x","why":"y","failure_scenario":""},{"category":"other","file":"a.ts","line":2,"what":"x","why":"y","failure_scenario":""}]}' \
+  run_review || rc=$?
+assert_eq "$rc" "0" "exit code"
 
 it "包みの外（status 等）を JSON として読もうとしない。.structured_output だけを見る"
 # status が SUCCESS であることは判定に関係しない。もし包み全体を検証に回していると、
@@ -196,7 +224,7 @@ assert_eq "$rc" "1" "exit code"
 
 it "reviewed:false の回答は、指摘の中身によらず落とし、理由を示す"
 rc=0
-FAKE_AGY_ANSWER='{"reviewed":false,"findings":[{"category":"other","file":"","line":0,"what":"レビューを実施できませんでした。","why":"ツールの実行が拒否されました。"}]}' \
+FAKE_AGY_ANSWER='{"reviewed":false,"findings":[{"category":"other","file":"","line":0,"what":"レビューを実施できませんでした。","why":"ツールの実行が拒否されました。","failure_scenario":""}]}' \
   run_review || rc=$?
 if [[ "$rc" -eq 1 ]] && grep -q '差分を読めなかったと答えました' "$WORK/err"; then
   pass

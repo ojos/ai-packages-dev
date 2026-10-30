@@ -136,7 +136,7 @@ mk_agy_json_stub() {
   local bindir="$1" kind="${2:-pass}" structured_output
   mkdir -p "$bindir"
   case "$kind" in
-    fail) structured_output='{"reviewed":true,"findings":[{"category":"bug","file":"a.ts","line":1,"what":"x","why":"y"}]}' ;;
+    fail) structured_output='{"reviewed":true,"findings":[{"category":"bug","file":"a.ts","line":1,"what":"x","why":"y","failure_scenario":"s"}]}' ;;
     *)    structured_output='{"reviewed":true,"findings":[]}' ;;
   esac
   cat > "$bindir/agy" <<STUB
@@ -157,7 +157,7 @@ mk_agy_history_stub() {
   local bindir="$1" verdict="${2:-LGTM}" structured_output
   mkdir -p "$bindir"
   case "$verdict" in
-    FINDINGS) structured_output='{"reviewed":true,"findings":[{"category":"bug","file":"a.ts","line":1,"what":"x","why":"y"}]}' ;;
+    FINDINGS) structured_output='{"reviewed":true,"findings":[{"category":"bug","file":"a.ts","line":1,"what":"x","why":"y","failure_scenario":"s"}]}' ;;
     *)        structured_output='{"reviewed":true,"findings":[]}' ;;
   esac
   # 記録するのは「-p」の次に渡された引数（chunk_text + 改行 1 + PROMPT）の値
