@@ -1401,7 +1401,7 @@ github/gitignore のテンプレートは言語・OS・エディタの生成物�
 - `permissions.blockWritesOutsideWorkingDirectories: true`: ファイル編集ツール（Write / Edit など）による、作業ディレクトリの外への書き込みを止めます。実測（2.1.314）では、許可ルール（例: `Edit(//外/**)`）で明示的に許した外への書き込みも拒否し、設定が無いと同じ書き込みは通りました。追加の作業ディレクトリ（`--add-dir`）への書き込みは、設定があっても通ります。**確かめたのはファイル編集ツールだけで、Bash のリダイレクト（`echo > 外`）などを止めるかは確かめていません**（Bash を経た書き込みも止めるとは言えません）。**Claude Code 2.1.314 以上で効きます。古い版では、設定ファイルは捨てられませんが、エラーも警告も出ずに黙って効きません**（2.1.296 で確かめました）。`doctor.sh` が版を検査します（下記）。
 - 確認フック（`confirm-merge-hook.sh`）の hook にだけ `"onFailure": "block"` を付けます。フック自体が失敗（異常終了・起動不能）したとき、通さずに止めるためです。マージの確認は承認を機構で保証するもので、フックが壊れて素通りになると保証が黙って消えます。**セッション協調フック（`session-coord-hook.sh`）には付けません。** 台帳は排他制御ではなく合図で、台帳の不具合ですべての操作を止めないこと（fail-open）が規範だからです。
 
-`doctor.sh` は、`claude` が PATH にあるときだけ `claude --version` の先頭の版を読み、下限 2.1.314 と数値で比べます（古ければ `[WARN]`。版を読めないときも判定できないので `[WARN]`。`claude` が無ければ検査しません）。
+`doctor.sh` は、対象の `.claude/settings.json` がこの設定を持ち、かつ `claude` が PATH にあるときだけ `claude --version` の先頭の版を読み、下限 2.1.314 と数値で比べます（古ければ `[WARN]`。版を読めないときも判定できないので `[WARN]`。設定を持たない対象と、`claude` が無い環境では検査しません）。
 
 既存の `.claude/settings.json` は温存されるため、この 2 つは足されません。必要なら手で足してください。
 
@@ -1432,7 +1432,7 @@ github/gitignore のテンプレートは言語・OS・エディタの生成物�
 | 衛生検査の配線 | 生成先に衛生検査 4 本（`check-control-chars.sh` / `check-table-breaks.sh` / `check-doc-links.sh` / `check-shell-portability.sh`）のいずれかがあり、`scripts/acceptance.sh` がそのファイル名を参照していなければ `[WARN]`（件数と配線の例を添える。`--strict` では非 0）。ファイル名がコメントにあるだけでも参照と見なすので、意図して呼ばない検査はファイル名と理由をコメントで書けば WARN が出ない。`acceptance.sh` が無いときは判定しない。`doctor.sh` は単体で取得されうるため、4 本の一覧は自前で持つ（`bootstrap.sh` と同じ内容。`tests/test-hygiene-wiring.sh` が照合する） |
 | 生成物の由来（下記） | `.devcontainer/ORIGIN`（[生成物の由来の記録](#生成物の由来の記録devcontainerorigin)）と現物を突き合わせ、生成時からの変更・記録した版が古いことを検出する |
 | 実行時コマンドの可用性 | `bash` / `jq` / `perl` / `gh`。`devcontainer.json` の features から検出した言語ランタイム（`rust` は feature 名と実行ファイル名が異なるため `cargo` で判定。`ruby` は一致するため `ruby` で判定）。`--with-aws` / `--with-gcp` で配線した cloud CLI（`aws` / `gcloud` / `terraform`）。`docker-outside-of-docker` を配線していれば `docker`。いずれも不在は WARN |
-| Claude Code の版 | `claude` が PATH にあるときだけ、`claude --version` を下限 2.1.314 と数値比較する。古い（`blockWritesOutsideWorkingDirectories` が黙って無視される）または読めなければ WARN |
+| Claude Code の版 | 対象の `.claude/settings.json` が `blockWritesOutsideWorkingDirectories` を持ち、`claude` が PATH にあるときだけ、`claude --version` を下限 2.1.314 と数値比較する。古い（`blockWritesOutsideWorkingDirectories` が黙って無視される）または読めなければ WARN |
 
 **`${localEnv:` の検出がこの診断の中核です。** 「[資格情報の扱い](#資格情報の扱い)」で述べたホスト資格情報の非注入は、方針を書いただけでは守られません。`remoteEnv` へホスト環境変数の参照が復活していないことを doctor が機械的に検査し、見つけたら FAIL にします。作業ディレクトリの受け渡し（`${localWorkspaceFolder}`）は `localEnv` ではないため対象外です。
 

@@ -661,44 +661,25 @@ check_git_config() {
 section "Git config (arbitrary code execution)"
 check_git_config
 
-# 生成する .claude/settings.json の permissions.blockWritesOutsideWorkingDirectories は、
-# この版より古い claude では黙って無視される（エラーも警告も出ない）。claude が PATH に無い
-# 環境（CI など）では検査しない。版を読めないときは、効くかどうか判定できないので WARN。
+# 対象の .claude/settings.json が permissions.blockWritesOutsideWorkingDirectories を持つとき、
+# この版より古い claude では黙って無視される（エラーも警告も出ない）。設定を持たない対象と、
+# claude が PATH に無い環境（CI など）では検査しない。版を読めないときは、効くかどうか
+# 判定できないので WARN。
 CLAUDE_MIN_VERSION="2.1.314"
 
-# 版の比較。"A.B.C" 同士を . で分けて数値で比べ、$1 >= $2 なら 0 を返す。
-# sort -V に頼らない（bash 3.2 / BSD sort 互換）。数字だけで構成されない版は 2 を返す。
-version_ge() {
-  local a="$1" b="$2" i x y
-  local -a av bv
-  [[ "$a" =~ ^[0-9]+(\.[0-9]+)*$ && "$b" =~ ^[0-9]+(\.[0-9]+)*$ ]] || return 2
-  IFS=. read -r -a av <<<"$a"
-  IFS=. read -r -a bv <<<"$b"
-  for i in 0 1 2 3 4 5; do
-    x="${av[$i]:-0}"
-    y="${bv[$i]:-0}"
-    x=$((10#$x))
-    y=$((10#$y))
-    if ((x > y)); then return 0; fi
-    if ((x < y)); then return 1; fi
-  done
-  return 0
-}
-
 check_claude_version() {
+  grep -q '"blockWritesOutsideWorkingDirectories"' "$TARGET_DIR/.claude/settings.json" 2>/dev/null || return 0
   command -v claude >/dev/null 2>&1 || return 0
-  local out ver rc=0 cmp=0
-  out="$(claude --version 2>/dev/null)" || rc=$?
+  local out ver
+  out="$(claude --version 2>/dev/null)" || out=""
   ver="${out%%[[:space:]]*}"
-  version_ge "$ver" "$CLAUDE_MIN_VERSION" || cmp=$?
-  if [[ "$rc" -ne 0 || "$cmp" -eq 2 ]]; then
+  # dcb_version_lt は数値でない区分を 0 とみなすので、先に X.Y.Z の形だけを通す
+  if [[ ! "$ver" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     warn "claude version could not be determined: 判定できません（blockWritesOutsideWorkingDirectories が効くのは $CLAUDE_MIN_VERSION 以上）"
-    return 0
-  fi
-  if [[ "$cmp" -eq 0 ]]; then
-    ok "claude $ver supports blockWritesOutsideWorkingDirectories (>= $CLAUDE_MIN_VERSION)"
-  else
+  elif dcb_version_lt "$ver" "$CLAUDE_MIN_VERSION"; then
     warn "claude $ver is older than $CLAUDE_MIN_VERSION: blockWritesOutsideWorkingDirectories is silently ignored (no error, no warning)"
+  else
+    ok "claude $ver supports blockWritesOutsideWorkingDirectories (>= $CLAUDE_MIN_VERSION)"
   fi
 }
 

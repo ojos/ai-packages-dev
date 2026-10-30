@@ -17,19 +17,6 @@ PLAYBOOK_SRC="$REPO_ROOT/.ai-playbook"
 # 各テストが使う一時領域。run-tests.sh が最後に掃除する。
 : "${TEST_TMP_ROOT:?TEST_TMP_ROOT must be set by the runner}"
 
-# 実行者の claude の版に結果を左右されないよう、新しい版を名乗る偽の claude を PATH の先頭へ置く。
-# doctor.sh は claude の版が下限より古いと WARN を出すため、古い claude が入った環境では
-# doctor.sh --strict を使うテストが落ちる。版の検査そのものは test-doctor-claude-version.sh が
-# 自前の PATH で確かめる。
-FAKE_CLAUDE_BIN="$TEST_TMP_ROOT/fake-claude-bin"
-if [[ ! -x "$FAKE_CLAUDE_BIN/claude" ]]; then
-  mkdir -p "$FAKE_CLAUDE_BIN"
-  printf '#!/bin/sh\necho "99.0.0 (Claude Code)"\n' >"$FAKE_CLAUDE_BIN/claude"
-  chmod +x "$FAKE_CLAUDE_BIN/claude"
-fi
-PATH="$FAKE_CLAUDE_BIN:$PATH"
-export PATH
-
 # ── 実行環境からの隔離 ────────────────────────────────────────────────────────
 #
 # 生成物のスクリプトは、ここに挙げた環境変数を実行時に読む。テストは生成物を
@@ -336,6 +323,22 @@ run_bootstrap_auto() {
   bash "$BOOTSTRAP" \
     --project-name test --languages node \
     --output-dir "$out" "$@"
+}
+
+# 偽の claude を置くディレクトリを作って、そのパスを返す。呼び出し側は
+# PATH="$dir:$PATH" で先頭に置く。$1 を `claude --version` の出力として返す。
+# $1 が空なら、--version が失敗する claude にする。
+make_fake_claude() {
+  local dir
+  dir="$(new_workdir)/fakebin"
+  mkdir -p "$dir"
+  if [[ -n "$1" ]]; then
+    printf '#!/usr/bin/env bash\necho "%s"\n' "$1" > "$dir/claude"
+  else
+    printf '#!/usr/bin/env bash\nexit 1\n' > "$dir/claude"
+  fi
+  chmod +x "$dir/claude"
+  printf '%s\n' "$dir"
 }
 
 # 偽の docker を置くディレクトリを作って、そのパスを返す。呼び出し側は

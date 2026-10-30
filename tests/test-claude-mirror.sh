@@ -232,25 +232,19 @@ else
   fail "git ls-files .claude/settings.json が $tracked_lines 行（1 行であるべき）"
 fi
 
-# permissions に許してよいキー（締める側のキーだけ）。ここが唯一の定義。
-# 許可リスト（allow / ask / deny）や、アクセス範囲を広げるキー（additionalDirectories /
-# defaultMode など）は含めない。
+# permissions に許してよいキー（締める側のキーだけ）。許可リスト（allow / ask / deny）や、
+# アクセス範囲を広げるキー（additionalDirectories / defaultMode など）は含めない。
+# DCB の生成物は、DCB 側のテスト（test-session-coord-hook.sh）が同じ一覧で確かめる。
+# スイートが別で、パッケージのテストは自己完結させるため、一覧は両方に置く。
 ALLOWED_PERMISSION_KEYS='["blockWritesOutsideWorkingDirectories"]'
 
-# 許可されていない permissions のキーを 1 行 1 キーで出す。permissions が無ければ何も出さない。
-# 判定は jq で行う（文字列一致ではなく JSON の構造で見る）。JSON として読めなければ 2 を返す。
+# 許可されていない permissions のキーを 1 行 1 キーで出す。何も出さなければ問題なし。
+# 判定は jq で行う（文字列一致ではなく JSON の構造で見る）。読めないときも通さないよう、
+# 理由を 1 行出す。
 disallowed_permission_keys() {
-  local f="$1"
   jq -r --argjson ok "$ALLOWED_PERMISSION_KEYS" \
-    '(.permissions // {}) | if type == "object" then keys[] | select(. as $k | $ok | index($k) | not) else "(object でない permissions)" end' "$f" 2>/dev/null
-  [[ "${PIPESTATUS[0]}" -eq 0 ]] || return 2
-}
-
-# 許可されていないキーがあれば 0（問題あり）、無ければ 1。読めないときも 0（通さない）。
-has_disallowed_permissions() {
-  local f="$1" out rc=0
-  out="$(disallowed_permission_keys "$f")" || rc=$?
-  [[ "$rc" -ne 0 || -n "$out" ]]
+    '(.permissions // {}) | if type == "object" then keys[] | select(. as $k | $ok | index($k) | not) else "(object でない permissions)" end' "$1" 2>/dev/null \
+    || echo "(JSON として読めない)"
 }
 
 it "追跡された .claude/settings.json の permissions が、締める側のキーだけである"
@@ -260,8 +254,8 @@ it "追跡された .claude/settings.json の permissions が、締める側の�
 # 全員へ配っても権限を広げないので持ってよい。
 if [[ ! -f "$SETTINGS" ]]; then
   fail "$SETTINGS が存在しない"
-elif has_disallowed_permissions "$SETTINGS"; then
-  fail "$SETTINGS の permissions に許可されないキーがある: $(disallowed_permission_keys "$SETTINGS" | tr '\n' ' ')（許可リストの混入。settings.local.json 側へ移すこと）"
+elif bad="$(disallowed_permission_keys "$SETTINGS")"; [[ -n "$bad" ]]; then
+  fail "$SETTINGS の permissions に許可されないキーがある: $(printf '%s' "$bad" | tr '\n' ' ')（許可リストの混入。settings.local.json 側へ移すこと）"
 else
   pass
 fi
@@ -273,7 +267,7 @@ PERM_MIXED="$TMP_ROOT/settings-with-mixed-permissions.json"
 printf '{"permissions":{"blockWritesOutsideWorkingDirectories":true,"allow":["Bash"]}}\n' >"$PERM_MIXED"
 PERM_OK="$TMP_ROOT/settings-with-tightening-permissions.json"
 printf '{"permissions":{"blockWritesOutsideWorkingDirectories":true}}\n' >"$PERM_OK"
-if has_disallowed_permissions "$PERM_FIXTURE" && has_disallowed_permissions "$PERM_MIXED" && ! has_disallowed_permissions "$PERM_OK"; then
+if [[ -n "$(disallowed_permission_keys "$PERM_FIXTURE")" && -n "$(disallowed_permission_keys "$PERM_MIXED")" && -z "$(disallowed_permission_keys "$PERM_OK")" ]]; then
   pass
 else
   fail "allow だけ・締める側と allow の混在を落とし、締める側だけを通す、のいずれかが成立しない（照合が空振りしている）"

@@ -42,7 +42,9 @@ else
 fi
 
 it "doctor が fix-mount-owner.sh の存在を検査する"
-output="$(bash "$PKG_DIR/doctor.sh" --target-dir "$out" --strict 2>&1)"
+# 生成物は --with-claude なので doctor は claude の版も見る。実行者の claude の版に
+# 左右されないよう、下限以上を名乗る偽の claude を先頭に置く。
+output="$(PATH="$(make_fake_claude '99.0.0 (Claude Code)'):$PATH" bash "$PKG_DIR/doctor.sh" --target-dir "$out" --strict 2>&1)"
 rc=$?
 if [[ "$rc" -eq 0 ]] && printf '%s' "$output" | grep 'scripts/fix-mount-owner.sh' >/dev/null; then
   pass
