@@ -45,25 +45,33 @@ check_rules_exist() {
   [[ -n "$(list_rules "$1")" ]] || { printf '.claude/rules/ に規則がありません' ; return 1; }
 }
 
-# check_paths <root> — 各規則が frontmatter に paths: と 1 つ以上の glob を持つ。
+# path_globs <file> — frontmatter の paths: の下の項目（glob）を、引用符を外して 1 行ずつ出す。
+# paths: の後、字下げの無い次のキーまでだけを読む（ほかのキーの一覧を paths と取り違えない）。
+path_globs() {
+  frontmatter "$1" | awk '
+    /^paths:[[:space:]]*$/ { inp = 1; next }
+    /^[^[:space:]]/ { inp = 0 }
+    inp && /^[[:space:]]+-[[:space:]]+[^[:space:]]/ {
+      v = $0; sub(/^[[:space:]]+-[[:space:]]+/, "", v); gsub(/^["'\'']|["'\'']$/, "", v); print v
+    }'
+}
+
+# check_paths <root> — 各規則が frontmatter の paths: に 1 つ以上の glob を持つ。
 check_paths() {
-  local root="$1" f fm bad=""
+  local root="$1" f bad=""
   while IFS= read -r f; do
-    fm="$(frontmatter "$root/$f")"
-    if ! grep -q '^paths:[[:space:]]*$' <<<"$fm" \
-       || ! grep -qE '^[[:space:]]+-[[:space:]]+[^[:space:]]' <<<"$fm"; then
-      bad="$bad $f"
-    fi
+    [[ -n "$(path_globs "$root/$f")" ]] || bad="$bad $f"
   done < <(list_rules "$root")
   [[ -z "$bad" ]] || { printf 'paths: を持たない規則:%s' "$bad"; return 1; }
 }
 
-# check_no_import <root> — @ の取り込みの行（行頭の @ に続くパス）が無い。frontmatter は
-# paths: と glob の行だけなので、ファイル全体を見ても同じ結果になる。
+# check_no_import <root> — @ の取り込み（行頭でも行の途中でも、空白か行頭に続く @パス）が無い。
+# Claude Code はコードスパン（バッククォート）の中の @ を取り込まないので、それを除いてから見る。
+# frontmatter は paths: と glob の行だけなので、ファイル全体を見ても同じ結果になる。
 check_no_import() {
   local root="$1" f bad=""
   while IFS= read -r f; do
-    if grep -qE '^[[:space:]]*@[A-Za-z0-9_./~-]+' "$root/$f"; then
+    if sed 's/`[^`]*`//g' "$root/$f" | grep -qE '(^|[[:space:]])@[A-Za-z0-9_./~-]+'; then
       bad="$bad $f"
     fi
   done < <(list_rules "$root")
@@ -120,6 +128,15 @@ run_check check_paths "$REPO_ROOT"
 it "規則の本文に @ の取り込みの行が無い"
 run_check check_no_import "$REPO_ROOT"
 
+it "各規則の paths: の glob が、追跡されたファイルに 1 つ以上一致する（綴りの誤りで規則が黙って載らなくならない）"
+nomatch=""
+while IFS= read -r f; do
+  while IFS= read -r g; do
+    [[ -n "$(git -C "$REPO_ROOT" ls-files -- ":(glob)$g" | head -n 1)" ]] || nomatch="$nomatch $f:$g"
+  done < <(path_globs "$REPO_ROOT/$f")
+done < <(list_rules "$REPO_ROOT")
+if [[ -z "$nomatch" ]]; then pass; else fail "一致するファイルが無い glob:$nomatch"; fi
+
 it "地図が各規則ファイルへリンクしている"
 run_check check_map_links "$REPO_ROOT"
 
@@ -166,6 +183,18 @@ it "paths: が空（glob が 1 つも無い）の規則は落ちる"
 D="$(make_fixture emptypaths)"
 printf -- '---\npaths:\n---\n\n本文\n' > "$D/.claude/rules/a.md"
 expect_fail check_paths "$D"
+
+it "paths: が空で、別のキーの一覧がある規則は落ちる"
+D="$(make_fixture otherlist)"
+printf -- '---\npaths:\ntags:\n  - x\n---\n\n本文\n' > "$D/.claude/rules/a.md"
+expect_fail check_paths "$D"
+
+it "行の途中の @ の取り込みも落ちる（コードスパンの中の @ は通す）"
+D="$(make_fixture midimport)"
+printf -- '---\npaths:\n  - "src/**"\n---\n\n書き方は `@パス` です。\n' > "$D/.claude/rules/a.md"
+run_check check_no_import "$D"
+printf -- '---\npaths:\n  - "src/**"\n---\n\n詳しくは @docs/x.md を参照。\n' > "$D/.claude/rules/a.md"
+expect_fail check_no_import "$D"
 
 it "@ の取り込みの行を含む規則は落ちる"
 D="$(make_fixture import)"

@@ -3,7 +3,6 @@ paths:
   - "packages/**"
   - ".ai-playbook/**"
   - "scripts/*.sh"
-  - "packages/devcontainer-bootstrap/bootstrap.sh"
 ---
 
 # パッケージ層の運用

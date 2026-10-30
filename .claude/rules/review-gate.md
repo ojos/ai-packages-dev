@@ -10,6 +10,9 @@ paths:
   - ".github/workflows/second-opinion-gate.yml"
   - ".ai-playbook/review-workflow.md"
   - ".ai-playbook/loop-workflow.md"
+  - ".claude/skills/land/SKILL.md"
+  - "tests/test-review-options.sh"
+  - "tests/test-ci-mirror.sh"
 ---
 
 地図（`.github/project-ai-rules.md`）の「レビューとゲート」の詳細です。ゲートの回し方の要点（`loop-gate.sh`・却下の記録・`post`）は地図が常時持ちます。
