@@ -34,13 +34,10 @@ list_rules() {
 }
 
 # frontmatter <file> — 先頭の --- から次の --- までを出す。先頭行が --- でなければ何も出さない。
+# 行末の CR を落とす（CRLF で取り出した規則で、--- を見落として paths: を読めなくならないように。
+# tests/test-subagent-roles.sh の agent_field と同じ理由）。
 frontmatter() {
-  awk 'NR == 1 { if ($0 != "---") exit; next } $0 == "---" { exit } { print }' "$1"
-}
-
-# body <file> — frontmatter を除いた本文を出す。
-body() {
-  awk 'NR == 1 && $0 == "---" { fm = 1; next } fm && $0 == "---" { fm = 0; next } !fm { print }' "$1"
+  awk '{ sub(/\r$/, "") } NR == 1 { if ($0 != "---") exit; next } $0 == "---" { exit } { print }' "$1"
 }
 
 # check_rules_exist <root> — 規則が 1 つ以上ある。
@@ -52,22 +49,21 @@ check_rules_exist() {
 check_paths() {
   local root="$1" f fm bad=""
   while IFS= read -r f; do
-    [[ -z "$f" ]] && continue
     fm="$(frontmatter "$root/$f")"
-    if ! grep '^paths:[[:space:]]*$' <<<"$fm" >/dev/null \
-       || ! grep -E '^[[:space:]]+-[[:space:]]+[^[:space:]]' <<<"$fm" >/dev/null; then
+    if ! grep -q '^paths:[[:space:]]*$' <<<"$fm" \
+       || ! grep -qE '^[[:space:]]+-[[:space:]]+[^[:space:]]' <<<"$fm"; then
       bad="$bad $f"
     fi
   done < <(list_rules "$root")
   [[ -z "$bad" ]] || { printf 'paths: を持たない規則:%s' "$bad"; return 1; }
 }
 
-# check_no_import <root> — 本文に @ の取り込みの行（行頭の @ に続くパス）が無い。
+# check_no_import <root> — @ の取り込みの行（行頭の @ に続くパス）が無い。frontmatter は
+# paths: と glob の行だけなので、ファイル全体を見ても同じ結果になる。
 check_no_import() {
   local root="$1" f bad=""
   while IFS= read -r f; do
-    [[ -z "$f" ]] && continue
-    if grep -E '^[[:space:]]*@[A-Za-z0-9_./~-]+' <<<"$(body "$root/$f")" >/dev/null; then
+    if grep -qE '^[[:space:]]*@[A-Za-z0-9_./~-]+' "$root/$f"; then
       bad="$bad $f"
     fi
   done < <(list_rules "$root")
@@ -79,8 +75,7 @@ check_map_links() {
   local root="$1" f bad=""
   [[ -f "$root/$MAP_REL" ]] || { printf '地図がありません: %s' "$MAP_REL"; return 1; }
   while IFS= read -r f; do
-    [[ -z "$f" ]] && continue
-    grep -F "$f" "$root/$MAP_REL" >/dev/null || bad="$bad $f"
+    grep -qF "$f" "$root/$MAP_REL" || bad="$bad $f"
   done < <(list_rules "$root")
   [[ -z "$bad" ]] || { printf '地図からリンクされていない規則:%s' "$bad"; return 1; }
 }
@@ -91,6 +86,12 @@ check_map_size() {
   [[ -f "$root/$MAP_REL" ]] || { printf '地図がありません: %s' "$MAP_REL"; return 1; }
   n="$(wc -l < "$root/$MAP_REL" | tr -d ' ')"
   [[ "$n" -le "$MAP_MAX_LINES" ]] || { printf '地図が %s 行（上限 %s 行）' "$n" "$MAP_MAX_LINES"; return 1; }
+}
+
+# check_all <root> — 全検査を通す（失敗したら、最初に落ちた検査のメッセージを出す）。
+check_all() {
+  check_rules_exist "$1" && check_paths "$1" && check_no_import "$1" \
+    && check_map_links "$1" && check_map_size "$1"
 }
 
 # run_check <関数名> <root> — 結果を pass / fail へ変換する。
@@ -140,10 +141,12 @@ make_fixture() {
 }
 
 it "（健全性）正常なフィクスチャは全検査を通る"
-GOOD="$(make_fixture good)"
-if check_rules_exist "$GOOD" >/dev/null && check_paths "$GOOD" >/dev/null \
-   && check_no_import "$GOOD" >/dev/null && check_map_links "$GOOD" >/dev/null \
-   && check_map_size "$GOOD" >/dev/null; then pass; else fail "正常なフィクスチャが落ちた（フィクスチャか検査が壊れている）"; fi
+run_check check_all "$(make_fixture good)"
+
+it "（健全性）CRLF の規則も paths: を読める"
+D="$(make_fixture crlf)"
+printf -- '---\r\npaths:\r\n  - "src/**"\r\n---\r\n\r\n本文\r\n' > "$D/.claude/rules/a.md"
+run_check check_paths "$D"
 
 it "規則が無いと落ちる"
 D="$(make_fixture none)"; rm -f "$D"/.claude/rules/*.md
@@ -176,7 +179,7 @@ expect_fail check_map_links "$D"
 
 it "地図が上限を超えると落ちる"
 D="$(make_fixture long)"
-i=0; while [[ "$i" -le "$MAP_MAX_LINES" ]]; do echo "行 $i"; i=$((i + 1)); done >> "$D/$MAP_REL"
+for ((i = 0; i <= MAP_MAX_LINES; i++)); do echo "行 $i"; done >> "$D/$MAP_REL"
 expect_fail check_map_size "$D"
 
 exit_with_result
