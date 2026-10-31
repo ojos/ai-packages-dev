@@ -36,8 +36,11 @@ list_rules() {
 # frontmatter <file> — 先頭の --- から次の --- までを出す。先頭行が --- でなければ何も出さない。
 # 行末の CR を落とす（CRLF で取り出した規則で、--- を見落として paths: を読めなくならないように。
 # tests/test-subagent-roles.sh の agent_field と同じ理由）。
+# 閉じの --- が無いまま終わるものは frontmatter として成り立たない（Claude Code が条件付きの規則と
+# して読まない）ので、何も出さない。
 frontmatter() {
-  awk '{ sub(/\r$/, "") } NR == 1 { if ($0 != "---") exit; next } $0 == "---" { exit } { print }' "$1"
+  awk '{ sub(/\r$/, "") } NR == 1 { if ($0 != "---") exit; next } $0 == "---" { closed = 1; exit } { buf = buf $0 "\n" }
+       END { if (closed) printf "%s", buf }' "$1"
 }
 
 # check_rules_exist <root> — 規則が 1 つ以上ある。
@@ -65,14 +68,15 @@ check_paths() {
   [[ -z "$bad" ]] || { printf 'paths: を持たない規則:%s' "$bad"; return 1; }
 }
 
-# check_no_import <root> — @ の取り込み（行頭でも行の途中でも、空白か行頭に続く @パス）が無い。
+# check_no_import <root> — @ の取り込み（行頭でも行の途中でも、括弧の直後でも）が無い。メールアドレス
+# （英数字などの直後の @）は取り込みではないので数えない。
 # Claude Code はコードスパン（バッククォート）の中の @ を取り込まないので、それを除いてから見る。
 # frontmatter は paths: と glob の行だけなので、ファイル全体を見ても同じ結果になる。
 check_no_import() {
   local root="$1" f bad=""
   while IFS= read -r f; do
     # grep -q はパイプを読み切らずに終わり、pipefail の下で sed が SIGPIPE で落ちうるので、出力を捨てる形で読み切る
-    if sed 's/`[^`]*`//g' "$root/$f" | grep -E '(^|[[:space:]])@[A-Za-z0-9_./~-]+' >/dev/null; then
+    if sed 's/`[^`]*`//g' "$root/$f" | grep -E '(^|[^A-Za-z0-9_.+-])@[A-Za-z0-9_./~-]+' >/dev/null; then
       bad="$bad $f"
     fi
   done < <(list_rules "$root")
@@ -199,6 +203,18 @@ printf -- '---\npaths:\n  - "src/**"\n---\n\n書き方は `@パス` です。\n'
 run_check check_no_import "$D"
 printf -- '---\npaths:\n  - "src/**"\n---\n\n詳しくは @docs/x.md を参照。\n' > "$D/.claude/rules/a.md"
 expect_fail check_no_import "$D"
+
+it "括弧の直後の @ の取り込みも落ちる（メールアドレスは通す）"
+D="$(make_fixture parenimport)"
+printf -- '---\npaths:\n  - "src/**"\n---\n\n連絡先は ido@example.com です。\n' > "$D/.claude/rules/a.md"
+run_check check_no_import "$D"
+printf -- '---\npaths:\n  - "src/**"\n---\n\n詳細は（@docs/guide.md）。\n' > "$D/.claude/rules/a.md"
+expect_fail check_no_import "$D"
+
+it "frontmatter の閉じの --- が無い規則は落ちる"
+D="$(make_fixture unclosed)"
+printf -- '---\npaths:\n  - "src/**"\n\n本文\n' > "$D/.claude/rules/a.md"
+expect_fail check_paths "$D"
 
 it "@ の取り込みの行を含む規則は落ちる"
 D="$(make_fixture import)"
