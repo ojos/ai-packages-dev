@@ -1,7 +1,7 @@
 name: Terraform (public repositories)
 
 # ojos の公開リポジトリ（配布先）の宣言（infra/github/）を、PR で plan し、main へのマージで
-# apply する（#487）。方針は .github/project-ai-rules.md「外部サービスの状態管理」。
+# apply する（#487）。方針は .claude/rules/external-services.md「外部サービスの状態管理」。
 #
 # - 状態ファイルは HCP Terraform（Execution Mode は Local）。HCP は置き場所としてだけ使い、
 #   plan / apply はこのランナーの中で走る。

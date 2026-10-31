@@ -9,7 +9,7 @@
 # この 3 つを Terraform（infra/github/security.tf。#487）で有効にするが、Private vulnerability
 # reporting は provider が扱えず、作成時に gh api を打つだけなので、外で無効にされても
 # plan に差分が出ない。このモノレポ自身は Terraform の対象外で、手で有効にする。どちらも
-# 「有効であること」の照合はここで行う（.github/project-ai-rules.md「脆弱性の報告と通知」）。
+# 「有効であること」の照合はここで行う（.claude/rules/external-services.md「脆弱性の報告と通知」）。
 #
 # ## 何を見るか
 #
@@ -142,7 +142,7 @@ if [[ "$unknown" -ne 0 ]]; then
   exit 2
 fi
 if [[ "$drift" -ne 0 ]]; then
-  say "無効な設定があります。有効にする手順は .github/project-ai-rules.md「脆弱性の報告と通知」にあります。"
+  say "無効な設定があります。有効にする手順は .claude/rules/external-services.md「脆弱性の報告と通知」にあります。"
   exit 1
 fi
 say "${repo}: 3 つとも有効です"

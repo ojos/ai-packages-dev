@@ -35,7 +35,7 @@
 | `scripts/second-opinion-gate-exempt.sh` | 第二意見の記録を求めない PR（Dependabot 等）かを判定する本体。`.github/workflows/second-opinion-gate.yml` が呼ぶ。正本は `.ai-playbook/templates/second-opinion-gate-exempt.sh`（`tests/test-second-opinion-gate-exempt.sh` が表で確かめる）。 |
 | `scripts/verify-commit-identity.sh` | コミット履歴の identity 検証（email のみで判定）。CI（identity-guard）と手元で共用。 |
 | `scripts/verify-commit-identity-selftest.sh` | `verify-commit-identity.sh` の判定そのものを、仕込みのリポジトリで確かめる自己試験。`identity-guard.yml` / `acceptance.sh` が検証の前に呼ぶ。 |
-| `scripts/check-repo-security.sh` | 脆弱性の報告と通知に関わるリポジトリ設定（Private vulnerability reporting・Dependabot alerts・security updates）が有効かを照合する。管理者権限のトークンが要るので CI には入れず、持ち主が手元で回す（`.github/project-ai-rules.md`「脆弱性の報告と通知」。`tests/test-check-repo-security.sh` が偽物の gh で確かめる）。 |
+| `scripts/check-repo-security.sh` | 脆弱性の報告と通知に関わるリポジトリ設定（Private vulnerability reporting・Dependabot alerts・security updates）が有効かを照合する。管理者権限のトークンが要るので CI には入れず、持ち主が手元で回す（`.claude/rules/external-services.md`「脆弱性の報告と通知」。`tests/test-check-repo-security.sh` が偽物の gh で確かめる）。 |
 | `scripts/terraform-refuse-destroy.sh` | 公開リポジトリ（`github_repository`）を消す・作り直す Terraform の plan を、apply の前に落とす。`prevent_destroy` が外されたときの 2 枚目で、`.github/workflows/terraform.yml` の plan / apply が呼ぶ（`tests/test-terraform-refuse-destroy.sh` が偽物の terraform で確かめる）。 |
 | `scripts/update-release-status.sh` | README のリリース状況更新。 |
 | `scripts/measure-agent-usage.sh` | サブエージェントの役割別トークン使用量を集計するレポート（合否判定はしない）。親セッションとサブエージェントの両方の記録を読み、全体内とサブエージェント内の 2 つの分母で比率を出す。 |

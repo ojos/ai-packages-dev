@@ -21,9 +21,10 @@
 
 規範はここで再定義せず、対応する正本を指します。
 
-- `.claude/skills/intake/SKILL.md`: `/intake` の起動点です。推奨配線を採用済みで、`.gitignore` は `.claude/*` を除外しつつ `!.claude/skills/` で再包含するため追跡対象です。判定基準・票の項目定義は複製せず、`.github/project-ai-rules.md`「intake フロー」と `.ai-playbook/intake/` を参照します。
+- `.claude/skills/intake/SKILL.md`: `/intake` の起動点です。推奨配線を採用済みで、`.gitignore` は `.claude/*` を除外しつつ `!.claude/skills/` で再包含するため追跡対象です。判定基準・票の項目定義は複製せず、`.github/project-ai-rules.md`「intake フロー」（起動の条件）、`.claude/rules/intake-flow.md`（Step 1〜9 と制約。`.ai-playbook/intake/` を読むと載る）と `.ai-playbook/intake/` を参照します。
 - `.claude/skills/land/SKILL.md`: `/land` の起動点です。この会話で PR を作ったら、指示を待たずに使います。判定基準は複製せず、`.ai-playbook/review-workflow.md` と `.ai-playbook/task-playbooks/pr-review.md` を参照します。マージ直前の承認は `scripts/confirm-merge-hook.sh`（`.claude/settings.json` の PreToolUse フックとして配線済み）が機構で保証します（`.ai-playbook/role-contracts/closer.md`「手動承認は機構で保証する」）。
 - `.claude/settings.json`: 追跡しています（`.gitignore` は `!.claude/settings.json` で再包含。#312）。マージの確認フック（`scripts/confirm-merge-hook.sh`）とセッション協調フック（`scripts/session-coord-hook.sh`）の配線を持ちます。権限は締める側の設定（`permissions.blockWritesOutsideWorkingDirectories`）だけを持ち、許可リストは持たず（追跡しない `settings.local.json` 側）、規範は定義しません。
+- `.claude/rules/*.md`: 場所に結びつく規範です。`paths:`（glob の配列）に一致するファイルに触れたときだけ文脈に載るため、`.github/project-ai-rules.md`（地図）は禁止事項・既定の動作・実行時に要る手順だけを持ち、理由・経緯・詳しい手順をここへ置きます。追跡対象です（`.gitignore` は `!.claude/rules/` で再包含）。**規則の中で `@` の取り込みを使いません。** 実測で、`paths:` 付きの規則の中の `@` は起動時から載り、条件付きにならないと分かったためです（#676）。スクリプトを実行しただけでは `paths:` は載らないので、実行時に要る手順は地図に置きます。検査は `tests/test-claude-rules.sh` です。
 
 ## 規範の取り込み
 

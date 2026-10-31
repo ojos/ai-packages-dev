@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# project-ai-rules.md の第二意見オプション表が、second-opinion-review.sh の実装と一致して
+# .claude/rules/review-gate.md の第二意見オプション表が、second-opinion-review.sh の実装と一致して
 # いることを検査する。
 #
 # この表は規範側に置かれた実装の写しで、ローカル事前ゲートの第二意見をどう調整
@@ -13,7 +13,7 @@ set -uo pipefail
 
 echo "test-review-options"
 
-RULES="$REPO_ROOT/.github/project-ai-rules.md"
+RULES="$REPO_ROOT/.claude/rules/review-gate.md"
 REVIEW="$REPO_ROOT/scripts/second-opinion-review.sh"
 
 # ── 規範側 ────────────────────────────────────────────────────────────────────
@@ -28,7 +28,7 @@ table_rows() {
 
 ROWS="$(table_rows)"
 
-it "project-ai-rules に第二意見オプション表がある"
+it "review-gate.md に第二意見オプション表がある"
 if [[ -n "$ROWS" ]]; then pass; else fail "第二意見オプション表を抽出できなかった"; fi
 
 # オプション列は `--runs <n>` の形で書かれる。引数のプレースホルダを落として
@@ -102,15 +102,15 @@ IMPL_ENGINE_DEFAULT="$(grep -oE 'ENGINE="\$\{SECOND_OPINION_ENGINE:-[a-z]+\}"' "
 # ── 照合 ──────────────────────────────────────────────────────────────────────
 
 it "オプションの一覧が規範と実装で一致する"
-assert_same_set "$DOC_OPTS" "$IMPL_OPTS" "project-ai-rules" "second-opinion-review.sh"
+assert_same_set "$DOC_OPTS" "$IMPL_OPTS" "review-gate.md" "second-opinion-review.sh"
 
 it "環境変数の一覧が規範と実装で一致する"
-assert_same_set "$DOC_ENVS" "$IMPL_ENVS" "project-ai-rules" "second-opinion-review.sh"
+assert_same_set "$DOC_ENVS" "$IMPL_ENVS" "review-gate.md" "second-opinion-review.sh"
 
 it "後方互換で受理する旧名の環境変数が規範と実装で一致する"
 # 旧名を実装から外したのに規範が案内し続ける（設定しても効かない）、逆に実装だけが
 # 受理して規範に無い（移行期限が読めない）、のどちらも起きうる。
-assert_same_set "$DOC_LEGACY_ENVS" "$IMPL_LEGACY_ENVS" "project-ai-rules" "second-opinion-review.sh"
+assert_same_set "$DOC_LEGACY_ENVS" "$IMPL_LEGACY_ENVS" "review-gate.md" "second-opinion-review.sh"
 
 it "--engine の既定値が規範と実装で一致する"
 # 既定のエンジンが変わると、どの CLI で第二意見を取るかが黙って変わる。認証手段も
