@@ -116,9 +116,12 @@ expect_fail() {
 
 # ── 現行ツリー ───────────────────────────────────────────────────────────────
 
-it ".claude/rules/ に規則が追跡されている（未追跡でも除外されていなければ可）"
-TRACKED="$(cd "$REPO_ROOT" && git ls-files --cached --others --exclude-standard -- .claude/rules/ | grep -c '\.md$')"
-if [[ "$TRACKED" -ge 1 ]]; then pass; else fail "追跡対象の規則が 0 件（.gitignore の !.claude/rules/ を確認）"; fi
+it ".claude/rules/ の規則がすべて追跡されている（git add し忘れた規則は配られない）"
+untracked=""
+while IFS= read -r f; do
+  git -C "$REPO_ROOT" ls-files --error-unmatch -- "$f" >/dev/null 2>&1 || untracked="$untracked $f"
+done < <(list_rules "$REPO_ROOT")
+if [[ -z "$untracked" ]]; then pass; else fail "追跡されていない規則:$untracked（.gitignore の !.claude/rules/ と git add を確認）"; fi
 
 it "規則が 1 つ以上ある"
 run_check check_rules_exist "$REPO_ROOT"
