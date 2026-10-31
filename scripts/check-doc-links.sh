@@ -434,6 +434,26 @@ while IFS= read -r -d '' md; do
     excluded_count=$((excluded_count + 1))
     continue
   fi
+  # 共通規範から生成した Claude Code 用の規則（.claude/rules/ai-playbook*.md）は走査しない。
+  # 本文は正本 .ai-playbook/shared-ai-rules.md の行をそのまま写したもので、相対リンクは
+  # .ai-playbook/ からの相対のまま残っている（ここからの相対では解決できない）。同じリンクは
+  # 正本が持ち、正本は走査されるので、見落としは生まれない。生成物かどうかは、先頭に付く
+  # 断りの行で見分ける（名前だけでは、手で書いた同名の規則まで外れる）。
+  case "$md" in
+    .claude/rules/ai-playbook*.md)
+      # frontmatter（あれば）の直後の最初の空でない行が、断りの接頭辞で始まるときだけ生成物とする
+      # （ファイルのどこかに同じ行があるだけの手書きの規則は、生成物としない）。
+      if awk 'BEGIN { r = 1 }
+              NR == 1 && $0 == "---" { fm = 1; next }
+              fm && $0 == "---" { fm = 0; next }
+              fm || $0 ~ /^[ \t\r]*$/ { next }
+              { if ($0 ~ /^> 生成物:/) r = 0; exit }
+              END { exit r }' "$md"; then
+        excluded_count=$((excluded_count + 1))
+        continue
+      fi
+      ;;
+  esac
   md_count=$((md_count + 1))
   case "$md" in
     */*) mdir="${md%/*}" ;;

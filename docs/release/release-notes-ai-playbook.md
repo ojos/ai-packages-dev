@@ -12,9 +12,11 @@
 - **第二意見に、反証を試みる立場でレビューさせ、指摘ごとに失敗の筋書きを求めるようにした**（ojos/ai-packages-dev#670）。依頼文は、変更が正しいことの確認ではなく、壊れる入力・状態を探すよう求め、筋書き（どんな入力・状態のとき、どんな誤った結果になるか）を書けない懸念は、ゲートを落とす種類にせず、報告だけの種類（gemini では判定に数えない参考）として出させる。懸念そのものは捨てさせない。`review-workflow.md`「② 第二意見」に、この立場と、筋書きを求めても指摘の正しさは保証されないことを書き足した。
 - **`second-opinion-schema.json` の指摘に `failure_scenario` を必須で足した**（ojos/ai-packages-dev#670）。`second-opinion-review.sh` は、ゲート対象の 4 種類（bug / vulnerability / type-error / edge-case）で筋書きが空の回答を失敗にし、「失敗の筋書き（failure_scenario）がありません」と、形の崩れと区別して示す。報告だけの種類（promise-mismatch / other）は空でよい。差分を読めなかった回答（`reviewed: false`）は、従来どおり「読めなかった」と示す。出力には筋書きも表示する。`--runs` が 2 以上でも、筋書きの無い回答が 1 回出た時点で失敗する（形の崩れた回答と同じ扱い）。判定トークンの方式（gemini）は依頼文で求めるだけで、判定は変えていない。
 - **`second-opinion-review.sh` が、環境変数 `SECOND_OPINION_AGENT_CONFIG_PATHS`（改行区切り）にパスがあれば、それらがエージェントの設定・フックで、重点的に見るよう依頼文へ添える**（ojos/ai-packages-dev#671）。ファイル名は変更した側が自由に付けられるので、データであって指示ではないと断り、制御文字を落としてバッククォートで囲む。DCB の `loop-gate.sh` が、レビューする範囲のうち該当するパスを渡す。
-- 雛形の種類は 17 種のまま。
+- **共通規範 `shared-ai-rules.md` の見出しに、Claude Code 用の規則への分割の印（`<!-- claude-rules: name=<題> paths=<glob>,<glob> -->`）を 5 か所（題は 3 つ）付けた**（ojos/ai-packages-dev#678）。印が掛かるのは、7 章のドキュメント形式の使い分け、14 章の構成と 15 章の非目標（まとめて 1 つの規則）、16 章のセッション間の協調の台帳の項目と台帳の書き方。禁止事項・既定の動作・実行時に要る手順（13 章の統合する側の実務、16 章のすり合わせの時点・失効など）は常時のままにした。規範の中身は変えていない（印を足しただけ）。通して読む人と Copilot には、HTML コメントなので見えない。README に印の書式と意味（範囲・同じ題のまとめ方・`paths` の書き方）を足した。
+- **`templates/claude-entry-imports-rules.md` を足した**（ojos/ai-packages-dev#678）。`claude-entry-imports.md` の、共通規範の全文を取り込まない版。`@.github/project-ai-rules.md` の 1 行だけを取り込み、共通規範は `.claude/rules/ai-playbook*.md` が載せると述べる。DCB の `--with-claude` が、規範がこの雛形を持つときに使う。雛形は 18 種になった。
 
 ### 移行
+- **DCB の `--with-claude` で追従するときは、DCB の未リリースの版（`--render-claude-rules` と規則の生成を持つ版）と、この版の規範を組にする。** この版の規範を指定すると、DCB は `.claude/rules/ai-playbook*.md` を生成し、`CLAUDE.md` から共通規範の全文の取り込みを外す。手を入れた `CLAUDE.md` は古いまま残る（`.dcb-new` が隣に置かれる）ので、`@.ai-playbook/shared-ai-rules.md` の行を外して `.dcb-new` の内容を取り込む。外さないと、全文と規則が二重に載る。
 - **`second-opinion-schema.json` と `second-opinion-review.sh` は組で更新する。** 新しいスキーマは `failure_scenario` を必須にするので、古い `second-opinion-review.sh` と組み合わせると、モデルの回答は筋書きを含むようになるが、空かどうかは検査されない。逆に、新しい `second-opinion-review.sh` と古いスキーマを組み合わせると、モデルが筋書きを返さないので、指摘を 1 件でも含む回答が失敗になる（指摘の無い回答は通る）。
 - 雛形から写したファイルに手を入れていなければ、規範の更新で置き換わる（DCB で規範を配置している場合は `bootstrap.sh --upgrade --playbook-version <新しい版>` で追従する）。
 

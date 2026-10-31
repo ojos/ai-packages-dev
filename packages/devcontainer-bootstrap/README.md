@@ -267,7 +267,7 @@ fi
 |---|---|
 | `--with-aws` | AWS CLI feature + `amazonwebservices.aws-toolkit-vscode` 拡張 + Terraform（下記） |
 | `--with-gcp` | Google Cloud CLI feature（外部 `dhoeric`）+ `GoogleCloudTools.cloudcode` 拡張 + Terraform（下記） |
-| `--with-claude` | Claude Code CLI（`@anthropic-ai/claude-code`）+ `anthropic.claude-code` 拡張 + `~/.claude` 永続化 + マージ確認フック（下記） |
+| `--with-claude` | Claude Code CLI（`@anthropic-ai/claude-code`）+ `anthropic.claude-code` 拡張 + `~/.claude` 永続化 + マージ確認フック（下記）。規範を配置する構成では、共通規範を常時と条件付きの規則に分けて `.claude/rules/` へ生成し、`CLAUDE.md` から全文の取り込みを外す（下記「AI 共通ルールの配置」） |
 | `--with-gemini` | Gemini CLI（`@google/gemini-cli`）+ `Google.gemini-cli-vscode-ide-companion` 拡張 + `~/.gemini` 永続化 |
 | `--with-antigravity` | Antigravity CLI（`agy`）+ `~/.gemini` 永続化 + テレメトリ無効化。**VS Code 拡張は入りません**。**OAuth のみ**で初回に対話ログインが要ります（下記） |
 | `--with-codex` | Codex CLI（`@openai/codex`）+ `~/.codex` 永続化。**VS Code 拡張は入りません**。**ChatGPT アカウントの OAuth または API キー**で初回に対話ログインが要ります（下記）。版の下限があり、下回っていれば入れ替えます |
@@ -310,6 +310,7 @@ fi
 - `--playbook-version <tag>`（既定: 空。既定ソース `ojos/ai-playbook` のタグ tarball への糖衣。`--playbook-from` とは排他。`<tag>` は GitHub の実タグ名をそのまま指定します。例: `v0.1.4`（先頭の `v` を含む）。存在しないタグを指定すると、**ファイルを 1 つも書かずに**明示エラーで終了します）
 - `--playbook-from <path|url>`（既定: 空。ルールの取得元。ディレクトリまたはアーカイブ URL。別 owner・任意 URL・ローカル用）
 - `--playbook-conflict-policy <skip|overwrite|prompt>`（既定: `skip`。**規範ファイル**に既存がある場合の扱い）
+- `--render-claude-rules <正本> <出力ディレクトリ>`（`--with-claude` が規則を作る処理だけを行う入口です。`<正本>`（`shared-ai-rules.md`）の印に従い、`<出力ディレクトリ>` へ `ai-playbook.md` と `ai-playbook-<題>.md` を書き、書いたファイル名を 1 行ずつ出して終了します。ほかの引数は見ません。`CLAUDE.md` を手で書いているプロジェクトが、規則を正本から作り直すために使います。印の書式の誤りや、同じ題で `paths` が食い違うときは、何も書かずに非 0 で止まります。印の書式と意味は ai-playbook の README の「共通規範の Claude Code 用の分割（印）」参照）
 - `-h` / `--help`（使い方を表示して終了。何も生成しません）
 
 ### 廃止フラグ
@@ -464,12 +465,13 @@ bash bootstrap.sh --no-absent .devcontainer/compose.yaml   # 記録を外す（�
 | `.ai-playbook/**` | 共通規範、ロール契約、タスクプレイブック、レビュー運用、intake 規律 |
 | `.ai-playbook/VERSION` | 規範の**取得元**（`version=` / `source=`）を on-disk に残す記録。どの取得元から取り込んだかを生成後の環境から照合できる。生成の入力と現物のハッシュは `.devcontainer/ORIGIN` が記録する（下記「生成物の由来の記録」） |
 | `.github/project-ai-rules.md` | プロジェクト共通ルールの雛形 |
-| `CLAUDE.md` / `AGENTS.md` / `.github/copilot-instructions.md` | 実行環境の入口ファイル（3 層の優先順位を配線）。`CLAUDE.md` だけは、末尾に規範 2 つ（`.ai-playbook/shared-ai-rules.md` / `.github/project-ai-rules.md`）を `@` で取り込む節を足す。Claude Code は、これで規範の全文を毎セッションの文脈へ載せる（生成物で約 53KB） |
+| `CLAUDE.md` / `AGENTS.md` / `.github/copilot-instructions.md` | 実行環境の入口ファイル（3 層の優先順位を配線）。`CLAUDE.md` だけは、末尾に規範を `@` で取り込む節を足す。`--with-claude` なしでは規範 2 つ（`.ai-playbook/shared-ai-rules.md` / `.github/project-ai-rules.md`）を取り込み、Claude Code は規範の全文を毎セッションの文脈へ載せる（生成物で約 53KB）。`--with-claude` を併せて指定すると、共通規範の全文は取り込まず（`.github/project-ai-rules.md` だけを取り込む）、共通規範は `.claude/rules/ai-playbook*.md` が分けて載せる（下記「AI 共通ルールの配置」） |
 | `scripts/second-opinion-review.sh` | 第二意見レビューの実行体。`scripts/loop-gate.sh` が存在すれば自動で直列化する。既定は `gemini` CLI（Antigravity CLI への切り替えにも対応するが、`agy` の導入はこの生成器の対象外）。エンジンの指定（引数または `SECOND_OPINION_ENGINE`）が無いまま既定の gemini で回り、`agy` か `codex` が PATH にあるときは、stderr に `[second-opinion] notice:` で知らせる（判定は変えない。gemini だけの構成では出さない） |
 | `.claude/skills/intake/SKILL.md` | Claude Code 向け intake 起点スキル（`--with-claude` 指定時のみ）。規範を複製せず `.ai-playbook/intake/` を参照するだけの薄いスキル |
 | `.claude/skills/peers/SKILL.md` | Claude Code 向けの、ほかのセッションの一覧・宛先の解決・送信・一斉送信の呼び出し口（`--with-claude` 指定時のみ）。実体は `scripts/session-peers.sh`。一斉送信も承認の根拠にならない（`.ai-playbook/shared-ai-rules.md` 16 章） |
 | `.claude/skills/land/SKILL.md` | Claude Code 向け PR 確認・マージ起点スキル（`--with-claude` 指定時のみ）。判定基準を複製せず `.ai-playbook/review-workflow.md` と `.ai-playbook/task-playbooks/pr-review.md` を参照する。マージ直前の確認そのものは `scripts/confirm-merge-hook.sh`（下記）が機構として保証する |
 | `.claude/agents/explorer.md` / `.claude/agents/implementer.md` | Claude Code 向け委譲先エージェント定義（`--with-claude` 指定時のみ）。`model` と `tools` を frontmatter で固定する。判定の導線は規範側（`shared-ai-rules.md` の「実装委譲パターン」）が持ち、ここでは再定義しない |
+| `.claude/rules/ai-playbook*.md` | 共通規範（`shared-ai-rules.md`）を Claude Code 用に分けた規則（`--with-claude` 指定時のみ）。正本の見出しの印に従い、`paths:` の無い `ai-playbook.md`（常時。起動時に必ず載る）と、`paths:` 付きの `ai-playbook-<題>.md`（一致するファイルに触れたときだけ載る。`@` の取り込みを含まない）を作る。正本から生成したもので、編集は正本へ（各ファイルの先頭にその旨の断りが付く）。このとき `CLAUDE.md` は共通規範の全文を取り込まない（`.github/project-ai-rules.md` だけを取り込む）。`--with-claude` なしの `CLAUDE.md` と、`AGENTS.md`・`.github/copilot-instructions.md` は変わらない。規範がこの機能（`templates/claude-entry-imports-rules.md`）を持たない古い版では、従来どおり全文を取り込む。置き方は `.claude/` のほかの生成物と同じで、DCB が作っていない同名のファイルは上書きしない。`--upgrade` では、手を入れていなければ作り直し、手を入れていれば `.dcb-new` を置く |
 
 取得元は次の順で解決します。
 
@@ -479,6 +481,22 @@ bash bootstrap.sh --no-absent .devcontainer/compose.yaml   # 記録を外す（�
 
 `curl` で `bootstrap.sh` を単体取得して実行する場合は隣接チェックアウトが存在しないため、`--playbook-version` または `--playbook-from` の指定が必要です。
 取得元が解決できない場合は、**ファイルを 1 つも書き込まずに終了します**。
+
+#### `--with-claude` のときの共通規範の分け方
+
+`CLAUDE.md` が共通規範（`shared-ai-rules.md`）の全文を取り込むと、毎セッション約 50KB が文脈に載ります。`--with-claude` を併せて指定すると、DCB は正本の見出しの印（`<!-- claude-rules: name=<題> paths=<glob>,<glob> -->`。書式と意味は ai-playbook の README の「共通規範の Claude Code 用の分割（印）」）に従って、共通規範を Claude Code 用の規則に分けて生成します。
+
+- 印の無い範囲（常時）は `.claude/rules/ai-playbook.md` へ。`paths:` が無いので、起動時に必ず載ります。
+- 印の範囲は `.claude/rules/ai-playbook-<題>.md` へ。`paths:` 付きで、一致するファイルに触れたときだけ載ります。同じ題の印が複数あれば、正本の順序で 1 つにまとめます。同じ題で `paths` が食い違うと、書き込む前に停止します。
+- 印の行以外は正本の行をそのまま写し、各ファイルの先頭に、生成物である旨（編集は正本へ）と、相対リンクの基準が `.ai-playbook/` であることを述べる断りを足します。条件付きの規則には親の見出しも添えます。本文に `@` の取り込みは入れません（`paths:` 付きの規則の中の `@` は起動時から載り、条件付きにならないため）。
+- `CLAUDE.md` は、規範の雛形 `templates/claude-entry-imports-rules.md` を使い、`@.ai-playbook/shared-ai-rules.md` の取り込みを外します（`@.github/project-ai-rules.md` は残します）。`--with-claude` なしの `CLAUDE.md` と、`AGENTS.md`・`.github/copilot-instructions.md` は、これまでどおり全文を参照させます。
+- 規範がこの雛形（`templates/claude-entry-imports-rules.md`）を持たない古い版では、この分割をせず、従来どおり全文を取り込みます。
+- **DCB が作っていない同名の既存ファイル**（`.claude/rules/ai-playbook*.md`）が置き先にあって規則を置けないときは、規則を 1 つも置かず、`CLAUDE.md` も全文を取り込む従来の形のままにして、警告を出します（規則だけ置かずに全文の取り込みを外すと、常時の部分が載らなくなるため）。判定は書き込みの前に行います。逆に、規則は置けたのに `CLAUDE.md` が全文を取り込んだままのとき（既存の `CLAUDE.md` の温存、`--upgrade` で手を入れた `CLAUDE.md`）は、二重に載る旨の警告を出します。
+- **正本から題が消えた・変わったとき**: `--upgrade` は、古い `ai-playbook-<題>.md` を消しません（「no longer generated (not deleted)」と報告するだけです）。残すと、その `paths:` に一致するファイルに触れるたびに載り続け、新しい規則と内容が重なります。報告に出た `.claude/rules/ai-playbook-<題>.md` は、手を入れていなければ手で消してください。
+- 印の誤り（入れ子、`paths` の空の要素・引用符・バックスラッシュ・波括弧、印のつもりの崩れた行）は、書き込む前に停止します。
+- 生成物は `.claude/` のほかの生成物と同じ扱いです（ORIGIN にハッシュを記録します。DCB が作っていない同名のファイルは上書きしません。`--upgrade` では手を入れていなければ作り直し、手を入れていれば `.dcb-new` を置きます）。
+- **`--upgrade` で手を入れた `CLAUDE.md` は古いまま残ります**（新しい版は隣の `CLAUDE.md.dcb-new` に置かれます）。古い `CLAUDE.md` は `@.ai-playbook/shared-ai-rules.md` で全文を取り込み続けるので、新しい規則と二重に載ります。`CLAUDE.md.dcb-new` の内容を取り込み（`@.ai-playbook/shared-ai-rules.md` の行を外し）、`CLAUDE.md.dcb-new` を消してから `--accept CLAUDE.md` で取り込み済みにしてください。
+- 生成の処理だけを行う入口が `--render-claude-rules <正本> <出力ディレクトリ>` です。`CLAUDE.md` を手で書くプロジェクトが、規則を作り直すために使います。
 
 ### AI CLI 導入挙動
 
@@ -1079,6 +1097,7 @@ OAuth トークン（`CLAUDE_CODE_OAUTH_TOKEN`）を `remoteEnv` へ注入する
 - `.claude/skills/land/SKILL.md`（`--with-claude` を併せて指定した場合のみ。PR 確認・マージ起点スキル）
 - `.claude/skills/peers/SKILL.md`（`--with-claude` を併せて指定した場合のみ。ほかのセッションの一覧・送信・一斉送信の呼び出し口。実体は `scripts/session-peers.sh`）
 - `.claude/agents/explorer.md` / `.claude/agents/implementer.md`（`--with-claude` を併せて指定した場合のみ。委譲先エージェント定義）
+- `.claude/rules/ai-playbook*.md`（`--with-claude` を併せて指定した場合のみ。共通規範を常時と条件付きに分けた規則。正本の印に従って生成する。下記「[AI 共通ルールの配置](#ai-共通ルールの配置)」参照）
 
 `--with-aws` / `--with-gcp` のいずれかを選択した場合は、加えて次を出力します（規範の配置は前提としません）。
 

@@ -47,14 +47,22 @@ fi
 
 it "DCB は規範の内部ファイル名をハードコードしない"
 # role-contracts/ 等の内部構造を知っていると、規範側の再編で静かに壊れる。
-# コメント行を除いて検査する。
-hits="$(grep -n 'role-contracts\|task-playbooks\|shared-ai-rules' "$BOOTSTRAP" \
-  | grep -v '^\s*[0-9]*:\s*#' | grep -vc '^\s*[0-9]*:#' || true)"
-if [[ "${hits:-0}" -eq 0 ]]; then
+# コメント行（字下げ付きを含む）を除いて検査する。
+# 例外（#678）: Claude Code 用の規則の生成は正本の名前を知る必要がある。許すのは、名前を持つ
+# 定数の定義の完全な 1 行（CLAUDE_RULES_SOURCE_NAME="shared-ai-rules.md"）だけで、ほかの箇所は
+# その定数を使う。定義がちょうど 1 行であることも検査する。
+DEF_RE='^[0-9]*:CLAUDE_RULES_SOURCE_NAME="shared-ai-rules.md"$'
+all_mentions="$(grep -n 'role-contracts\|task-playbooks\|shared-ai-rules' "$BOOTSTRAP" \
+  | grep -v '^[0-9]*:[[:space:]]*#' || true)"
+def_count="$(printf '%s\n' "$all_mentions" | grep -c "$DEF_RE" || true)"
+mentions="$(printf '%s\n' "$all_mentions" | grep -v "$DEF_RE" | grep . || true)"
+hits=0
+[[ -z "$mentions" ]] || hits="$(printf '%s\n' "$mentions" | wc -l | tr -d ' ')"
+if [[ "$hits" -eq 0 && "$def_count" -eq 1 ]]; then
   pass
 else
-  fail "内部ファイル名への言及が $hits 件残っている:
-$(grep -n 'role-contracts\|task-playbooks\|shared-ai-rules' "$BOOTSTRAP" | grep -v ':#' | head -5)"
+  fail "内部ファイル名への言及が $hits 件残っている（定数の定義の行は $def_count 行。ちょうど 1 行が必要）:
+$(printf '%s\n' "$mentions" | head -5)"
 fi
 
 # ── 生成物は雛形と完全一致する（コピーであって再生成でない）──────────────────
