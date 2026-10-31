@@ -537,12 +537,34 @@ dcb_render_claude_rules() {
     return 1
   fi
   # render は誤りがあれば何も書かずに失敗するが、出力ディレクトリは先に作ることになる。
-  # 印の誤りのときに空のディレクトリを残さないよう、検証（list）を作る前に済ませる。
-  dcb_claude_rules_awk list "$src" >/dev/null || return 1
-  mkdir -p "$outdir" || return 1
-  dcb_claude_rules_awk render "$src" "$outdir" || return 1
+  # 印の誤りや衝突のときに空のディレクトリを残さないよう、検証（list）と衝突の検査を作る前に済ませる。
   local names f base
   names="$(dcb_claude_rules_awk list "$src")" || return 1
+  dcb_claude_rules_conflicts "$outdir" "$names" || return 1
+  mkdir -p "$outdir" || return 1
+  # 出力先の中の一時ディレクトリへ生成してから、mv で置き換える。awk の書き込みはシンボリック
+  # リンク・ハードリンクを辿り、1 つずつ書くので、途中で失敗すると一部だけ新しくなる。mv は
+  # ディレクトリの項目を差し替えるので、リンクを辿らず、生成の失敗では出力先に何も残さない。
+  tmp="$(mktemp -d "$outdir/.ai-playbook-render.XXXXXX")" || return 1
+  if ! dcb_claude_rules_awk render "$src" "$tmp"; then
+    rm -rf "$tmp"
+    return 1
+  fi
+  # 生成のあいだに出力先が変わっていないかを、置き換えの直前にもう一度確かめる（検査と mv の
+  # あいだの窓は残るが、生成にかかる時間ぶんの窓は閉じる）。
+  if ! dcb_claude_rules_conflicts "$outdir" "$names"; then
+    rm -rf "$tmp"
+    return 1
+  fi
+  while IFS= read -r base; do
+    [[ -n "$base" ]] || continue
+    if ! mv -f "$tmp/$base" "$outdir/$base"; then
+      rm -rf "$tmp"
+      echo "error: --render-claude-rules: $base を置けませんでした。" >&2
+      return 1
+    fi
+  done <<< "$names"
+  rm -rf "$tmp"
   # 今回生成しなかった生成物（正本から題が消えた・変わったあとの古い規則）を消す。生成物かどうかは
   # 断りの行で見分け、断りの無い手書きの規則は消さない。消した名前は標準エラーへ出す（標準出力は
   # 生成した名前の一覧に保つ）。--upgrade の方針（報告だけで消さない）はここでは変えない。
@@ -556,6 +578,35 @@ dcb_render_claude_rules() {
     fi
   done
   printf '%s\n' "$names"
+}
+
+# 出力先（$1）に、生成する名前（$2。1 行に 1 つ）と同名で上書きできないものがあるかを調べる。
+# あれば理由つきで名前を標準エラーへ出し、1 を返す。上書きできないのは、シンボリックリンク・
+# 通常のファイルでないもの・読めないもの・生成物の断りが無いもの（手書きの規則）と、スティッキー
+# ビット付きのディレクトリにある、自分もディレクトリも所有していないもの（mv で置き換えられず、
+# 一部だけ新しくなるため。ファイルかディレクトリの所有者なら置き換えられる）。
+# --with-claude の検査（claude_rules_load）は ORIGIN の記録と中身の一致で見分けるので、判定を
+# 共通にしない（こちらには ORIGIN が無く、断りで見分ける）。
+dcb_claude_rules_conflicts() {
+  local outdir="$1" names="$2" base f conflicts=""
+  while IFS= read -r base; do
+    [[ -n "$base" ]] || continue
+    f="$outdir/$base"
+    [[ -e "$f" || -L "$f" ]] || continue
+    if [[ -L "$f" || ! -f "$f" ]]; then
+      conflicts+="  $base（シンボリックリンクか、通常のファイルでない）"$'\n'
+    elif [[ ! -r "$f" ]]; then
+      conflicts+="  $base（読めないため、生成物か確かめられない）"$'\n'
+    elif ! dcb_is_generated_rule "$f"; then
+      conflicts+="  $base（生成物の断りが無い）"$'\n'
+    elif [[ -k "$outdir" && ! -O "$f" && ! -O "$outdir" ]]; then
+      conflicts+="  $base（スティッキービット付きのディレクトリにあり、ファイルもディレクトリも自分の所有でないので、置き換えられない）"$'\n'
+    fi
+  done <<< "$names"
+  [[ -z "$conflicts" ]] && return 0
+  echo "error: --render-claude-rules: 出力先に、上書きできない同名のものがあるため、何も書きません:" >&2
+  printf '%s' "$conflicts" >&2
+  return 1
 }
 
 # 規則のファイルが生成物か。frontmatter（あれば）の直後の最初の空でない行が、断りの接頭辞で
