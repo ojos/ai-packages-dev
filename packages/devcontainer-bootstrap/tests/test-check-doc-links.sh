@@ -451,4 +451,53 @@ cp -R "$BASE" "$out"
 run_check "$out"
 assert_fail "追跡 0 件" "追跡ファイルが 1 件もありません"
 
+# ── 共通規範から生成した規則（.claude/rules/ai-playbook*.md）──────────────────
+#
+# 生成した規則の本文は正本の行そのままで、相対リンクは .ai-playbook/ からの相対のまま
+# 残る。ここからの相対では解決できないので走査から外す。同じリンクは正本が持ち、正本は
+# 走査される。生成物かどうかは先頭の断りの行で見分け、名前だけでは外さない。
+
+CLAUDE_BASE="$(new_workdir)/claude-base"
+run_bootstrap "$CLAUDE_BASE" --with-claude --with-playbook >/dev/null 2>&1
+
+it "--with-claude --with-playbook の生成物（生成した規則を含む）で、リンク検査が通る"
+out="$(BASE="$CLAUDE_BASE" new_repo)"
+run_check "$out"
+if [[ "$CHECK_RC" -eq 0 && -f "$out/.claude/rules/ai-playbook.md" ]]; then pass; else fail "rc=$CHECK_RC $CHECK_OUT"; fi
+
+it "生成した規則は走査から外れても、正本の壊れたリンクは落ちる（見落としは生まれない）"
+out="$(BASE="$CLAUDE_BASE" new_repo)"
+printf '\n[壊れたリンク](no-such-file.md)\n' >> "$out/.ai-playbook/shared-ai-rules.md"
+(cd "$out" && git add -A) >/dev/null 2>&1
+run_check "$out"
+assert_fail "正本の壊れたリンク" "no-such-file.md"
+
+it "断りの行を持たない同名の規則は、手で書いたものとして走査される"
+out="$(BASE="$CLAUDE_BASE" new_repo)"
+add_doc "$out" .claude/rules/ai-playbook-handmade.md "$(printf -- '---\npaths:\n  - "src/**"\n---\n\n[壊れたリンク](no-such-file.md)')
+"
+run_check "$out"
+assert_fail "手書きの同名の規則" "no-such-file.md"
+
+it "生成物に手で壊れたリンクを追記すると、断りがあっても検出される"
+out="$(BASE="$CLAUDE_BASE" new_repo)"
+printf '\n[壊れたリンク](no-such-file.md)\n' >> "$out/.claude/rules/ai-playbook.md"
+(cd "$out" && git add -A) >/dev/null 2>&1
+run_check "$out"
+assert_fail "追記された生成物" "no-such-file.md"
+
+it "断りに書かれた正本が読めない生成物は、通常どおり走査される"
+out="$(BASE="$CLAUDE_BASE" new_repo)"
+printf '\n[壊れたリンク](no-such-file.md)\n' >> "$out/.claude/rules/ai-playbook-doc-formats.md"
+(cd "$out" && git rm -q -f --cached .ai-playbook/shared-ai-rules.md && rm -f .ai-playbook/shared-ai-rules.md && git add -A) >/dev/null 2>&1
+run_check "$out"
+assert_fail "正本が無い生成物" "ai-playbook-doc-formats.md"
+
+it "断りの接頭辞が先頭の行ではなく本文の途中にあるだけの規則は、手書きとして走査される"
+out="$(BASE="$CLAUDE_BASE" new_repo)"
+add_doc "$out" .claude/rules/ai-playbook-handmade.md "$(printf -- '---\npaths:\n  - "src/**"\n---\n\n手書きの本文\n> 生成物: という行が途中にある\n[壊れたリンク](no-such-file.md)')
+"
+run_check "$out"
+assert_fail "途中に接頭辞がある手書きの規則" "no-such-file.md"
+
 exit_with_result

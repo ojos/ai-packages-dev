@@ -61,9 +61,12 @@ readme_outputs() {
 # 規範ファイルは 1 つ 1 つが README の一覧に並ぶ性質のものではない（内容の正本は
 # ai-playbook 側で、DCB は木ごと配置する）。README の `.ai-playbook/**` と対応付ける。
 # VERSION だけは DCB 自身が書く記録なので個別に残す。
+# .claude/rules/ai-playbook*.md も同様に、正本の印で数と名前が決まる（規範の版で増減する）ため、
+# README の `.claude/rules/ai-playbook*.md` 1 行と対応付ける。
 normalize_paths() {
   sed -e 's|^\.ai-playbook/VERSION$|@KEEP@.ai-playbook/VERSION|' \
       -e 's|^\.ai-playbook/.*$|.ai-playbook/**|' \
+      -e 's|^\.claude/rules/ai-playbook.*\.md$|.claude/rules/ai-playbook*.md|' \
       -e 's|^@KEEP@||'
 }
 

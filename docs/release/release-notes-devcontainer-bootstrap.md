@@ -13,12 +13,22 @@
 - **`loop-gate.sh` が、エージェントの設定・フックに触れる変更を一覧に出す**（ojos/ai-packages-dev#671）。`.claude/`・`.mcp.json`・`.github/workflows/`・`.githooks/`・`.husky/`・`.git-config-allow`・`.gitattributes`（どの階層も）・`.gitmodules`・`.devcontainer/`・`.vscode/`・フックの本体のスクリプトに当たるパスを（改名は移動元も）出力し、環境変数 `SECOND_OPINION_AGENT_CONFIG_PATHS` で第二意見へ渡す。判定と終了コードは変えない。
 - **生成する `.claude/settings.json` に、権限を締める側の設定を 2 つ足した**（ojos/ai-packages-dev#672）。`permissions.blockWritesOutsideWorkingDirectories: true`（作業ディレクトリの外への書き込みを止める）と、確認フック（`confirm-merge-hook.sh`）の hook への `"onFailure": "block"`（フックが失敗したとき通さず止める）。セッション協調フックには付けない（台帳は fail-open が規範）。許可リストは引き続き持たない。
 - **`doctor.sh` が Claude Code の版を検査する**（ojos/ai-packages-dev#672）。対象の `.claude/settings.json` がこの設定を持ち、`claude` が PATH にあるときだけ、`claude --version` を下限 2.1.314 と比べ、古ければ WARN（`blockWritesOutsideWorkingDirectories` が、エラーも警告も出ずに黙って無視される）。版を読めないときも WARN。設定を持たない対象と、`claude` が無い環境では検査しない。
+- **`--with-claude` のとき、共通規範を常時の規則と条件付きの規則に分けて生成し、`CLAUDE.md` から全文の取り込みを外した**（ojos/ai-packages-dev#678）。今までは `CLAUDE.md` が `@.ai-playbook/shared-ai-rules.md` で全文（約 50KB）を毎セッションの文脈へ載せていた。正本の見出しの印（`<!-- claude-rules: name=<題> paths=<glob>,<glob> -->`。ai-playbook の未リリースの版が付ける）に従い、印の無い範囲を `.claude/rules/ai-playbook.md`（`paths:` なし＝起動時に必ず載る）へ、印の範囲を `.claude/rules/ai-playbook-<題>.md`（`paths:` 付き。一致するファイルに触れたときだけ載る。`@` の取り込みは入れない）へ生成する。正本の行は印の行を除いて変えずに写し、各ファイルの先頭に、生成物である旨と相対リンクの基準を述べる断りを足す。`CLAUDE.md` は ai-playbook の `templates/claude-entry-imports-rules.md`（`@.github/project-ai-rules.md` だけを取り込む版）を使う。`--with-claude` なしの `CLAUDE.md` と `AGENTS.md`・`copilot-instructions.md` は変えない。生成物は ORIGIN のハッシュに乗り、`--upgrade` では手を入れていなければ作り直し、手を入れていれば `.dcb-new` を置く。DCB が作っていない同名のファイルは上書きしない。
+- **生成の処理だけを行う入口 `--render-claude-rules <正本> <出力ディレクトリ>` を足した**（ojos/ai-packages-dev#678）。`CLAUDE.md` を手で書くプロジェクトが、規則を正本から作り直すために使う。印の書式の誤りや、同じ題で `paths` が食い違うときは、何も書かずに非 0 で止まる。
+- **`scripts/check-doc-links.sh` が、生成した規則（`.claude/rules/ai-playbook*.md`）を走査しない**（ojos/ai-packages-dev#678）。生成した規則の本文は正本の行そのままで、相対リンクは `.ai-playbook/` からの相対のまま残るため、そこからの相対では解決できない。同じリンクは正本が持ち、正本は走査される。生成物かどうかは先頭の断りの行で見分け、断りの無い同名の規則は手で書いたものとして走査する。集計の「除外」の件数に数える。
+- **この版が要求する ai-playbook は変わらない**。ai-playbook が `templates/claude-entry-imports-rules.md` を持たない古い版では、分割をせず従来どおり全文を取り込む。分割を使うには、ai-playbook の未リリースの版（`templates/claude-entry-imports-rules.md` と印を持つ版）を指定する。
 
 ### 移行
 - 既にある `.claude/settings.json` は、衝突の扱い（既定は温存）に従って書き換えない。SessionStart の配線が欲しければ、`bash "$CLAUDE_PROJECT_DIR/scripts/check-git-config.sh" --hook` を手で足す。
   `permissions.blockWritesOutsideWorkingDirectories: true` と、確認フックの hook への `"onFailure": "block"` も、同様に手で足す。
 - husky などで `core.hooksPath` を使っているプロジェクトは、`doctor.sh` が WARN を出すようになる。`.git-config-allow` に `core.hooksPath=<値>` を書いてコミットすると黙る。
 - 第二意見の依頼文へ一覧を添えるのは、ai-playbook の未リリースの雛形の `second-opinion-review.sh` から。古い雛形と組み合わせても、一覧は loop-gate の出力に出る（依頼文に添えられないだけ）。
+- **`--upgrade` で手を入れた `CLAUDE.md` は古いまま残る。** 新しい版は隣の `CLAUDE.md.dcb-new` に置かれる。古い `CLAUDE.md` は `@.ai-playbook/shared-ai-rules.md` で全文を取り込み続けるので、新しく生成された `.claude/rules/ai-playbook*.md` と二重に載る（規範の全文と、同じ内容の規則が両方文脈に入る）。取り込み方: `CLAUDE.md` の `@.ai-playbook/shared-ai-rules.md` の行と、それを説明する文を外し（`CLAUDE.md.dcb-new` の「規範の取り込み（Claude Code）」の節に差し替える）、`CLAUDE.md.dcb-new` を消してから `bash bootstrap.sh --accept CLAUDE.md` で取り込み済みにする。`@.github/project-ai-rules.md` の行は残す。
+- 既存の出力先は `scripts/check-doc-links.sh` を `--upgrade` で更新して追従する（手を入れていなければ置き換わる）。
+- **正本から題が消えた・変わったとき、古い `.claude/rules/ai-playbook-<題>.md` は残る。** `--upgrade` は生成しなくなったファイルを消さず、「no longer generated (not deleted)」と報告するだけにしている。残すと、その `paths:` に一致するファイルに触れるたびに載り続ける。報告に出た規則は、手を入れていなければ手で消す。
+- DCB が作っていない同名の `.claude/rules/ai-playbook*.md` が既にあるときは、規則を置かず、`CLAUDE.md` も従来の形（全文を取り込む）のままにして警告する。
+- 手を入れていない `CLAUDE.md` は、`--upgrade` で自動的に新しい形へ更新される。
+- `.claude/rules/ai-playbook*.md` は正本から生成するものなので、編集は正本（`shared-ai-rules.md`）へ行う。手を入れた規則は、次の `--upgrade` で上書きされず、`.dcb-new` が置かれる。
 
 ## v0.23.6
 

@@ -12,6 +12,18 @@
 #   3. 地図が各規則ファイルへリンクしている（道案内が無い規則は読まれない）
 #   4. 地図が行数の上限以下（地図が育つと、常時の文脈を縮める目的が失われる）
 #
+# 例外: .claude/rules/ai-playbook*.md は手で書かず、共通規範の正本（.ai-playbook/shared-ai-rules.md）の
+# 印から bootstrap.sh --render-claude-rules で生成したものである（#678）。生成物は
+#   - paths: を持つ規則だけではない（常時の ai-playbook.md は paths: を持たない。起動時に載る）
+#   - 地図からリンクしない（正本の側が道案内を持つ）
+# ので上の 2 と 3 から外し、代わりに
+#   5. 正本から作り直したものと一致する（手で直した生成物、正本の変更に追随していない生成物を落とす）
+# を検査する。@ なし・追跡済み・glob の実在は生成物にも掛ける。
+#
+# 生成物かどうかは、名前の決め打ちではなく、生成物の先頭に付く断りの行で見分ける
+# （bootstrap.sh の dcb_claude_rules_awk が書く、接頭辞「> 生成物:」で始まる行）。
+# 名前で決め打つと、手で書いた規則が ai-playbook で始まる名前になったとき、検査から黙って外れる。
+#
 # 検査は「ルートを受け取る関数」にしてあり、末尾で壊したフィクスチャへも同じ関数を
 # 当てる。検査が実際に落ちることを確かめないと、常に緑の検査が緑のまま残る。
 #
@@ -24,6 +36,33 @@ echo "test-claude-rules"
 
 MAP_REL=".github/project-ai-rules.md"
 MAP_MAX_LINES=150
+# 作り直しの一時置き場（check_generated_match）と、末尾の壊したフィクスチャの置き場。
+FIX="$(mktemp -d "${TMPDIR:-/tmp}/test-claude-rules.XXXXXX")"
+trap 'rm -rf "$FIX"' EXIT
+SOURCE_REL=".ai-playbook/shared-ai-rules.md"
+BOOTSTRAP_REL="packages/devcontainer-bootstrap/bootstrap.sh"
+# 生成物の断りの行の接頭辞（bootstrap.sh の CLAUDE_RULES_NOTICE_PREFIX と同じ。この接頭辞だけで見分ける）。
+GEN_NOTICE='> 生成物:'
+
+# is_generated <file> — 正本から生成した規則か（先頭の断りの行で見分ける）。
+is_generated() {
+  # frontmatter（あれば）の直後の最初の空でない行が接頭辞で始まるときだけ生成物とする。
+  awk -v p="$GEN_NOTICE" 'BEGIN { r = 1 }
+      NR == 1 && $0 == "---" { fm = 1; next }
+      fm && $0 == "---" { fm = 0; next }
+      fm || $0 ~ /^[ \t\r]*$/ { next }
+      { if (index($0, p) == 1) r = 0; exit }
+      END { exit r }' "$1"
+}
+
+# list_rules_by_origin <root> <hand|generated> — 手で書いた規則、または生成物の規則を 1 行ずつ出す。
+list_rules_by_origin() {
+  local root="$1" want="$2" f kind
+  while IFS= read -r f; do
+    if is_generated "$root/$f"; then kind=generated; else kind=hand; fi
+    [[ "$kind" == "$want" ]] && printf '%s\n' "$f"
+  done < <(list_rules "$root")
+}
 
 # list_rules <root> — 規則ファイル（root からの相対パス）を 1 行ずつ出す。
 list_rules() {
@@ -59,12 +98,14 @@ path_globs() {
     }'
 }
 
-# check_paths <root> — 各規則が frontmatter の paths: に 1 つ以上の glob を持つ。
+# check_paths <root> — 手で書いた各規則が frontmatter の paths: に 1 つ以上の glob を持つ。
+# 生成物は対象外（常時の ai-playbook.md は paths: を持たない。条件付きの生成物が paths: を
+# 持つことは check_generated_match が、正本から作り直したものとの一致で見る）。
 check_paths() {
   local root="$1" f bad=""
   while IFS= read -r f; do
     [[ -n "$(path_globs "$root/$f")" ]] || bad="$bad $f"
-  done < <(list_rules "$root")
+  done < <(list_rules_by_origin "$root" hand)
   [[ -z "$bad" ]] || { printf 'paths: を持たない規則:%s' "$bad"; return 1; }
 }
 
@@ -83,13 +124,13 @@ check_no_import() {
   [[ -z "$bad" ]] || { printf '@ の取り込みを含む規則:%s' "$bad"; return 1; }
 }
 
-# check_map_links <root> — 地図が各規則ファイルへリンクしている。
+# check_map_links <root> — 地図が、手で書いた各規則ファイルへリンクしている（生成物は対象外）。
 check_map_links() {
   local root="$1" f bad=""
   [[ -f "$root/$MAP_REL" ]] || { printf '地図がありません: %s' "$MAP_REL"; return 1; }
   while IFS= read -r f; do
     grep -qF "$f" "$root/$MAP_REL" || bad="$bad $f"
-  done < <(list_rules "$root")
+  done < <(list_rules_by_origin "$root" hand)
   [[ -z "$bad" ]] || { printf '地図からリンクされていない規則:%s' "$bad"; return 1; }
 }
 
@@ -101,10 +142,42 @@ check_map_size() {
   [[ "$n" -le "$MAP_MAX_LINES" ]] || { printf '地図が %s 行（上限 %s 行）' "$n" "$MAP_MAX_LINES"; return 1; }
 }
 
+# check_generated_match <root> — 生成物の規則が、正本から作り直したものと一致する。
+# 作り直しは bootstrap.sh の --render-claude-rules を使う（--with-claude と同じ処理）。
+# 正本が無いのに生成物がある、作り直した規則の一部が置かれていない、置かれている生成物が
+# 作り直しに無い（正本から題が消えたのに残っている）、中身が違う、のいずれも落とす。
+# 生成物が 1 つも無く正本も無いルートは、検査するものが無いので通す。
+check_generated_match() {
+  local root="$1" tmp gen f bad=""
+  gen="$(list_rules_by_origin "$root" generated)"
+  if [[ ! -f "$root/$SOURCE_REL" ]]; then
+    [[ -z "$gen" ]] || { printf '正本 %s が無いのに生成物があります: %s' "$SOURCE_REL" "$(printf '%s' "$gen" | tr '\n' ' ')"; return 1; }
+    return 0
+  fi
+  tmp="$(mktemp -d "$FIX/render.XXXXXX")" || return 1
+  if ! bash "$REPO_ROOT/$BOOTSTRAP_REL" --render-claude-rules "$root/$SOURCE_REL" "$tmp" >/dev/null 2>"$tmp.err"; then
+    printf '正本から規則を作り直せません: %s' "$(head -c 200 "$tmp.err")"
+    return 1
+  fi
+  for f in "$tmp"/*.md; do
+    [[ -f "$f" ]] || continue
+    if [[ ! -f "$root/.claude/rules/$(basename "$f")" ]]; then
+      bad="$bad 未生成:$(basename "$f")"
+    elif ! diff -q "$f" "$root/.claude/rules/$(basename "$f")" >/dev/null; then
+      bad="$bad 不一致:$(basename "$f")"
+    fi
+  done
+  while IFS= read -r f; do
+    [[ -n "$f" ]] || continue
+    [[ -f "$tmp/$(basename "$f")" ]] || bad="$bad 正本に無い生成物:$(basename "$f")"
+  done <<< "$gen"
+  [[ -z "$bad" ]] || { printf '正本から作り直したものと一致しません（%s を実行して置き直す）:%s' "bash $BOOTSTRAP_REL --render-claude-rules $SOURCE_REL .claude/rules" "$bad"; return 1; }
+}
+
 # check_all <root> — 全検査を通す（失敗したら、最初に落ちた検査のメッセージを出す）。
 check_all() {
   check_rules_exist "$1" && check_paths "$1" && check_no_import "$1" \
-    && check_map_links "$1" && check_map_size "$1"
+    && check_map_links "$1" && check_map_size "$1" && check_generated_match "$1"
 }
 
 # run_check <関数名> <root> — 結果を pass / fail へ変換する。
@@ -145,7 +218,13 @@ while IFS= read -r f; do
 done < <(list_rules "$REPO_ROOT")
 if [[ -z "$nomatch" ]]; then pass; else fail "一致するファイルが無い glob:$nomatch"; fi
 
-it "地図が各規則ファイルへリンクしている"
+it "生成物（ai-playbook*.md）が、正本から作り直したものと一致する（正本を直したら置き直す）"
+run_check check_generated_match "$REPO_ROOT"
+
+it "生成物が 1 つ以上ある（断りの行で見分けられなくなると、検査が黙って空になる）"
+if [[ -n "$(list_rules_by_origin "$REPO_ROOT" generated)" ]]; then pass; else fail "生成物の断りの行を持つ規則が無い（GEN_NOTICE と bootstrap.sh の文言のずれ、または生成物の置き忘れ）"; fi
+
+it "地図が、手で書いた各規則ファイルへリンクしている"
 run_check check_map_links "$REPO_ROOT"
 
 it "地図が ${MAP_MAX_LINES} 行以下"
@@ -153,8 +232,6 @@ run_check check_map_size "$REPO_ROOT"
 
 # ── 意図的に壊したフィクスチャ ───────────────────────────────────────────────
 
-FIX="$(mktemp -d "${TMPDIR:-/tmp}/test-claude-rules.XXXXXX")"
-trap 'rm -rf "$FIX"' EXIT
 
 # make_fixture <名前> — 正常な最小構成を作って、そのルートを出力する。
 make_fixture() {
@@ -230,5 +307,58 @@ it "地図が上限を超えると落ちる"
 D="$(make_fixture long)"
 for ((i = 0; i <= MAP_MAX_LINES; i++)); do echo "行 $i"; done >> "$D/$MAP_REL"
 expect_fail check_map_size "$D"
+
+# make_generated_fixture <名前> — 正本と、そこから生成した規則（地図にリンクされない）を持つルートを作る。
+make_generated_fixture() {
+  local d
+  d="$(make_fixture "$1")"
+  mkdir -p "$d/.ai-playbook"
+  printf '# t\n\n常時\n\n<!-- claude-rules: name=x paths=src/** -->\n## 条件付き\n\n本文\n' > "$d/$SOURCE_REL"
+  bash "$REPO_ROOT/$BOOTSTRAP_REL" --render-claude-rules "$d/$SOURCE_REL" "$d/.claude/rules" >/dev/null
+  printf '%s' "$d"
+}
+
+it "（健全性）正本から生成した規則は、paths: が無い常時の規則や地図からリンクされない規則も含めて全検査を通る"
+run_check check_all "$(make_generated_fixture genok)"
+
+it "生成物を手で直すと落ちる"
+D="$(make_generated_fixture genedit)"
+printf '手で足した行\n' >> "$D/.claude/rules/ai-playbook-x.md"
+expect_fail check_generated_match "$D"
+
+it "正本を直したのに生成物を置き直していないと落ちる"
+D="$(make_generated_fixture genstale)"
+printf '\n正本に足した行\n' >> "$D/$SOURCE_REL"
+expect_fail check_generated_match "$D"
+
+it "正本から題が消えたのに、生成物が残っていると落ちる"
+D="$(make_generated_fixture genorphan)"
+printf '# t\n\n常時\n' > "$D/$SOURCE_REL"
+expect_fail check_generated_match "$D"
+
+it "生成した規則が置かれていないと落ちる"
+D="$(make_generated_fixture genmissing)"
+rm -f "$D/.claude/rules/ai-playbook-x.md"
+expect_fail check_generated_match "$D"
+
+it "正本が無いのに生成物があると落ちる"
+D="$(make_generated_fixture gennosrc)"
+rm -f "$D/$SOURCE_REL"
+expect_fail check_generated_match "$D"
+
+it "生成物の @ の取り込みも落ちる（生成物にも @ なしの検査を掛ける）"
+D="$(make_generated_fixture genimport)"
+printf '@docs/x.md\n' >> "$D/.claude/rules/ai-playbook-x.md"
+expect_fail check_no_import "$D"
+
+it "断りの接頭辞が本文の途中にあるだけの規則は生成物と見なされず、paths: が無ければ落ちる"
+D="$(make_generated_fixture genmid)"
+printf -- '---\ndescription: x\n---\n\n手書きの本文\n%s 途中の行\n' "$GEN_NOTICE" > "$D/.claude/rules/ai-playbook-x.md"
+expect_fail check_paths "$D"
+
+it "断りの行を消した規則は生成物と見なされず、paths: が無ければ落ちる（名前では見分けない）"
+D="$(make_generated_fixture gennotice)"
+printf -- '---\ndescription: x\n---\n\n手書きの本文\n' > "$D/.claude/rules/ai-playbook-x.md"
+expect_fail check_paths "$D"
 
 exit_with_result

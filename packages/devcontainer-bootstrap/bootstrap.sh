@@ -343,6 +343,232 @@ dcb_file_sha256() {
   fi
 }
 
+# ── Claude Code 用の規則の生成（--with-claude）────────────────────────────────
+#
+# 規範の共通ルール（shared-ai-rules.md）は全文のまま正本に置き、Claude Code には
+# 「常に効かせる部分」と「要る場面で載る部分」に分けて渡す。分け方は正本の見出しの
+# 直前に置く印で決める（印の書式と意味は ai-playbook の README に書く）。
+#
+#   <!-- claude-rules: name=<題> paths=<glob>,<glob> -->
+#
+# 印は直後の見出し（# 〜 ######）の節に掛かる。範囲は、その見出しから、次の「同じか
+# より上の階層」の見出しの手前まで（下位の見出しは含む）。印の無い範囲は常時で、
+# ファイル冒頭の H1 も含む。同じ題の印が複数あれば、1 つの規則へ正本の順序でまとめる。
+#
+#   常時の範囲   -> .claude/rules/ai-playbook.md        （paths: なし＝起動時に必ず載る）
+#   印の範囲     -> .claude/rules/ai-playbook-<題>.md   （paths: 付き）
+#
+# 条件付きの規則の本文へは @ の取り込みを入れない。paths: 付きの規則の中の @ は
+# 起動時から載り、条件付きにならないため（正本の行は変えずに写すので、正本の本文に
+# @ の取り込みがあれば、そのまま写る。正本側で書かない）。
+#
+# 生成は bash と awk だけで行う。DCB は .ai-playbook/ へ .md しか写さないため、
+# 生成の道具を規範側に置いて配ることができない（生成の入口はこの bootstrap.sh）。
+#
+# 行の扱い: 印の行だけを落とし、ほかの正本の行は 1 行も変えず、ちょうど 1 つの
+# ファイルへ、正本の順序で写す。各ファイルの先頭（frontmatter の後）には、生成物で
+# ある旨と相対リンクの基準（.ai-playbook/ からの相対）を述べる断りの行を足す。条件付きの
+# 規則には、親の見出しを示す行も足す。断りの行は CLAUDE_RULES_NOTICE_PREFIX で始め、本文との
+# 間を空行で区切る（生成物の見分けは、この接頭辞だけで行う。scripts/check-doc-links.sh、
+# tests/test-claude-rules.sh と DCB のテストが使う）。
+# 空行は正本のとおり写す。ただし各ファイルの末尾の空行だけは落とす（節の終わりの
+# 空行が末尾に残ると、ファイルの末尾が空行で終わり git diff --check に掛かるため）。
+# このため照合は、空行以外の行を厳密に（ちょうど 1 回・順序どおり）、空行は
+# 「正本の部分列として現れる」ことで見る。
+#
+# 正本のファイル名。規範の内部のファイル名を DCB が知らない原則（tests/test-templates.sh が
+# 検査する）の、この機能に限った例外で、名前を持つのはこの 1 行だけにする（ほかの箇所は
+# この変数を使う）。
+CLAUDE_RULES_SOURCE_NAME="shared-ai-rules.md"
+# 生成物の断りの行の接頭辞。正本の名前を含めない（生成物の見分けを名前から切り離す）。
+CLAUDE_RULES_NOTICE_PREFIX="> 生成物:"
+
+# 使い方: dcb_claude_rules_awk <list|render> <正本> [出力ディレクトリ]
+#   list    生成するファイル名（ai-playbook*.md）を、正本の登場順に 1 行ずつ出す。
+#   render  出力ディレクトリへ書く（ディレクトリは呼び出し側が作る）。
+# 印の書式の誤り・印の直後が見出しでない・同じ題で paths が食い違う、のいずれかで、
+# 何も書かずに 1 を返す。
+dcb_claude_rules_awk() {
+  local mode="$1" src="$2" outdir="${3-}"
+  awk -v mode="$mode" -v outdir="$outdir" -v notice_prefix="$CLAUDE_RULES_NOTICE_PREFIX" -v src_name="$CLAUDE_RULES_SOURCE_NAME" '
+    function fail(msg) {
+      printf "error: %s:%d: %s\n", FILENAME, NR, msg > "/dev/stderr"
+      failed = 1
+      exit 1
+    }
+    # 出力先のファイル（題 cur の範囲）を登録して番号を返す。登場順に番号を振る。
+    function file_of(name) {
+      if (!(name in idx)) { nfiles++; idx[name] = nfiles; names[nfiles] = name }
+      return idx[name]
+    }
+    function emit(line,   f) {
+      f = file_of(cur)
+      n[f]++
+      body[f, n[f]] = line
+    }
+    BEGIN { cur = ""; curlevel = 0; infence = 0; pend = 0; nfiles = 0; failed = 0; file_of("") }
+    {
+      line = $0
+      sub(/\r$/, "", line)
+      # 印。コードの囲みの中は対象にしない。
+      # 印のつもりの行（大文字小文字を問わず「<!--」の後に空白が任意で claude-rule を含む行。
+      # 行頭の空白や綴りの崩れも含む）は、厳密な書式でなければ誤りにする。黙って通すと、
+      # 印が効かず、その節が常時へ入る。
+      if (!infence && tolower(line) ~ /<!--[ \t]*claude-rule/) {
+        if (line !~ /^<!-- claude-rules: name=[a-z0-9][a-z0-9-]* paths=[^[:space:]]+ -->$/) {
+          fail("claude-rules の印の書式が不正です（行頭から <!-- claude-rules: name=<題> paths=<glob>,<glob> --> の形で書く。題は小文字・数字・ハイフン、paths にタブを含む空白類は使えない）")
+        }
+        if (pend) fail("印が続いています（印の直後は見出しでなければならない）")
+        s = line
+        sub(/^<!-- claude-rules: name=/, "", s)
+        pname = s; sub(/ paths=.*$/, "", pname)
+        ppaths = s; sub(/^[^ ]* paths=/, "", ppaths); sub(/ -->$/, "", ppaths)
+        # paths は YAML の二重引用符の文字列へそのまま書く。引用符・バックスラッシュ・波括弧
+        # （カンマで分けられない）と、空の要素（a,,b・先頭や末尾のカンマ）は使えない。
+        if (ppaths ~ /[{}"\\]/ || ppaths ~ /(^,|,,|,$)/) {
+          fail("paths に使えない文字または空の要素があります（引用符・バックスラッシュ・波括弧・空の要素は使えない）: " ppaths)
+        }
+        if (pname in pathsof && pathsof[pname] != ppaths) {
+          fail("同じ題 " pname " の paths が食い違います（" pathsof[pname] " と " ppaths "）")
+        }
+        pathsof[pname] = ppaths
+        pend = 1
+        next
+      }
+      is_heading = 0
+      # 見出し（CommonMark）: 行頭の字下げは 0〜3 個の空白まで（4 個以上はコードブロック）。
+      if (!infence && line ~ /^ ? ? ?#+[ \t]/) {
+        hl = line; sub(/^ +/, "", hl)
+        match(hl, /^#+/)
+        lvl = RLENGTH
+        if (lvl <= 6) is_heading = 1
+      }
+      if (pend && !is_heading) fail("印の直後の行が見出しではありません")
+      if (is_heading) {
+        text = line; sub(/^ +#+[ \t]+/, "", text); sub(/^#+[ \t]+/, "", text); sub(/[ \t]+$/, "", text)
+        if (pend) {
+          # 印のある節の中に別の印（入れ子）は置けない。内側の節が終わったときに外側の残りが
+          # 常時へ漏れる。同じ階層以上の見出しなら、外側の節はすでに終わっているので兄弟でよい。
+          if (cur != "" && lvl > curlevel) {
+            fail("印のある節（" cur "）の中に、別の印（" pname "）があります（入れ子の印は使えない。同じ題でも）")
+          }
+          # 親の見出し: 印の見出しより上の階層で、最も近い H2 以下の見出し。
+          parent = ""
+          for (k = lvl - 1; k >= 2; k--) if (k in ht && ht[k] != "") { parent = ht[k]; break }
+          cur = pname; curlevel = lvl; pend = 0
+          f = file_of(cur)
+          if (parent != "" && !((f, parent) in seenp)) {
+            seenp[f, parent] = 1
+            np[f]++; parents[f, np[f]] = parent
+          }
+        } else if (cur != "" && lvl <= curlevel) {
+          cur = ""
+        }
+        ht[lvl] = text
+        for (k = lvl + 1; k <= 6; k++) ht[k] = ""
+      }
+      # 条件付きの規則へ写す本文に @ の取り込みがあれば失敗させる（paths: 付きの規則の @ は
+      # 起動時から載り、条件付きにならない）。判定は tests/test-claude-rules.sh の check_no_import と
+      # 同じ: バッククォートの中は除き、メールアドレスのように英数字などの直後の @ は数えない。
+      if (cur != "") {
+        t = line
+        gsub(/`[^`]*`/, "", t)
+        if (t ~ /(^|[^A-Za-z0-9_.+-])@[A-Za-z0-9_.\/~-]+/) {
+          fail("条件付きの規則（" cur "）の本文に @ の取り込みがあります（バッククォートで囲むか、言い換える）: " line)
+        }
+      }
+      # コードの囲み（CommonMark）: 開始の記号（` か ~）と長さを覚え、同じ記号で同じ長さ以上、
+      # 後ろが空白だけの行でだけ閉じる。別の記号の行や、短い行は囲みの中の本文として扱う。
+      if (line ~ /^ ? ? ?(```+|~~~+)/) {
+        fl = line; sub(/^ +/, "", fl)
+        fc = substr(fl, 1, 1)
+        match(fl, /^(`+|~+)/)
+        flen_now = RLENGTH
+        rest = substr(fl, flen_now + 1)
+        if (!infence) {
+          # 開始。バッククォートの囲みの情報文字列にバッククォートは入らない（入るならインラインコード）。
+          if (!(fc == "`" && index(rest, "`") > 0)) { infence = 1; fence_char = fc; fence_len = flen_now }
+        } else if (fc == fence_char && flen_now >= fence_len && rest ~ /^[ \t]*$/) {
+          infence = 0
+        }
+      }
+      emit($0)
+    }
+    END {
+      if (failed) exit 1
+      if (pend) { printf "error: %s: 印の直後に見出しがありません\n", FILENAME > "/dev/stderr"; exit 1 }
+      for (f = 1; f <= nfiles; f++) {
+        # 本文が空白だけのファイルは作らない（常時の範囲が空のときなど）。
+        last = 0
+        for (i = n[f]; i >= 1; i--) if (body[f, i] !~ /^[ \t\r]*$/) { last = i; break }
+        if (last == 0) continue
+        fname = (names[f] == "") ? "ai-playbook.md" : "ai-playbook-" names[f] ".md"
+        if (mode == "list") { print fname; continue }
+        path = outdir "/" fname
+        if (names[f] != "") {
+          print "---" > path
+          print "paths:" > path
+          m = split(pathsof[names[f]], g, ",")
+          for (j = 1; j <= m; j++) if (g[j] != "") print "  - \"" g[j] "\"" > path
+          print "---" > path
+          print "" > path
+        }
+        print notice_prefix " 正本 `.ai-playbook/" src_name "` から生成したものです。編集は正本へ行ってください（ここを直しても、作り直しで消えます）。" > path
+        print "> 本文の相対リンクは、このファイルからではなく `.ai-playbook/` からの相対です。" > path
+        if (np[f] > 0) {
+          ptxt = ""
+          for (j = 1; j <= np[f]; j++) ptxt = ptxt "「" parents[f, j] "」"
+          print "> 親の見出し: " ptxt "の一部" > path
+        }
+        print "" > path
+        for (i = 1; i <= last; i++) print body[f, i] > path
+        close(path)
+      }
+    }
+  ' "$src"
+}
+
+# 正本から、Claude Code 用の規則を出力ディレクトリへ生成する（--render-claude-rules の本体）。
+# 出力ディレクトリは無ければ作る。失敗したら、何も書かずに 1 を返す。
+dcb_render_claude_rules() {
+  local src="$1" outdir="$2" tmp
+  if [[ ! -f "$src" ]]; then
+    echo "error: --render-claude-rules: 正本が見つかりません: $src" >&2
+    return 1
+  fi
+  # render は誤りがあれば何も書かずに失敗するが、出力ディレクトリは先に作ることになる。
+  # 印の誤りのときに空のディレクトリを残さないよう、検証（list）を作る前に済ませる。
+  dcb_claude_rules_awk list "$src" >/dev/null || return 1
+  mkdir -p "$outdir" || return 1
+  dcb_claude_rules_awk render "$src" "$outdir" || return 1
+  local names f base
+  names="$(dcb_claude_rules_awk list "$src")" || return 1
+  # 今回生成しなかった生成物（正本から題が消えた・変わったあとの古い規則）を消す。生成物かどうかは
+  # 断りの行で見分け、断りの無い手書きの規則は消さない。消した名前は標準エラーへ出す（標準出力は
+  # 生成した名前の一覧に保つ）。--upgrade の方針（報告だけで消さない）はここでは変えない。
+  for f in "$outdir"/ai-playbook*.md; do
+    [[ -f "$f" && ! -L "$f" ]] || continue
+    base="$(basename "$f")"
+    printf '%s\n' "$names" | grep -x -F -- "$base" >/dev/null && continue
+    if dcb_is_generated_rule "$f"; then
+      rm -f "$f"
+      echo "removed: $base" >&2
+    fi
+  done
+  printf '%s\n' "$names"
+}
+
+# 規則のファイルが生成物か。frontmatter（あれば）の直後の最初の空でない行が、断りの接頭辞で
+# 始まるときだけ真にする。
+dcb_is_generated_rule() {
+  awk -v p="$CLAUDE_RULES_NOTICE_PREFIX" 'BEGIN { r = 1 }
+      NR == 1 && $0 == "---" { fm = 1; next }
+      fm && $0 == "---" { fm = 0; next }
+      fm || $0 ~ /^[ \t\r]*$/ { next }
+      { if (index($0, p) == 1) r = 0; exit }
+      END { exit r }' "$1"
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --project-name)     PROJECT_NAME="$2"; shift 2 ;;
@@ -418,6 +644,14 @@ while [[ $# -gt 0 ]]; do
     --playbook-from)    PLAYBOOK_FROM="$2"; shift 2 ;;
     --playbook-version) PLAYBOOK_VERSION="$2"; shift 2 ;;
     --playbook-conflict-policy) PLAYBOOK_CONFLICT_POLICY="$2"; PLAYBOOK_CONFLICT_POLICY_EXPLICIT="true"; shift 2 ;;
+    # 生成の処理だけを行う入口（--with-claude の生成と同じ処理。このリポジトリのように
+    # CLAUDE.md を手で書くプロジェクトが、規則を正本から作り直すために使う）。ほかの
+    # 引数は見ずに、ここで終わる。
+    --render-claude-rules)
+      [[ $# -ge 3 ]] || { echo "error: --render-claude-rules には <正本> <出力ディレクトリ> の 2 つが必要です。" >&2; exit 1; }
+      dcb_render_claude_rules "$2" "$3" || exit 1
+      exit 0
+      ;;
     -h|--help)          usage; exit 0 ;;
     *) echo "error: unknown option: $1" >&2; usage; exit 1 ;;
   esac
@@ -5680,6 +5914,38 @@ while IFS= read -r -d '' md; do
     excluded_count=$((excluded_count + 1))
     continue
   fi
+  # 共通規範から生成した Claude Code 用の規則（.claude/rules/ai-playbook*.md）は走査しない。
+  # 本文は正本 .ai-playbook/shared-ai-rules.md の行をそのまま写したもので、相対リンクは
+  # .ai-playbook/ からの相対のまま残っている（ここからの相対では解決できない）。同じリンクは
+  # 正本が持ち、正本は走査されるので、見落としは生まれない。生成物かどうかは、先頭に付く
+  # 断りの行で見分ける（名前だけでは、手で書いた同名の規則まで外れる）。
+  case "$md" in
+    .claude/rules/ai-playbook*.md)
+      # 外すのは、frontmatter（あれば）の直後の最初の空でない行が断りの接頭辞で始まり、かつ、
+      # 断りの後の本文の空でない各行が、断りに書かれた正本（リポジトリのルートから読む）に含まれる
+      # ときだけ（正本から写した行だけのとき）。手で壊れたリンクを足した生成物、正本が読めない
+      # 生成物は、通常どおり走査する。断りの行（「> 」で始まる連続した行）と frontmatter は、
+      # 生成器が足す行なので本文として数えない。
+      gen_src="$(sed -n 's/^> 生成物: 正本 `\([^`]*\)`.*/\1/p' "$md" | sed -n '1p')"
+      case "$gen_src" in
+        ""|/*|..|../*|*/../*|*/..) gen_src="" ;;
+      esac
+      if [ -n "$gen_src" ] && [ -f "$gen_src" ] && awk 'BEGIN { st = 0; bad = 0 }
+              FILENAME == ARGV[1] { src[$0] = 1; next }
+              FNR == 1 && $0 == "---" { fm = 1; next }
+              fm { if ($0 == "---") fm = 0; next }
+              st == 0 { if ($0 ~ /^[ \t\r]*$/) next
+                        if ($0 ~ /^> 生成物:/) { st = 1; next }
+                        bad = 1; exit }
+              st == 1 { if ($0 ~ /^> /) next
+                        st = 2; if ($0 ~ /^[ \t\r]*$/) next }
+              st == 2 { if ($0 !~ /^[ \t\r]*$/ && !($0 in src)) { bad = 1; exit } }
+              END { exit (st == 2 && !bad) ? 0 : 1 }' "$gen_src" "$md"; then
+        excluded_count=$((excluded_count + 1))
+        continue
+      fi
+      ;;
+  esac
   md_count=$((md_count + 1))
   case "$md" in
     */*) mdir="${md%/*}" ;;
@@ -13206,6 +13472,96 @@ resolve_playbook_source_or_die() {
     echo "       何も書き込んでいません。" >&2
     exit 1
   fi
+  # 規則の生成に使う正本の印が正しいかと、規則を置けるかも、書き込みの前に確かめる
+  # （印の誤りで、規範を書いたあとに生成だけ止まる状態を作らない）。
+  claude_rules_load
+}
+
+# --with-claude のとき、共通規範（shared-ai-rules.md）を Claude Code 用の規則に分けて
+# 生成し、CLAUDE.md からは全文の取り込みを外す構成にするか。規範が次の 2 つを持つときだけ
+# 真にする（持たない古い規範では従来どおり、全文を CLAUDE.md から取り込む。この機能の
+# ために、要求する規範の版を上げない）。
+#   - 正本 shared-ai-rules.md
+#   - 取り込みを project-ai-rules.md だけにした雛形 templates/claude-entry-imports-rules.md
+# 生成を行う条件（規範を配置する構成の --with-claude）と、CLAUDE.md を組み立てる条件を
+# 同じ判定にする。片方だけ真だと、全文の取り込みが外れたのに規則が無い（規範が載らない）、
+# または規則があるのに全文も載る（二重）状態になる。
+#
+# さらに、DCB が作っていない既存のファイルが規則の置き先にあって規則を置けない
+# （CLAUDE_RULES_CONFLICT が空でない）ときも偽にする。規則を置けないのに CLAUDE.md だけ
+# 全文の取り込みを外すと、常時の部分が載らなくなるため、その場合は規則を置かず、CLAUDE.md も
+# 従来の雛形のままにする（警告は claude_rules_load が出す）。
+claude_rules_enabled() {
+  should_install_playbook || return 1
+  has_with claude || return 1
+  [[ -z "$CLAUDE_RULES_CONFLICT" ]] || return 1
+  [[ -f "$PLAYBOOK_DIR/$CLAUDE_RULES_SOURCE_NAME" && -f "$PLAYBOOK_DIR/templates/claude-entry-imports-rules.md" ]]
+}
+
+# 生成する規則のファイル名（改行区切り）と、置けない既存ファイルの相対パス（改行区切り）を、
+# 書き込みの前に 1 回だけ求めて変数に持つ。claude_rules_rel_paths などが何度も呼ばれても、
+# 正本を読み直さない。resolve_playbook_source_or_die が呼ぶ。印の誤りがあれば、何も書かずに止める。
+#
+# 置けない既存ファイル: 置き先に既にあり、DCB が生成した中身ではないもの。
+#   - 新しく生成するとき: 中身が、これから生成する中身と違い、ORIGIN に hash: の記録も無い
+#     （衝突の扱い skip / overwrite / prompt のどれでも同じ。同じ中身なら、再実行で何も変わらない
+#     ので衝突としない）。
+#   - --upgrade: ORIGIN に hash: の記録が無い（DCB が作っていない。置こうとしても .dcb-new になる）。
+CLAUDE_RULES_NAMES=""
+CLAUDE_RULES_CONFLICT=""
+claude_rules_load() {
+  local src="$PLAYBOOK_DIR/$CLAUDE_RULES_SOURCE_NAME" tmp name rel dest origin
+  CLAUDE_RULES_NAMES=""
+  CLAUDE_RULES_CONFLICT=""
+  should_install_playbook || return 0
+  has_with claude || return 0
+  [[ -f "$src" && -f "$PLAYBOOK_DIR/templates/claude-entry-imports-rules.md" ]] || return 0
+  tmp="$(mktemp -d "${TMPDIR:-/tmp}/dcb-claude-rules-check.XXXXXX")" || {
+    echo "error: 一時ディレクトリを作れません（Claude Code 用の規則の検査）。" >&2
+    exit 1
+  }
+  if ! CLAUDE_RULES_NAMES="$(dcb_render_claude_rules "$src" "$tmp")"; then
+    rm -rf "$tmp"
+    echo "       正本 $CLAUDE_RULES_SOURCE_NAME の claude-rules の印を直してください。何も書き込んでいません。" >&2
+    exit 1
+  fi
+  origin="$OUTPUT_DIR/$ORIGIN_REL_PATH"
+  while IFS= read -r name; do
+    [[ -n "$name" ]] || continue
+    rel=".claude/rules/$name"
+    dest="$OUTPUT_DIR/$rel"
+    [[ -e "$dest" || -L "$dest" ]] || continue
+    if [[ "$UPGRADE" == "true" ]]; then
+      [[ -n "$(dcb_origin_get "$origin" "hash:$rel" 2>/dev/null || true)" ]] && continue
+    else
+      # 衝突の扱い（skip / overwrite / prompt）には依らない。overwrite でも prompt でも、DCB が
+      # 作っていない規則を巻き込むと、規則だけ置かれない（断られる）ことが起きうるため、
+      # 同じに扱う。DCB が作った記録があれば衝突としない。
+      [[ -n "$(dcb_origin_get "$origin" "hash:$rel" 2>/dev/null || true)" ]] && continue
+      [[ ! -L "$dest" ]] && diff -q "$tmp/$name" "$dest" >/dev/null 2>&1 && continue
+    fi
+    CLAUDE_RULES_CONFLICT="$CLAUDE_RULES_CONFLICT$rel"$'\n'
+  done <<< "$CLAUDE_RULES_NAMES"
+  rm -rf "$tmp"
+  if [[ -n "$CLAUDE_RULES_CONFLICT" ]]; then
+    echo "warning: DCB が作っていない既存のファイルがあるため、Claude Code 用の規則（.claude/rules/ai-playbook*.md）を置きません。CLAUDE.md も共通規範の全文を取り込む従来の形のままにします（規則だけ置かないと、常時の部分が載らなくなるため）。" >&2
+    while IFS= read -r rel; do
+      [[ -z "$rel" ]] || echo "  $rel" >&2
+    done <<< "$CLAUDE_RULES_CONFLICT"
+    echo "         規則を使うには、これらのファイルを移すか消してから、もう一度実行してください。" >&2
+  fi
+}
+
+# 生成する規則の相対パス（出力先から）。正本の印で決まるため、規範の版で増減する。
+# dry-run の計画表示・由来記録・--upgrade の突き合わせが、playbook_installed_rel_paths
+# 経由でこの一覧を共通の抽出元として使う。
+claude_rules_rel_paths() {
+  local f
+  claude_rules_enabled || return 0
+  while IFS= read -r f; do
+    [[ -n "$f" ]] || continue
+    printf '.claude/rules/%s\n' "$f"
+  done <<< "$CLAUDE_RULES_NAMES"
 }
 
 # install_playbook_rules が .ai-playbook/** 以外に配置する相対パスの一覧
@@ -13247,6 +13603,7 @@ playbook_installed_rel_paths() {
         '.claude/skills/peers/SKILL.md' \
         '.claude/agents/explorer.md' \
         '.claude/agents/implementer.md'
+      claude_rules_rel_paths
     fi
   fi
 }
@@ -13297,6 +13654,11 @@ install_playbook_rules() {
   # 案内だけを出す（この雛形のために要求する規範の版を上げない）。
   tpl="$(require_playbook_template entry.md)"
   local imports="$PLAYBOOK_DIR/templates/claude-entry-imports.md" claude_entry
+  # --with-claude で規則へ分けるときは、共通規範の全文の取り込みを外した雛形に替える
+  # （全文の取り込みを残すと、規則と二重に載る）。--with-claude なしは従来のまま。
+  if claude_rules_enabled; then
+    imports="$PLAYBOOK_DIR/templates/claude-entry-imports-rules.md"
+  fi
   if [[ -f "$imports" ]]; then
     claude_entry="$(mktemp "${TMPDIR:-/tmp}/dcb-claude-entry.XXXXXX")" || {
       echo "error: 一時ファイルを作れません（CLAUDE.md の組み立て）。" >&2
@@ -13308,6 +13670,13 @@ install_playbook_rules() {
   else
     echo "note: 規範に templates/claude-entry-imports.md が無いため、CLAUDE.md に規範の取り込みの節を足しません（ai-playbook v0.8.0 以降で足します）。" >&2
     apply_file_with_policy "$tpl" "$OUTPUT_DIR/CLAUDE.md"
+  fi
+  # 規則を置くのに、CLAUDE.md が共通規範の全文を取り込んだままのとき（既存の CLAUDE.md を
+  # 温存した、または --upgrade で手を入れた CLAUDE.md の隣に .dcb-new を置いた）は、全文と規則が
+  # 二重に載る。知らせる。
+  if claude_rules_enabled && [[ "$DRY_RUN" != "true" && -f "$OUTPUT_DIR/CLAUDE.md" ]] \
+     && grep -x -F -- "@$PLAYBOOK_REL_ROOT/$CLAUDE_RULES_SOURCE_NAME" "$OUTPUT_DIR/CLAUDE.md" >/dev/null; then
+    echo "warning: $OUTPUT_DIR/CLAUDE.md が共通規範の全文を取り込んだままです。Claude Code 用の規則（.claude/rules/ai-playbook*.md）と二重に載ります。CLAUDE.md の @$PLAYBOOK_REL_ROOT/$CLAUDE_RULES_SOURCE_NAME の行を外してください（新しい版は CLAUDE.md.dcb-new に置かれることがあります）。" >&2
   fi
   apply_file_with_policy "$tpl" "$OUTPUT_DIR/AGENTS.md"
   apply_file_with_policy "$tpl" "$OUTPUT_DIR/.github/copilot-instructions.md"
@@ -13413,6 +13782,27 @@ install_playbook_rules() {
     apply_file_with_policy "$tpl" "$OUTPUT_DIR/.claude/agents/explorer.md"
     tpl="$(require_playbook_template claude-agent-implementer.md)"
     apply_file_with_policy "$tpl" "$OUTPUT_DIR/.claude/agents/implementer.md"
+  fi
+
+  # 共通規範を、常に効かせる部分と要る場面で載る部分の規則に分けて置く。生成の仕方と
+  # 行の扱いは dcb_claude_rules_awk の説明のとおり。置き方はほかの .claude/ の生成物と同じ
+  # （apply_file_with_policy）なので、既存の同名ファイルは上書きせず、--upgrade では手を
+  # 入れていなければ作り直し、入れていれば .dcb-new を置く。
+  if claude_rules_enabled; then
+    local rules_tmp rule_file
+    rules_tmp="$(mktemp -d "${TMPDIR:-/tmp}/dcb-claude-rules.XXXXXX")" || {
+      echo "error: 一時ディレクトリを作れません（Claude Code 用の規則の生成）。" >&2
+      exit 1
+    }
+    if ! dcb_render_claude_rules "$PLAYBOOK_DIR/$CLAUDE_RULES_SOURCE_NAME" "$rules_tmp" >/dev/null; then
+      rm -rf "$rules_tmp"
+      echo "error: Claude Code 用の規則を生成できませんでした。" >&2
+      exit 1
+    fi
+    for rule_file in "$rules_tmp"/*.md; do
+      apply_file_with_policy "$rule_file" "$OUTPUT_DIR/.claude/rules/$(basename "$rule_file")"
+    done
+    rm -rf "$rules_tmp"
   fi
 
   # 導入した規範のソースを on-disk に記録する。これがないと、生成後の環境から

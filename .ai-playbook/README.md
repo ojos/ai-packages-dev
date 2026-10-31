@@ -73,13 +73,41 @@ ai-playbook・devcontainer-bootstrap（DCB）・devcontainer-host（devhost）�
 | `loop-workflow.md` | ループコーディング運用の規範（受け入れ検証の機械ゲート化・verify ランナー契約・収束） |
 | `loop-coding-guide.md` | ループコーディングの解説ガイド（従来ワークフローとの違い・考え方。`loop-workflow.md` の解説版） |
 | `intake/` | intake テンプレート、相談テンプレート、判定 reason code |
-| `templates/` | 導入用の雛形 17 種（`entry.md` 実行環境の入口ファイル / `claude-entry-imports.md` Claude Code の入口ファイルの末尾に足す規範の取り込みの節 / `project-ai-rules.md` プロジェクト共通ルール / `second-opinion-review.sh` 第二意見レビューの実装例 / `second-opinion-schema.json` 第二意見の回答の形（JSON スキーマ方式で判定するエンジン用） / `second-opinion-record.sh` 第二意見の記録・投稿の実装例 / `second-opinion-gate-exempt.sh` 記録を求めない PR の判定本体 / `second-opinion-gate.yml` 第二意見が回されたことの確認側の実装例 / `copilot-review.yml` リモート最終ゲートの要求側の実装例 / `review-gate.yml` リモート最終ゲートの確認側の実装例 / `review-usable.sh` 確認側が使う「読まれたか」の判定本体 / `check-review-usable.sh` 上記の表駆動の自己検査 / `claude-skill-intake.md` Claude Code の intake 起点スキル / `claude-skill-land.md` Claude Code の PR 確認・マージ起点スキル / `claude-skill-peers.md` Claude Code の、ほかのセッションの一覧・送信・一斉送信の呼び出し口スキル / `claude-agent-explorer.md`・`claude-agent-implementer.md` Claude Code の委譲先エージェント定義） |
+| `templates/` | 導入用の雛形 18 種（`entry.md` 実行環境の入口ファイル / `claude-entry-imports.md` Claude Code の入口ファイルの末尾に足す規範の取り込みの節 / `claude-entry-imports-rules.md` 同じ節の、共通規範の全文を取り込まず `.claude/rules/` の規則へ分ける版 / `project-ai-rules.md` プロジェクト共通ルール / `second-opinion-review.sh` 第二意見レビューの実装例 / `second-opinion-schema.json` 第二意見の回答の形（JSON スキーマ方式で判定するエンジン用） / `second-opinion-record.sh` 第二意見の記録・投稿の実装例 / `second-opinion-gate-exempt.sh` 記録を求めない PR の判定本体 / `second-opinion-gate.yml` 第二意見が回されたことの確認側の実装例 / `copilot-review.yml` リモート最終ゲートの要求側の実装例 / `review-gate.yml` リモート最終ゲートの確認側の実装例 / `review-usable.sh` 確認側が使う「読まれたか」の判定本体 / `check-review-usable.sh` 上記の表駆動の自己検査 / `claude-skill-intake.md` Claude Code の intake 起点スキル / `claude-skill-land.md` Claude Code の PR 確認・マージ起点スキル / `claude-skill-peers.md` Claude Code の、ほかのセッションの一覧・送信・一斉送信の呼び出し口スキル / `claude-agent-explorer.md`・`claude-agent-implementer.md` Claude Code の委譲先エージェント定義） |
 | `.gitignore` | このパッケージを開発するときの追跡除外設定。規範ではないため配布・取り込みの対象外（`shared-ai-rules.md` 14 章） |
 
 共通ルールの補足として、AI からの質問は一問ずつ行い、各質問には意図を添え、回答は選択肢優先で提示します。
 
 実行環境の入口ファイル（例: `CLAUDE.md`）は、
 この共通ルールを参照しつつ環境固有の最小差分のみを記述する運用を推奨します。
+
+## 共通規範の Claude Code 用の分割（印）
+
+`shared-ai-rules.md` は全文のまま正本に保ち、Copilot などの実行環境と人は、これまでどおり通して読みます。Claude Code では、全文を毎セッションの文脈へ載せる代わりに、**常に効かせる部分**と**要る場面で載る部分**に分けられます。分け方は、正本の見出しの直前に置く印で決めます。
+
+```
+<!-- claude-rules: name=<題> paths=<glob>,<glob> -->
+### 見出し
+```
+
+- **印は直後の見出し（`#`〜`######`）の節に掛かります。** 範囲は、その見出しから、次の「同じかより上の階層」の見出しの手前までです（下位の見出しは含みます）。印の直後の行は見出しでなければなりません。
+- **印の無い範囲は常時です。** ファイル冒頭の H1 も含みます。
+- `name` は規則の題です（小文字・数字・ハイフン）。`paths` は、その規則が載るファイルの glob を、カンマで区切って並べます（空白と、波括弧の中のカンマは使えません）。
+- **同じ `name` の印が複数あれば、1 つの規則へ正本の順序でまとめます。** 同じ `name` で `paths` が食い違うと、生成は失敗します。
+- 印はプロジェクト固有の名前を持たない書式です。HTML コメントなので、通して読むときには見えません。
+
+生成は devcontainer-bootstrap（DCB）の `--with-claude` が行います（このパッケージは印だけを持ち、生成の道具を持ちません）。
+
+| 範囲 | 生成先 |
+|---|---|
+| 常時 | `.claude/rules/ai-playbook.md`（`paths:` なし。起動時に必ず載る） |
+| 印の範囲 | `.claude/rules/ai-playbook-<name>.md`（`paths:` 付き。一致するファイルに触れたときだけ載る） |
+
+- 印の行だけを落とし、正本のほかの行は変えずに、ちょうど 1 つの規則へ写します（各規則の末尾の空行だけは落とします）。
+- 各規則の先頭に、生成物である旨（編集は正本へ）と、相対リンクの基準が `.ai-playbook/` であることを述べる断りを足します。条件付きの規則には、親の見出しも添えます。
+- 条件付きの規則に `@` の取り込みは入れません。`paths:` 付きの規則の中の `@` は起動時から載り、条件付きにならないためです。
+- 印を付けるときの線引き: 禁止事項・既定の動作・ファイルに触れずに判断する場面で要る規則は常時にし、詳しい手順は条件付きにします。
+- このとき `CLAUDE.md` は、`templates/claude-entry-imports-rules.md`（共通規範の全文を取り込まない版）の節を使います。
 
 ## 基本方針
 
@@ -209,6 +237,8 @@ cat .ai-playbook/templates/claude-entry-imports.md >> CLAUDE.md
 ```
 
 Claude Code の `CLAUDE.md` だけは、取り込みの 2 行で規範の全文を毎セッションの文脈へ載せます（2 つで約 50KB）。`AGENTS.md` と `copilot-instructions.md` には取り込みの構文が無いので、足しません。devcontainer-bootstrap で生成した場合は、この 2 行を含む節が最初から付いています。
+
+共通規範を常時の部分と条件付きの規則に分ける場合（上記「共通規範の Claude Code 用の分割（印）」）は、`claude-entry-imports.md` の代わりに `claude-entry-imports-rules.md`（`project-ai-rules.md` の 1 行だけを取り込む版）を足し、規則は DCB の `--render-claude-rules` で生成します。devcontainer-bootstrap の `--with-claude` で生成した場合は、この構成が最初から入っています。
 
 ### 3. プロジェクト固有の値を埋める
 
