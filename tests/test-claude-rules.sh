@@ -71,7 +71,8 @@ check_paths() {
 check_no_import() {
   local root="$1" f bad=""
   while IFS= read -r f; do
-    if sed 's/`[^`]*`//g' "$root/$f" | grep -qE '(^|[[:space:]])@[A-Za-z0-9_./~-]+'; then
+    # grep -q はパイプを読み切らずに終わり、pipefail の下で sed が SIGPIPE で落ちうるので、出力を捨てる形で読み切る
+    if sed 's/`[^`]*`//g' "$root/$f" | grep -E '(^|[[:space:]])@[A-Za-z0-9_./~-]+' >/dev/null; then
       bad="$bad $f"
     fi
   done < <(list_rules "$root")
