@@ -538,35 +538,21 @@ dcb_render_claude_rules() {
   fi
   # render は誤りがあれば何も書かずに失敗するが、出力ディレクトリは先に作ることになる。
   # 印の誤りや衝突のときに空のディレクトリを残さないよう、検証（list）と衝突の検査を作る前に済ませる。
-  local names f base conflicts=""
+  local names f base
   names="$(dcb_claude_rules_awk list "$src")" || return 1
-  # 手書きの同名の規則を上書きしない。生成する名前のどれかが、断りの無い通常のファイル・
-  # シンボリックリンク・通常のファイルでないもの・読めないものとして既にあれば、何も書かず
-  # （古い生成物も消さず）に失敗する。--with-claude の検査（claude_rules_load）は ORIGIN の記録と
-  # 中身の一致で見分けるので、判定を共通にしない（こちらには ORIGIN が無く、断りで見分ける）。
-  while IFS= read -r base; do
-    [[ -n "$base" ]] || continue
-    f="$outdir/$base"
-    [[ -e "$f" || -L "$f" ]] || continue
-    if [[ -L "$f" || ! -f "$f" ]]; then
-      conflicts+="  $base（シンボリックリンクか、通常のファイルでない）"$'\n'
-    elif [[ ! -r "$f" ]]; then
-      conflicts+="  $base（読めないため、生成物か確かめられない）"$'\n'
-    elif ! dcb_is_generated_rule "$f"; then
-      conflicts+="  $base（生成物の断りが無い）"$'\n'
-    fi
-  done <<< "$names"
-  if [[ -n "$conflicts" ]]; then
-    echo "error: --render-claude-rules: 出力先に、上書きできない同名のものがあるため、何も書きません:" >&2
-    printf '%s' "$conflicts" >&2
-    return 1
-  fi
+  dcb_claude_rules_conflicts "$outdir" "$names" || return 1
   mkdir -p "$outdir" || return 1
   # 出力先の中の一時ディレクトリへ生成してから、mv で置き換える。awk の書き込みはシンボリック
   # リンク・ハードリンクを辿り、1 つずつ書くので、途中で失敗すると一部だけ新しくなる。mv は
   # ディレクトリの項目を差し替えるので、リンクを辿らず、生成の失敗では出力先に何も残さない。
   tmp="$(mktemp -d "$outdir/.ai-playbook-render.XXXXXX")" || return 1
   if ! dcb_claude_rules_awk render "$src" "$tmp"; then
+    rm -rf "$tmp"
+    return 1
+  fi
+  # 生成のあいだに出力先が変わっていないかを、置き換えの直前にもう一度確かめる（検査と mv の
+  # あいだの窓は残るが、生成にかかる時間ぶんの窓は閉じる）。
+  if ! dcb_claude_rules_conflicts "$outdir" "$names"; then
     rm -rf "$tmp"
     return 1
   fi
@@ -592,6 +578,34 @@ dcb_render_claude_rules() {
     fi
   done
   printf '%s\n' "$names"
+}
+
+# 出力先（$1）に、生成する名前（$2。1 行に 1 つ）と同名で上書きできないものがあるかを調べる。
+# あれば理由つきで名前を標準エラーへ出し、1 を返す。上書きできないのは、シンボリックリンク・
+# 通常のファイルでないもの・読めないもの・生成物の断りが無いもの（手書きの規則）と、スティッキー
+# ビット付きのディレクトリにある他人の所有のもの（mv で置き換えられず、一部だけ新しくなるため）。
+# --with-claude の検査（claude_rules_load）は ORIGIN の記録と中身の一致で見分けるので、判定を
+# 共通にしない（こちらには ORIGIN が無く、断りで見分ける）。
+dcb_claude_rules_conflicts() {
+  local outdir="$1" names="$2" base f conflicts=""
+  while IFS= read -r base; do
+    [[ -n "$base" ]] || continue
+    f="$outdir/$base"
+    [[ -e "$f" || -L "$f" ]] || continue
+    if [[ -L "$f" || ! -f "$f" ]]; then
+      conflicts+="  $base（シンボリックリンクか、通常のファイルでない）"$'\n'
+    elif [[ ! -r "$f" ]]; then
+      conflicts+="  $base（読めないため、生成物か確かめられない）"$'\n'
+    elif ! dcb_is_generated_rule "$f"; then
+      conflicts+="  $base（生成物の断りが無い）"$'\n'
+    elif [[ -k "$outdir" && ! -O "$f" ]]; then
+      conflicts+="  $base（スティッキービット付きのディレクトリにある他人の所有のもので、置き換えられない）"$'\n'
+    fi
+  done <<< "$names"
+  [[ -z "$conflicts" ]] && return 0
+  echo "error: --render-claude-rules: 出力先に、上書きできない同名のものがあるため、何も書きません:" >&2
+  printf '%s' "$conflicts" >&2
+  return 1
 }
 
 # 規則のファイルが生成物か。frontmatter（あれば）の直後の最初の空でない行が、断りの接頭辞で
