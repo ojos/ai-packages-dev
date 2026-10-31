@@ -537,12 +537,48 @@ dcb_render_claude_rules() {
     return 1
   fi
   # render は誤りがあれば何も書かずに失敗するが、出力ディレクトリは先に作ることになる。
-  # 印の誤りのときに空のディレクトリを残さないよう、検証（list）を作る前に済ませる。
-  dcb_claude_rules_awk list "$src" >/dev/null || return 1
-  mkdir -p "$outdir" || return 1
-  dcb_claude_rules_awk render "$src" "$outdir" || return 1
-  local names f base
+  # 印の誤りや衝突のときに空のディレクトリを残さないよう、検証（list）と衝突の検査を作る前に済ませる。
+  local names f base conflicts=""
   names="$(dcb_claude_rules_awk list "$src")" || return 1
+  # 手書きの同名の規則を上書きしない。生成する名前のどれかが、断りの無い通常のファイル・
+  # シンボリックリンク・通常のファイルでないもの・読めないものとして既にあれば、何も書かず
+  # （古い生成物も消さず）に失敗する。--with-claude の検査（claude_rules_load）は ORIGIN の記録と
+  # 中身の一致で見分けるので、判定を共通にしない（こちらには ORIGIN が無く、断りで見分ける）。
+  while IFS= read -r base; do
+    [[ -n "$base" ]] || continue
+    f="$outdir/$base"
+    [[ -e "$f" || -L "$f" ]] || continue
+    if [[ -L "$f" || ! -f "$f" ]]; then
+      conflicts+="  $base（シンボリックリンクか、通常のファイルでない）"$'\n'
+    elif [[ ! -r "$f" ]]; then
+      conflicts+="  $base（読めないため、生成物か確かめられない）"$'\n'
+    elif ! dcb_is_generated_rule "$f"; then
+      conflicts+="  $base（生成物の断りが無い）"$'\n'
+    fi
+  done <<< "$names"
+  if [[ -n "$conflicts" ]]; then
+    echo "error: --render-claude-rules: 出力先に、上書きできない同名のものがあるため、何も書きません:" >&2
+    printf '%s' "$conflicts" >&2
+    return 1
+  fi
+  mkdir -p "$outdir" || return 1
+  # 出力先の中の一時ディレクトリへ生成してから、mv で置き換える。awk の書き込みはシンボリック
+  # リンク・ハードリンクを辿り、1 つずつ書くので、途中で失敗すると一部だけ新しくなる。mv は
+  # ディレクトリの項目を差し替えるので、リンクを辿らず、生成の失敗では出力先に何も残さない。
+  tmp="$(mktemp -d "$outdir/.ai-playbook-render.XXXXXX")" || return 1
+  if ! dcb_claude_rules_awk render "$src" "$tmp"; then
+    rm -rf "$tmp"
+    return 1
+  fi
+  while IFS= read -r base; do
+    [[ -n "$base" ]] || continue
+    if ! mv -f "$tmp/$base" "$outdir/$base"; then
+      rm -rf "$tmp"
+      echo "error: --render-claude-rules: $base を置けませんでした。" >&2
+      return 1
+    fi
+  done <<< "$names"
+  rm -rf "$tmp"
   # 今回生成しなかった生成物（正本から題が消えた・変わったあとの古い規則）を消す。生成物かどうかは
   # 断りの行で見分け、断りの無い手書きの規則は消さない。消した名前は標準エラーへ出す（標準出力は
   # 生成した名前の一覧に保つ）。--upgrade の方針（報告だけで消さない）はここでは変えない。

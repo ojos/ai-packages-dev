@@ -452,6 +452,81 @@ out_rm="$(render "$src" "$od" 2>&1)"
 if [[ ! -e "$od/ai-playbook-a.md" && -f "$od/ai-playbook-handmade.md" && -f "$od/ai-playbook.md" \
    && "$out_rm" == *"removed: ai-playbook-a.md"* && "$out_rm" != *"removed: ai-playbook-handmade.md"* ]]; then pass; else fail "出力=$out_rm"; fi
 
+# snapshot <ディレクトリ> — 配下の一覧（種類つき）と、通常のファイルの中身を出す（実行の前後の比較用）。
+snapshot() {
+  (cd "$1" && find . | LC_ALL=C sort | while IFS= read -r p; do
+    if [[ -L "$p" ]]; then echo "l $p -> $(readlink "$p")"
+    elif [[ -d "$p" ]]; then echo "d $p"
+    else echo "f $p"; cat "$p"; fi
+  done)
+}
+
+# 衝突の検査（#680）: 生成物（題 a）を作ったうえで、古い生成物（題 old）も置いておく。衝突で
+# 失敗したときに、古い生成物を消す処理も走らないことを、一覧の一致で確かめる。
+conflict_src="$(new_workdir)/conflict.md"
+printf '# t\n\n<!-- claude-rules: name=old paths=y/** -->\n## O\n\n古い\n' > "$conflict_src"
+conflict_base="$(new_workdir)/o"
+render "$conflict_src" "$conflict_base" >/dev/null 2>&1
+printf '# t\n\n<!-- claude-rules: name=a paths=x/** -->\n## A\n\n本文\n' > "$conflict_src"
+
+for name in ai-playbook.md ai-playbook-a.md; do
+  it "--render-claude-rules は、手書きの同名の規則（$name）があれば何も書かずに失敗し、その名前を出す"
+  od="$(new_workdir)/o"; cp -a "$conflict_base/." "$od/"
+  printf -- '---\npaths:\n  - "z/**"\n---\n\n手書き\n' > "$od/$name"
+  before="$(snapshot "$od")"
+  err="$(render "$conflict_src" "$od" 2>&1 >/dev/null)"; rc=$?
+  if [[ "$rc" != "0" && "$err" == *"$name"* && "$(snapshot "$od")" == "$before" ]]; then pass; else fail "rc=$rc err=$err"; fi
+done
+
+it "--render-claude-rules は、同名がシンボリックリンクなら何も書かずに失敗し、リンク先も変えない"
+od="$(new_workdir)/o"; cp -a "$conflict_base/." "$od/"
+target="$(new_workdir)/target.md"
+# リンク先が断りを持っていても、書き込みがリンク先へ及ぶので衝突とする。
+cp "$conflict_base/ai-playbook.md" "$target"
+rm -f "$od/ai-playbook.md"; ln -s "$target" "$od/ai-playbook.md"
+before="$(snapshot "$od")"; target_before="$(cat "$target")"
+err="$(render "$conflict_src" "$od" 2>&1 >/dev/null)"; rc=$?
+if [[ "$rc" != "0" && "$err" == *"ai-playbook.md"* && "$(snapshot "$od")" == "$before" \
+   && "$(cat "$target")" == "$target_before" ]]; then pass; else fail "rc=$rc err=$err"; fi
+
+it "--render-claude-rules は、同名がディレクトリなら何も書かずに失敗する"
+od="$(new_workdir)/o"; cp -a "$conflict_base/." "$od/"
+mkdir "$od/ai-playbook-a.md"
+before="$(snapshot "$od")"
+err="$(render "$conflict_src" "$od" 2>&1 >/dev/null)"; rc=$?
+if [[ "$rc" != "0" && "$err" == *"ai-playbook-a.md"* && "$(snapshot "$od")" == "$before" ]]; then pass; else fail "rc=$rc err=$err"; fi
+
+it "--render-claude-rules は、同名が断りのある生成物だけなら今までどおり作り直す"
+od="$(new_workdir)/o"; cp -a "$conflict_base/." "$od/"
+# 題 a と常時の生成物は断りを持つ。題 old の生成物は今回生成しないので、消える。
+printf '# t\n\n<!-- claude-rules: name=a paths=x/** -->\n## A\n\n新しい本文\n' > "$conflict_src.2"
+render "$conflict_src" "$od" >/dev/null 2>&1   # 題 a の生成物を作っておく（old はここで消える）
+cp "$conflict_base/ai-playbook-old.md" "$od/"   # 古い生成物を置き直す
+out_ok="$(render "$conflict_src.2" "$od" 2>&1)"; rc=$?
+if [[ "$rc" == "0" ]] && command grep -F '新しい本文' "$od/ai-playbook-a.md" >/dev/null \
+   && [[ ! -e "$od/ai-playbook-old.md" && "$out_ok" == *"removed: ai-playbook-old.md"* \
+   && "$out_ok" == *"ai-playbook-a.md"* ]] \
+   && [[ -z "$(find "$od" -name '.ai-playbook-render.*')" ]]; then pass; else fail "rc=$rc 出力=$out_ok"; fi
+
+it "--render-claude-rules は、生成物にハードリンクがあっても、リンクの相手を書き換えない"
+od="$(new_workdir)/o"; render "$conflict_src" "$od" >/dev/null 2>&1
+other="$(new_workdir)/other.md"; ln "$od/ai-playbook-a.md" "$other"; other_before="$(cat "$other")"
+if render "$conflict_src.2" "$od" >/dev/null 2>&1 && [[ "$(cat "$other")" == "$other_before" ]] \
+   && command grep -F '新しい本文' "$od/ai-playbook-a.md" >/dev/null; then pass; else fail "リンクの相手が変わった"; fi
+
+it "--render-claude-rules は、同名の生成物が読めなければ、その理由を出して何も書かずに失敗する"
+if [[ "$(id -u)" == "0" ]]; then
+  pass   # root は読み取りの権限を無視するので確かめられない
+else
+  od="$(new_workdir)/o"; render "$conflict_src" "$od" >/dev/null 2>&1; chmod 000 "$od/ai-playbook-a.md"
+  before="$(ls -la "$od" | awk '{print $1, $NF}')"
+  err="$(render "$conflict_src.2" "$od" 2>&1 >/dev/null)"; rc=$?
+  after="$(ls -la "$od" | awk '{print $1, $NF}')"
+  chmod 644 "$od/ai-playbook-a.md"
+  if [[ "$rc" != "0" && "$err" == *"読めない"* && "$after" == "$before" ]] \
+     && ! command grep -F '新しい本文' "$od/ai-playbook.md" "$od/ai-playbook-a.md" >/dev/null; then pass; else fail "rc=$rc err=$err"; fi
+fi
+
 it "正本が無いと失敗する"
 err="$(render "$(new_workdir)/none.md" "$(new_workdir)/o" 2>&1 >/dev/null)"; rc=$?
 if [[ "$rc" != "0" && "$err" == *"見つかりません"* ]]; then pass; else fail "rc=$rc err=$err"; fi
