@@ -465,8 +465,31 @@ dcb_claude_rules_awk() {
         ht[lvl] = text
         for (k = lvl + 1; k <= 6; k++) ht[k] = ""
       }
-      if (!infence && line ~ /^(```|~~~)/) infence = 1
-      else if (infence && line ~ /^(```|~~~)/) infence = 0
+      # 条件付きの規則へ写す本文に @ の取り込みがあれば失敗させる（paths: 付きの規則の @ は
+      # 起動時から載り、条件付きにならない）。判定は tests/test-claude-rules.sh の check_no_import と
+      # 同じ: バッククォートの中は除き、メールアドレスのように英数字などの直後の @ は数えない。
+      if (cur != "") {
+        t = line
+        gsub(/`[^`]*`/, "", t)
+        if (t ~ /(^|[^A-Za-z0-9_.+-])@[A-Za-z0-9_.\/~-]+/) {
+          fail("条件付きの規則（" cur "）の本文に @ の取り込みがあります（バッククォートで囲むか、言い換える）: " line)
+        }
+      }
+      # コードの囲み（CommonMark）: 開始の記号（` か ~）と長さを覚え、同じ記号で同じ長さ以上、
+      # 後ろが空白だけの行でだけ閉じる。別の記号の行や、短い行は囲みの中の本文として扱う。
+      if (line ~ /^ ? ? ?(```+|~~~+)/) {
+        fl = line; sub(/^ +/, "", fl)
+        fc = substr(fl, 1, 1)
+        match(fl, /^(`+|~+)/)
+        flen_now = RLENGTH
+        rest = substr(fl, flen_now + 1)
+        if (!infence) {
+          # 開始。バッククォートの囲みの情報文字列にバッククォートは入らない（入るならインラインコード）。
+          if (!(fc == "`" && index(rest, "`") > 0)) { infence = 1; fence_char = fc; fence_len = flen_now }
+        } else if (fc == fence_char && flen_now >= fence_len && rest ~ /^[ \t]*$/) {
+          infence = 0
+        }
+      }
       emit($0)
     }
     END {
@@ -13441,8 +13464,9 @@ claude_rules_enabled() {
 # 正本を読み直さない。resolve_playbook_source_or_die が呼ぶ。印の誤りがあれば、何も書かずに止める。
 #
 # 置けない既存ファイル: 置き先に既にあり、DCB が生成した中身ではないもの。
-#   - 新しく生成するとき: 中身が、これから生成する中身と違う（衝突の扱いが skip なら置けない。
-#     同じ中身なら、再実行で何も変わらないので衝突としない）。overwrite / prompt は置けるので数えない。
+#   - 新しく生成するとき: 中身が、これから生成する中身と違い、ORIGIN に hash: の記録も無い
+#     （衝突の扱い skip / overwrite / prompt のどれでも同じ。同じ中身なら、再実行で何も変わらない
+#     ので衝突としない）。
 #   - --upgrade: ORIGIN に hash: の記録が無い（DCB が作っていない。置こうとしても .dcb-new になる）。
 CLAUDE_RULES_NAMES=""
 CLAUDE_RULES_CONFLICT=""
@@ -13471,7 +13495,10 @@ claude_rules_load() {
     if [[ "$UPGRADE" == "true" ]]; then
       [[ -n "$(dcb_origin_get "$origin" "hash:$rel" 2>/dev/null || true)" ]] && continue
     else
-      [[ "$PLAYBOOK_CONFLICT_POLICY" == "skip" ]] || continue
+      # 衝突の扱い（skip / overwrite / prompt）には依らない。overwrite でも prompt でも、DCB が
+      # 作っていない規則を巻き込むと、規則だけ置かれない（断られる）ことが起きうるため、
+      # 同じに扱う。DCB が作った記録があれば衝突としない。
+      [[ -n "$(dcb_origin_get "$origin" "hash:$rel" 2>/dev/null || true)" ]] && continue
       [[ ! -L "$dest" ]] && diff -q "$tmp/$name" "$dest" >/dev/null 2>&1 && continue
     fi
     CLAUDE_RULES_CONFLICT="$CLAUDE_RULES_CONFLICT$rel"$'\n'

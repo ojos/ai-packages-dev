@@ -491,7 +491,7 @@ bash bootstrap.sh --no-absent .devcontainer/compose.yaml   # 記録を外す（�
 - 印の行以外は正本の行をそのまま写し、各ファイルの先頭に、生成物である旨（編集は正本へ）と、相対リンクの基準が `.ai-playbook/` であることを述べる断りを足します。条件付きの規則には親の見出しも添えます。本文に `@` の取り込みは入れません（`paths:` 付きの規則の中の `@` は起動時から載り、条件付きにならないため）。
 - `CLAUDE.md` は、規範の雛形 `templates/claude-entry-imports-rules.md` を使い、`@.ai-playbook/shared-ai-rules.md` の取り込みを外します（`@.github/project-ai-rules.md` は残します）。`--with-claude` なしの `CLAUDE.md` と、`AGENTS.md`・`.github/copilot-instructions.md` は、これまでどおり全文を参照させます。
 - 規範がこの雛形（`templates/claude-entry-imports-rules.md`）を持たない古い版では、この分割をせず、従来どおり全文を取り込みます。
-- **DCB が作っていない同名の既存ファイル**（`.claude/rules/ai-playbook*.md`）が置き先にあって規則を置けないときは、規則を 1 つも置かず、`CLAUDE.md` も全文を取り込む従来の形のままにして、警告を出します（規則だけ置かずに全文の取り込みを外すと、常時の部分が載らなくなるため）。判定は書き込みの前に行います。逆に、規則は置けたのに `CLAUDE.md` が全文を取り込んだままのとき（既存の `CLAUDE.md` の温存、`--upgrade` で手を入れた `CLAUDE.md`）は、二重に載る旨の警告を出します。
+- **DCB が作っていない同名の既存ファイル**（`.claude/rules/ai-playbook*.md`）が置き先にあって規則を置けないときは、規則を 1 つも置かず、`CLAUDE.md` も全文を取り込む従来の形のままにして、警告を出します（規則だけ置かずに全文の取り込みを外すと、常時の部分が載らなくなるため）。判定は書き込みの前に行い、`--playbook-conflict-policy`（skip / overwrite / prompt）には依りません（同じ中身のもの、ORIGIN に記録のあるものは衝突としません）。手書きの同名の規則を消す（移す）と、次の実行（`--upgrade` を含む）で規則が採用され、`CLAUDE.md` も切り替わります。逆に、規則は置けたのに `CLAUDE.md` が全文を取り込んだままのとき（既存の `CLAUDE.md` の温存、`--upgrade` で手を入れた `CLAUDE.md`）は、二重に載る旨の警告を出します。
 - **正本から題が消えた・変わったとき**: `--upgrade` は、古い `ai-playbook-<題>.md` を消しません（「no longer generated (not deleted)」と報告するだけです）。残すと、その `paths:` に一致するファイルに触れるたびに載り続け、新しい規則と内容が重なります。報告に出た `.claude/rules/ai-playbook-<題>.md` は、手を入れていなければ手で消してください。
 - 印の誤り（入れ子、`paths` の空の要素・引用符・バックスラッシュ・波括弧、印のつもりの崩れた行）は、書き込む前に停止します。
 - 生成物は `.claude/` のほかの生成物と同じ扱いです（ORIGIN にハッシュを記録します。DCB が作っていない同名のファイルは上書きしません。`--upgrade` では手を入れていなければ作り直し、手を入れていれば `.dcb-new` を置きます）。

@@ -363,6 +363,57 @@ expect_render_fail "印のつもりの行（大文字）は失敗する" \
 <!-- Claude-Rules: name=a paths=x/** -->
 ## A" "書式が不正"
 
+# コードの囲みは、開始の記号と長さを覚え、同じ記号で同じ長さ以上の行だけで閉じる。
+it "バッククォート 4 つの囲みの中の ~~~ や短い囲みでは閉じず、その後の印の使用例は印として扱われない"
+src="$(new_workdir)/fence.md"
+cat > "$src" <<'MD'
+# t
+
+<!-- claude-rules: name=a paths=x/** -->
+## A
+
+````
+```
+~~~
+<!-- claude-rules: name=a paths=y/** -->
+# 囲みの中の見出し風の行
+~~~~
+````
+
+## B
+
+常時
+MD
+od="$(new_workdir)/o"
+names="$(render "$src" "$od" 2>&1)"; rc=$?
+if [[ "$rc" == "0" && "$names" == *"ai-playbook-a.md"* ]] \
+   && command grep -F '囲みの中の見出し風の行' "$od/ai-playbook-a.md" >/dev/null \
+   && ! command grep -F '常時' "$od/ai-playbook-a.md" >/dev/null \
+   && command grep -F '常時' "$od/ai-playbook.md" >/dev/null; then
+  pass
+else
+  fail "rc=$rc 出力=$names"
+fi
+
+it "閉じの記号が短い・別の種類の行は囲みを閉じない（開いたままなら、その中の印のような行は本文）"
+src="$(new_workdir)/fence2.md"
+printf '# t\n\n<!-- claude-rules: name=a paths=x/** -->\n## A\n\n~~~~\n~~~\n```\n<!-- claude-rules: name=b paths=y/** -->\n~~~~\n\n## B\n\n常時\n' > "$src"
+od="$(new_workdir)/o"
+if render "$src" "$od" >/dev/null 2>&1 && command grep -F 'name=b' "$od/ai-playbook-a.md" >/dev/null && command grep -F '常時' "$od/ai-playbook.md" >/dev/null; then pass; else fail "囲みの判定が CommonMark と違う"; fi
+
+expect_render_fail "条件付きの規則へ写す本文に @ の取り込みがあると失敗する" \
+"# t
+
+<!-- claude-rules: name=a paths=x/** -->
+## A
+
+詳しくは @docs/guide.md を参照。" "@ の取り込み"
+
+it "条件付きの本文でも、バッククォートの中の @ とメールアドレスは取り込みと見なさない（常時の範囲は対象外）"
+src="$(new_workdir)/at.md"
+printf '# t\n\n常時の @docs/x.md は対象外。\n\n<!-- claude-rules: name=a paths=x/** -->\n## A\n\n`@パス` と ido@example.com。\n' > "$src"
+if render "$src" "$(new_workdir)/o" >/dev/null 2>&1; then pass; else fail "失敗した"; fi
+
 it "正本が無いと失敗する"
 err="$(render "$(new_workdir)/none.md" "$(new_workdir)/o" 2>&1 >/dev/null)"; rc=$?
 if [[ "$rc" != "0" && "$err" == *"見つかりません"* ]]; then pass; else fail "rc=$rc err=$err"; fi
@@ -512,6 +563,22 @@ if [[ "$placed" == "1" ]] \
 else
   fail "置いた規則=$placed err=$(printf '%s' "$conf_err" | head -c 300)"
 fi
+
+for pol in overwrite prompt; do
+  it "衝突の扱いが $pol でも、手書きの同名の規則があれば規則を置かず、CLAUDE.md も従来の形のままにして警告する"
+  cp2="$(new_workdir)/p"
+  mkdir -p "$cp2/.claude/rules"
+  printf '利用者が書いたもの\n' > "$cp2/.claude/rules/ai-playbook.md"
+  cp2_err="$(printf 'y\ny\ny\ny\ny\ny\ny\ny\n' | run_bootstrap "$cp2" --with-claude --with-playbook --playbook-conflict-policy "$pol" 2>&1 >/dev/null)"
+  placed="$(find "$cp2/.claude/rules" -type f | wc -l | tr -d ' ')"
+  if [[ "$placed" == "1" && "$(cat "$cp2/.claude/rules/ai-playbook.md")" == "利用者が書いたもの" ]] \
+     && diff -q "$cp2/CLAUDE.md" <(cat "$TPL/entry.md" "$TPL/claude-entry-imports.md") >/dev/null 2>&1 \
+     && [[ "$cp2_err" == *"置きません"* ]]; then
+    pass
+  else
+    fail "置いた規則=$placed err=$(printf '%s' "$cp2_err" | head -c 300)"
+  fi
+done
 
 it "同じ中身の既存ファイル（再実行）は衝突としない"
 rerun="$(new_workdir)/p"
