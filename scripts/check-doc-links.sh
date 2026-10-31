@@ -441,14 +441,26 @@ while IFS= read -r -d '' md; do
   # 断りの行で見分ける（名前だけでは、手で書いた同名の規則まで外れる）。
   case "$md" in
     .claude/rules/ai-playbook*.md)
-      # frontmatter（あれば）の直後の最初の空でない行が、断りの接頭辞で始まるときだけ生成物とする
-      # （ファイルのどこかに同じ行があるだけの手書きの規則は、生成物としない）。
-      if awk 'BEGIN { r = 1 }
-              NR == 1 && $0 == "---" { fm = 1; next }
-              fm && $0 == "---" { fm = 0; next }
-              fm || $0 ~ /^[ \t\r]*$/ { next }
-              { if ($0 ~ /^> 生成物:/) r = 0; exit }
-              END { exit r }' "$md"; then
+      # 外すのは、frontmatter（あれば）の直後の最初の空でない行が断りの接頭辞で始まり、かつ、
+      # 断りの後の本文の空でない各行が、断りに書かれた正本（リポジトリのルートから読む）に含まれる
+      # ときだけ（正本から写した行だけのとき）。手で壊れたリンクを足した生成物、正本が読めない
+      # 生成物は、通常どおり走査する。断りの行（「> 」で始まる連続した行）と frontmatter は、
+      # 生成器が足す行なので本文として数えない。
+      gen_src="$(sed -n 's/^> 生成物: 正本 `\([^`]*\)`.*/\1/p' "$md" | sed -n '1p')"
+      case "$gen_src" in
+        ""|/*|..|../*|*/../*|*/..) gen_src="" ;;
+      esac
+      if [ -n "$gen_src" ] && [ -f "$gen_src" ] && awk 'BEGIN { st = 0; bad = 0 }
+              FILENAME == ARGV[1] { src[$0] = 1; next }
+              FNR == 1 && $0 == "---" { fm = 1; next }
+              fm { if ($0 == "---") fm = 0; next }
+              st == 0 { if ($0 ~ /^[ \t\r]*$/) next
+                        if ($0 ~ /^> 生成物:/) { st = 1; next }
+                        bad = 1; exit }
+              st == 1 { if ($0 ~ /^> /) next
+                        st = 2; if ($0 ~ /^[ \t\r]*$/) next }
+              st == 2 { if ($0 !~ /^[ \t\r]*$/ && !($0 in src)) { bad = 1; exit } }
+              END { exit (st == 2 && !bad) ? 0 : 1 }' "$gen_src" "$md"; then
         excluded_count=$((excluded_count + 1))
         continue
       fi

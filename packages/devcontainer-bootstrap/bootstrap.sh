@@ -415,8 +415,8 @@ dcb_claude_rules_awk() {
       # 行頭の空白や綴りの崩れも含む）は、厳密な書式でなければ誤りにする。黙って通すと、
       # 印が効かず、その節が常時へ入る。
       if (!infence && tolower(line) ~ /<!--[ \t]*claude-rule/) {
-        if (line !~ /^<!-- claude-rules: name=[a-z0-9][a-z0-9-]* paths=[^ ]+ -->$/) {
-          fail("claude-rules の印の書式が不正です（行頭から <!-- claude-rules: name=<題> paths=<glob>,<glob> --> の形で書く。題は小文字・数字・ハイフン、paths に空白は使えない）")
+        if (line !~ /^<!-- claude-rules: name=[a-z0-9][a-z0-9-]* paths=[^[:space:]]+ -->$/) {
+          fail("claude-rules の印の書式が不正です（行頭から <!-- claude-rules: name=<題> paths=<glob>,<glob> --> の形で書く。題は小文字・数字・ハイフン、paths にタブを含む空白類は使えない）")
         }
         if (pend) fail("印が続いています（印の直後は見出しでなければならない）")
         s = line
@@ -436,14 +436,16 @@ dcb_claude_rules_awk() {
         next
       }
       is_heading = 0
-      if (!infence && line ~ /^#+[ \t]/) {
-        match(line, /^#+/)
+      # 見出し（CommonMark）: 行頭の字下げは 0〜3 個の空白まで（4 個以上はコードブロック）。
+      if (!infence && line ~ /^ ? ? ?#+[ \t]/) {
+        hl = line; sub(/^ +/, "", hl)
+        match(hl, /^#+/)
         lvl = RLENGTH
         if (lvl <= 6) is_heading = 1
       }
       if (pend && !is_heading) fail("印の直後の行が見出しではありません")
       if (is_heading) {
-        text = line; sub(/^#+[ \t]+/, "", text); sub(/[ \t]+$/, "", text)
+        text = line; sub(/^ +#+[ \t]+/, "", text); sub(/^#+[ \t]+/, "", text); sub(/[ \t]+$/, "", text)
         if (pend) {
           # 印のある節の中に別の印（入れ子）は置けない。内側の節が終わったときに外側の残りが
           # 常時へ漏れる。同じ階層以上の見出しなら、外側の節はすでに終わっているので兄弟でよい。
@@ -539,7 +541,32 @@ dcb_render_claude_rules() {
   dcb_claude_rules_awk list "$src" >/dev/null || return 1
   mkdir -p "$outdir" || return 1
   dcb_claude_rules_awk render "$src" "$outdir" || return 1
-  dcb_claude_rules_awk list "$src"
+  local names f base
+  names="$(dcb_claude_rules_awk list "$src")" || return 1
+  # 今回生成しなかった生成物（正本から題が消えた・変わったあとの古い規則）を消す。生成物かどうかは
+  # 断りの行で見分け、断りの無い手書きの規則は消さない。消した名前は標準エラーへ出す（標準出力は
+  # 生成した名前の一覧に保つ）。--upgrade の方針（報告だけで消さない）はここでは変えない。
+  for f in "$outdir"/ai-playbook*.md; do
+    [[ -f "$f" && ! -L "$f" ]] || continue
+    base="$(basename "$f")"
+    printf '%s\n' "$names" | grep -x -F -- "$base" >/dev/null && continue
+    if dcb_is_generated_rule "$f"; then
+      rm -f "$f"
+      echo "removed: $base" >&2
+    fi
+  done
+  printf '%s\n' "$names"
+}
+
+# 規則のファイルが生成物か。frontmatter（あれば）の直後の最初の空でない行が、断りの接頭辞で
+# 始まるときだけ真にする。
+dcb_is_generated_rule() {
+  awk -v p="$CLAUDE_RULES_NOTICE_PREFIX" 'BEGIN { r = 1 }
+      NR == 1 && $0 == "---" { fm = 1; next }
+      fm && $0 == "---" { fm = 0; next }
+      fm || $0 ~ /^[ \t\r]*$/ { next }
+      { if (index($0, p) == 1) r = 0; exit }
+      END { exit r }' "$1"
 }
 
 while [[ $# -gt 0 ]]; do
@@ -5894,14 +5921,26 @@ while IFS= read -r -d '' md; do
   # 断りの行で見分ける（名前だけでは、手で書いた同名の規則まで外れる）。
   case "$md" in
     .claude/rules/ai-playbook*.md)
-      # frontmatter（あれば）の直後の最初の空でない行が、断りの接頭辞で始まるときだけ生成物とする
-      # （ファイルのどこかに同じ行があるだけの手書きの規則は、生成物としない）。
-      if awk 'BEGIN { r = 1 }
-              NR == 1 && $0 == "---" { fm = 1; next }
-              fm && $0 == "---" { fm = 0; next }
-              fm || $0 ~ /^[ \t\r]*$/ { next }
-              { if ($0 ~ /^> 生成物:/) r = 0; exit }
-              END { exit r }' "$md"; then
+      # 外すのは、frontmatter（あれば）の直後の最初の空でない行が断りの接頭辞で始まり、かつ、
+      # 断りの後の本文の空でない各行が、断りに書かれた正本（リポジトリのルートから読む）に含まれる
+      # ときだけ（正本から写した行だけのとき）。手で壊れたリンクを足した生成物、正本が読めない
+      # 生成物は、通常どおり走査する。断りの行（「> 」で始まる連続した行）と frontmatter は、
+      # 生成器が足す行なので本文として数えない。
+      gen_src="$(sed -n 's/^> 生成物: 正本 `\([^`]*\)`.*/\1/p' "$md" | sed -n '1p')"
+      case "$gen_src" in
+        ""|/*|..|../*|*/../*|*/..) gen_src="" ;;
+      esac
+      if [ -n "$gen_src" ] && [ -f "$gen_src" ] && awk 'BEGIN { st = 0; bad = 0 }
+              FILENAME == ARGV[1] { src[$0] = 1; next }
+              FNR == 1 && $0 == "---" { fm = 1; next }
+              fm { if ($0 == "---") fm = 0; next }
+              st == 0 { if ($0 ~ /^[ \t\r]*$/) next
+                        if ($0 ~ /^> 生成物:/) { st = 1; next }
+                        bad = 1; exit }
+              st == 1 { if ($0 ~ /^> /) next
+                        st = 2; if ($0 ~ /^[ \t\r]*$/) next }
+              st == 2 { if ($0 !~ /^[ \t\r]*$/ && !($0 in src)) { bad = 1; exit } }
+              END { exit (st == 2 && !bad) ? 0 : 1 }' "$gen_src" "$md"; then
         excluded_count=$((excluded_count + 1))
         continue
       fi

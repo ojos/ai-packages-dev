@@ -414,6 +414,44 @@ src="$(new_workdir)/at.md"
 printf '# t\n\n常時の @docs/x.md は対象外。\n\n<!-- claude-rules: name=a paths=x/** -->\n## A\n\n`@パス` と ido@example.com。\n' > "$src"
 if render "$src" "$(new_workdir)/o" >/dev/null 2>&1; then pass; else fail "失敗した"; fi
 
+it "paths にタブが入った印は失敗する（空白類全体を拒む）"
+src="$(new_workdir)/tab.md"
+printf '# t\n\n<!-- claude-rules: name=a paths=x/**\ty/** -->\n## A\n' > "$src"
+err="$(render "$src" "$(new_workdir)/o" 2>&1 >/dev/null)"; rc=$?
+if [[ "$rc" != "0" && "$err" == *"書式が不正"* ]]; then pass; else fail "rc=$rc err=$err"; fi
+
+it "字下げ 0〜3 個の空白の見出しは見出しとして扱い（印の直後・節の終わり）、4 個以上は見出しにしない"
+src="$(new_workdir)/indent.md"
+printf '# t\n\n<!-- claude-rules: name=a paths=x/** -->\n   ## A\n\n本文 A\n\n    ## 4 個の字下げは見出しではない\n\n  ## B\n\n常時 B\n' > "$src"
+od="$(new_workdir)/o"
+if render "$src" "$od" >/dev/null 2>&1 \
+   && command grep -F '4 個の字下げ' "$od/ai-playbook-a.md" >/dev/null \
+   && ! command grep -F '常時 B' "$od/ai-playbook-a.md" >/dev/null \
+   && command grep -F '常時 B' "$od/ai-playbook.md" >/dev/null; then pass; else fail "字下げ付きの見出しの判定が CommonMark と違う"; fi
+
+it "印の直後が 4 個の字下げの行なら、見出しではないので失敗する"
+src="$(new_workdir)/indent4.md"
+printf '# t\n\n<!-- claude-rules: name=a paths=x/** -->\n    ## A\n' > "$src"
+err="$(render "$src" "$(new_workdir)/o" 2>&1 >/dev/null)"; rc=$?
+if [[ "$rc" != "0" && "$err" == *"見出しではありません"* ]]; then pass; else fail "rc=$rc err=$err"; fi
+
+it "字下げ 3 個のコードの囲みも開始・終了として扱う"
+src="$(new_workdir)/fence3.md"
+printf '# t\n\n<!-- claude-rules: name=a paths=x/** -->\n## A\n\n   ```\n## 囲みの中\n   ```\n\n## B\n\n常時\n' > "$src"
+od="$(new_workdir)/o"
+if render "$src" "$od" >/dev/null 2>&1 && command grep -F '囲みの中' "$od/ai-playbook-a.md" >/dev/null && command grep -F '常時' "$od/ai-playbook.md" >/dev/null; then pass; else fail "字下げ付きの囲みの判定"; fi
+
+it "--render-claude-rules は、今回生成しなかった生成物を消して名前を出し、手書きのものは残す"
+src="$(new_workdir)/stale.md"
+printf '# t\n\n<!-- claude-rules: name=a paths=x/** -->\n## A\n\n本文\n' > "$src"
+od="$(new_workdir)/o"
+render "$src" "$od" >/dev/null 2>&1
+printf '# t\n\n常時だけ\n' > "$src"
+printf -- '---\npaths:\n  - "z/**"\n---\n\n手書き\n' > "$od/ai-playbook-handmade.md"
+out_rm="$(render "$src" "$od" 2>&1)"
+if [[ ! -e "$od/ai-playbook-a.md" && -f "$od/ai-playbook-handmade.md" && -f "$od/ai-playbook.md" \
+   && "$out_rm" == *"removed: ai-playbook-a.md"* && "$out_rm" != *"removed: ai-playbook-handmade.md"* ]]; then pass; else fail "出力=$out_rm"; fi
+
 it "正本が無いと失敗する"
 err="$(render "$(new_workdir)/none.md" "$(new_workdir)/o" 2>&1 >/dev/null)"; rc=$?
 if [[ "$rc" != "0" && "$err" == *"見つかりません"* ]]; then pass; else fail "rc=$rc err=$err"; fi

@@ -479,6 +479,20 @@ add_doc "$out" .claude/rules/ai-playbook-handmade.md "$(printf -- '---\npaths:\n
 run_check "$out"
 assert_fail "手書きの同名の規則" "no-such-file.md"
 
+it "生成物に手で壊れたリンクを追記すると、断りがあっても検出される"
+out="$(BASE="$CLAUDE_BASE" new_repo)"
+printf '\n[壊れたリンク](no-such-file.md)\n' >> "$out/.claude/rules/ai-playbook.md"
+(cd "$out" && git add -A) >/dev/null 2>&1
+run_check "$out"
+assert_fail "追記された生成物" "no-such-file.md"
+
+it "断りに書かれた正本が読めない生成物は、通常どおり走査される"
+out="$(BASE="$CLAUDE_BASE" new_repo)"
+printf '\n[壊れたリンク](no-such-file.md)\n' >> "$out/.claude/rules/ai-playbook-doc-formats.md"
+(cd "$out" && git rm -q -f --cached .ai-playbook/shared-ai-rules.md && rm -f .ai-playbook/shared-ai-rules.md && git add -A) >/dev/null 2>&1
+run_check "$out"
+assert_fail "正本が無い生成物" "ai-playbook-doc-formats.md"
+
 it "断りの接頭辞が先頭の行ではなく本文の途中にあるだけの規則は、手書きとして走査される"
 out="$(BASE="$CLAUDE_BASE" new_repo)"
 add_doc "$out" .claude/rules/ai-playbook-handmade.md "$(printf -- '---\npaths:\n  - "src/**"\n---\n\n手書きの本文\n> 生成物: という行が途中にある\n[壊れたリンク](no-such-file.md)')
