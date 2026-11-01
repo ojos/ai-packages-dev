@@ -4,7 +4,8 @@
 # agy は他の AI CLI と 2 点で違い、その 2 点がこのテストの対象になる。
 #
 #   1. npm 配布ではない。install_if_missing <cmd> <npm-pkg> の同型に乗らず、
-#      配布元のインストーラを取得して実行する専用の関数が要る。
+#      配布元のマニフェストを取り、SHA-512 を照合して置く専用の関数が要る
+#      （配布元のインストーラを取得して実行する形は採らない）。
 #   2. 資格情報を ~/.gemini/antigravity-cli/ へ置く。gemini と設定ディレクトリを
 #      共有するため、永続 volume は「どちらかが選ばれていれば 1 つだけ」になる。
 #
@@ -48,7 +49,8 @@ run_bootstrap "$OUT_AG" --with-antigravity >/dev/null 2>&1
 AG_INSTALL="$OUT_AG/scripts/install-ai-tools.sh"
 
 it "単独指定で agy の導入行が入る"
-if grep -q 'antigravity.google/cli/install.sh' "$AG_INSTALL" 2>/dev/null \
+if grep -q 'antigravity-cli-auto-updater-974169037036.us-central1.run.app' "$AG_INSTALL" 2>/dev/null \
+   && grep -q 'manifests/' "$AG_INSTALL" 2>/dev/null \
    && grep -q '^install_agy_if_missing$' "$AG_INSTALL" 2>/dev/null; then
   pass
 else

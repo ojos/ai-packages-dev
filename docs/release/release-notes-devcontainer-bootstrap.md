@@ -9,6 +9,8 @@
 ## 未リリース
 
 ### Summary
+- **生成する `scripts/install-ai-tools.sh` が、claude・gemini にも版の下限を持たせた**（ojos/ai-packages-dev#684）。下限より古いものが既に入っていれば npm の `@latest` で入れ替え（CLI の名前・今の版・下限を出す）、入れたあとも下限未満なら非 0 で止まる。下限は claude 2.1.314（`doctor.sh` の `CLAUDE_MIN_VERSION` と同じ値。テストで照合する）、gemini 0.64.0。codex（0.156.0）が持っていた版の比較を共通の関数（`ai_cli_version_is_old`・`ai_cli_version`・`install_if_missing` の第 3 引数）に一般化し、3 つで共有する。
+- **agy の導入が、配布元のインストーラ（取得して実行する形）をやめ、本体の SHA-512 を自分で照合してから置く形になった**（ojos/ai-packages-dev#684）。プラットフォームを配布元のインストーラと同じ判定で決め（linux の amd64・arm64 とそれぞれの musl 版、darwin。表に無いものは理由を出して非 0）、マニフェストを取り、本体を落として SHA-512 を照合し、`~/.local/bin/agy` へ置いて `agy install` を呼ぶ。マニフェストは `jq` で JSON として読み、置く前に本体の `--version` も確かめる。照合が通らない・マニフェストを読めない・キーが欠けている・マニフェストや本体の版が下限 1.3.4 未満のときは、理由を出して何も置かずに非 0。既にある agy が下限未満なら同じ手順で入れ替え、下限以上なら何もしない。雛形に、遠くのスクリプトを実行する行は残らない。
 - **第二意見の既定のエンジンが gemini から codex に変わったのに合わせ、生成する `.env.example` のエンジンの欄の説明を直した**（ojos/ai-packages-dev#682）。「空なら gemini」を「空なら codex」に改めた（antigravity だけの構成では、codex を導入しないので、使うエンジンを記入しておくよう述べる）。**`--with-gemini` だけの構成でも `SECOND_OPINION_ENGINE` の欄を出し、`gemini` を記入するようにした。** これまでは antigravity か codex を選んだときだけ欄を出していたため、gemini だけで生成したプロジェクトは既定の変更の影響をそのまま受けた。`--second-opinion-engine` も、`--with-gemini` だけの構成で受け付ける。`second-opinion-review.sh` の既定の変更そのものは ai-playbook の未リリースの版が持つ。
 - **エージェントに任意のコードを実行させうる git の設定を検出する `scripts/check-git-config.sh` を足した**（ojos/ai-packages-dev#671）。`core.fsmonitor`・`core.hooksPath`・`core.sshCommand`・`credential.helper`・`gpg.program`・`diff.external`・diff / filter / merge のドライバ・`remote.<名前>.uploadpack` など、git の普段の操作でコマンドを実行させうるキーを、local と worktree の設定（取り込んだ先を含む）から読み取りだけで検出する。SessionStart のフックと doctor では、仕込まれた値が会話の文脈に入らないよう、キーの種類と件数だけを出す。設定は NUL 区切りで読む（改行を含む値を読み違えない）。git を呼んだ瞬間にコマンドを実行させる攻撃（サンドボックスも承認も通らない）への備え。`--with-claude` で生成する `.claude/settings.json` の SessionStart と、`doctor.sh`（WARN）から呼ぶ。拒否はしない。正当な設定は根の `.git-config-allow` に `キー=値` で書いてコミットすると黙る（読むのはコミット済みの中身だけ）。
 - **`loop-gate.sh` が、エージェントの設定・フックに触れる変更を一覧に出す**（ojos/ai-packages-dev#671）。`.claude/`・`.mcp.json`・`.github/workflows/`・`.githooks/`・`.husky/`・`.git-config-allow`・`.gitattributes`（どの階層も）・`.gitmodules`・`.devcontainer/`・`.vscode/`・フックの本体のスクリプトに当たるパスを（改名は移動元も）出力し、環境変数 `SECOND_OPINION_AGENT_CONFIG_PATHS` で第二意見へ渡す。判定と終了コードは変えない。
@@ -20,6 +22,7 @@
 - **この版が要求する ai-playbook は変わらない**。ai-playbook が `templates/claude-entry-imports-rules.md` を持たない古い版では、分割をせず従来どおり全文を取り込む。分割を使うには、ai-playbook の未リリースの版（`templates/claude-entry-imports-rules.md` と印を持つ版）を指定する。
 
 ### 移行
+- `scripts/install-ai-tools.sh` は `bootstrap.sh --upgrade` で追従する（手を入れていなければ置き換わる）。次にコンテナを作る（または `bash scripts/install-ai-tools.sh` を再実行する）とき、下限より古い claude・gemini・agy が入れ替わる。agy の導入先は従来どおり `~/.local/bin/agy`。
 - **第二意見のエンジンを指定していない（`.env` の `SECOND_OPINION_ENGINE` が空か無い）プロジェクトだけが対象です。** `.env` で明示した値はそのまま使われます。**以前の DCB で `--with-gemini` だけを選んで生成したプロジェクトは、欄が無いので対象です。** ai-playbook の新しい版を取り込むと codex を使おうとし、使えなければ案内を出して止まります。gemini を使い続けるには、`.env` に `SECOND_OPINION_ENGINE=gemini` を書きます（この版の `--upgrade` で `.env.example` に欄が入りますが、`.env` へは写されないので、手で書き足します）。
 - 既にある `.claude/settings.json` は、衝突の扱い（既定は温存）に従って書き換えない。SessionStart の配線が欲しければ、`bash "$CLAUDE_PROJECT_DIR/scripts/check-git-config.sh" --hook` を手で足す。
   `permissions.blockWritesOutsideWorkingDirectories: true` と、確認フックの hook への `"onFailure": "block"` も、同様に手で足す。

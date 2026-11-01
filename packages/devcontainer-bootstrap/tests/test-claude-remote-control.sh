@@ -6,7 +6,7 @@
 # 未指定の構成の出力は変えない。--upgrade が記録を引き継ぎ、doctor が行を不正としない。
 #
 # 生成した install-ai-tools.sh は全体を一時的な HOME で実行する。claude は PATH 上の
-# stub で「導入済み」にするので CLI の導入（npm）は走らない。
+# stub で「導入済み（下限以上）」にするので CLI の導入（npm）は走らない。
 
 set -uo pipefail
 if [[ -z "${TEST_TMP_ROOT:-}" ]]; then
@@ -21,13 +21,14 @@ echo "test-claude-remote-control"
 DOCTOR="$(dirname "$BOOTSTRAP")/doctor.sh"
 BASH_BIN="$(command -v bash)"
 
-# claude を導入済みに見せる stub（呼ばれたら異常）。
+# claude を導入済みに見せる stub。版の下限の検査で --version だけは答える
+# （下限以上の版）。それ以外で呼ばれたら異常。
 STUB="$TEST_TMP_ROOT/stub"; mkdir -p "$STUB"
-printf '#!/usr/bin/env bash\nexit 97\n' > "$STUB/claude"; chmod +x "$STUB/claude"
+printf '#!/usr/bin/env bash\nif [[ "${1-}" == "--version" ]]; then echo "2.1.314 (Claude Code)"; exit 0; fi\nexit 97\n' > "$STUB/claude"; chmod +x "$STUB/claude"
 
 # jq を含まない PATH。スクリプトが使うコマンドだけを写す。
 NOJQ="$TEST_TMP_ROOT/nojq"; mkdir -p "$NOJQ"
-for c in dirname mkdir chmod mktemp mv rm cat env; do
+for c in dirname mkdir chmod mktemp mv rm cat env tr grep head awk sort bash; do
   ln -s "$(command -v "$c")" "$NOJQ/$c" 2>/dev/null
 done
 cp "$STUB/claude" "$NOJQ/claude"

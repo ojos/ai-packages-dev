@@ -6,7 +6,7 @@
 #   1. npm 配布ではあるが、版の下限がある。第二意見レビューの既定モデルを引ける
 #      版より古い CLI が既に入っている場合、install_if_missing の同型（「在れば
 #      飛ばす」）に乗ると、古い版のまま更新されずレビューのたびに失敗する。
-#      そのため agy と同じく専用の関数（__CODEX_FUNCTION_LINES__）を持つ。
+#      そのため、版の下限を渡して導入する専用の関数（__CODEX_FUNCTION_LINES__）を持つ。
 #   2. 資格情報を ~/.codex へ置く。gemini / antigravity とは共有しない専用の
 #      設定ディレクトリなので、永続 volume も専用になる（gemini-storage を
 #      共有する agy とは対照的）。
@@ -47,7 +47,7 @@ run_bootstrap "$OUT_CX" --with-codex >/dev/null 2>&1
 CX_INSTALL="$OUT_CX/scripts/install-ai-tools.sh"
 
 it "単独指定で codex の導入行が入る"
-if grep -q '@openai/codex@latest' "$CX_INSTALL" 2>/dev/null \
+if grep -q '"@openai/codex"' "$CX_INSTALL" 2>/dev/null \
    && grep -q '^install_codex_if_missing$' "$CX_INSTALL" 2>/dev/null; then
   pass
 else
@@ -85,7 +85,8 @@ else
 fi
 
 it "読めない版文字列は古い扱いにする（fail-closed）"
-if grep -q 'have !~ /\^\[0-9\]+\\\.\[0-9\]+\\\.\[0-9\]+\$/.*exit 0' "$CX_INSTALL" 2>/dev/null; then
+# プレリリースの印（-beta.1 など）だけは許す形。それ以外の綴りは exit 0（古い）へ落とす。
+if grep -qF 'have !~ /^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$/) { exit 0 }' "$CX_INSTALL" 2>/dev/null; then
   pass
 else
   fail "読めない版の扱いが見当たらない"
@@ -360,13 +361,15 @@ exit 0
 STUB
 chmod +x "$BEHAV_BIN/npm"
 
-# install_codex_if_missing と codex_version_is_old だけを切り出して走らせる。
-# install-ai-tools.sh 全体を実行すると、選んでいない他 CLI の存在確認
-# （command -v claude 等）が混ざるため、対象の 2 関数だけを抽出する。
+# install_codex_if_missing と、それが使う共通の関数（版の比較・版の取得・
+# install_if_missing）だけを切り出して走らせる。install-ai-tools.sh 全体を実行すると、
+# 選んでいない他 CLI の存在確認（command -v claude 等）が混ざるため、関数だけを抽出する。
 extract_codex_funcs() {
   awk '
     /^CODEX_MIN_VERSION=/ { print; next }
-    /^codex_version_is_old\(\) \{/ { inside=1 }
+    /^ai_cli_version_is_old\(\) \{/ { inside=1 }
+    /^ai_cli_version\(\) \{/ { inside=1 }
+    /^install_if_missing\(\) \{/ { inside=1 }
     /^install_codex_if_missing\(\) \{/ { inside=1 }
     inside { print; if ($0 == "}") inside=0 }
   ' "$1"
@@ -375,9 +378,10 @@ extract_codex_funcs() {
 FUNCS_FILE="$(new_workdir)/funcs.sh"
 extract_codex_funcs "$CX_INSTALL" > "$FUNCS_FILE"
 
-it "対象の 2 関数と CODEX_MIN_VERSION を抽出できる"
+it "対象の関数と CODEX_MIN_VERSION を抽出できる"
 if grep -q '^CODEX_MIN_VERSION=' "$FUNCS_FILE" \
-   && grep -q '^codex_version_is_old() {' "$FUNCS_FILE" \
+   && grep -q '^ai_cli_version_is_old() {' "$FUNCS_FILE" \
+   && grep -q '^install_if_missing() {' "$FUNCS_FILE" \
    && grep -q '^install_codex_if_missing() {' "$FUNCS_FILE"; then
   pass
 else
