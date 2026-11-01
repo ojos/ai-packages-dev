@@ -16,7 +16,7 @@
 #   認証手段の違う 3 つの CLI から選べる。判定ロジックは 1 か所に集約し、エンジン
 #   ごとに複製しない。複製すると、判定の修正が片側にしか効かない状態が生まれる。
 #
-#   gemini       gemini CLI。API キー認証（GEMINI_API_KEY）。既定。構造化出力を
+#   gemini       gemini CLI。API キー認証（GEMINI_API_KEY）。構造化出力を
 #                強制する旗を持たないため、従来どおり「出力の最後の行の判定
 #                トークン」方式で判定する（下記「通過判定」）。ツールは解禁しない
 #   antigravity  Antigravity CLI（agy）。Google アカウントの OAuth 認証。API キー
@@ -26,7 +26,7 @@
 #   codex        Codex CLI（codex exec）。ChatGPT アカウントの OAuth 認証（または
 #                API キー）。`--output-schema` で構造化出力を強制できるため、
 #                判定は JSON で行う。ツールは解禁せず、起動する環境も絞る
-#                （下記「ツールの解禁」「codex の実行環境」）
+#                （下記「ツールの解禁」「codex の実行環境」）。既定
 #
 # ツールの解禁:
 #   どのエンジンにもツールを解禁しない。差分はプロンプトへ埋め込み、モデルには
@@ -191,8 +191,8 @@ fi
 RANGE=""
 # --base <rev>: 索引と <rev> の差（コミット済みとステージ済みの両方）を対象にする。
 BASE=""
-ENGINE="${SECOND_OPINION_ENGINE:-gemini}"
-# エンジンが --engine / SECOND_OPINION_ENGINE のどちらでも指定されたか。既定の gemini に
+ENGINE="${SECOND_OPINION_ENGINE:-codex}"
+# エンジンが --engine / SECOND_OPINION_ENGINE のどちらでも指定されたか。既定の codex に
 # 落ちたことを、ほかの CLI が入っている環境で知らせるために使う（下記）。
 ENGINE_SPECIFIED=0
 [[ -n "${SECOND_OPINION_ENGINE:-}" ]] && ENGINE_SPECIFIED=1
@@ -207,7 +207,7 @@ options:
   --range <git-range>   レビュー対象の差分範囲（既定: ステージ済み差分）
   --base <rev>          索引と <rev> の差（コミット済み + ステージ済み）をレビュー対象にする。
                         PR 全体を渡したいときに使う。--range とは併用できない
-  --engine <name>       レビューを実行する CLI（gemini | antigravity | codex。既定: gemini。
+  --engine <name>       レビューを実行する CLI（gemini | antigravity | codex。既定: codex。
                         SECOND_OPINION_ENGINE でも指定可）
   --model <name>        使用モデル（既定: 各 CLI の既定。SECOND_OPINION_MODEL でも指定可）
   --runs <n>            実行回数（既定: 1。SECOND_OPINION_RUNS でも指定可）
@@ -283,23 +283,38 @@ ENGINE_JSON=0
 # category から下の BLOCKING_CATEGORIES を見てこのスクリプトが決める。
 SCHEMA_FILE="$__SCRIPT_DIR/second-opinion-schema.json"
 
-# エンジンの指定が無いまま既定の gemini を使うとき、ほかのエンジンの CLI が入っていれば
-# 知らせる。両方を入れた構成で、.env を写し忘れた作業ツリーなどが黙って gemini で回るのを
-# 気づけるようにするため。gemini だけの構成では出さない（ノイズを増やさない）。
+# エンジンの指定が無いまま既定の codex を使うとき、ほかのエンジンの CLI が入っていれば
+# 知らせる。複数入れた構成で、.env を写し忘れた作業ツリーなどが黙って既定の codex で
+# 回るのを気づけるようにするため。codex だけの構成では出さない（ノイズを増やさない）。
 # 判定（終了コード・LGTM）は変えない。文面に `(engine=` の形を含めない（loop-gate.sh が
 # 出力の最初の `(engine=` からエンジン名を読んで記録に残すため）。
 #
-# 回数の検査の後、エンジンの検査の前に置く。回数の誤りで止まる実行では出さず、gemini の
-# CLI やキーが無くて止まる実行では、止まった理由（指定が無く gemini に落ちた）を先に示すため。
-if [[ "$ENGINE_SPECIFIED" -eq 0 && "$ENGINE" == "gemini" ]]; then
+# 回数の検査の後、エンジンの検査の前に置く。回数の誤りで止まる実行では出さず、codex の
+# CLI やログインが無くて止まる実行では、止まった理由（指定が無く codex に落ちた）を先に示すため。
+if [[ "$ENGINE_SPECIFIED" -eq 0 && "$ENGINE" == "codex" ]]; then
   __other_clis=""
-  command -v agy >/dev/null 2>&1 && __other_clis="agy"
-  command -v codex >/dev/null 2>&1 && __other_clis="${__other_clis:+$__other_clis / }codex"
+  command -v gemini >/dev/null 2>&1 && __other_clis="gemini"
+  command -v agy >/dev/null 2>&1 && __other_clis="${__other_clis:+$__other_clis / }agy"
   if [[ -n "$__other_clis" ]]; then
-    echo "[second-opinion] notice: エンジンの指定が無いので既定の gemini を使います（$__other_clis の CLI も見つかっています）。" >&2
+    echo "[second-opinion] notice: エンジンの指定が無いので既定の codex を使います（$__other_clis の CLI も見つかっています）。" >&2
     echo "[second-opinion] notice: 別のエンジンで回すには --engine <gemini|antigravity|codex> か、.env の SECOND_OPINION_ENGINE で指定してください。" >&2
   fi
 fi
+
+# 既定の codex が使えず止まるとき、移行の案内を出す。既定は gemini から codex へ変わった
+# ため、gemini を前提にしていた環境が、理由の分からないまま止まるのを避ける。
+# エンジンを明示した実行（--engine / SECOND_OPINION_ENGINE）では出さない。明示した値が
+# 使えないのは設定の誤りで、既定の変更とは関係が無い。
+# gemini へ自動で切り替えない。案内するだけで、gemini は実行しない（黙って別のエンジンへ
+# 落とすと、認証も送信先も違うレビューが利用者の知らないまま回る）。
+codex_default_hint() {
+  [[ "$ENGINE_SPECIFIED" -eq 0 ]] || return 0
+  echo "[second-opinion] hint: 第二意見の既定のエンジンは codex に変わりました（以前は gemini）。エンジンを指定していないため codex を使おうとして止まりました。" >&2
+  echo "[second-opinion] hint: codex を導入してログイン（'codex login'）するか、エンジンを指定してください。" >&2
+  if command -v gemini >/dev/null 2>&1 && [[ -n "${GEMINI_API_KEY:-}" ]]; then
+    echo "[second-opinion] hint: gemini を使い続けるには --engine gemini を付けるか、.env に SECOND_OPINION_ENGINE=gemini を書いてください。" >&2
+  fi
+}
 
 # エンジンの検査は CLI を呼ぶ前に済ませる。未知の値をそのまま先へ流すと、
 # 「コマンドが無い」というエンジン不在のエラーに化けて、綴り間違いだと分からない。
@@ -330,6 +345,7 @@ case "$ENGINE" in
   codex)
     command -v codex >/dev/null 2>&1 || {
       echo "error: codex (Codex CLI) not found. codex を導入してログインしてから再実行してください（導入手段はプロジェクト層で定義します）" >&2
+      codex_default_hint
       exit 1
     }
     # codex は OAuth（ChatGPT アカウント）と API キーの両方を受けるため、どちらで
@@ -341,6 +357,7 @@ case "$ENGINE" in
     # 出てくるのは「回答が空」に近い形なので、ログインしていないことが読み取りにくい。
     codex login status >/dev/null 2>&1 || {
       echo "error: codex にログインしていません。'codex login' を対話で 1 度通してから再実行してください" >&2
+      codex_default_hint
       exit 1
     }
     # モデルの既定を CLI に任せない。CLI 既定のモデルは Plus 等の低い枠に当たりやすく、

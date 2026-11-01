@@ -14,6 +14,11 @@ set -uo pipefail
 
 echo "test-second-opinion-review"
 
+# 既定のエンジンは codex（#682）。このファイルの多くの検査は gemini の stub で判定ロジックを
+# 見るため、既定に頼らず gemini を明示した環境で走らせる。既定そのものを見る検査（下の
+# 「#682」の節と #591 の通知の節）は、この指定を外して（env -u）実行する。
+export SECOND_OPINION_ENGINE=gemini
+
 REVIEW="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)/.ai-playbook/templates/second-opinion-review.sh"
 SCHEMA="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)/.ai-playbook/templates/second-opinion-schema.json"
 
@@ -646,16 +651,16 @@ if [[ "$bad" -eq 0 ]]; then pass; else fail "値なしオプションの扱い�
 # agy が入っていると、「CLI が無いとき」の検証が本物を拾って成立しない。
 MIN_PATH="/usr/bin:/bin"
 
-it "既定のエンジンは gemini（gemini 不在なら gemini の導入案内で停止する）"
+it "既定のエンジンは codex（codex 不在なら codex の導入案内で停止する）"
 # 既定が入れ替わっていないことを、CLI を実行せずに判別する。
 d="$(new_workdir)/r"; b="$(new_workdir)/bin"
 mk_review_repo "$d"; mkdir -p "$b"
-err="$( ( cd "$d" && PATH="$b:$MIN_PATH" GEMINI_API_KEY=dummy bash scripts/second-opinion-review.sh ) 2>&1 >/dev/null )"
+err="$( ( cd "$d" && env -u SECOND_OPINION_ENGINE PATH="$b:$MIN_PATH" GEMINI_API_KEY=dummy bash scripts/second-opinion-review.sh ) 2>&1 >/dev/null )"
 rc=$?
 if [[ "$rc" -eq 1 ]]; then
-  assert_contains "$err" "gemini CLI not found" "既定エンジンの不在メッセージ"
+  assert_contains "$err" "codex (Codex CLI) not found" "既定エンジンの不在メッセージ"
 else
-  fail "gemini 不在で停止しなかった (exit $rc): $err"
+  fail "codex 不在で停止しなかった (exit $rc): $err"
 fi
 
 it "--engine antigravity で agy 不在なら agy の導入案内で停止する"
@@ -1003,80 +1008,170 @@ else
   pass
 fi
 
-# ── #591: エンジン未指定で既定の gemini に落ちたときの通知 ────────────────────
+# ── #591 / #682: エンジン未指定で既定の codex に落ちたときの通知と、使えないときの案内 ─────
 #
-# 両方のエンジンを入れた構成で、.env を写し忘れた作業ツリーが黙って gemini で回るのを
+# 複数のエンジンを入れた構成で、.env を写し忘れた作業ツリーが黙って既定の codex で回るのを
 # 気づけるようにする。判定は変えない。文面に `(engine=` を含めると loop-gate.sh が
 # 出力の最初の `(engine=` からエンジン名を読むため、記録が狂う。
 
-NOTICE_MARK="既定の gemini を使います"
+NOTICE_MARK="既定の codex を使います"
 
-# 通知の検査用: gemini の stub と、指定した追加 CLI の stub を同じ bin に置いて実行する。
+# codex の偽の CLI。`codex login status` は $2 が "nologin" なら 1、それ以外は 0 で返す。
+# `codex exec ... -o <file>` は回答（指摘なし）を <file> へ書く。呼び出しは .count と .argv に残す。
+mk_codex_stub() {
+  local bindir="$1" login="${2:-ok}"
+  mkdir -p "$bindir"
+  cat > "$bindir/codex" <<STUB
+#!/usr/bin/env bash
+if [[ "\${1:-}" == "login" ]]; then
+  [[ "$login" == "nologin" ]] && exit 1
+  exit 0
+fi
+n=\$(cat "$bindir/.count" 2>/dev/null || echo 0)
+echo \$((n + 1)) > "$bindir/.count"
+printf '%s\n' "\$@" > "$bindir/.argv"
+cat > /dev/null
+out=""
+prev=""
+for a in "\$@"; do
+  [[ "\$prev" == "-o" ]] && out="\$a"
+  prev="\$a"
+done
+[[ -n "\$out" ]] && printf '%s\n' '{"reviewed":true,"findings":[]}' > "\$out"
+exit 0
+STUB
+  chmod +x "$bindir/codex"
+  rm -f "$bindir/.count" "$bindir/.argv"
+}
+
+# 通知の検査用: codex の stub と、指定した追加 CLI の stub を同じ bin に置いて実行する。
 # 引数: 追加 CLI 名（空なら置かない） / review.sh への追加引数...。出力は stdout+stderr、$rc に終了コード。
 run_notice_case() {
   local extra="$1"; shift
   local d b
   d="$(new_workdir)/r"; b="$(new_workdir)/bin"
-  mk_review_repo "$d"; mk_gemini_stub "$b" "L"
+  mk_review_repo "$d"; mk_codex_stub "$b"
   [[ -z "$extra" ]] || mk_cli_stub "$b" "$extra" "L"
   out="$( cd "$d" && env -u SECOND_OPINION_ENGINE PATH="$b:$MIN_PATH" GEMINI_API_KEY=dummy bash scripts/second-opinion-review.sh "$@" 2>&1 )"; rc=$?
 }
 
-
-it "未指定で codex の CLI があれば、既定の gemini で回す旨と指定方法を知らせる（終了コードは変わらない）"
-run_notice_case codex
-if [[ "$rc" -eq 0 ]] \
-   && [[ "$out" == *"[second-opinion] notice:"*"$NOTICE_MARK"* ]] \
-   && [[ "$out" == *"--engine"* && "$out" == *"SECOND_OPINION_ENGINE"* ]]; then
+it "#682 指定なしのとき codex で実行する（gemini は呼ばない）"
+d="$(new_workdir)/r"; b="$(new_workdir)/bin"
+mk_review_repo "$d"; mk_codex_stub "$b"; mk_cli_stub "$b" gemini "L"
+out="$( cd "$d" && env -u SECOND_OPINION_ENGINE PATH="$b:$MIN_PATH" GEMINI_API_KEY=dummy bash scripts/second-opinion-review.sh 2>&1 )"; rc=$?
+if [[ "$rc" -eq 0 && "$(cat "$b/.count" 2>/dev/null)" == "1" && -f "$b/.argv" ]] \
+   && ! [[ -e "$b/.stdin" ]]; then
   pass
 else
-  fail "通知が出ない、または終了コードが変わった (exit $rc): $out"
+  fail "codex で実行されていない (exit $rc): $out"
+fi
+
+it "#682 指定なしで codex が無く、gemini と GEMINI_API_KEY があるとき、非 0 で --engine gemini を案内し、gemini は実行しない"
+d="$(new_workdir)/r"; b="$(new_workdir)/bin"
+mk_review_repo "$d"; mk_gemini_stub "$b" "L"
+out="$( cd "$d" && env -u SECOND_OPINION_ENGINE PATH="$b:$MIN_PATH" GEMINI_API_KEY=dummy bash scripts/second-opinion-review.sh 2>&1 )"; rc=$?
+if [[ "$rc" -ne 0 && "$out" == *"codex (Codex CLI) not found"* && "$out" == *"--engine gemini"* \
+      && "$out" == *"SECOND_OPINION_ENGINE=gemini"* && ! -e "$b/.count" ]]; then
+  pass
+else
+  fail "案内が出ない、または gemini が実行された (exit $rc): $out"
+fi
+
+it "#682 指定なしで codex が無く、gemini が使えない（GEMINI_API_KEY が空）なら、gemini の使い方は案内しない"
+d="$(new_workdir)/r"; b="$(new_workdir)/bin"
+mk_review_repo "$d"; mk_gemini_stub "$b" "L"
+out="$( cd "$d" && env -u SECOND_OPINION_ENGINE PATH="$b:$MIN_PATH" GEMINI_API_KEY= bash scripts/second-opinion-review.sh 2>&1 )"; rc=$?
+if [[ "$rc" -ne 0 && "$out" == *"既定のエンジンは codex に変わりました"* && "$out" != *"--engine gemini"* && ! -e "$b/.count" ]]; then
+  pass
+else
+  fail "gemini が使えないのに案内した、または止まらなかった (exit $rc): $out"
+fi
+
+it "#682 指定なしで codex がログインしていないとき、非 0 で、既定が codex に変わった旨を案内する"
+d="$(new_workdir)/r"; b="$(new_workdir)/bin"
+mk_review_repo "$d"; mk_codex_stub "$b" nologin
+out="$( cd "$d" && env -u SECOND_OPINION_ENGINE PATH="$b:$MIN_PATH" GEMINI_API_KEY=dummy bash scripts/second-opinion-review.sh 2>&1 )"; rc=$?
+if [[ "$rc" -ne 0 && "$out" == *"codex にログインしていません"* && "$out" == *"既定のエンジンは codex に変わりました"* && ! -e "$b/.count" ]]; then
+  pass
+else
+  fail "ログイン未了の案内が出ない (exit $rc): $out"
+fi
+
+it "#682 エンジンを明示したとき（--engine codex / SECOND_OPINION_ENGINE=codex）は、codex が使えなくても移行の案内を出さない"
+d="$(new_workdir)/r"; b="$(new_workdir)/bin"
+mk_review_repo "$d"; mk_codex_stub "$b" nologin
+out1="$( cd "$d" && env -u SECOND_OPINION_ENGINE PATH="$b:$MIN_PATH" bash scripts/second-opinion-review.sh --engine codex 2>&1 )"; rc1=$?
+out2="$( cd "$d" && SECOND_OPINION_ENGINE=codex PATH="$b:$MIN_PATH" bash scripts/second-opinion-review.sh 2>&1 )"; rc2=$?
+if [[ "$rc1" -ne 0 && "$rc2" -ne 0 && "$out1" == *"codex にログインしていません"* && "$out2" == *"codex にログインしていません"* \
+      && "$out1" != *"既定のエンジンは"* && "$out2" != *"既定のエンジンは"* ]]; then
+  pass
+else
+  fail "明示したのに案内が出た、または止まらなかった (exit $rc1/$rc2): $out1 / $out2"
+fi
+
+it "#682 指定なしで codex が使え、ほかのエンジンの CLI も入っているとき、codex で実行し、既定を使った旨を知らせる"
+run_notice_case gemini
+if [[ "$rc" -eq 0 && "$out" == *"[second-opinion] notice:"*"$NOTICE_MARK"* && "$out" == *"（gemini の CLI も見つかっています）"* ]]; then
+  pass
+else
+  fail "知らせが出ない、または codex で回っていない (exit $rc): $out"
+fi
+
+it "#682 --engine gemini を明示したとき、これまでどおり gemini で実行する"
+d="$(new_workdir)/r"; b="$(new_workdir)/bin"
+mk_review_repo "$d"; mk_gemini_stub "$b" "L"; mk_codex_stub "$b" nologin
+out="$( cd "$d" && env -u SECOND_OPINION_ENGINE PATH="$b:$MIN_PATH" GEMINI_API_KEY=dummy bash scripts/second-opinion-review.sh --engine gemini 2>&1 )"; rc=$?
+if [[ "$rc" -eq 0 && "$(cat "$b/.count" 2>/dev/null)" == "1" && "$out" != *"$NOTICE_MARK"* && "$out" != *"既定のエンジンは"* ]]; then
+  pass
+else
+  fail "gemini で実行されていない (exit $rc): $out"
 fi
 
 it "未指定で agy の CLI があるときも知らせる"
 run_notice_case agy
 if [[ "$rc" -eq 0 && "$out" == *"$NOTICE_MARK"* ]]; then pass; else fail "agy で通知が出ない (exit $rc): $out"; fi
 
-it "通知は、実際に見つかった CLI だけを挙げる（codex だけなら agy を挙げない）"
-run_notice_case codex
-if [[ "$out" == *"（codex の CLI も見つかっています）"* && "$out" != *"agy"* ]]; then pass; else fail "見つかった CLI と通知の名前が合わない: $out"; fi
+it "通知は、実際に見つかった CLI だけを挙げる（gemini だけなら agy を挙げない）"
+run_notice_case gemini
+if [[ "$out" == *"（gemini の CLI も見つかっています）"* && "$out" != *"agy"* ]]; then pass; else fail "見つかった CLI と通知の名前が合わない: $out"; fi
 
 it "回数の誤り（--runs 0）で止まる実行では知らせない"
-run_notice_case codex --runs 0
+run_notice_case gemini --runs 0
 if [[ "$rc" -ne 0 && "$out" != *"$NOTICE_MARK"* ]]; then pass; else fail "止まる実行で通知が出た、または止まらなかった (exit $rc): $out"; fi
 
-it "ほかの CLI が無い（gemini だけ）なら知らせない"
+it "ほかの CLI が無い（codex だけ）なら知らせない"
 run_notice_case ""
-if [[ "$rc" -eq 0 && "$out" != *"$NOTICE_MARK"* ]]; then pass; else fail "gemini だけで通知が出た (exit $rc): $out"; fi
+if [[ "$rc" -eq 0 && "$out" != *"$NOTICE_MARK"* ]]; then pass; else fail "codex だけで通知が出た (exit $rc): $out"; fi
 
-it "--engine で指定していれば（gemini でも）知らせない"
-run_notice_case codex --engine gemini
+it "--engine で指定していれば（codex でも）知らせない"
+run_notice_case gemini --engine codex
 if [[ "$rc" -eq 0 && "$out" != *"$NOTICE_MARK"* ]]; then pass; else fail "--engine 指定で通知が出た (exit $rc): $out"; fi
 
 it "SECOND_OPINION_ENGINE で指定していれば知らせない"
 d="$(new_workdir)/r"; b="$(new_workdir)/bin"
-mk_review_repo "$d"; mk_gemini_stub "$b" "L"; mk_cli_stub "$b" codex "L"
-out="$( cd "$d" && PATH="$b:$MIN_PATH" GEMINI_API_KEY=dummy SECOND_OPINION_ENGINE=gemini bash scripts/second-opinion-review.sh 2>&1 )"; rc=$?
+mk_review_repo "$d"; mk_codex_stub "$b"; mk_cli_stub "$b" gemini "L"
+out="$( cd "$d" && PATH="$b:$MIN_PATH" GEMINI_API_KEY=dummy SECOND_OPINION_ENGINE=codex bash scripts/second-opinion-review.sh 2>&1 )"; rc=$?
 if [[ "$rc" -eq 0 && "$out" != *"$NOTICE_MARK"* ]]; then pass; else fail "環境変数指定で通知が出た (exit $rc): $out"; fi
 
 it "SECOND_OPINION_ENGINE が空文字なら未指定扱いで知らせる"
 d="$(new_workdir)/r"; b="$(new_workdir)/bin"
-mk_review_repo "$d"; mk_gemini_stub "$b" "L"; mk_cli_stub "$b" codex "L"
+mk_review_repo "$d"; mk_codex_stub "$b"; mk_cli_stub "$b" gemini "L"
 out="$( cd "$d" && PATH="$b:$MIN_PATH" GEMINI_API_KEY=dummy SECOND_OPINION_ENGINE= bash scripts/second-opinion-review.sh 2>&1 )"; rc=$?
 if [[ "$rc" -eq 0 && "$out" == *"$NOTICE_MARK"* ]]; then pass; else fail "空文字で通知が出ない (exit $rc): $out"; fi
 
 it "通知が出ても、指摘ありの判定（終了コード 1）は変わらない"
 d="$(new_workdir)/r"; b="$(new_workdir)/bin"
-mk_review_repo "$d"; mk_gemini_stub "$b" "F"; mk_cli_stub "$b" codex "L"
+mk_review_repo "$d"; mk_codex_stub "$b"; mk_cli_stub "$b" gemini "L"
+sed 's|"findings":\[\]|"findings":[{"category":"bug","file":"a.txt","line":1,"what":"x","why":"y","failure_scenario":"s"}]|' "$b/codex" > "$b/codex.new" && cat "$b/codex.new" > "$b/codex" && rm -f "$b/codex.new"
 out="$( cd "$d" && env -u SECOND_OPINION_ENGINE PATH="$b:$MIN_PATH" GEMINI_API_KEY=dummy bash scripts/second-opinion-review.sh 2>&1 )"; rc=$?
 if [[ "$rc" -eq 1 && "$out" == *"$NOTICE_MARK"* ]]; then pass; else fail "判定が変わった (exit $rc): $out"; fi
 
-it "通知が出る条件でも、loop-gate が残す記録のエンジン名は gemini になる"
+it "通知が出る条件でも、loop-gate が残す記録のエンジン名は codex になる"
 # 実物の reviewer の出力を、生成した loop-gate.sh の record_second_opinion へそのまま渡し、
 # 記録スクリプト（stub）が受け取った --engine を見る。抽出の式をここへ写すと、loop-gate 側の
 # 式が変わったときに追随せず、記録を実際に作らないまま通るため。loop-gate.sh は source では
 # ゲート本体を走らせない（source ガード）ので、関数だけを呼べる。
-run_notice_case codex
+run_notice_case gemini
 cap="$(new_workdir)/capture.txt"; printf '%s\n' "$out" > "$cap"
 gen="$(new_workdir)/p"
 run_bootstrap "$gen" >/dev/null 2>&1
@@ -1088,11 +1183,29 @@ STUB
 rec="$( . "$gen/scripts/loop-gate.sh" && record_second_opinion "$cap" "staged" 0 2>&1 )"
 if [[ "$out" != *"$NOTICE_MARK"* ]]; then
   fail "通知が出ていない前提が崩れた: $out"
-elif [[ "$rec" == *"RECORD_SAVED:"*"--engine gemini "* ]]; then
+elif [[ "$rec" == *"RECORD_SAVED:"*"--engine codex "* ]]; then
   pass
 else
-  fail "記録のエンジン名が gemini でない、または記録が作られない: $rec"
+  fail "記録のエンジン名が codex でない、または記録が作られない: $rec"
 fi
+
+it "#682 指定なしの経路で --runs 2 と --base を解析し、codex を 2 回呼び、知らせを 1 回だけ出す"
+d="$(new_workdir)/r"; b="$(new_workdir)/bin"
+mk_review_repo "$d"; mk_codex_stub "$b"; mk_cli_stub "$b" gemini "L"
+rm -f "$b/.count"
+out="$( cd "$d" && env -u SECOND_OPINION_ENGINE PATH="$b:$MIN_PATH" GEMINI_API_KEY=dummy bash scripts/second-opinion-review.sh --runs 2 --base HEAD 2>&1 )"; rc=$?
+n_notice="$(printf '%s\n' "$out" | command grep -c "$NOTICE_MARK")"
+if [[ "$rc" -eq 0 && "$(cat "$b/.count" 2>/dev/null)" == "2" && "$n_notice" == "1" ]]; then pass; else fail "exit $rc, 呼び出し $(cat "$b/.count" 2>/dev/null), 知らせ $n_notice: $out"; fi
+
+it "#682 指定なしの経路で --range と --base の併用は、知らせも案内も出さず止まる"
+run_notice_case gemini --range HEAD --base HEAD
+if [[ "$rc" -ne 0 && "$out" != *"$NOTICE_MARK"* && "$out" != *"既定のエンジンは"* ]]; then pass; else fail "exit $rc: $out"; fi
+
+it "#682 指定なしで codex が使えないとき、--runs の誤りは案内より先に回数の誤りで止まる"
+d="$(new_workdir)/r"; b="$(new_workdir)/bin"
+mk_review_repo "$d"; mkdir -p "$b"
+out="$( cd "$d" && env -u SECOND_OPINION_ENGINE PATH="$b:$MIN_PATH" bash scripts/second-opinion-review.sh --runs x 2>&1 )"; rc=$?
+if [[ "$rc" -ne 0 && "$out" == *"runs は 1 以上の整数"* && "$out" != *"既定のエンジンは"* ]]; then pass; else fail "exit $rc: $out"; fi
 
 # ── エージェントの設定・フックの一覧を依頼文へ添える ──────────────────────────
 #

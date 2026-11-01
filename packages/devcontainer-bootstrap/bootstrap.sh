@@ -1283,8 +1283,8 @@ if [[ -n "$SECOND_OPINION_ENGINE_OPT" ]]; then
       ;;
   esac
   soe_problem=""
-  if ! has_with antigravity && ! has_with codex; then
-    soe_problem="--with-antigravity も --with-codex も選んでいない構成では、.env.example に SECOND_OPINION_ENGINE の記入欄を出さず、指定の行き先がありません"
+  if ! has_with gemini && ! has_with antigravity && ! has_with codex; then
+    soe_problem="--with-gemini も --with-antigravity も --with-codex も選んでいない構成では、.env.example に SECOND_OPINION_ENGINE の記入欄を出さず、指定の行き先がありません"
   elif ! has_with "$SECOND_OPINION_ENGINE_OPT"; then
     soe_problem="--with-$SECOND_OPINION_ENGINE_OPT で選んでいないエンジンは指定できません"
   fi
@@ -12514,21 +12514,22 @@ second_opinion_engine_fill() {
 # トークン分岐は行わない。未選択なら空。
 # .env.example の __SECOND_OPINION_ENGINE_LINES__。第二意見のエンジン選択。
 #
-# 空なら gemini で、gemini だけの構成では指定しなくても挙動は変わらない。したがってこの
-# 記入欄が要るのは antigravity / codex を選べる構成だけで、どちらかを --with-* で選んだ
-# ときだけ出す。常時出すと、それらを導入していない生成物に「選べないエンジン」の記入欄が残る。
+# 空なら codex（既定は gemini から codex に変わった）。gemini / antigravity / codex のいずれかを
+# --with-* で選んだときだけ欄を出す（AI CLI を 1 つも選ばない構成では出さない）。gemini だけの
+# 構成も出すのは、空のままだと既定の codex（未導入）へ落ちて止まるため、gemini を記入しておく。
+# 常時出すと、それらを導入していない生成物に「選べないエンジン」の記入欄が残る。
 # 値は、選んだエンジンから一意に決まるときだけ記入済みにする（下記）。
 build_second_opinion_engine_block() {
   # $1 は resolve_second_opinion_engine_default の結果（キーの欄と同じ判断を使う）
-  has_with antigravity || has_with codex || { printf ''; return; }
+  has_with gemini || has_with antigravity || has_with codex || { printf ''; return; }
 
   # 値は、選んだエンジンから一意に決まるときだけ記入済みにする。
   # - gemini を選んだ構成（ほかと併用）では gemini。明示しておけば、.env を持つ作業ツリーでは
   #   reviewer の通知（既定へ落ちた知らせ）が出ず、.env を写し忘れた作業ツリーでだけ出る。
   # - gemini を選ばず、代わりのエンジンを 1 つだけ選んだ構成では、そのエンジン。空のままだと
-  #   既定の gemini（CLI もキーも無い）で回り、設定するまで使えないため。
+  #   既定の codex で回り、antigravity だけの構成では codex が無く、設定するまで使えないため。
   # - gemini を選ばず antigravity と codex の両方を選んだときは、一意に決まらないので空のまま
-  #   （既定の gemini へ落ちたことは reviewer の通知が知らせる）。
+  #   （既定の codex へ落ちたことは reviewer の通知が知らせる）。
   # - --second-opinion-engine の指定があれば、上のどれよりも優先してその値（検証済み）。
   local engine_default="$1" key_note="" key_line=""
   # キーの欄が無い構成では、読み手に見えないキーを指さない。
@@ -12537,10 +12538,19 @@ build_second_opinion_engine_block() {
     key_line=$'\n#\n# いずれも GEMINI_API_KEY は使わない。'
   fi
 
-  if has_with antigravity && has_with codex; then
+  if ! has_with antigravity && ! has_with codex; then
+    # gemini だけ（上の判定で、ここへ来るのは gemini を選んだ構成）。
     cat <<'ENGTMPL' | second_opinion_engine_fill "$engine_default" "$key_line" "$key_note"
 
-# 第二意見レビューのエンジン（gemini | antigravity | codex）。空なら gemini。
+# 第二意見レビューのエンジン。空なら第二意見レビューの既定のエンジンになるが、この構成では
+# それを導入しないため、導入した gemini を記入済みで出す。
+# 生成時に --second-opinion-engine で明示した場合は、その値になる。
+SECOND_OPINION_ENGINE=__ENGINE_DEFAULT__
+ENGTMPL
+  elif has_with antigravity && has_with codex; then
+    cat <<'ENGTMPL' | second_opinion_engine_fill "$engine_default" "$key_line" "$key_note"
+
+# 第二意見レビューのエンジン（gemini | antigravity | codex）。空なら codex。
 # gemini も選んで生成した構成では gemini を記入済みで出す。
 # 生成時に --second-opinion-engine で明示した場合は、その値になる。
 #
@@ -12559,7 +12569,7 @@ ENGTMPL
   elif has_with codex; then
     cat <<'ENGTMPL' | second_opinion_engine_fill "$engine_default" "$key_line" "$key_note"
 
-# 第二意見レビューのエンジン（gemini | codex）。空なら gemini。
+# 第二意見レビューのエンジン（gemini | codex）。空なら codex。
 # 生成時に選んだエンジン（gemini を選んでいれば gemini、codex だけなら codex）を記入済みで出す。
 # 生成時に --second-opinion-engine で明示した場合は、その値になる。
 #
@@ -12574,7 +12584,8 @@ ENGTMPL
   else
     cat <<'ENGTMPL' | second_opinion_engine_fill "$engine_default" "$key_line" "$key_note"
 
-# 第二意見レビューのエンジン（gemini | antigravity）。空なら gemini。
+# 第二意見レビューのエンジン（gemini | antigravity）。空なら第二意見レビューの既定のエンジン（この構成では
+# 導入していないため、使うエンジンを記入しておく）。
 # 生成時に選んだエンジン（gemini を選んでいれば gemini、antigravity だけなら antigravity）を記入済みで出す。
 # 生成時に --second-opinion-engine で明示した場合は、その値になる。
 #

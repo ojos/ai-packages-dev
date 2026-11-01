@@ -101,12 +101,12 @@ bash scripts/second-opinion-review.sh --engine codex           # エンジン切
 |---|---|---|---|
 | `--range <git-range>` | — | ステージ済み差分 | レビュー対象の差分範囲 |
 | `--base <rev>` | — | — | 索引と `<rev>` の差（コミット済みとステージ済みの両方）をレビュー対象にする。`--range` と併用できない。`loop-gate.sh` は、ステージ済み差分があるとき既定ブランチとの分岐点を渡す |
-| `--engine <name>` | `SECOND_OPINION_ENGINE` | `gemini` | レビューを実行する CLI（`gemini` / `antigravity` / `codex`）。どちらでも指定せず `agy` か `codex` が PATH にあるときは、既定の gemini を使う旨を stderr に知らせる（判定は変えない） |
+| `--engine <name>` | `SECOND_OPINION_ENGINE` | `codex` | レビューを実行する CLI（`gemini` / `antigravity` / `codex`）。どちらでも指定せず `gemini` か `agy` が PATH にあるときは、既定の codex を使う旨を stderr に知らせる（判定は変えない）。どちらでも指定せず codex が使えない（CLI が無い・未ログイン）ときは、移行の案内を stderr に出して止まる（gemini へ自動で切り替えない） |
 | `--model <name>` | `SECOND_OPINION_MODEL` | 各 CLI の既定 | 使用モデル |
 | `--runs <n>` | `SECOND_OPINION_RUNS` | `1` | 実行回数（1 以上の整数。不正値は実行前に停止） |
 | — | `SECOND_OPINION_AGENT_CONFIG_PATHS` | 未設定 | `loop-gate.sh` が渡す、レビュー範囲のうちエージェントの設定・フックに当たるパスの一覧（改行区切り）。空でなければ依頼文の末尾に、重点的に見るよう添える |
 
-- **エンジンの指定が無いまま既定の gemini で回るとき、`agy` か `codex` が見つかれば、`[second-opinion] notice:` で始まる 2 行を stderr に出します。** 両方を入れた構成で `.env` を写し忘れた作業ツリーが、黙って gemini で回るのを防ぐためです。終了コードと判定は変わらず、gemini だけの構成では出しません。文面に `(engine=` の形を含めないのは、`loop-gate.sh` が出力の最初の `(engine=` から記録のエンジン名を読むためです。
+- **エンジンの指定が無いまま既定の codex で回るとき、`gemini` か `agy` が見つかれば、`[second-opinion] notice:` で始まる 2 行を stderr に出します。** 複数を入れた構成で `.env` を写し忘れた作業ツリーが、黙って既定の codex で回るのを防ぐためです。終了コードと判定は変わらず、codex だけの構成では出しません。文面に `(engine=` の形を含めないのは、`loop-gate.sh` が出力の最初の `(engine=` から記録のエンジン名を読むためです。
 - 優先順位は CLI 引数 > `.env` > 既定です。`.env` は既に設定済みの環境変数も上書きするため、環境変数でエンジンを前置しても `.env` に負けます（`--engine` を使います）。
 - 環境変数の旧名 `GEMINI_REVIEW_MODEL` / `GEMINI_REVIEW_RUNS` も後方互換で受理します。新名が設定されていればそちらが勝ちます。ただし `GEMINI_REVIEW_MODEL` は gemini 用のモデル名なので、エンジンが `gemini` のときだけ引き継ぎます（`codex` / `antigravity` へ渡すと、そのエンジンでは実行できないためです）。それらのエンジンでは、`SECOND_OPINION_MODEL` も `--model` も無ければ、各エンジンの既定のモデルになります。`GEMINI_REVIEW_RUNS` はエンジンに依らず受理します。
 - 判定は多数決です。指摘を報告した run が**過半数**（`floor(N/2)+1`）に達したときだけ落とします。既定の `1` では閾値も 1 で、従来と同じ挙動になります。
