@@ -28,7 +28,7 @@ printf '#!/usr/bin/env bash\nif [[ "${1-}" == "--version" ]]; then echo "2.1.314
 
 # jq を含まない PATH。スクリプトが使うコマンドだけを写す。
 NOJQ="$TEST_TMP_ROOT/nojq"; mkdir -p "$NOJQ"
-for c in dirname mkdir chmod mktemp mv rm cat env tr grep head awk bash; do
+for c in dirname mkdir chmod mktemp mv rm cat env tr grep head awk sort bash; do
   ln -s "$(command -v "$c")" "$NOJQ/$c" 2>/dev/null
 done
 cp "$STUB/claude" "$NOJQ/claude"

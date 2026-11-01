@@ -180,7 +180,7 @@ mkdir -p "$minbin"
 ln -sf "$(command -v dirname)" "$minbin/dirname"
 # 版の読み取りと比較（ai_cli_version・ai_cli_version_is_old）に要るもの。bash は
 # 偽の CLI の #!/usr/bin/env bash が引くため（無いと版が読めず、入れ替えへ進んでしまう）。
-for c in grep head awk bash; do ln -sf "$(command -v "$c")" "$minbin/$c"; done
+for c in grep head awk sort bash; do ln -sf "$(command -v "$c")" "$minbin/$c"; done
 for c in claude gemini agy codex; do
   cp "$STUB_BIN/$c" "$minbin/$c"
 done

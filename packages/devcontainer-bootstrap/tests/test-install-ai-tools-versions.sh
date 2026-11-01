@@ -146,7 +146,12 @@ exit 0
 STUB
   chmod +x "$d/antigravity"
   tar -czf "$sb/srv/payload" -C "$d" antigravity
-  sha512sum "$sb/srv/payload" | cut -d' ' -f1
+  # sha512sum の無い環境（macOS など）では shasum を使う（実装と同じ代替）。
+  if command -v sha512sum >/dev/null 2>&1; then
+    sha512sum "$sb/srv/payload" | cut -d' ' -f1
+  else
+    shasum -a 512 "$sb/srv/payload" | cut -d' ' -f1
+  fi
 }
 
 # マニフェストを書く。$1=SB $2=版 $3=sha512（空ならキーを欠かす）
@@ -300,6 +305,19 @@ put_cli "$SB" agy "1.3.4"
 run_install "$SB"
 if [[ "$RUN_RC" -eq 0 ]] && npm_called_with "$SB" 'install -g @google/gemini-cli@latest' \
    && printf '%s' "$RUN_OUT" | grep 'gemini （版を読めません） は 0.64.0 未満です' >/dev/null; then
+  pass
+else
+  fail "rc=$RUN_RC npm=$(cat "$SB/npm.log" 2>/dev/null | tr '\n' ';') out=$RUN_OUT"
+fi
+
+it "claude の --version に別の版（New version 2.2.0 available）が混じれば、読めないとして入れ替える"
+SB="$(new_sandbox)"
+put_cli "$SB" claude "$(printf 'New version 2.2.0 available\n2.1.296 (Claude Code)')"
+fmt_version claude 2.1.320 > "$SB/newver/claude"
+put_cli "$SB" agy "1.3.4"
+run_install "$SB"
+if [[ "$RUN_RC" -eq 0 ]] && npm_called_with "$SB" 'install -g @anthropic-ai/claude-code@latest' \
+   && printf '%s' "$RUN_OUT" | grep 'claude （版を読めません） は 2.1.314 未満です' >/dev/null; then
   pass
 else
   fail "rc=$RUN_RC npm=$(cat "$SB/npm.log" 2>/dev/null | tr '\n' ';') out=$RUN_OUT"
@@ -521,6 +539,11 @@ if [[ "$RUN_RC" -ne 0 && ! -e "$SB/home/.local/bin/agy" ]] \
 else
   fail "rc=$RUN_RC out=$RUN_OUT"
 fi
+
+it "agy の取得は、転送先も含めて HTTPS に限る（curl の呼び出しすべてに --proto-redir '=https'）"
+n_curl="$(grep -c 'curl -fsSL' "$INSTALL")"
+n_https="$(grep -c "curl -fsSL --proto '=https' --proto-redir '=https'" "$INSTALL")"
+if [[ "$n_curl" -gt 0 && "$n_curl" -eq "$n_https" ]]; then pass; else fail "curl=$n_curl https 限定=$n_https"; fi
 
 it "雛形に、遠くのスクリプトを実行する「| bash」「| sh」の行が無い"
 if ! grep -Eq '\|[[:space:]]*(bash|sh)([[:space:]]|$)' "$INSTALL"; then pass; else fail "$(grep -nE '\|[[:space:]]*(bash|sh)([[:space:]]|$)' "$INSTALL")"; fi

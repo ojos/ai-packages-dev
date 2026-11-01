@@ -1916,10 +1916,14 @@ ai_cli_version_is_old() {
 # 取れなければ空を返す（呼び出し側が古い扱いにする）。
 # `--version` が非 0 で終わったときは、出力に数字があっても版として読まない
 # （"Node.js 22.0.0 is required" のようなエラーの数字を、CLI の版と取り違えないため）。
+# 出力に違う版が 2 つ以上あるとき（"New version 2.2.0 available" のような知らせが
+# 混じるなど）も、どれが CLI 自身の版か決められないので、読めない扱いにする。
 ai_cli_version() {
-  local out
+  local out vers
   out="$("$1" --version 2>/dev/null)" || return 0
-  printf '%s\n' "$out" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?' | head -1 || true
+  vers="$(printf '%s\n' "$out" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?' | sort -u)" || true
+  case "$vers" in *$'\n'*) return 0 ;; esac
+  printf '%s' "$vers"
 }
 
 # npm 配布の CLI を導入する。第 3 引数に版の下限を渡すと、在るときも版を見る。
@@ -12909,7 +12913,9 @@ agy_install_from_manifest() {
   local platform manifest version url sha512 payload actual target_dir target staged
   platform="$(agy_platform)" || return 1
 
-  if ! manifest="$(curl -fsSL "$AGY_DOWNLOAD_BASE_URL/manifests/$platform.json" 2>/dev/null)" || [[ -z "$manifest" ]]; then
+  # 転送先も HTTPS に限る（HTTP へ転送されると、平文のマニフェストで URL と SHA-512 を
+  # まとめて差し替えられ、照合が意味を失う）。本体の取得も同じ。
+  if ! manifest="$(curl -fsSL --proto '=https' --proto-redir '=https' "$AGY_DOWNLOAD_BASE_URL/manifests/$platform.json" 2>/dev/null)" || [[ -z "$manifest" ]]; then
     echo "[install-ai-tools] error: agy のマニフェストを取得できません: $AGY_DOWNLOAD_BASE_URL/manifests/$platform.json" >&2
     return 1
   fi
@@ -12937,7 +12943,7 @@ agy_install_from_manifest() {
   esac
 
   payload="$tmp/payload"
-  if ! curl -fsSL -o "$payload" "$url"; then
+  if ! curl -fsSL --proto '=https' --proto-redir '=https' -o "$payload" "$url"; then
     echo "[install-ai-tools] error: agy の本体を取得できません: $url" >&2
     return 1
   fi
