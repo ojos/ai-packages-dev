@@ -179,7 +179,7 @@ fmt_version claude 2.1.320 > "$SB/newver/claude"
 put_cli "$SB" agy "1.3.4"
 run_install "$SB"
 if [[ "$RUN_RC" -eq 0 ]] && npm_called_with "$SB" 'install -g @anthropic-ai/claude-code@latest' \
-   && printf '%s' "$RUN_OUT" | grep -q 'claude 2.1.296 は 2.1.314 未満です'; then
+   && printf '%s' "$RUN_OUT" | grep 'claude 2.1.296 は 2.1.314 未満です' >/dev/null; then
   pass
 else
   fail "rc=$RUN_RC npm=$(cat "$SB/npm.log" 2>/dev/null | tr '\n' ';') out=$RUN_OUT"
@@ -189,7 +189,7 @@ it "claude が下限ちょうどなら入れない（npm を呼ばない）"
 SB="$(new_sandbox)"
 put_cli "$SB" agy "1.3.4"
 run_install "$SB"
-if [[ "$RUN_RC" -eq 0 && ! -s "$SB/npm.log" ]] && printf '%s' "$RUN_OUT" | grep -q 'claude 2.1.314 already installed'; then
+if [[ "$RUN_RC" -eq 0 && ! -s "$SB/npm.log" ]] && printf '%s' "$RUN_OUT" | grep 'claude 2.1.314 already installed' >/dev/null; then
   pass
 else
   fail "rc=$RUN_RC npm=$(cat "$SB/npm.log" 2>/dev/null | tr '\n' ';') out=$RUN_OUT"
@@ -208,7 +208,7 @@ put_cli "$SB" claude "$(fmt_version claude 2.1.296)"
 put_cli "$SB" agy "1.3.4"
 run_install "$SB"
 if [[ "$RUN_RC" -ne 0 ]] && npm_called_with "$SB" 'claude-code@latest' \
-   && printf '%s' "$RUN_OUT" | grep -q '導入後も claude の版が 2.1.314 未満'; then
+   && printf '%s' "$RUN_OUT" | grep '導入後も claude の版が 2.1.314 未満' >/dev/null; then
   pass
 else
   fail "rc=$RUN_RC out=$RUN_OUT"
@@ -229,7 +229,7 @@ fmt_version gemini 0.65.0 > "$SB/newver/gemini"
 put_cli "$SB" agy "1.3.4"
 run_install "$SB"
 if [[ "$RUN_RC" -eq 0 ]] && npm_called_with "$SB" 'install -g @google/gemini-cli@latest' \
-   && printf '%s' "$RUN_OUT" | grep -q 'gemini 0.63.9 は 0.64.0 未満です'; then
+   && printf '%s' "$RUN_OUT" | grep 'gemini 0.63.9 は 0.64.0 未満です' >/dev/null; then
   pass
 else
   fail "rc=$RUN_RC out=$RUN_OUT"
@@ -247,7 +247,7 @@ SB="$(new_sandbox)"
 put_cli "$SB" gemini "0.60.0"
 put_cli "$SB" agy "1.3.4"
 run_install "$SB"
-if [[ "$RUN_RC" -ne 0 ]] && printf '%s' "$RUN_OUT" | grep -q '導入後も gemini の版が 0.64.0 未満'; then pass; else fail "rc=$RUN_RC out=$RUN_OUT"; fi
+if [[ "$RUN_RC" -ne 0 ]] && printf '%s' "$RUN_OUT" | grep '導入後も gemini の版が 0.64.0 未満' >/dev/null; then pass; else fail "rc=$RUN_RC out=$RUN_OUT"; fi
 
 it "codex は下限（0.156.0）未満なら入れ替える（共通の関数を使う）"
 SB="$(new_sandbox)"
@@ -256,7 +256,7 @@ fmt_version codex 0.162.1 > "$SB/newver/codex"
 put_cli "$SB" agy "1.3.4"
 run_install "$SB"
 if [[ "$RUN_RC" -eq 0 ]] && npm_called_with "$SB" 'install -g @openai/codex@latest' \
-   && printf '%s' "$RUN_OUT" | grep -q 'codex 0.100.0 は 0.156.0 未満です'; then
+   && printf '%s' "$RUN_OUT" | grep 'codex 0.100.0 は 0.156.0 未満です' >/dev/null; then
   pass
 else
   fail "rc=$RUN_RC out=$RUN_OUT"
@@ -268,7 +268,7 @@ put_cli "$SB" claude "v2.1.320-beta.1 (Claude Code)"
 put_cli "$SB" agy "1.3.4"
 run_install "$SB"
 if [[ "$RUN_RC" -eq 0 ]] && ! npm_called_with "$SB" '@anthropic-ai/claude-code' \
-   && printf '%s' "$RUN_OUT" | grep -q 'claude 2.1.320 already installed'; then
+   && printf '%s' "$RUN_OUT" | grep 'claude 2.1.320 already installed' >/dev/null; then
   pass
 else
   fail "rc=$RUN_RC npm=$(cat "$SB/npm.log" 2>/dev/null | tr '\n' ';') out=$RUN_OUT"
@@ -279,7 +279,7 @@ SB="$(new_sandbox)"
 put_cli "$SB" claude "$(fmt_version claude 2.1.296)"
 put_cli "$SB" agy "1.3.4"
 run_install "$SB"
-if [[ "$RUN_RC" -ne 0 ]] && printf '%s' "$RUN_OUT" | grep -q 'より前に別の claude があるか'; then
+if [[ "$RUN_RC" -ne 0 ]] && printf '%s' "$RUN_OUT" | grep 'より前に別の claude があるか' >/dev/null; then
   pass
 else
   fail "rc=$RUN_RC out=$RUN_OUT"
@@ -310,7 +310,7 @@ SB="$(new_sandbox)"
 make_agy_payload "$SB" >/dev/null
 write_manifest "$SB" "$AGY_NEW_VERSION" "$(printf '0%.0s' $(seq 1 128))"
 run_install "$SB"
-if [[ "$RUN_RC" -ne 0 && ! -e "$SB/home/.local/bin/agy" ]] && printf '%s' "$RUN_OUT" | grep -q 'SHA-512'; then
+if [[ "$RUN_RC" -ne 0 && ! -e "$SB/home/.local/bin/agy" ]] && printf '%s' "$RUN_OUT" | grep 'SHA-512' >/dev/null; then
   pass
 else
   fail "rc=$RUN_RC out=$RUN_OUT"
@@ -323,7 +323,7 @@ it "agy: マニフェストを読めなければ、何も置かずに非 0（理
 SB="$(new_sandbox)"
 make_agy_payload "$SB" >/dev/null
 run_install "$SB"
-if [[ "$RUN_RC" -ne 0 && ! -e "$SB/home/.local/bin/agy" ]] && printf '%s' "$RUN_OUT" | grep -q 'マニフェストを取得できません'; then
+if [[ "$RUN_RC" -ne 0 && ! -e "$SB/home/.local/bin/agy" ]] && printf '%s' "$RUN_OUT" | grep 'マニフェストを取得できません' >/dev/null; then
   pass
 else
   fail "rc=$RUN_RC out=$RUN_OUT"
@@ -334,7 +334,7 @@ SB="$(new_sandbox)"
 make_agy_payload "$SB" >/dev/null
 write_manifest "$SB" "$AGY_NEW_VERSION" ""
 run_install "$SB"
-if [[ "$RUN_RC" -ne 0 && ! -e "$SB/home/.local/bin/agy" ]] && printf '%s' "$RUN_OUT" | grep -q 'マニフェストの形が想定と違います'; then
+if [[ "$RUN_RC" -ne 0 && ! -e "$SB/home/.local/bin/agy" ]] && printf '%s' "$RUN_OUT" | grep 'マニフェストの形が想定と違います' >/dev/null; then
   pass
 else
   fail "rc=$RUN_RC out=$RUN_OUT"
@@ -345,7 +345,7 @@ SB="$(new_sandbox)"
 sha="$(make_agy_payload "$SB")"
 write_manifest "$SB" "1.3.3" "$sha"
 run_install "$SB"
-if [[ "$RUN_RC" -ne 0 && ! -e "$SB/home/.local/bin/agy" ]] && printf '%s' "$RUN_OUT" | grep -q '下限 1.3.4 未満'; then
+if [[ "$RUN_RC" -ne 0 && ! -e "$SB/home/.local/bin/agy" ]] && printf '%s' "$RUN_OUT" | grep '下限 1.3.4 未満' >/dev/null; then
   pass
 else
   fail "rc=$RUN_RC out=$RUN_OUT"
@@ -357,7 +357,7 @@ sha="$(make_agy_payload "$SB")"
 write_manifest "$SB" "$AGY_NEW_VERSION" "$sha"
 rm -f "$SB/srv/payload"
 run_install "$SB"
-if [[ "$RUN_RC" -ne 0 && ! -e "$SB/home/.local/bin/agy" ]] && printf '%s' "$RUN_OUT" | grep -q '本体を取得できません'; then
+if [[ "$RUN_RC" -ne 0 && ! -e "$SB/home/.local/bin/agy" ]] && printf '%s' "$RUN_OUT" | grep '本体を取得できません' >/dev/null; then
   pass
 else
   fail "rc=$RUN_RC out=$RUN_OUT"
@@ -374,7 +374,7 @@ write_manifest "$SB" "$AGY_NEW_VERSION" "$sha"
 run_install "$SB"
 if [[ "$RUN_RC" -eq 0 ]] \
    && [[ "$("$SB/home/.local/bin/agy" --version 2>/dev/null)" == "$AGY_NEW_VERSION" ]] \
-   && printf '%s' "$RUN_OUT" | grep -q 'agy 1.2.0 は 1.3.4 未満です'; then
+   && printf '%s' "$RUN_OUT" | grep 'agy 1.2.0 は 1.3.4 未満です' >/dev/null; then
   pass
 else
   fail "rc=$RUN_RC out=$RUN_OUT"
@@ -384,7 +384,7 @@ it "agy: 既にある agy が下限以上なら何もしない（curl を呼ば�
 SB="$(new_sandbox)"
 put_cli "$SB" agy "1.3.4"
 run_install "$SB"
-if [[ "$RUN_RC" -eq 0 && ! -e "$SB/curl.log" ]] && printf '%s' "$RUN_OUT" | grep -q 'agy 1.3.4 already installed'; then
+if [[ "$RUN_RC" -eq 0 && ! -e "$SB/curl.log" ]] && printf '%s' "$RUN_OUT" | grep 'agy 1.3.4 already installed' >/dev/null; then
   pass
 else
   fail "rc=$RUN_RC out=$RUN_OUT"
@@ -398,7 +398,7 @@ sha="$(make_agy_payload "$SB")"
 write_manifest "$SB" "$AGY_NEW_VERSION" "$sha"
 run_install "$SB" FAKE_UNAME_O=Android
 if [[ "$RUN_RC" -ne 0 && ! -e "$SB/curl.log" && ! -e "$SB/home/.local/bin/agy" ]] \
-   && printf '%s' "$RUN_OUT" | grep -q '配布に無いプラットフォームです: android_amd64'; then
+   && printf '%s' "$RUN_OUT" | grep '配布に無いプラットフォームです: android_amd64' >/dev/null; then
   pass
 else
   fail "rc=$RUN_RC out=$RUN_OUT"
@@ -407,12 +407,12 @@ fi
 it "agy: 対応しない OS は、理由を出して非 0"
 SB="$(new_sandbox)"
 run_install "$SB" FAKE_UNAME_S=FreeBSD
-if [[ "$RUN_RC" -ne 0 && ! -e "$SB/curl.log" ]] && printf '%s' "$RUN_OUT" | grep -q '対応しない OS'; then pass; else fail "rc=$RUN_RC out=$RUN_OUT"; fi
+if [[ "$RUN_RC" -ne 0 && ! -e "$SB/curl.log" ]] && printf '%s' "$RUN_OUT" | grep '対応しない OS' >/dev/null; then pass; else fail "rc=$RUN_RC out=$RUN_OUT"; fi
 
 it "agy: 対応しないアーキテクチャは、理由を出して非 0"
 SB="$(new_sandbox)"
 run_install "$SB" FAKE_UNAME_M=riscv64
-if [[ "$RUN_RC" -ne 0 && ! -e "$SB/curl.log" ]] && printf '%s' "$RUN_OUT" | grep -q '対応しないアーキテクチャ'; then pass; else fail "rc=$RUN_RC out=$RUN_OUT"; fi
+if [[ "$RUN_RC" -ne 0 && ! -e "$SB/curl.log" ]] && printf '%s' "$RUN_OUT" | grep '対応しないアーキテクチャ' >/dev/null; then pass; else fail "rc=$RUN_RC out=$RUN_OUT"; fi
 
 it "agy: arm64 の darwin と、musl の linux を、表どおりのマニフェストへ引く"
 SB="$(new_sandbox)"
@@ -439,8 +439,8 @@ done
 RUN_OUT="$(env HOME="$SB/home" TMPDIR="$SB/tmp" PATH="$SB/bin:$SB/home/.local/bin:$SB/sys" bash "$INSTALL" 2>&1)"
 RUN_RC=$?
 if [[ "$RUN_RC" -ne 0 && ! -e "$SB/home/.local/bin/agy" ]] \
-   && printf '%s' "$RUN_OUT" | grep -q 'SHA-512 を計算する道具' \
-   && ! printf '%s' "$RUN_OUT" | grep -q 'マニフェストと一致しません'; then
+   && printf '%s' "$RUN_OUT" | grep 'SHA-512 を計算する道具' >/dev/null \
+   && ! printf '%s' "$RUN_OUT" | grep 'マニフェストと一致しません' >/dev/null; then
   pass
 else
   fail "rc=$RUN_RC out=$RUN_OUT"

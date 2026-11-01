@@ -38,7 +38,7 @@ new_home() {
 # npm も curl も呼ばれない（呼ばれたらネットワークへ出るので、それ自体が異常）。
 STUB_BIN="$TMP_ROOT/bin"
 mkdir -p "$STUB_BIN"
-for c in claude gemini agy npm curl; do
+for c in npm curl; do
   # $0 は stub の実行時に展開させる。ここで展開すると、どの stub が呼ばれたのかが
   # 分からなくなる。単一引用符は意図的。
   # shellcheck disable=SC2016
@@ -54,6 +54,16 @@ codex_min="$(sed -n 's/^CODEX_MIN_VERSION="\(.*\)"$/\1/p' "$INSTALL")"
 # shellcheck disable=SC2016
 printf '#!/usr/bin/env bash\nif [[ "$1" == "--version" ]]; then echo "codex-cli %s"; exit 0; fi\necho "STUB $0 は呼ばれてはいけない" >&2\nexit 97\n' "$codex_min" > "$STUB_BIN/codex"
 chmod +x "$STUB_BIN/codex"
+# claude・gemini・agy も版の下限を見る（下限未満なら入れ替える）ので、codex と同じく
+# --version にだけ下限の版を返す。下限は scripts/install-ai-tools.sh から読む。
+claude_min="$(sed -n 's/^install_if_missing claude "[^"]*" "\(.*\)"$/\1/p' "$INSTALL")"
+gemini_min="$(sed -n 's/^install_if_missing gemini "[^"]*" "\(.*\)"$/\1/p' "$INSTALL")"
+agy_min="$(sed -n 's/^AGY_MIN_VERSION="\(.*\)"$/\1/p' "$INSTALL")"
+for pair in "claude:$claude_min" "gemini:$gemini_min" "agy:$agy_min"; do
+  # shellcheck disable=SC2016
+  printf '#!/usr/bin/env bash\nif [[ "$1" == "--version" ]]; then echo "%s"; exit 0; fi\necho "STUB $0 は呼ばれてはいけない" >&2\nexit 97\n' "${pair#*:}" > "$STUB_BIN/${pair%%:*}"
+  chmod +x "$STUB_BIN/${pair%%:*}"
+done
 
 run_install() {
   local home="$1"
@@ -168,6 +178,9 @@ minbin="$TMP_ROOT/minbin"
 mkdir -p "$minbin"
 # jq の検査へ到達するまでに要る外部コマンドだけを通す（それ以外は builtin）。
 ln -sf "$(command -v dirname)" "$minbin/dirname"
+# 版の読み取りと比較（ai_cli_version・ai_cli_version_is_old）に要るもの。bash は
+# 偽の CLI の #!/usr/bin/env bash が引くため（無いと版が読めず、入れ替えへ進んでしまう）。
+for c in grep head awk bash; do ln -sf "$(command -v "$c")" "$minbin/$c"; done
 for c in claude gemini agy codex; do
   cp "$STUB_BIN/$c" "$minbin/$c"
 done
