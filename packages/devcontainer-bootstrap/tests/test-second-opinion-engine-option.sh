@@ -44,7 +44,7 @@ OUT_W="$(new_workdir)/p"
 run_bootstrap "$OUT_W" --with-gemini --with-codex --second-opinion-engine codex >/dev/null 2>&1
 w_err="$(bash "$BOOTSTRAP" --upgrade --output-dir "$OUT_W" --without-codex 2>&1 >/dev/null)"; w_rc=$?
 if [[ "$w_rc" == 0 && "$w_err" == *warning:*ORIGIN* ]] \
-   && [[ "$(engine_of "$OUT_W")" == "" ]] \
+   && [[ "$(engine_of "$OUT_W")" == "SECOND_OPINION_ENGINE=gemini" ]] \
    && ! grep -q 'input:second-opinion-engine' "$OUT_W/.devcontainer/ORIGIN"; then pass; else fail "rc=$w_rc 値=$(engine_of "$OUT_W") err=$w_err"; fi
 
 it "gemini + antigravity を残して codex を外すと、既定（gemini）に戻る"
@@ -100,7 +100,7 @@ expect_stop "未知の値で止まる" --with-codex --second-opinion-engine foo
 expect_stop "空の値で止まる" --with-codex --second-opinion-engine ""
 expect_stop "選んでいないエンジン（antigravity）で止まる" --with-codex --second-opinion-engine antigravity
 expect_stop "gemini を選んでいないのに gemini を指定すると止まる" --with-codex --second-opinion-engine gemini
-expect_stop "エンジンの記入欄が出ない構成（gemini のみ）で止まる" --with-gemini --second-opinion-engine gemini
+expect_stop "gemini のみの構成で codex を指定すると止まる" --with-gemini --second-opinion-engine codex
 expect_stop "エンジンの記入欄が出ない構成（装備なし）で止まる" --second-opinion-engine gemini
 
 # ── GEMINI_API_KEY の欄はエンジンが codex / antigravity のときだけ出さない（#646） ──
@@ -136,5 +136,38 @@ if [[ -z "$(command grep -n 'GEMINI_API_KEY' "$OUT_K/.env.example")" && -z "$(aw
 it "キーの欄がある構成（gemini + codex 固定）の .env.example にも空行 2 連続が無い"
 OUT_L="$(new_workdir)/p"
 if run_bootstrap "$OUT_L" --with-gemini --with-codex --second-opinion-engine codex >/dev/null 2>&1 && [[ -z "$(awk 'prev=="" && $0=="" && NR>1 {print NR} {prev=$0}' "$OUT_L/.env.example")" ]]; then pass; else fail "空行が続く、または生成失敗"; fi
+
+# ── #682: 既定のエンジンは codex。記入欄の説明も合わせる ─────────────────────────
+for __cfg in "antigravity と codex の両方（エンジンを記入しない構成）:--with-antigravity --with-codex" \
+             "codex のみ:--with-codex" "gemini + codex:--with-gemini --with-codex"; do
+  it "エンジンの欄の説明が「空なら codex」と述べ、「空なら gemini」を含まない（${__cfg%%:*}）"
+  OUT_M="$(new_workdir)/p"
+  # shellcheck disable=SC2086
+  if ! run_bootstrap "$OUT_M" ${__cfg#*:} >/dev/null 2>&1 || [[ ! -f "$OUT_M/.env.example" ]]; then fail "生成に失敗した"
+  elif command grep -q '空なら codex' "$OUT_M/.env.example" && ! command grep -q '空なら gemini' "$OUT_M/.env.example"; then pass
+  else fail "説明が合っていない: $(command grep -n '空なら' "$OUT_M/.env.example")"; fi
+done
+
+it "antigravity のみの構成の説明は「空なら gemini」を含まず、codex を名指ししない（codex を含めない構成の制約）"
+OUT_P="$(new_workdir)/p"
+if run_bootstrap "$OUT_P" --with-antigravity >/dev/null 2>&1 && ! command grep -q '空なら gemini' "$OUT_P/.env.example" && ! command grep -qi 'codex' "$OUT_P/.env.example"; then pass; else fail "$(command grep -n '空なら\|codex' "$OUT_P/.env.example")"; fi
+
+it "エンジンを記入しない構成（antigravity と codex の両方）では SECOND_OPINION_ENGINE の値が空のまま"
+OUT_N="$(new_workdir)/p"
+if run_bootstrap "$OUT_N" --with-antigravity --with-codex >/dev/null 2>&1 && [[ "$(engine_of "$OUT_N")" == "SECOND_OPINION_ENGINE=" ]]; then pass; else fail "$(engine_of "$OUT_N")"; fi
+
+# ── gemini だけの構成にも欄を出し、gemini を記入する（#682） ─────────────────────
+it "--with-gemini だけで SECOND_OPINION_ENGINE=gemini を記入し、「空なら gemini」を含まず、antigravity と codex を名指ししない"
+OUT_Q="$(new_workdir)/p"
+if run_bootstrap "$OUT_Q" --with-gemini >/dev/null 2>&1 && [[ "$(engine_of "$OUT_Q")" == "SECOND_OPINION_ENGINE=gemini" ]] \
+   && ! command grep -q '空なら gemini' "$OUT_Q/.env.example" && ! command grep -qi 'antigravity\|codex' "$OUT_Q/.env.example"; then pass; else fail "$(engine_of "$OUT_Q")"; fi
+
+it "--with-gemini --second-opinion-engine gemini が成功し、gemini を記入する"
+OUT_R="$(new_workdir)/p"
+if run_bootstrap "$OUT_R" --with-gemini --second-opinion-engine gemini >/dev/null 2>&1 && [[ "$(engine_of "$OUT_R")" == "SECOND_OPINION_ENGINE=gemini" ]]; then pass; else fail "$(engine_of "$OUT_R")"; fi
+
+it "AI CLI を 1 つも選ばない構成では、これまでどおり欄を出さない"
+OUT_S="$(new_workdir)/p"
+if run_bootstrap "$OUT_S" >/dev/null 2>&1 && [[ -z "$(engine_of "$OUT_S")" ]]; then pass; else fail "$(engine_of "$OUT_S")"; fi
 
 exit_with_result

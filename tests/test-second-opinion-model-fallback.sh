@@ -87,9 +87,9 @@ it "gemini: 旧名のモデル名が渡る"
 got="$(GEMINI_REVIEW_MODEL=legacy-gemini-model run_engine gemini --engine gemini)"
 assert_eq "$got" "legacy-gemini-model" "gemini に渡ったモデル"
 
-it "gemini: 既定のエンジン（指定なし）でも旧名のモデル名が渡る"
-got="$(GEMINI_REVIEW_MODEL=legacy-gemini-model run_engine gemini)"
-assert_eq "$got" "legacy-gemini-model" "gemini に渡ったモデル"
+it "既定のエンジン（指定なし、既定は codex）では旧名の値は渡らず gpt-6-sol が渡る"
+got="$(GEMINI_REVIEW_MODEL=legacy-gemini-model run_engine codex)"
+assert_eq "$got" "gpt-6-sol" "codex に渡ったモデル"
 
 it "SECOND_OPINION_MODEL があれば、旧名より優先される（gemini）"
 got="$(SECOND_OPINION_MODEL=new-model GEMINI_REVIEW_MODEL=legacy-gemini-model run_engine gemini --engine gemini)"
