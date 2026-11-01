@@ -9,9 +9,10 @@
 # CLI の選択で行が変わるため、バイト一致は原理的に成立しない）。つまり開発
 # リポジトリの写しと生成物は自動では揃わない。
 #
-# 一方 codex の版判定（codex_version_is_old / install_codex_if_missing）と下限
+# 一方 codex の導入（install_codex_if_missing）と下限
 # （CODEX_MIN_VERSION）は構成によらず内容が変わらない。ここだけは揃えられるし、
-# 揃っていないと困る。片方で直した不具合（版の読み違い等）が他方に残る。
+# 揃っていないと困る。片方で直した不具合（版の読み違い等）が他方に残るため。
+# 共通の版比較の関数（ai_cli_version_is_old など）は test-ai-cli-version-mirror.sh が見る。
 #
 # ## 何を比べるか
 #
@@ -67,7 +68,7 @@ fi
 
 # ── 関数ごとの照合 ────────────────────────────────────────────────────────────
 
-for fn in codex_version_is_old install_codex_if_missing; do
+for fn in install_codex_if_missing; do
   canon_body="$(extract_func "$CANON" "$fn" | code_only)"
   gen_body="$(extract_func "$GENERATED" "$fn" | code_only)"
 

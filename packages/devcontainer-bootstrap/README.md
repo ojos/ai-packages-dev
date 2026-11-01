@@ -510,9 +510,11 @@ bash scripts/fix-mount-owner.sh && bash scripts/install-ai-tools.sh
 
 導入するのは `--with-claude` / `--with-gemini` / `--with-antigravity` / `--with-codex` / `--with-copilot` で**明示選択した AI CLI のみ**です。トークン有無での自動導入は行いません（明示 opt-in）。何も選択しなければ AI CLI は導入されません。
 
-`--with-antigravity` だけは npm 配布ではないため、配布元のインストーラを取得して `~/.local/bin/agy` へ置きます。あわせて**テレメトリを無効化**します（下記）。
+**claude と gemini は、版の下限を検査します**（claude は 2.1.314 以上。`doctor.sh` の検査と同じ値で、`blockWritesOutsideWorkingDirectories` が効く最小の版。gemini は 0.64.0 以上）。下限より古いものが既に入っていれば、「在るから飛ばす」ではなく npm の `@latest` で入れ替え（CLI の名前・今の版・下限を出します）、入れたあとも下限未満なら非 0 で止まります。下限以上なら何もしません。
 
-`--with-codex` は npm 配布（`@openai/codex`）ですが、**版の下限を検査します**。第二意見レビューの既定モデルを引ける版より古い CLI が既に入っている場合は、「在るから飛ばす」ではなく入れ替えます。認証は ChatGPT アカウントの OAuth または API キーで、導入だけでは使えません。初回は対話で `codex login` を通してください。
+`--with-antigravity` だけは npm 配布ではありません。配布元のインストーラ（取得して実行する形）は**実行せず**、同じ手順を自分で行います。プラットフォーム（`linux_amd64` / `linux_arm64` とそれぞれの `_musl` 版、`darwin_amd64` / `darwin_arm64`。表に無いものは理由を出して非 0）を決め、配布元のマニフェスト（`<配布元>/manifests/<プラットフォーム>.json` の `version`・`url`・`sha512`）を取り、本体を落として **SHA-512 を照合してから** `~/.local/bin/agy` へ置き、`agy install` で PATH の設定を任せます。照合が通らない・マニフェストを読めない・キーが欠けている・マニフェストの版が下限（1.3.4）未満のときは、理由を出して何も置かずに非 0 で止まります。既にある agy が下限未満なら同じ手順で入れ替え、下限以上なら何もしません。マニフェストの形と URL は、配布元のインストーラを読んで確かめたもので、変われば導入は理由を出して止まります。あわせて**テレメトリを無効化**します（下記）。
+
+`--with-codex` は npm 配布（`@openai/codex`）ですが、**版の下限を検査します**。第二意見レビューの既定モデルを引ける版（0.156.0 以上）より古い CLI が既に入っている場合は、「在るから飛ばす」ではなく入れ替えます（版の比較は claude・gemini と共通の関数です）。認証は ChatGPT アカウントの OAuth または API キーで、導入だけでは使えません。初回は対話で `codex login` を通してください。
 
 ## ループコーディング支援
 

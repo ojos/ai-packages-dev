@@ -37,7 +37,7 @@ TMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/test-agy-install-mirror.XXXXXX")"
 trap 'rm -rf "$TMP_ROOT"' EXIT
 
 # シェル関数の本体を名前で切り出す。`<name>() {` から、桁 1 の `}` までを返す。
-# 対象の 2 関数はいずれもこの形で書かれている。
+# 対象の関数はいずれもこの形で書かれている。
 extract_func() {
   local file="$1" name="$2"
   NAME_WANT="$name" awk '
@@ -68,7 +68,7 @@ fi
 
 # ── 関数ごとの照合 ────────────────────────────────────────────────────────────
 
-for fn in install_agy_if_missing disable_agy_telemetry; do
+for fn in install_agy_if_missing agy_platform agy_manifest_value agy_sha512 agy_install_from_manifest disable_agy_telemetry; do
   canon_body="$(extract_func "$CANON" "$fn" | code_only)"
   gen_body="$(extract_func "$GENERATED" "$fn" | code_only)"
 
@@ -98,6 +98,17 @@ if [[ -n "$canon_path" && "$canon_path" == "$gen_path" ]]; then
   pass
 else
   fail "正本='$canon_path' 生成物='$gen_path'"
+fi
+
+it "AGY_MIN_VERSION と AGY_DOWNLOAD_BASE_URL が正本と生成物で一致する"
+# 同じく関数の外の代入。下限がずれると入れ替えの判定が、配布元の URL がずれると
+# 取りに行く先が、層ごとに違ってしまう。
+canon_vals="$(grep -E '^AGY_(MIN_VERSION|DOWNLOAD_BASE_URL)=' "$CANON")"
+gen_vals="$(grep -E '^AGY_(MIN_VERSION|DOWNLOAD_BASE_URL)=' "$GENERATED")"
+if [[ "$(printf '%s\n' "$canon_vals" | grep -c .)" -eq 2 && "$canon_vals" == "$gen_vals" ]]; then
+  pass
+else
+  fail "正本='$canon_vals' 生成物='$gen_vals'"
 fi
 
 # ── 照合が生きていることの確認（対照） ────────────────────────────────────────
