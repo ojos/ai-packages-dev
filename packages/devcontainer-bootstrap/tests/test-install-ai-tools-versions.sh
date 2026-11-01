@@ -287,6 +287,24 @@ else
   fail "rc=$RUN_RC out=$RUN_OUT"
 fi
 
+it "gemini の --version が非 0 で終われば、出力の数字（Node.js 22.0.0）を版とみなさず入れ替える"
+SB="$(new_sandbox)"
+cat > "$SB/bin/gemini" <<'STUB'
+#!/usr/bin/env bash
+echo "Node.js 22.0.0 is required"
+exit 1
+STUB
+chmod +x "$SB/bin/gemini"
+fmt_version gemini 0.66.0 > "$SB/newver/gemini"
+put_cli "$SB" agy "1.3.4"
+run_install "$SB"
+if [[ "$RUN_RC" -eq 0 ]] && npm_called_with "$SB" 'install -g @google/gemini-cli@latest' \
+   && printf '%s' "$RUN_OUT" | grep 'gemini （版を読めません） は 0.64.0 未満です' >/dev/null; then
+  pass
+else
+  fail "rc=$RUN_RC npm=$(cat "$SB/npm.log" 2>/dev/null | tr '\n' ';') out=$RUN_OUT"
+fi
+
 it "claude を入れ替えても下限未満のままなら、PATH の先の別の claude を疑う案内を出す"
 SB="$(new_sandbox)"
 put_cli "$SB" claude "$(fmt_version claude 2.1.296)"
@@ -384,6 +402,18 @@ if [[ "$RUN_RC" -ne 0 && ! -e "$SB/home/.local/bin/agy" ]] && printf '%s' "$RUN_
   pass
 else
   fail "rc=$RUN_RC out=$RUN_OUT"
+fi
+
+it "agy: 置き先（~/.local/bin/agy）がディレクトリなら、中へ移さずに非 0"
+SB="$(new_sandbox)"
+sha="$(make_agy_payload "$SB")"
+write_manifest "$SB" "$AGY_NEW_VERSION" "$sha"
+mkdir -p "$SB/home/.local/bin/agy"
+run_install "$SB"
+if [[ "$RUN_RC" -ne 0 && -z "$(ls -A "$SB/home/.local/bin/agy")" ]] && printf '%s' "$RUN_OUT" | grep 'ディレクトリのため、agy を置けません' >/dev/null; then
+  pass
+else
+  fail "rc=$RUN_RC 中身=$(ls -A "$SB/home/.local/bin/agy") out=$RUN_OUT"
 fi
 
 it "agy: マニフェストの版が下限（1.3.4）未満なら、何も置かずに非 0（理由を出す）"

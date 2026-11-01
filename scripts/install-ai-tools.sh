@@ -33,8 +33,12 @@ ai_cli_version_is_old() {
 # の形もありうるので、最初に現れる数の 3 つ組を、プレリリースの印ごと取る
 # （前置の v は落とす。印は ai_cli_version_is_old が見る）。
 # 取れなければ空を返す（呼び出し側が古い扱いにする）。
+# `--version` が非 0 で終わったときは、出力に数字があっても版として読まない
+# （"Node.js 22.0.0 is required" のようなエラーの数字を、CLI の版と取り違えないため）。
 ai_cli_version() {
-  "$1" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?' | head -1 || true
+  local out
+  out="$("$1" --version 2>/dev/null)" || return 0
+  printf '%s\n' "$out" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?' | head -1 || true
 }
 
 # npm 配布の CLI を導入する。第 3 引数に版の下限を渡すと、在るときも版を見る。
@@ -122,7 +126,11 @@ agy_platform() {
   platform="${os}_${arch}"
   if [[ "$os" == "linux" ]]; then
     # musl の検出。パイプの後ろに grep -q を置かない（pipefail で誤って落ちる）。
-    if [[ -f /lib/libc.musl-x86_64.so.1 || -f /lib/libc.musl-aarch64.so.1 ]]; then
+    # musl のローダーは、今のアーキテクチャのものだけを見る（別のアーキテクチャ用が
+    # 置いてあるだけの glibc の環境を、musl と取り違えないため）。
+    local loader
+    if [[ "$arch" == "amd64" ]]; then loader="/lib/libc.musl-x86_64.so.1"; else loader="/lib/libc.musl-aarch64.so.1"; fi
+    if [[ -f "$loader" ]]; then
       platform="${platform}_musl"
     else
       case "$(ldd /bin/ls 2>&1 || true)" in
@@ -237,6 +245,11 @@ agy_install_from_manifest() {
     echo "[install-ai-tools] error: $target_dir を作れません" >&2
     return 1
   fi
+  # 置き先がディレクトリだと、mv はその中へ移して成功してしまう。
+  if [[ -d "$target" && ! -L "$target" ]]; then
+    echo "[install-ai-tools] error: $target がディレクトリのため、agy を置けません" >&2
+    return 1
+  fi
   # 同じディレクトリへ一時の名前で置いてから mv で差し替える（動いている本体を
   # 上書きして「text file busy」になることを避け、途中で切れても半端な本体を残さない）。
   if ! cp "$staged" "$target.new.$$" || ! chmod +x "$target.new.$$" || ! mv -f "$target.new.$$" "$target"; then
@@ -289,7 +302,7 @@ install_agy_if_missing() {
       return 1
     fi
     echo "[install-ai-tools] agy installed: $(command -v agy) (${have})"
-  elif [[ -x "$HOME/.local/bin/agy" ]]; then
+  elif [[ -f "$HOME/.local/bin/agy" && -x "$HOME/.local/bin/agy" ]]; then
     echo "[install-ai-tools] agy installed to ~/.local/bin (PATH に無いため現シェルからは見えません)"
   else
     echo "[install-ai-tools] error: 導入は完了しましたが agy が見つかりません" >&2
