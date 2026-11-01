@@ -85,7 +85,8 @@ else
 fi
 
 it "読めない版文字列は古い扱いにする（fail-closed）"
-if grep -q 'have !~ /\^\[0-9\]+\\\.\[0-9\]+\\\.\[0-9\]+\$/.*exit 0' "$CX_INSTALL" 2>/dev/null; then
+# プレリリースの印（-beta.1 など）だけは許す形。それ以外の綴りは exit 0（古い）へ落とす。
+if grep -qF 'have !~ /^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$/) { exit 0 }' "$CX_INSTALL" 2>/dev/null; then
   pass
 else
   fail "読めない版の扱いが見当たらない"

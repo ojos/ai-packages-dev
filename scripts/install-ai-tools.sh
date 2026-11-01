@@ -10,27 +10,31 @@ set -euo pipefail
 #
 # 読めない綴りは「古い」として扱う（fail-closed）。入れ替えは冪等で副作用が
 # 小さい一方、読めないまま通すと、要件を満たさない CLI で回り続けることになる。
+# プレリリースの印（"2.1.314-beta.1" の "-beta.1"）が付いた版は、同じ番号の正式版
+# より前のものなので、番号が下限と同じなら「古い」とする。
 ai_cli_version_is_old() {
   local have="$1" want="$2"
   awk -v have="$have" -v want="$want" '
     function num(s, part) { split(s, a, "."); return a[part] + 0 }
     BEGIN {
-      if (have !~ /^[0-9]+\.[0-9]+\.[0-9]+$/) { exit 0 }   # 読めない → 古い扱い
+      if (have !~ /^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$/) { exit 0 }   # 読めない → 古い扱い
+      pre = (have ~ /-/); sub(/-.*$/, "", have)
       for (i = 1; i <= 3; i++) {
         h = num(have, i); w = num(want, i)
         if (h > w) { exit 1 }
         if (h < w) { exit 0 }
       }
-      exit 1
+      exit pre ? 0 : 1
     }'
 }
 
-# CLI の `--version` の出力から、x.y.z の綴りだけを取り出す。出力は CLI ごとに
+# CLI の `--version` の出力から、版の綴りを取り出す。出力は CLI ごとに
 # "2.1.296 (名前)" や "名前 0.162.1" のように違い、"v1.3.5" や "0.66.0-preview.1"
-# の形もありうるので、最初に現れる数の 3 つ組を取る（前置の v や後ろの印は落とす）。
+# の形もありうるので、最初に現れる数の 3 つ組を、プレリリースの印ごと取る
+# （前置の v は落とす。印は ai_cli_version_is_old が見る）。
 # 取れなければ空を返す（呼び出し側が古い扱いにする）。
 ai_cli_version() {
-  "$1" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true
+  "$1" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?' | head -1 || true
 }
 
 # npm 配布の CLI を導入する。第 3 引数に版の下限を渡すと、在るときも版を見る。
@@ -137,12 +141,13 @@ agy_platform() {
   esac
 }
 
-# マニフェスト（JSON）から、平らな文字列のキーの値を返す。jq に頼らない。
+# マニフェスト（JSON）の最上位の、文字列のキーの値を返す。JSON として読めない・
+# 最上位がオブジェクトでない・キーが無い・文字列でないときは、空を返して 1 を返す
+# （形が変わったマニフェストを、文字列の拾い読みで通さないため）。jq は
+# disable_agy_telemetry と同じく前提にする（呼び出し側が有無を確かめる）。
 agy_manifest_value() {
-  local v
-  v="$(printf '%s\n' "$1" | sed -n 's/.*"'"$2"'"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
-  # 同じキーが複数行にあっても、最初の 1 行だけを返す。
-  printf '%s' "${v%%$'\n'*}"
+  printf '%s' "$1" | jq -er --arg k "$2" \
+    'if type == "object" and (.[$k] | type) == "string" and .[$k] != "" then .[$k] else error("missing") end' 2>/dev/null
 }
 
 # ファイルの SHA-512（16 進、小文字）を返す。
@@ -171,9 +176,13 @@ agy_install_from_manifest() {
     echo "[install-ai-tools] error: agy のマニフェストを取得できません: $AGY_DOWNLOAD_BASE_URL/manifests/$platform.json" >&2
     return 1
   fi
-  version="$(agy_manifest_value "$manifest" version)"
-  url="$(agy_manifest_value "$manifest" url)"
-  sha512="$(agy_manifest_value "$manifest" sha512)"
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "[install-ai-tools] error: jq が無いため agy のマニフェストを読めません。jq を導入してから再実行してください" >&2
+    return 1
+  fi
+  version="$(agy_manifest_value "$manifest" version)" || version=""
+  url="$(agy_manifest_value "$manifest" url)" || url=""
+  sha512="$(agy_manifest_value "$manifest" sha512)" || sha512=""
   if [[ -z "$version" || -z "$url" || -z "$sha512" ]]; then
     echo "[install-ai-tools] error: agy のマニフェストの形が想定と違います（version・url・sha512 のキーを読めません）" >&2
     return 1
@@ -212,6 +221,16 @@ agy_install_from_manifest() {
       ;;
   esac
 
+  # 置く前に、取り出した本体そのものの版を確かめる。SHA-512 はマニフェストとの一致しか
+  # 示さず、本体が動くことや下限以上であることは示さない。PATH に ~/.local/bin が
+  # 無い環境では、置いたあとに PATH から確かめることもできない。
+  chmod +x "$staged" 2>/dev/null || true
+  actual="$(ai_cli_version "$staged")"
+  if ai_cli_version_is_old "$actual" "$AGY_MIN_VERSION"; then
+    echo "[install-ai-tools] error: 取り出した agy の本体の版が $AGY_MIN_VERSION 未満か、読めません（実際: ${actual:-不明}）。何も置かずに中止します" >&2
+    return 1
+  fi
+
   target_dir="$HOME/.local/bin"
   target="$target_dir/agy"
   if ! mkdir -p "$target_dir"; then
@@ -228,8 +247,11 @@ agy_install_from_manifest() {
   if [[ "$platform" == darwin_* ]]; then
     xattr -d com.apple.quarantine "$target" 2>/dev/null || true
   fi
-  # 配布元のインストーラと同じく、PATH の設定などを agy 自身に任せる。警告での終了は許す。
-  "$target" install || true
+  # 配布元のインストーラと同じく、PATH の設定などを agy 自身に任せる。配布元も
+  # この終了コードで止めないので、導入は失敗にしない。ただし黙って捨てず、知らせる。
+  if ! "$target" install; then
+    echo "[install-ai-tools] warning: 'agy install'（PATH の設定など）が非 0 で終わりました。~/.local/bin が PATH にあるかを確かめてください" >&2
+  fi
 }
 
 install_agy_if_missing() {

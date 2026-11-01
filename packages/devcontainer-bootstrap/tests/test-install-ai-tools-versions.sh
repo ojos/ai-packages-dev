@@ -268,10 +268,23 @@ put_cli "$SB" claude "v2.1.320-beta.1 (Claude Code)"
 put_cli "$SB" agy "1.3.4"
 run_install "$SB"
 if [[ "$RUN_RC" -eq 0 ]] && ! npm_called_with "$SB" '@anthropic-ai/claude-code' \
-   && printf '%s' "$RUN_OUT" | grep 'claude 2.1.320 already installed' >/dev/null; then
+   && printf '%s' "$RUN_OUT" | grep 'claude 2.1.320-beta.1 already installed' >/dev/null; then
   pass
 else
   fail "rc=$RUN_RC npm=$(cat "$SB/npm.log" 2>/dev/null | tr '\n' ';') out=$RUN_OUT"
+fi
+
+it "claude が下限と同じ番号のプレリリース版（2.1.314-beta.1）なら、古いとして入れ替える"
+SB="$(new_sandbox)"
+put_cli "$SB" claude "2.1.314-beta.1 (Claude Code)"
+fmt_version claude 2.1.320 > "$SB/newver/claude"
+put_cli "$SB" agy "1.3.4"
+run_install "$SB"
+if [[ "$RUN_RC" -eq 0 ]] && npm_called_with "$SB" 'install -g @anthropic-ai/claude-code@latest' \
+   && printf '%s' "$RUN_OUT" | grep 'claude 2.1.314-beta.1 は 2.1.314 未満です' >/dev/null; then
+  pass
+else
+  fail "rc=$RUN_RC out=$RUN_OUT"
 fi
 
 it "claude を入れ替えても下限未満のままなら、PATH の先の別の claude を疑う案内を出す"
@@ -335,6 +348,39 @@ make_agy_payload "$SB" >/dev/null
 write_manifest "$SB" "$AGY_NEW_VERSION" ""
 run_install "$SB"
 if [[ "$RUN_RC" -ne 0 && ! -e "$SB/home/.local/bin/agy" ]] && printf '%s' "$RUN_OUT" | grep 'マニフェストの形が想定と違います' >/dev/null; then
+  pass
+else
+  fail "rc=$RUN_RC out=$RUN_OUT"
+fi
+
+it "agy: マニフェストが JSON として壊れていれば（末尾のカンマ）、何も置かずに非 0"
+SB="$(new_sandbox)"
+sha="$(make_agy_payload "$SB")"
+printf '{"version":"%s","url":"https://example.invalid/agy.tar.gz","sha512":"%s",}\n' "$AGY_NEW_VERSION" "$sha" > "$SB/srv/manifest.json"
+run_install "$SB"
+if [[ "$RUN_RC" -ne 0 && ! -e "$SB/home/.local/bin/agy" ]] && printf '%s' "$RUN_OUT" | grep 'マニフェストの形が想定と違います' >/dev/null; then
+  pass
+else
+  fail "rc=$RUN_RC out=$RUN_OUT"
+fi
+
+it "agy: キーが最上位に無い（入れ子の）マニフェストなら、何も置かずに非 0"
+SB="$(new_sandbox)"
+sha="$(make_agy_payload "$SB")"
+printf '{"asset":{"version":"%s","url":"https://example.invalid/agy.tar.gz","sha512":"%s"}}\n' "$AGY_NEW_VERSION" "$sha" > "$SB/srv/manifest.json"
+run_install "$SB"
+if [[ "$RUN_RC" -ne 0 && ! -e "$SB/home/.local/bin/agy" ]] && printf '%s' "$RUN_OUT" | grep 'マニフェストの形が想定と違います' >/dev/null; then
+  pass
+else
+  fail "rc=$RUN_RC out=$RUN_OUT"
+fi
+
+it "agy: 取り出した本体の版が下限未満なら、SHA-512 が合っていても何も置かずに非 0"
+SB="$(new_sandbox)"
+sha="$(AGY_NEW_VERSION=1.2.0 make_agy_payload "$SB")"
+write_manifest "$SB" "$AGY_NEW_VERSION" "$sha"
+run_install "$SB"
+if [[ "$RUN_RC" -ne 0 && ! -e "$SB/home/.local/bin/agy" ]] && printf '%s' "$RUN_OUT" | grep '取り出した agy の本体の版が 1.3.4 未満' >/dev/null; then
   pass
 else
   fail "rc=$RUN_RC out=$RUN_OUT"
