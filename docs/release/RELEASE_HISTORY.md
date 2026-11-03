@@ -9,14 +9,17 @@
 
 | パッケージ | リポジトリ | 現行バージョン | 配布形態 |
 |---|---|---|---|
-| devcontainer-bootstrap | `ojos/devcontainer-bootstrap` | v0.23.6 | GitHub Release + 資産 5 点（配布スクリプト 2: `bootstrap.sh` / `doctor.sh`、生成物 3: `SHA256SUMS` / `RELEASE-MANIFEST.json` / `PACKAGE_ARCHIVE.tar.gz`） |
-| ai-playbook | `ojos/ai-playbook` | v0.12.2 | git タグのみ |
-| devcontainer-host | `ojos/devcontainer-host` | v0.6.0 | GitHub Release + 資産 14 点（個別 11: `dev.sh` / `dev-up@.service` / `dev-runner@.service` / `dev-route@.service` / `dev-route-sync@.service` / `dev-route-sync@.timer` / `runner.Dockerfile` / `install.sh` / `projects.example` / `runners.example` / `routes.example`、生成物 3: `SHA256SUMS` / `RELEASE-MANIFEST.json` / `PACKAGE_ARCHIVE.tar.gz`） |
+| devcontainer-bootstrap | `ojos/devcontainer-bootstrap` | v0.24.0 | GitHub Release + 資産 5 点（配布スクリプト 2: `bootstrap.sh` / `doctor.sh`、生成物 3: `SHA256SUMS` / `RELEASE-MANIFEST.json` / `PACKAGE_ARCHIVE.tar.gz`） |
+| ai-playbook | `ojos/ai-playbook` | v0.13.0 | git タグのみ |
+| devcontainer-host | `ojos/devcontainer-host` | v0.7.0 | GitHub Release + 資産 14 点（個別 11: `dev.sh` / `dev-up@.service` / `dev-runner@.service` / `dev-route@.service` / `dev-route-sync@.service` / `dev-route-sync@.timer` / `runner.Dockerfile` / `install.sh` / `projects.example` / `runners.example` / `routes.example`、生成物 3: `SHA256SUMS` / `RELEASE-MANIFEST.json` / `PACKAGE_ARCHIVE.tar.gz`） |
 
 ### 新世代の版更新
 
 | パッケージ | 版 | 公開日 | 要点 |
 |---|---|---|---|
+| devcontainer-bootstrap | v0.24.0 | 2026-11-03 | **生成する `install-ai-tools.sh` が claude・gemini・codex・agy に版の下限を持ち、agy は配布元のインストーラをやめて SHA-512 を照合してから置く**（#684）。**任意のコードを実行させうる git の設定を検出する `check-git-config.sh`**（#671。SessionStart と doctor から呼ぶ）、`loop-gate.sh` がエージェントの設定に触れる変更を一覧に出す（#671）。**生成する `.claude/settings.json` に `blockWritesOutsideWorkingDirectories` と確認フックの `onFailure: "block"`**、doctor が Claude Code の版（下限 2.1.314）を検査（#672）。**`--with-claude` で共通規範を常時と条件付きの規則に分けて生成し、`CLAUDE.md` から全文の取り込みを外した**（#678、`--render-claude-rules`。手書きの同名の規則を上書きしない #680）。`.env.example` のエンジンの欄を codex 既定に合わせ、`--with-gemini` だけでも `gemini` を記入（#682）。勧める ai-playbook は v0.13.0（要求は変わらない） |
+| ai-playbook | v0.13.0 | 2026-11-03 | **第二意見の既定のエンジンを gemini から codex へ移した**（#682。エンジンを指定していないプロジェクトは対応が要る。codex が使えなければ案内を出して止まる）。**第二意見に反証の立場を求め、スキーマに `failure_scenario` を必須で足した**（#670）。エージェントの設定に触れるパスを依頼文へ添える（#671）。共通規範に Claude Code 用の規則への分割の印を付け、`templates/claude-entry-imports-rules.md` を足した（#678。雛形は 18 種） |
+| devcontainer-host | v0.7.0 | 2026-11-03 | **`dev doctor <名前>` が、AI CLI のサンドボックス（bubblewrap）の前提を確かめる**（#686）。コンテナの SecurityOpt を示し、コンテナの中で bwrap（無ければ unshare）で非特権 user namespace の作成と mount を試す。起こせなければ足りない層と対処を出す（SecurityOpt に apparmor / seccomp の指定があれば WARN、無ければ INFO）。ホストの `kernel.apparmor_restrict_unprivileged_userns` は参考の表示だけ |
 | devcontainer-bootstrap | v0.23.6 | 2026-10-19 | `update-check.sh` の追従で、未コミットの変更の確認を台帳への git の登録より後にした（#666。確認と登録のあいだに別のセッションが書き込むと、汚れたまま追従が進んでいた） |
 | devcontainer-bootstrap | v0.23.5 | 2026-10-18 | **`.env` の `UPDATE_CHECK=off` で `check-no-secrets.sh` が `SECRETS_FAIL` になっていたのを直した**（#657）。**`update-check.sh` の追従が、台帳を確かめてからブランチを切るようにした**（#658。他のセッションの git の登録があれば止める）。**`confirm-merge-hook.sh` が、シングルクォートの中の行継続で確認を出していたのを直した**（#659。読みが確実な単純な形だけ。`#`・`<<`・`$`・バッククォートを含めば今までどおり）。勧める ai-playbook は v0.12.2。破壊的変更なし |
 | ai-playbook | v0.12.2 | 2026-10-18 | **共通規範に、別のリポジトリの issue / PR は `owner/repo#N` と書く決まりを足した**（#660）。**`second-opinion-review.sh` の参照の文脈に、同じ番号の別物かもしれない旨の断りを足した**（報告は省かず、可能性を添える）。破壊的変更なし。雛形は 17 種のまま |

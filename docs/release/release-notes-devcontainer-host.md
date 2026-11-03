@@ -6,7 +6,7 @@ devhost（SSH で届く外部の機械で devcontainer を保つ道具。コマ�
 >
 > 同じ理由で、issue 参照は `ojos/ai-packages-dev#NNN` の形で書いてください。裸の `#NNN` は GitHub のオートリンクが**配布先リポジトリの issue** として解決するため、配布後は存在しない issue や無関係な issue を指します。
 
-## 未リリース
+## v0.7.0
 
 ### Summary
 - **`dev doctor <名前>` が、AI CLI のサンドボックス（bubblewrap）の前提を確かめるようにした**（ojos/ai-packages-dev#686）。ネイティブ Linux の Docker Engine では、コンテナの seccomp（namespace の作成を止める）と AppArmor（mount を止める）の既定の制限のために、使ってみて `bwrap: No permissions to create new namespace` などで落ちるまで気づけなかった。
