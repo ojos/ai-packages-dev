@@ -70,8 +70,8 @@ AppArmor だけを外しても、seccomp が先に止めるので動きません
 非特権 user namespace の作成と mount を試し、通らなければ足りない層（seccomp は namespace の作成を、AppArmor は mount を止めます）を出します。
 SecurityOpt に apparmor / seccomp の指定がある（サンドボックスを使うつもりの）コンテナでは WARN、無ければ INFO です。
 ホストの `kernel.apparmor_restrict_unprivileged_userns`（Ubuntu の AppArmor による非特権 user namespace の制限）は参考に示すだけです。
-コンテナの中の失敗には関わらなかった（実測）ので、**コンテナの 2 層を外す前に、ホストの値を変えないでください**（ホストの隔離が弱まるだけで直りません）。
-2 層を外しても通らないときだけ、doctor はほかの制限の候補の 1 つとして、この値も挙げます。
+コンテナの中の失敗には関わらなかった（実測）ので、**コンテナのサンドボックスのためにホストの値を変えないでください**（ホストの隔離が弱まるだけで直りません）。
+AppArmor の層は、ホストで AppArmor が有効なとき（`/sys/module/apparmor/parameters/enabled` が `Y`）だけ挙げます。
 
 ## DCB と一緒に使うと揃うもの
 

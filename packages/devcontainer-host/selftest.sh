@@ -1216,7 +1216,7 @@ SANDBOX_PROBE="$(sed -n "s/^DOCTOR_SANDBOX_PROBE='\(.*\)'\$/\1/p" "$DEV")"
 # 引数を固定して照合する（上の読み出しだけでは、引数を変えても呼び出しの記録の照合が追随して通るため）。
 # bwrap は codex が起動のたびに行う確かめと同じ引数、unshare は --mount で mount まで試す（AppArmor の層を見るため）。
 case "$SANDBOX_PROBE" in
-  *"exec bwrap --unshare-user --unshare-net --ro-bind / / /bin/true;"*"exec unshare --user --map-root-user --mount true;"*) ;;
+  *"exec bwrap --unshare-user --unshare-net --ro-bind / / true;"*"exec unshare --user --map-root-user --mount true;"*) ;;
   *) ng "DOCTOR_SANDBOX_PROBE の引数が想定と違います: $SANDBOX_PROBE" ;;
 esac
 doctor_up() {
@@ -1270,6 +1270,12 @@ set_userns_restrict() {
 expect_no_out_line() {
   if grep -qE -- "$1" "$OUT"; then ng "$CUR: 標準出力に /$1/ の行があってはいけません"; sed 's/^/    stdout: /' "$OUT" >&2; fi
 }
+# ホストの AppArmor の有効・無効を偽の /sys に置く。以下の試験は、断りが無ければ有効（Y）の機械で回す。
+set_host_apparmor() {
+  mkdir -p "$WORK/sys/module/apparmor/parameters"
+  printf '%s\n' "$1" >"$WORK/sys/module/apparmor/parameters/enabled"
+}
+set_host_apparmor Y
 SB_REF='対処: DCB の README「コンテナの中での codex のサンドボックス」、devhost の README「外部の機械の前提」'
 
 set_userns_restrict 0
@@ -1305,12 +1311,20 @@ expect_out_line '\[WARN\] サンドボックス: bwrap で'
 run 3 "doctor(sandbox): 両方外しても起こせなければ、ほかの制限を示して WARN で 3" -- FAKE_SANDBOX=bwrap-fail 'FAKE_SECURITY_OPT=["apparmor=unconfined","seccomp=unconfined"]' -- doctor alpha
 expect_out_line '足りない層: コンテナの AppArmor と seccomp の層は外してあります（user.max_user_namespaces など、ほかの制限を確かめてください）'
 set_userns_restrict 1
-run 3 "doctor(sandbox): 両方外しても起こせず、ホストの制限が 1 なら、その値も候補に挙げる" -- FAKE_SANDBOX=bwrap-fail 'FAKE_SECURITY_OPT=["apparmor=unconfined","seccomp=unconfined"]' -- doctor alpha
-expect_out_line '足りない層: コンテナの AppArmor と seccomp の層は外してあります（user.max_user_namespaces、ホストの kernel.apparmor_restrict_unprivileged_userns など'
+run 3 "doctor(sandbox): 両方外しても起こせず、ホストの制限が 1 でも、その値を足りない層に挙げない" -- FAKE_SANDBOX=bwrap-fail 'FAKE_SECURITY_OPT=["apparmor=unconfined","seccomp=unconfined"]' -- doctor alpha
+expect_no_out_line '足りない層: .*apparmor_restrict_unprivileged_userns'
 set_userns_restrict 0
 
-# ホストで AppArmor が無効なら、AppArmor の層は挙げない。
-mkdir -p "$WORK/sys/module/apparmor/parameters"
+run 3 "doctor(sandbox): unconfined で始まる別のプロファイル名は unconfined と読まない" -- FAKE_SANDBOX=bwrap-fail 'FAKE_SECURITY_OPT=["apparmor=unconfined-custom","seccomp=unconfined-custom.json"]' -- doctor alpha
+expect_out_line '\[INFO\] コンテナの SecurityOpt: apparmor=unconfined なし / seccomp=unconfined なし'
+expect_out_line "^ +足りない層: seccomp=unconfined が無い（namespace の作成を止める） / apparmor=unconfined が無い（mount を止める）。$SB_REF\$"
+
+# ホストで AppArmor が無効、または AppArmor が無い（ファイルが無い）なら、AppArmor の層は挙げない。
+rm -rf "$WORK/sys"
+run 3 "doctor(sandbox): ホストに AppArmor が無ければ、AppArmor の層を挙げない" -- FAKE_SANDBOX=bwrap-fail 'FAKE_SECURITY_OPT=["seccomp:unconfined"]' -- doctor alpha
+expect_out_line '足りない層: コンテナの AppArmor と seccomp の層は外してあります'
+expect_no_out_line 'apparmor=unconfined が無い'
+set_host_apparmor Y
 printf 'N\n' >"$WORK/sys/module/apparmor/parameters/enabled"
 run 3 "doctor(sandbox): ホストの AppArmor が無効なら、AppArmor の層を挙げない" -- FAKE_SANDBOX=bwrap-fail 'FAKE_SECURITY_OPT=["seccomp:unconfined"]' -- doctor alpha
 expect_out_line '足りない層: コンテナの AppArmor と seccomp の層は外してあります'
@@ -1318,7 +1332,6 @@ expect_no_out_line 'apparmor=unconfined が無い'
 printf 'Y\n' >"$WORK/sys/module/apparmor/parameters/enabled"
 run 3 "doctor(sandbox): ホストの AppArmor が有効なら、AppArmor の層を挙げる" -- FAKE_SANDBOX=bwrap-fail 'FAKE_SECURITY_OPT=["seccomp:unconfined"]' -- doctor alpha
 expect_out_line "^ +足りない層: apparmor=unconfined が無い（mount を止める）。$SB_REF\$"
-rm -rf "$WORK/sys"
 
 run 3 "doctor(sandbox): bwrap の行の後ろに別の出力が続いても、bwrap の行を出す" -- FAKE_SANDBOX=bwrap-fail-trailer 'FAKE_SECURITY_OPT=["seccomp=unconfined"]' -- doctor alpha
 expect_out_line '\[WARN\] サンドボックス: bwrap で非特権 user namespace の作成か mount に失敗しました（終了コード 1）: bwrap: Failed to make / slave: Permission denied$'
@@ -1353,6 +1366,7 @@ expect_no_out_line '足りない層'
 run 0 "doctor(sandbox): 一時ファイルを作れなければ確かめない" -- TMPDIR="$WORK/no-such-dir" 'FAKE_SECURITY_OPT=["seccomp=unconfined"]' -- doctor alpha
 expect_out_line '\[INFO\] サンドボックス: 一時ファイルを作れないので、起動を確かめられません'
 set_userns_restrict ""
+rm -rf "$WORK/sys"
 
 run 1 "doctor: exec が通らない" -- FAKE_EXEC_FAIL=1 -- doctor alpha
 expect_out_line '\[FAIL\] exec が通りません（終了コード 1）: .*procReady not received'

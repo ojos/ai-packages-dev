@@ -2902,9 +2902,10 @@ cmd_doctor() {
 }
 
 # コンテナの中で起こす、サンドボックスの起動の確かめ。bwrap があれば、codex が起動のたびに行う確かめと
-# 同じ引数で、無ければ unshare で、非特権 user namespace を作って mount する（どちらも何も書き換えない。
+# 同じ namespace と mount の引数で（中で起こすコマンドだけは /bin/true でなく PATH の true。/bin/true の無い
+# コンテナで、層の不足と取り違えないため）、無ければ unshare で、非特権 user namespace を作って mount する（どちらも何も書き換えない。
 # unshare の --mount は / の伝播を private にする mount を行う）。1 行目に使ったもの（bwrap / unshare / none）を出す。
-DOCTOR_SANDBOX_PROBE='if command -v bwrap >/dev/null 2>&1; then echo "dev-doctor-probe bwrap"; exec bwrap --unshare-user --unshare-net --ro-bind / / /bin/true; elif command -v unshare >/dev/null 2>&1; then echo "dev-doctor-probe unshare"; exec unshare --user --map-root-user --mount true; else echo "dev-doctor-probe none"; fi'
+DOCTOR_SANDBOX_PROBE='if command -v bwrap >/dev/null 2>&1; then echo "dev-doctor-probe bwrap"; exec bwrap --unshare-user --unshare-net --ro-bind / / true; elif command -v unshare >/dev/null 2>&1; then echo "dev-doctor-probe unshare"; exec unshare --user --map-root-user --mount true; else echo "dev-doctor-probe none"; fi'
 
 # AI CLI のサンドボックス（bubblewrap）の前提を見る。引数: コンテナの ID / ワークスペースのパス / 秒数 / 猶予。
 # 止めるのはコンテナの 2 層（seccomp の既定のプロファイルが namespace の作成を、AppArmor の docker-default が
@@ -2967,7 +2968,8 @@ doctor_sandbox() {
     return 0
   fi
 
-  # 足りない層を挙げる。ホストで AppArmor が無効なら、AppArmor の層は挙げない。
+  # 足りない層を挙げる。AppArmor の層は、ホストで AppArmor が有効（enabled が Y）と読めたときだけ挙げる
+  # （AppArmor の無いホストでは、そのファイル自体が無い）。
   # 両方を外しても起こせなければ、ほかの原因を疑う。
   if [[ -r "$SYS_ROOT/module/apparmor/parameters/enabled" ]]; then
     hostaa="$(head -n 1 "$SYS_ROOT/module/apparmor/parameters/enabled" 2>/dev/null || true)"
@@ -2976,11 +2978,9 @@ doctor_sandbox() {
     need="SecurityOpt を読めないので特定できません"
   else
     if [[ "$sc" != 1 ]]; then need="seccomp=unconfined が無い（namespace の作成を止める）"; fi
-    if [[ "$aa" != 1 && "$hostaa" != N ]]; then need="${need:+$need / }apparmor=unconfined が無い（mount を止める）"; fi
+    if [[ "$aa" != 1 && "$hostaa" == Y ]]; then need="${need:+$need / }apparmor=unconfined が無い（mount を止める）"; fi
     if [[ -z "$need" ]]; then
-      need="コンテナの AppArmor と seccomp の層は外してあります（user.max_user_namespaces"
-      [[ "$restrict" == 1 ]] && need="$need、ホストの kernel.apparmor_restrict_unprivileged_userns"
-      need="$need など、ほかの制限を確かめてください）"
+      need="コンテナの AppArmor と seccomp の層は外してあります（user.max_user_namespaces など、ほかの制限を確かめてください）"
     fi
   fi
   if [[ "$intent" == 1 ]]; then level=WARN; else level=INFO; fi
