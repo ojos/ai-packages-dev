@@ -6,7 +6,7 @@
 >
 > 同じ理由で、issue 参照は `ojos/ai-packages-dev#NNN` の形で書いてください。裸の `#NNN` は GitHub のオートリンクが**配布先リポジトリの issue** として解決するため、配布後は存在しない issue や無関係な issue を指します。
 
-## 未リリース
+## v0.13.0
 
 ### Summary
 - **第二意見の既定のエンジンを gemini から codex へ移した（利用者の対応が要ることがある）**（ojos/ai-packages-dev#682）。Gemini CLI が 2026-06-18 に、無料と個人向けの有料プランでの提供を終えたため。`templates/second-opinion-review.sh` は、エンジンの指定（`--engine` / `SECOND_OPINION_ENGINE`）が無いと codex を使う。codex が使えない（CLI が無い・`codex login status` が失敗する）ときは、既定が変わった旨の案内（`[second-opinion] hint:`）を出して非 0 で止まり、gemini へは自動で切り替えない。gemini の CLI と `GEMINI_API_KEY` が揃っていれば、`--engine gemini` か `.env` の `SECOND_OPINION_ENGINE=gemini` で使い続けられることも案内する。指定が無いまま codex で回り、gemini か agy の CLI も見つかったときの知らせ（`[second-opinion] notice:`）も、既定の codex に合わせた。
@@ -18,7 +18,7 @@
 
 ### 移行
 - **第二意見のエンジンを指定していない（`.env` の `SECOND_OPINION_ENGINE` が空か無い）プロジェクトだけが対象です。** これまで既定の gemini で回していたなら、gemini を使い続けるには `.env` に `SECOND_OPINION_ENGINE=gemini` を書きます（`--engine gemini` でも可）。codex へ移るなら、codex を導入して `codex login` を通します。エンジンを明示しているプロジェクトは何もしなくてよい。
-- **DCB の `--with-claude` で追従するときは、DCB の未リリースの版（`--render-claude-rules` と規則の生成を持つ版）と、この版の規範を組にする。** この版の規範を指定すると、DCB は `.claude/rules/ai-playbook*.md` を生成し、`CLAUDE.md` から共通規範の全文の取り込みを外す。手を入れた `CLAUDE.md` は古いまま残る（`.dcb-new` が隣に置かれる）ので、`@.ai-playbook/shared-ai-rules.md` の行を外して `.dcb-new` の内容を取り込む。外さないと、全文と規則が二重に載る。
+- **DCB の `--with-claude` で追従するときは、DCB v0.24.0 以降（`--render-claude-rules` と規則の生成を持つ版）と、この版の規範を組にする。** この版の規範を指定すると、DCB は `.claude/rules/ai-playbook*.md` を生成し、`CLAUDE.md` から共通規範の全文の取り込みを外す。手を入れた `CLAUDE.md` は古いまま残る（`.dcb-new` が隣に置かれる）ので、`@.ai-playbook/shared-ai-rules.md` の行を外して `.dcb-new` の内容を取り込む。外さないと、全文と規則が二重に載る。
 - **`second-opinion-schema.json` と `second-opinion-review.sh` は組で更新する。** 新しいスキーマは `failure_scenario` を必須にするので、古い `second-opinion-review.sh` と組み合わせると、モデルの回答は筋書きを含むようになるが、空かどうかは検査されない。逆に、新しい `second-opinion-review.sh` と古いスキーマを組み合わせると、モデルが筋書きを返さないので、指摘を 1 件でも含む回答が失敗になる（指摘の無い回答は通る）。
 - 雛形から写したファイルに手を入れていなければ、規範の更新で置き換わる（DCB で規範を配置している場合は `bootstrap.sh --upgrade --playbook-version <新しい版>` で追従する）。
 
