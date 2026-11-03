@@ -682,7 +682,7 @@ unshare）で非特権 user namespace を作って mount してみる。ホス�
   （読めない項目、pids.max が数でも max でもない値のときも WARN）
   サンドボックスを起こせないときは、SecurityOpt に apparmor / seccomp の指定があれば WARN、
   無ければ INFO（使わないプロジェクトの判定を変えない）。どちらも足りない層と対処を出す。
-  確かめそのものが返らない・届かないときは INFO（確かめられません）
+  確かめそのものが返らない・届かない・bwrap（unshare）を起こせないときは INFO（確かめられません）
 
 終了コード: 0 = 問題なし / 1 = FAIL がある / 2 = 使い方か設定ファイルの誤り / 3 = WARN だけ
 失敗したとき: FAIL なら dev rebuild <名前> で作り直す。WARN だけなら原因を調べてから判断する。

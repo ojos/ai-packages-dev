@@ -2967,6 +2967,12 @@ doctor_sandbox() {
     doc_line OK "サンドボックス: $tool で非特権 user namespace を作り、mount できます"
     return 0
   fi
+  # bwrap / unshare 自体を起こせない（126 / 127。共有ライブラリの欠落など）か、中で起こす true を
+  # 実行できない（execvp の失敗）ときは、namespace と mount まで届いていないので、層の不足とは言わない。
+  if [[ "$ec" -eq 126 || "$ec" -eq 127 || "$eout" == *execvp* ]]; then
+    doc_line INFO "サンドボックス: $tool を起こせないので、起動を確かめられません（終了コード $ec）: $eout"
+    return 0
+  fi
 
   # 足りない層を挙げる。AppArmor の層は、ホストで AppArmor が有効（enabled が Y）と読めたときだけ挙げる
   # （AppArmor の無いホストでは、そのファイル自体が無い）。
@@ -3277,7 +3283,7 @@ unshare）で非特権 user namespace を作って mount してみる。ホス�
   （読めない項目、pids.max が数でも max でもない値のときも WARN）
   サンドボックスを起こせないときは、SecurityOpt に apparmor / seccomp の指定があれば WARN、
   無ければ INFO（使わないプロジェクトの判定を変えない）。どちらも足りない層と対処を出す。
-  確かめそのものが返らない・届かないときは INFO（確かめられません）
+  確かめそのものが返らない・届かない・bwrap（unshare）を起こせないときは INFO（確かめられません）
 
 終了コード: 0 = 問題なし / 1 = FAIL がある / 2 = 使い方か設定ファイルの誤り / 3 = WARN だけ
 失敗したとき: FAIL なら dev rebuild <名前> で作り直す。WARN だけなら原因を調べてから判断する。

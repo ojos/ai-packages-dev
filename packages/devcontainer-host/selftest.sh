@@ -21,7 +21,8 @@
 #     （本物はコンテナの中の true を実行して 0 で抜ける）
 #   - `exec ... sh -c <doctor のサンドボックスの確かめ>`: FAKE_SANDBOX（bwrap / unshare / none / bwrap-fail /
 #     unshare-fail / hang / nomarker。既定は bwrap で通る）の結果を、本物の bwrap・unshare と同じ形の出力で返す
-#     （nomarker は、bwrap・unshare に届く前に exec が落ちる形。bwrap-fail-trailer は、bwrap の行の後ろに別の出力が続く形）
+#     （nomarker は、bwrap・unshare に届く前に exec が落ちる形。bwrap-noexec は bwrap 自体を起こせない形（127）、
+#     bwrap-notrue は bwrap の中で true を実行できない形。bwrap-fail-trailer は、bwrap の行の後ろに別の出力が続く形）
 # - docker `inspect --format '{{.State.Pid}}' <id>`: 動いていれば PID、止まっていれば 0（本物は
 #   止まったコンテナの State.Pid を 0 で返す）。無い ID は 1。他の形は落とす
 # - docker `inspect --format '{{json .HostConfig.SecurityOpt}}' <id>`: FAKE_SECURITY_OPT（既定 null）。FAKE_SECOPT_FAIL=1 で 1
@@ -206,6 +207,8 @@ case "$sub" in
         unshare-fail) echo "dev-doctor-probe unshare"; echo "unshare: unshare failed: Operation not permitted" >&2; exit 1 ;;
         hang) echo "dev-doctor-probe bwrap"; exec sleep 20 ;;
         bwrap-fail-trailer) echo "dev-doctor-probe bwrap"; echo "bwrap: Failed to make / slave: Permission denied" >&2; echo "{\"outcome\":\"error\"}" >&2; exit 1 ;;
+        bwrap-noexec) echo "dev-doctor-probe bwrap"; echo "sh: 1: exec: bwrap: error while loading shared libraries: libcap.so.2: cannot open shared object file" >&2; exit 127 ;;
+        bwrap-notrue) echo "dev-doctor-probe bwrap"; echo "bwrap: execvp true: No such file or directory" >&2; exit 1 ;;
         nomarker) echo "OCI runtime exec failed: exec failed: unable to start container process: unknown" >&2; exit 126 ;;
         *) echo "fake devcontainer: 想定外の FAKE_SANDBOX: $FAKE_SANDBOX" >&2; exit 2 ;;
       esac
@@ -1361,6 +1364,14 @@ expect_no_out_line '足りない層'
 
 run 0 "doctor(sandbox): bwrap・unshare に届く前に落ちれば、層の不足とは言わず INFO で 0" -- FAKE_SANDBOX=nomarker 'FAKE_SECURITY_OPT=["seccomp=unconfined"]' -- doctor alpha
 expect_out_line '\[INFO\] サンドボックス: 起動を確かめられません（終了コード 126）: OCI runtime exec failed'
+expect_no_out_line '足りない層'
+
+run 0 "doctor(sandbox): bwrap 自体を起こせなければ、層の不足とは言わず INFO で 0" -- FAKE_SANDBOX=bwrap-noexec 'FAKE_SECURITY_OPT=["seccomp=unconfined"]' -- doctor alpha
+expect_out_line '\[INFO\] サンドボックス: bwrap を起こせないので、起動を確かめられません（終了コード 127）: .*libcap'
+expect_no_out_line '足りない層'
+
+run 0 "doctor(sandbox): bwrap の中で true を実行できなければ、層の不足とは言わず INFO で 0" -- FAKE_SANDBOX=bwrap-notrue 'FAKE_SECURITY_OPT=["seccomp=unconfined"]' -- doctor alpha
+expect_out_line '\[INFO\] サンドボックス: bwrap を起こせないので、起動を確かめられません（終了コード 1）: bwrap: execvp true'
 expect_no_out_line '足りない層'
 
 run 0 "doctor(sandbox): 一時ファイルを作れなければ確かめない" -- TMPDIR="$WORK/no-such-dir" 'FAKE_SECURITY_OPT=["seccomp=unconfined"]' -- doctor alpha
