@@ -6,6 +6,14 @@ devhost（SSH で届く外部の機械で devcontainer を保つ道具。コマ�
 >
 > 同じ理由で、issue 参照は `ojos/ai-packages-dev#NNN` の形で書いてください。裸の `#NNN` は GitHub のオートリンクが**配布先リポジトリの issue** として解決するため、配布後は存在しない issue や無関係な issue を指します。
 
+## 未リリース
+
+### Summary
+- **`dev doctor <名前>` が、AI CLI のサンドボックス（bubblewrap）の前提を確かめるようにした**（ojos/ai-packages-dev#686）。ネイティブ Linux の Docker Engine では、コンテナの seccomp（namespace の作成を止める）と AppArmor（mount を止める）の既定の制限のために、使ってみて `bwrap: No permissions to create new namespace` などで落ちるまで気づけなかった。
+  - コンテナの SecurityOpt（`apparmor=unconfined` / `seccomp=unconfined`）を INFO で示す。ホストの `kernel.apparmor_restrict_unprivileged_userns` も参考に示すが、コンテナの中の失敗には関わらない（実測）ので、判定には使わない。
+  - コンテナの中で bwrap（codex が起動のたびに行う確かめと同じ引数。無ければ unshare）を起こし、非特権 user namespace の作成と mount を試す。何も書き換えず、`DEV_EXEC_TIMEOUT` の時間で区切る。
+  - 起こせないとき、SecurityOpt に apparmor / seccomp の指定があれば WARN（終了コード 3）、無ければ INFO にする。サンドボックスを使わないプロジェクトの判定は変わらない。どちらも足りない層と、DCB の README「コンテナの中での codex のサンドボックス」への案内を出す。確かめそのものが返らない・届かないときは、層の不足とは言わず INFO（確かめられません）にする。
+
 ## v0.6.0
 
 ### Summary

@@ -19,8 +19,12 @@
 #     1 で返す。本物の終了コードは確かめていない（dev は 0 以外を「入れない」とだけ読む）
 #   - `exec ... true`: 偽のコンテナには true が無いので、0 で抜ける
 #     （本物はコンテナの中の true を実行して 0 で抜ける）
+#   - `exec ... sh -c <doctor のサンドボックスの確かめ>`: FAKE_SANDBOX（bwrap / unshare / none / bwrap-fail /
+#     unshare-fail / hang / nomarker。既定は bwrap で通る）の結果を、本物の bwrap・unshare と同じ形の出力で返す
+#     （nomarker は、bwrap・unshare に届く前に exec が落ちる形。bwrap-fail-trailer は、bwrap の行の後ろに別の出力が続く形）
 # - docker `inspect --format '{{.State.Pid}}' <id>`: 動いていれば PID、止まっていれば 0（本物は
 #   止まったコンテナの State.Pid を 0 で返す）。無い ID は 1。他の形は落とす
+# - docker `inspect --format '{{json .HostConfig.SecurityOpt}}' <id>`: FAKE_SECURITY_OPT（既定 null）。FAKE_SECOPT_FAIL=1 で 1
 # - ps: `-eo pid=,stat=`（`=` で見出しを消した「PID 状態」の列。PID は右寄せ。この環境の
 #   procps-ng 4.0.4 の出力に合わせた）。cgroup の所属は ps に出させず、dev が
 #   /proc/<PID>/cgroup を読む（ps の cgroup 列はルートの cgroup で `-` と出る環境があり、
@@ -191,6 +195,21 @@ case "$sub" in
       exec sleep 20
     fi
     [[ "$1" == "true" ]] && exit 0
+    if [[ "$1" == "sh" && "${3:-}" == *dev-doctor-probe* ]]; then
+      # doctor のサンドボックスの起動の確かめ。FAKE_SANDBOX で、コンテナの中にあるもの（bwrap / unshare / none）と
+      # 結果（-fail は名前空間を作れない）を選ぶ。既定は bwrap で通る。hang は返らない。
+      case "${FAKE_SANDBOX:-bwrap}" in
+        bwrap) echo "dev-doctor-probe bwrap"; exit 0 ;;
+        unshare) echo "dev-doctor-probe unshare"; exit 0 ;;
+        none) echo "dev-doctor-probe none"; exit 0 ;;
+        bwrap-fail) echo "dev-doctor-probe bwrap"; echo "bwrap: No permissions to create new namespace, likely because the kernel does not allow non-privileged user namespaces." >&2; exit 1 ;;
+        unshare-fail) echo "dev-doctor-probe unshare"; echo "unshare: unshare failed: Operation not permitted" >&2; exit 1 ;;
+        hang) echo "dev-doctor-probe bwrap"; exec sleep 20 ;;
+        bwrap-fail-trailer) echo "dev-doctor-probe bwrap"; echo "bwrap: Failed to make / slave: Permission denied" >&2; echo "{\"outcome\":\"error\"}" >&2; exit 1 ;;
+        nomarker) echo "OCI runtime exec failed: exec failed: unable to start container process: unknown" >&2; exit 126 ;;
+        *) echo "fake devcontainer: 想定外の FAKE_SANDBOX: $FAKE_SANDBOX" >&2; exit 2 ;;
+      esac
+    fi
     exec "$@"
     ;;
   *) echo "fake devcontainer: この試験が想定していないサブコマンドです: $sub" >&2; exit 2 ;;
@@ -248,6 +267,12 @@ case "$sub" in
     if [[ "$2" == '{{index .Config.Labels "com.docker.compose.project"}}' ]]; then
       # compose の label。無いコンテナは空文字（本物は index が空文字を返す）。
       printf '%s\n' "$(printf '%s\n' "$row" | cut -f 4)"
+      exit 0
+    fi
+    if [[ "$2" == '{{json .HostConfig.SecurityOpt}}' ]]; then
+      # doctor のサンドボックスの項目。FAKE_SECURITY_OPT が JSON の値（既定は null = 指定なし）。FAKE_SECOPT_FAIL=1 で読めない。
+      if [[ "${FAKE_SECOPT_FAIL:-0}" == "1" ]]; then echo "Error: inspect に失敗しました" >&2; exit 1; fi
+      printf '%s\n' "${FAKE_SECURITY_OPT:-null}"
       exit 0
     fi
     [[ "$2" == '{{.State.Pid}}' ]] || { echo "fake docker: 想定外の inspect の format: $2" >&2; exit 2; }
@@ -861,7 +886,7 @@ run() {
   CUR="$name"
   env -i HOME="$WORK/home" PATH="$FAKEBIN:$TOOLBIN" \
     DEV_PROJECTS_FILE="${T_CONF:-$CONF}" FAKE_LOG="$LOG" FAKE_STATE="$STATE" \
-    DEV_PROC_ROOT="$WORK/proc" DEV_CGROUP_ROOT="$WORK/cg" \
+    DEV_PROC_ROOT="$WORK/proc" DEV_CGROUP_ROOT="$WORK/cg" DEV_SYS_ROOT="$WORK/sys" \
     ${envs[@]+"${envs[@]}"} \
     "$BASH_BIN" "$DEV" "$@" >"$OUT" 2>"$ERR" <"${RUN_STDIN:-/dev/null}" || code=$?
   if [[ "$code" != "$want" ]]; then
@@ -1185,6 +1210,15 @@ add_zombies() {
   local k
   for ((k = 0; k < $1; k++)); do add_task $((5000 + k)) Z "$2"; done
 }
+# doctor のサンドボックスの確かめのコマンド（dev.sh の DOCTOR_SANDBOX_PROBE をそのまま読む）。
+SANDBOX_PROBE="$(sed -n "s/^DOCTOR_SANDBOX_PROBE='\(.*\)'\$/\1/p" "$DEV")"
+[[ -n "$SANDBOX_PROBE" ]] || ng "dev.sh から DOCTOR_SANDBOX_PROBE を読めません"
+# 引数を固定して照合する（上の読み出しだけでは、引数を変えても呼び出しの記録の照合が追随して通るため）。
+# bwrap は codex が起動のたびに行う確かめと同じ引数、unshare は --mount で mount まで試す（AppArmor の層を見るため）。
+case "$SANDBOX_PROBE" in
+  *"exec bwrap --unshare-user --unshare-net --ro-bind / / /bin/true;"*"exec unshare --user --map-root-user --mount true;"*) ;;
+  *) ng "DOCTOR_SANDBOX_PROBE の引数が想定と違います: $SANDBOX_PROBE" ;;
+esac
 doctor_up() {
   reset_state
   run 0 "up alpha（doctor の仕込み）" -- -- up alpha
@@ -1215,11 +1249,114 @@ expect_calls \
   "devcontainer [exec] [--workspace-folder] [$A] [true]" \
   "docker [inspect] [--format] [{{.State.Pid}}] [$id_a]" \
   "ps [-eo] [pid=,stat=]" \
+  "docker [inspect] [--format] [{{json .HostConfig.SecurityOpt}}] [$id_a]" \
+  "devcontainer [exec] [--workspace-folder] [$A] [sh] [-c] [$SANDBOX_PROBE]" \
   "systemctl [--user] [is-active] [dev-up@alpha.service]" \
   "journalctl [--user] [-u] [dev-up@alpha.service] [-n] [10] [--no-pager]"
+# サンドボックスの前提（偽の木に sysctl が無い = 読めない）。
+expect_out_line '\[OK +\] サンドボックス: bwrap で非特権 user namespace を作り、mount できます'
+expect_out_line '\[INFO\] ホストの kernel.apparmor_restrict_unprivileged_userns を読めません（.*参考。コンテナの中のサンドボックスには関わらず'
+expect_out_line '\[INFO\] コンテナの SecurityOpt: apparmor=unconfined なし / seccomp=unconfined なし'
+
+# ── 6c'. doctor のサンドボックスの前提 ───────────────────────────────────────
+# ホストの sysctl を偽の /proc に置く。引数: 値（空なら置かない）
+set_userns_restrict() {
+  rm -rf "$WORK/proc/sys"
+  [[ -z "$1" ]] && return 0
+  mkdir -p "$WORK/proc/sys/kernel"
+  printf '%s\n' "$1" >"$WORK/proc/sys/kernel/apparmor_restrict_unprivileged_userns"
+}
+# 標準出力に、この形の行が無いこと。
+expect_no_out_line() {
+  if grep -qE -- "$1" "$OUT"; then ng "$CUR: 標準出力に /$1/ の行があってはいけません"; sed 's/^/    stdout: /' "$OUT" >&2; fi
+}
+SB_REF='対処: DCB の README「コンテナの中での codex のサンドボックス」、devhost の README「外部の機械の前提」'
+
+set_userns_restrict 0
+run 0 "doctor(sandbox): sysctl が 0 で通る" -- -- doctor alpha
+expect_out_line '\[INFO\] ホストの kernel.apparmor_restrict_unprivileged_userns = 0（参考。コンテナの中のサンドボックスには関わらず'
+expect_out_line '判定: OK'
+
+set_userns_restrict 1
+run 0 "doctor(sandbox): 指定が無く起こせない（使わないプロジェクト）は INFO で 0" -- FAKE_SANDBOX=bwrap-fail -- doctor alpha
+expect_out_line '\[INFO\] ホストの kernel.apparmor_restrict_unprivileged_userns = 1（参考。'
+expect_out_line '\[INFO\] サンドボックス: bwrap で非特権 user namespace の作成か mount に失敗しました（終了コード 1）: bwrap: No permissions to create new namespace'
+expect_out_line "^ +足りない層: seccomp=unconfined が無い（namespace の作成を止める） / apparmor=unconfined が無い（mount を止める）。$SB_REF\$"
+expect_no_out_line '\[WARN\]'
+expect_no_out_line 'ホストの制限'
+expect_out_line '判定: OK'
+
+run 3 "doctor(sandbox): AppArmor だけ外して起こせない（#392 の実測）は WARN で 3" -- FAKE_SANDBOX=bwrap-fail 'FAKE_SECURITY_OPT=["apparmor=unconfined"]' -- doctor alpha
+expect_out_line '\[INFO\] コンテナの SecurityOpt: apparmor=unconfined あり / seccomp=unconfined なし'
+expect_out_line '\[WARN\] サンドボックス: bwrap で非特権 user namespace の作成か mount に失敗しました'
+expect_out_line "^ +足りない層: seccomp=unconfined が無い（namespace の作成を止める）。$SB_REF\$"
+expect_out_line '判定: WARN（1 件）'
+
+# ホストの sysctl が 0 でも、AppArmor の層は足りない層に挙げる（ホストの値はコンテナの中の失敗に関わらない）。
+set_userns_restrict 0
+run 3 "doctor(sandbox): seccomp だけ外して起こせない（古い書き方の : も読む）は WARN で 3" -- FAKE_SANDBOX=bwrap-fail 'FAKE_SECURITY_OPT=["seccomp:unconfined"]' -- doctor alpha
+expect_out_line '\[INFO\] コンテナの SecurityOpt: apparmor=unconfined なし / seccomp=unconfined あり'
+expect_out_line "^ +足りない層: apparmor=unconfined が無い（mount を止める）。$SB_REF\$"
+
+run 3 "doctor(sandbox): 独自の seccomp のプロファイルも使うつもりとして WARN で 3" -- FAKE_SANDBOX=bwrap-fail 'FAKE_SECURITY_OPT=["seccomp={\"defaultAction\":\"SCMP_ACT_ALLOW\"}"]' -- doctor alpha
+expect_out_line '\[INFO\] コンテナの SecurityOpt: apparmor=unconfined なし / seccomp=unconfined なし'
+expect_out_line '\[WARN\] サンドボックス: bwrap で'
+
+run 3 "doctor(sandbox): 両方外しても起こせなければ、ほかの制限を示して WARN で 3" -- FAKE_SANDBOX=bwrap-fail 'FAKE_SECURITY_OPT=["apparmor=unconfined","seccomp=unconfined"]' -- doctor alpha
+expect_out_line '足りない層: コンテナの AppArmor と seccomp の層は外してあります（user.max_user_namespaces など、ほかの制限を確かめてください）'
+set_userns_restrict 1
+run 3 "doctor(sandbox): 両方外しても起こせず、ホストの制限が 1 なら、その値も候補に挙げる" -- FAKE_SANDBOX=bwrap-fail 'FAKE_SECURITY_OPT=["apparmor=unconfined","seccomp=unconfined"]' -- doctor alpha
+expect_out_line '足りない層: コンテナの AppArmor と seccomp の層は外してあります（user.max_user_namespaces、ホストの kernel.apparmor_restrict_unprivileged_userns など'
+set_userns_restrict 0
+
+# ホストで AppArmor が無効なら、AppArmor の層は挙げない。
+mkdir -p "$WORK/sys/module/apparmor/parameters"
+printf 'N\n' >"$WORK/sys/module/apparmor/parameters/enabled"
+run 3 "doctor(sandbox): ホストの AppArmor が無効なら、AppArmor の層を挙げない" -- FAKE_SANDBOX=bwrap-fail 'FAKE_SECURITY_OPT=["seccomp:unconfined"]' -- doctor alpha
+expect_out_line '足りない層: コンテナの AppArmor と seccomp の層は外してあります'
+expect_no_out_line 'apparmor=unconfined が無い'
+printf 'Y\n' >"$WORK/sys/module/apparmor/parameters/enabled"
+run 3 "doctor(sandbox): ホストの AppArmor が有効なら、AppArmor の層を挙げる" -- FAKE_SANDBOX=bwrap-fail 'FAKE_SECURITY_OPT=["seccomp:unconfined"]' -- doctor alpha
+expect_out_line "^ +足りない層: apparmor=unconfined が無い（mount を止める）。$SB_REF\$"
+rm -rf "$WORK/sys"
+
+run 3 "doctor(sandbox): bwrap の行の後ろに別の出力が続いても、bwrap の行を出す" -- FAKE_SANDBOX=bwrap-fail-trailer 'FAKE_SECURITY_OPT=["seccomp=unconfined"]' -- doctor alpha
+expect_out_line '\[WARN\] サンドボックス: bwrap で非特権 user namespace の作成か mount に失敗しました（終了コード 1）: bwrap: Failed to make / slave: Permission denied$'
+
+run 0 "doctor(sandbox): 両方外して起こせる" -- 'FAKE_SECURITY_OPT=["apparmor=unconfined","seccomp=unconfined"]' -- doctor alpha
+expect_out_line '\[INFO\] コンテナの SecurityOpt: apparmor=unconfined あり / seccomp=unconfined あり'
+expect_out_line '\[OK +\] サンドボックス: bwrap で非特権 user namespace を作り、mount できます'
+
+run 0 "doctor(sandbox): unshare で起こせない（指定なし）は INFO で 0" -- FAKE_SANDBOX=unshare-fail -- doctor alpha
+expect_out_line '\[INFO\] サンドボックス: unshare で非特権 user namespace の作成か mount に失敗しました（終了コード 1）: unshare: unshare failed: Operation not permitted'
+
+run 0 "doctor(sandbox): bwrap が無ければ unshare で確かめる" -- FAKE_SANDBOX=unshare -- doctor alpha
+expect_out_line '\[OK +\] サンドボックス: unshare で非特権 user namespace を作り、mount できます'
+
+run 0 "doctor(sandbox): bwrap も unshare も無ければ INFO で 0" -- FAKE_SANDBOX=none 'FAKE_SECURITY_OPT=["seccomp=unconfined"]' -- doctor alpha
+expect_out_line '\[INFO\] サンドボックス: コンテナに bwrap も unshare もありません（起動を確かめられません）'
+expect_out_line '判定: OK'
+
+run 0 "doctor(sandbox): SecurityOpt を読めなければ INFO（指定なしとして扱う）" -- FAKE_SECOPT_FAIL=1 FAKE_SANDBOX=bwrap-fail -- doctor alpha
+expect_out_line '\[INFO\] コンテナの SecurityOpt を読めません'
+expect_out_line '\[INFO\] サンドボックス: bwrap で非特権 user namespace の作成か mount に失敗しました'
+expect_out_line "^ +足りない層: SecurityOpt を読めないので特定できません。$SB_REF\$"
+
+run 0 "doctor(sandbox): 確かめが返らなければ、層の不足とは言わず INFO で 0" -- FAKE_SANDBOX=hang DEV_EXEC_TIMEOUT=1 DEV_EXEC_KILL_GRACE=1 'FAKE_SECURITY_OPT=["seccomp=unconfined"]' -- doctor alpha
+expect_out_line '\[INFO\] サンドボックス: 起動の確かめが 1 秒で返りません（確かめられません）'
+expect_no_out_line '足りない層'
+
+run 0 "doctor(sandbox): bwrap・unshare に届く前に落ちれば、層の不足とは言わず INFO で 0" -- FAKE_SANDBOX=nomarker 'FAKE_SECURITY_OPT=["seccomp=unconfined"]' -- doctor alpha
+expect_out_line '\[INFO\] サンドボックス: 起動を確かめられません（終了コード 126）: OCI runtime exec failed'
+expect_no_out_line '足りない層'
+
+run 0 "doctor(sandbox): 一時ファイルを作れなければ確かめない" -- TMPDIR="$WORK/no-such-dir" 'FAKE_SECURITY_OPT=["seccomp=unconfined"]' -- doctor alpha
+expect_out_line '\[INFO\] サンドボックス: 一時ファイルを作れないので、起動を確かめられません'
+set_userns_restrict ""
 
 run 1 "doctor: exec が通らない" -- FAKE_EXEC_FAIL=1 -- doctor alpha
 expect_out_line '\[FAIL\] exec が通りません（終了コード 1）: .*procReady not received'
+expect_no_out_line 'サンドボックス'
 expect_out_line '判定: FAIL'
 expect_out_line 'dev rebuild alpha'
 mk_cg 4242 "$CG" 18034 18039 5 0

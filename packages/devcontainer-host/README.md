@@ -66,6 +66,12 @@ seccomp の既定の制限を両方外す必要があります**（seccomp は D
 `--with-codex` を使わずに codex を後から入れた場合や、それより前の DCB で生成した場合は、
 DCB の README の「コンテナの中での codex のサンドボックス」に従って足してください。
 AppArmor だけを外しても、seccomp が先に止めるので動きません（Ubuntu 26.04 の実機で実測）。
+`dev doctor <名前>` は、この前提を確かめます。コンテナの SecurityOpt を示し、コンテナの中で bwrap（無ければ unshare）を起こして
+非特権 user namespace の作成と mount を試し、通らなければ足りない層（seccomp は namespace の作成を、AppArmor は mount を止めます）を出します。
+SecurityOpt に apparmor / seccomp の指定がある（サンドボックスを使うつもりの）コンテナでは WARN、無ければ INFO です。
+ホストの `kernel.apparmor_restrict_unprivileged_userns`（Ubuntu の AppArmor による非特権 user namespace の制限）は参考に示すだけです。
+コンテナの中の失敗には関わらなかった（実測）ので、**コンテナの 2 層を外す前に、ホストの値を変えないでください**（ホストの隔離が弱まるだけで直りません）。
+2 層を外しても通らないときだけ、doctor はほかの制限の候補の 1 つとして、この値も挙げます。
 
 ## DCB と一緒に使うと揃うもの
 
@@ -657,18 +663,26 @@ dev doctor — 「コンテナは動いているのに入れない」を見分�
   dev doctor --runner <名前>
 
 出す項目: コンテナの有無と状態 / exec が実際に通るか / cgroup の pids.current と pids.max /
-pids の上限に当たった回数 / ゾンビの数 / memory.events の oom_kill / ユニットの状態 / ユニットのログの末尾。
+pids の上限に当たった回数 / ゾンビの数 / memory.events の oom_kill / サンドボックスの前提 / ユニットの状態 /
+ユニットのログの末尾。
 cgroup は /proc/<コンテナの PID>/cgroup から求める（cgroup v2）。
 pids の上限は、コンテナの cgroup から根まで遡り、上限のある階層のうち現在値 / 上限 の比が最大のもので
 判定して、その階層を表示する（systemd の slice の TasksMax などに当たっていても見逃さない）。
 exec は 30 秒（環境変数 DEV_EXEC_TIMEOUT で変えられる。1 以上の整数）で返らなければ FAIL にする。
 TERM を送っても止まらないときは、さらに 5 秒（DEV_EXEC_KILL_GRACE。1 以上の整数）後に KILL する。
+サンドボックスの前提は、AI CLI のサンドボックス（bubblewrap）が起動できるかを見る（exec が通るときだけ）。
+コンテナの SecurityOpt（apparmor=unconfined / seccomp=unconfined）を示し、コンテナの中で bwrap（無ければ
+unshare）で非特権 user namespace を作って mount してみる。ホストの kernel.apparmor_restrict_unprivileged_userns は
+参考に示すだけ（コンテナの中のサンドボックスには関わらない）。
 
 判定:
   FAIL  exec が通らないか返らない / pids が上限の 90% 以上 / pids.max が 0 /
         コンテナが無いか動いていない
   WARN  pids の上限に当たった回数が 1 以上 / ゾンビが 100 以上 / oom_kill が 1 以上
   （読めない項目、pids.max が数でも max でもない値のときも WARN）
+  サンドボックスを起こせないときは、SecurityOpt に apparmor / seccomp の指定があれば WARN、
+  無ければ INFO（使わないプロジェクトの判定を変えない）。どちらも足りない層と対処を出す。
+  確かめそのものが返らない・届かないときは INFO（確かめられません）
 
 終了コード: 0 = 問題なし / 1 = FAIL がある / 2 = 使い方か設定ファイルの誤り / 3 = WARN だけ
 失敗したとき: FAIL なら dev rebuild <名前> で作り直す。WARN だけなら原因を調べてから判断する。
@@ -1038,7 +1052,7 @@ bash devhost/selftest.sh   # DEVHOST_SELFTEST_PASS
 止めたときに登録を外す API を呼ぶことを、偽の `docker` / `curl`（GitHub の API には出ません）で確かめます。
 加えて、上の「コマンドの説明」の各ブロックが `dev help` の出力と一致すること、載せたサブコマンドの集合が
 `dev` の受け付ける集合と一致することを照合します（説明の 1 行を書き換えた複製では落ちることも確かめます）。偽物を本物に合わせたところは `selftest.sh` の冒頭にあります。
-`dev doctor` が読む /proc と cgroup の根は、環境変数 `DEV_PROC_ROOT` / `DEV_CGROUP_ROOT` で差し替えられます
-（自己試験が偽の木を渡すためで、既定は本物の `/proc` と `/sys/fs/cgroup` です）。
+`dev doctor` が読む /proc と cgroup と /sys の根は、環境変数 `DEV_PROC_ROOT` / `DEV_CGROUP_ROOT` / `DEV_SYS_ROOT` で差し替えられます
+（自己試験が偽の木を渡すためで、既定は本物の `/proc` と `/sys/fs/cgroup` と `/sys` です）。
 `dev self-update` の置き換え先は環境変数 `DEV_SELF_PATH` で差し替えられます（自己試験が、偽の `curl` と
 一時ディレクトリの偽の `dev` に対して回すためで、既定は実行中の `dev.sh` 自身です）。
