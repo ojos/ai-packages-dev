@@ -69,9 +69,10 @@ DEV_VERSION="v0.6.0"
 # （公式の install.sh は ~/.devcontainers/bin）と ~/.local/bin を**末尾へ**足す（先に在る PATH を優先する）。
 PATH="$PATH:$HOME/.devcontainers/bin:$HOME/.local/bin"
 
-# dev doctor が読む /proc と cgroup の根。既定は本物のパスで、自己試験が偽の木へ差し替える。
+# dev doctor が読む /proc と cgroup と /sys の根。既定は本物のパスで、自己試験が偽の木へ差し替える。
 PROC_ROOT="${DEV_PROC_ROOT:-/proc}"
 CGROUP_ROOT="${DEV_CGROUP_ROOT:-/sys/fs/cgroup}"
+SYS_ROOT="${DEV_SYS_ROOT:-/sys}"
 
 die() { echo "[$PROG] $*" >&2; exit 1; }
 usage_error() { echo "[$PROG] $*" >&2; exit 2; }
@@ -2858,7 +2859,7 @@ cmd_doctor() {
     [[ "$tmp" == /dev/null ]] || rm -f "$tmp"
     if [[ "$ec" -eq 0 ]]; then
       doc_line OK "exec が通ります"
-    elif [[ "$ec" -eq 124 || "$ec" -eq 137 || "$ec" -eq 143 ]]; then
+    elif is_timeout_rc "$ec"; then
       doc_line FAIL "exec が $secs 秒で返りません（止まっています）: $eout"
     else
       doc_line FAIL "exec が通りません（終了コード $ec）: $eout"
@@ -2874,6 +2875,9 @@ cmd_doctor() {
       else
         doctor_cgroup "$CGROUP_ROOT$cgpath" "$cgpath"
       fi
+    fi
+    if [[ "$ec" -eq 0 ]]; then
+      doctor_sandbox "$id" "$path" "$secs" "$grace"
     fi
   fi
 
@@ -2896,6 +2900,103 @@ cmd_doctor() {
   fi
   echo "[$PROG] 判定: OK"
 }
+
+# コンテナの中で起こす、サンドボックスの起動の確かめ。bwrap があれば、codex が起動のたびに行う確かめと
+# 同じ namespace と mount の引数で（中で起こすコマンドだけは /bin/true でなく PATH の true。/bin/true の無い
+# コンテナで、層の不足と取り違えないため）、無ければ unshare で、非特権 user namespace を作って mount する（どちらも何も書き換えない。
+# unshare の --mount は / の伝播を private にする mount を行う）。1 行目に使ったもの（bwrap / unshare / none）を出す。
+DOCTOR_SANDBOX_PROBE='if command -v bwrap >/dev/null 2>&1; then echo "dev-doctor-probe bwrap"; exec bwrap --unshare-user --unshare-net --ro-bind / / true; elif command -v unshare >/dev/null 2>&1; then echo "dev-doctor-probe unshare"; exec unshare --user --map-root-user --mount true; else echo "dev-doctor-probe none"; fi'
+
+# AI CLI のサンドボックス（bubblewrap）の前提を見る。引数: コンテナの ID / ワークスペースのパス / 秒数 / 猶予。
+# 止めるのはコンテナの 2 層（seccomp の既定のプロファイルが namespace の作成を、AppArmor の docker-default が
+# mount を止める）。ホストの kernel.apparmor_restrict_unprivileged_userns はコンテナの中の失敗に関わらない
+# （実測）ので、参考に示すだけで判定に使わない。サンドボックスは必須ではないので FAIL にはしない。
+# 起こせないとき、SecurityOpt に apparmor / seccomp の指定があれば（使うつもりのコンテナ）WARN、無ければ INFO。
+doctor_sandbox() {
+  local id="$1" path="$2" secs="$3" grace="$4"
+  local restrict="" sopt aa=0 sc=0 intent=0 known=0 hostaa="" tmp ec=0 tool="" eout="" level need=""
+  local ref="対処: DCB の README「コンテナの中での codex のサンドボックス」、devhost の README「外部の機械の前提」"
+  local sysctl="$PROC_ROOT/sys/kernel/apparmor_restrict_unprivileged_userns" note
+
+  note="参考。コンテナの中のサンドボックスには関わらず、ホストで直接 bwrap を使うときに効きます"
+  if [[ -r "$sysctl" ]]; then
+    restrict="$(head -n 1 "$sysctl" 2>/dev/null || true)"
+  fi
+  case "$restrict" in
+    0 | 1) doc_line INFO "ホストの kernel.apparmor_restrict_unprivileged_userns = $restrict（$note）" ;;
+    *) doc_line INFO "ホストの kernel.apparmor_restrict_unprivileged_userns を読めません（この制限の無いカーネルか、読めない環境です。$note）" ;;
+  esac
+
+  if sopt="$(docker inspect --format '{{json .HostConfig.SecurityOpt}}' "$id" 2>/dev/null)"; then
+    # apparmor=unconfined と、古い書き方の apparmor:unconfined の両方を読む（seccomp も同じ）。
+    # unconfined でなくても、独自のプロファイルを指定していれば、使うつもりのコンテナとして扱う。
+    [[ "$sopt" =~ \"apparmor[=:]unconfined\" ]] && aa=1
+    [[ "$sopt" =~ \"seccomp[=:]unconfined\" ]] && sc=1
+    [[ "$sopt" =~ \"(apparmor|seccomp)[=:] ]] && intent=1
+    known=1
+    doc_line INFO "コンテナの SecurityOpt: apparmor=unconfined $([[ "$aa" == 1 ]] && echo あり || echo なし) / seccomp=unconfined $([[ "$sc" == 1 ]] && echo あり || echo なし)"
+  else
+    doc_line INFO "コンテナの SecurityOpt を読めません"
+  fi
+
+  if ! tmp="$(mktemp "${TMPDIR:-/tmp}/dev-doctor.XXXXXX" 2>/dev/null)"; then
+    doc_line INFO "サンドボックス: 一時ファイルを作れないので、起動を確かめられません"
+    return 0
+  fi
+  run_limited "$secs" "$grace" "$tmp" devcontainer exec --workspace-folder "$path" sh -c "$DOCTOR_SANDBOX_PROBE" || ec=$?
+  tool="$(sed -n 's/^dev-doctor-probe \([a-z]*\)$/\1/p' "$tmp" | head -n 1)"
+  # bwrap / unshare 自身の行を優先する（その後ろに exec の出力が続いても、止めた層が読めるように）。
+  eout="$(grep -E '^(bwrap|unshare): ' "$tmp" | tail -n 1 || true)"
+  [[ -n "$eout" ]] || eout="$(grep -v '^dev-doctor-probe ' "$tmp" | tail -n 1 || true)"
+  rm -f "$tmp"
+
+  if is_timeout_rc "$ec"; then
+    doc_line INFO "サンドボックス: 起動の確かめが $secs 秒で返りません（確かめられません）"
+    return 0
+  fi
+  if [[ -z "$tool" ]]; then
+    # bwrap / unshare まで届いていない（exec そのものの失敗など）。層の不足とは言えない。
+    doc_line INFO "サンドボックス: 起動を確かめられません（終了コード $ec）: $eout"
+    return 0
+  fi
+  if [[ "$tool" == none ]]; then
+    doc_line INFO "サンドボックス: コンテナに bwrap も unshare もありません（起動を確かめられません）"
+    return 0
+  fi
+  if [[ "$ec" -eq 0 ]]; then
+    doc_line OK "サンドボックス: $tool で非特権 user namespace を作り、mount できます"
+    return 0
+  fi
+  # bwrap / unshare 自体を起こせない（126 / 127。共有ライブラリの欠落など）か、中で起こす true を
+  # 実行できない（execvp の失敗）ときは、namespace と mount まで届いていないので、層の不足とは言わない。
+  if [[ "$ec" -eq 126 || "$ec" -eq 127 || "$eout" == *execvp* ]]; then
+    doc_line INFO "サンドボックス: $tool を起こせないので、起動を確かめられません（終了コード $ec）: $eout"
+    return 0
+  fi
+
+  # 足りない層を挙げる。AppArmor の層は、ホストで AppArmor が有効（enabled が Y）と読めたときだけ挙げる
+  # （AppArmor の無いホストでは、そのファイル自体が無い）。
+  # 両方を外しても起こせなければ、ほかの原因を疑う。
+  if [[ -r "$SYS_ROOT/module/apparmor/parameters/enabled" ]]; then
+    hostaa="$(head -n 1 "$SYS_ROOT/module/apparmor/parameters/enabled" 2>/dev/null || true)"
+  fi
+  if [[ "$known" != 1 ]]; then
+    need="SecurityOpt を読めないので特定できません"
+  else
+    if [[ "$sc" != 1 ]]; then need="seccomp=unconfined が無い（namespace の作成を止める）"; fi
+    if [[ "$aa" != 1 && "$hostaa" == Y ]]; then need="${need:+$need / }apparmor=unconfined が無い（mount を止める）"; fi
+    if [[ -z "$need" ]]; then
+      need="コンテナの AppArmor と seccomp の層は外してあります（user.max_user_namespaces など、ほかの制限を確かめてください）"
+    fi
+  fi
+  if [[ "$intent" == 1 ]]; then level=WARN; else level=INFO; fi
+  doc_line "$level" "サンドボックス: $tool で非特権 user namespace の作成か mount に失敗しました（終了コード $ec）: $eout"
+  # 続きの行は数えない（1 つの項目を 2 件に数えないため）。
+  printf '         足りない層: %s。%s\n' "$need" "$ref"
+}
+
+# run_limited の終了コードが時間切れ（timeout の 124、KILL の 137、kill の TERM の 143）か。
+is_timeout_rc() { [[ "$1" -eq 124 || "$1" -eq 137 || "$1" -eq 143 ]]; }
 
 # 時間を区切って実行する。引数: 秒数 出力先のファイル コマンド...。終了コードを返す
 # （時間切れは timeout なら 124（KILL まで進めば 137）、代替（kill）なら 143（KILL なら 137））。
@@ -3163,18 +3264,26 @@ dev doctor — 「コンテナは動いているのに入れない」を見分�
   dev doctor --runner <名前>
 
 出す項目: コンテナの有無と状態 / exec が実際に通るか / cgroup の pids.current と pids.max /
-pids の上限に当たった回数 / ゾンビの数 / memory.events の oom_kill / ユニットの状態 / ユニットのログの末尾。
+pids の上限に当たった回数 / ゾンビの数 / memory.events の oom_kill / サンドボックスの前提 / ユニットの状態 /
+ユニットのログの末尾。
 cgroup は /proc/<コンテナの PID>/cgroup から求める（cgroup v2）。
 pids の上限は、コンテナの cgroup から根まで遡り、上限のある階層のうち現在値 / 上限 の比が最大のもので
 判定して、その階層を表示する（systemd の slice の TasksMax などに当たっていても見逃さない）。
 exec は 30 秒（環境変数 DEV_EXEC_TIMEOUT で変えられる。1 以上の整数）で返らなければ FAIL にする。
 TERM を送っても止まらないときは、さらに 5 秒（DEV_EXEC_KILL_GRACE。1 以上の整数）後に KILL する。
+サンドボックスの前提は、AI CLI のサンドボックス（bubblewrap）が起動できるかを見る（exec が通るときだけ）。
+コンテナの SecurityOpt（apparmor=unconfined / seccomp=unconfined）を示し、コンテナの中で bwrap（無ければ
+unshare）で非特権 user namespace を作って mount してみる。ホストの kernel.apparmor_restrict_unprivileged_userns は
+参考に示すだけ（コンテナの中のサンドボックスには関わらない）。
 
 判定:
   FAIL  exec が通らないか返らない / pids が上限の 90% 以上 / pids.max が 0 /
         コンテナが無いか動いていない
   WARN  pids の上限に当たった回数が 1 以上 / ゾンビが 100 以上 / oom_kill が 1 以上
   （読めない項目、pids.max が数でも max でもない値のときも WARN）
+  サンドボックスを起こせないときは、SecurityOpt に apparmor / seccomp の指定があれば WARN、
+  無ければ INFO（使わないプロジェクトの判定を変えない）。どちらも足りない層と対処を出す。
+  確かめそのものが返らない・届かない・bwrap（unshare）を起こせないときは INFO（確かめられません）
 
 終了コード: 0 = 問題なし / 1 = FAIL がある / 2 = 使い方か設定ファイルの誤り / 3 = WARN だけ
 失敗したとき: FAIL なら dev rebuild <名前> で作り直す。WARN だけなら原因を調べてから判断する。
