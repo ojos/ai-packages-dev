@@ -59,6 +59,9 @@
 #   codex が書いたテスト（`.second-opinion-repro/` の下）だけをまっさらな写しへ移して、
 #   スクリプト自身が `codex sandbox` で `bash <テスト>` を実行し、その終了コードで決める
 #   （0 = 誤った結果を観測した、1 = 観測しなかった、それ以外 = 確かめられなかった）。
+#   テストの終了コードは包みが作業ツリーの中のファイルへ書き、それが無ければ「テストが起動
+#   しなかった」として確かめられなかったに数える（サンドボックス自体の失敗の 1 と区別するため）。
+#   `.second-opinion-repro/` の中にシンボリックリンクがある回答は、再実行しない。
 #   結果（再現した／しなかった／確かめられなかった）を出力へ足す。**終了コードは変えない**——再現した指摘も、再現しなかった指摘も、
 #   確かめられなかった指摘も、従来どおり落とす（再現しなかったものは「反証されていない」。
 #   反証は別の段階の役目）。証拠が増えるだけで、判定が緩くなることはない。
@@ -1592,6 +1595,9 @@ repro_base="$work_dir/repro-base"
 repro_perm_args=(-c 'permissions.ws.filesystem={":workspace_roots"="write", ":minimal"="read"}'
                  -c 'permissions.ws.network.enabled=false')
 repro_timeout_cmd=()
+# repro_rerun の結果（下記）。
+repro_rerun_status=""
+repro_rerun_rc=""
 # サンドボックスの起動（確かめと再実行）に使う空の CODEX_HOME。
 repro_sb_home="$work_dir/repro-sandbox-home"
 # 再実行でテストへ渡す PATH（テストには呼び出し元の環境を渡さない）。
@@ -1647,24 +1653,45 @@ repro_prepare_once() {
   return 0
 }
 
-# codex が書いたテストを、スクリプト自身がまっさらな写しで実行する。判定はこの終了コードで決める
-# （codex の申告では決めない。テストを書いただけで実行していない・実行に失敗したのに
+# codex が書いたテストを、スクリプト自身がまっさらな写しで実行する。判定はこのテストの終了コードで
+# 決める（codex の申告では決めない。テストを書いただけで実行していない・実行に失敗したのに
 # 「再現した」「再現しなかった」と答える回答を、そのまま数えないため）。
 # 引数: $1 = codex が使った作業ツリー、$2 = テストのパス（.second-opinion-repro/ の下）、
-#       $3 = 再実行の作業ツリー、$4 = 出力の置き場。終了コードはテストのもの（起こせなければ非 0・非 1）。
+#       $3 = 再実行の作業ツリー、$4 = 出力の置き場。
+# 結果は repro_rerun_status に入れる: ran（repro_rerun_rc にテストの終了コード）/ timeout /
+# nostart（テストが起動しなかった。repro_rerun_rc に外側の終了コード）/ copyfail。
+# テストの終了コードは、包みの bash が作業ツリーの中のファイルへ書く。`codex sandbox` 自体が
+# 起動に失敗しても 1 などを返すため、外側の終了コードではテストの 1 と区別できない。
 repro_rerun() {
-  local src="$1" test_path="$2" dest="$3" out="$4" rc=0
+  local src="$1" test_path="$2" dest="$3" out="$4" rc=0 rc_rel
+  repro_rerun_status=""
+  repro_rerun_rc=""
   rm -rf "$dest"
   # 写すのは .second-opinion-repro/ だけ。codex が外のファイルを変えていても、それに頼る
   # テストは再実行で通らない（レビューした状態の上でだけ確かめる）。
   if ! cp -a "$repro_base" "$dest" 2>"$out" || ! cp -a "$src/.second-opinion-repro" "$dest/" 2>>"$out"; then
-    return 125
+    repro_rerun_status="copyfail"
+    return 0
   fi
+  rc_rel=".second-opinion-rerun-rc-$RANDOM$RANDOM"
   # テストには呼び出し元の環境（資格情報を含む）を渡さない。内側の env -i で空にし、PATH だけを渡す。
+  # 包みの bash -c の本文は、サンドボックスの中で展開させるため単一引用符で渡す。
+  # shellcheck disable=SC2016
   (cd "$dest" && ${repro_timeout_cmd[@]+"${repro_timeout_cmd[@]}"} env -i ${CODEX_ENV_PASS[@]+"${CODEX_ENV_PASS[@]}"} CODEX_HOME="$repro_sb_home" \
     "$CLI" sandbox "${repro_perm_args[@]}" -P ws -C "$dest" -- \
-    /usr/bin/env -i "$repro_test_path_env" HOME="$dest" /bin/bash "$test_path" </dev/null >"$out" 2>&1) || rc=$?
-  return "$rc"
+    /usr/bin/env -i "$repro_test_path_env" HOME="$dest" \
+    /bin/bash -c '/bin/bash "$1"; printf "%s\n" "$?" > "$2"' repro-rerun "$test_path" "$rc_rel" \
+    </dev/null >"$out" 2>&1) || rc=$?
+  if [[ "$rc" -eq 124 || "$rc" -eq 137 ]]; then
+    repro_rerun_status="timeout"
+  elif [[ -f "$dest/$rc_rel" ]] && repro_rerun_rc="$(tr -d '[:space:]' < "$dest/$rc_rel")" \
+       && [[ "$repro_rerun_rc" =~ ^[0-9]{1,3}$ ]]; then
+    repro_rerun_status="ran"
+  else
+    repro_rerun_status="nostart"
+    repro_rerun_rc="$rc"
+  fi
+  return 0
 }
 
 # 再現の段階の本体。$repro_candidates_file の指摘を重複なくまとめ、残りの予算まで再現させる。
@@ -1793,14 +1820,25 @@ run_repro_stage() {
               || -L "$tree/$test_path" || ! -f "$tree/$test_path" ]]; then
           kind="unknown"
           reason="テストのファイルが .second-opinion-repro/ の下にありません（test_path: $(printf '%s' "$test_path" | repro_clean | tr '\n' ' ' | cut -c1-200)）"
+        elif [[ -L "$tree/.second-opinion-repro" ]] \
+             || [[ -n "$(find "$tree/.second-opinion-repro" -type l -print -quit 2>/dev/null)" ]]; then
+          # 途中のディレクトリをリンクにすると、末尾の検査をすり抜けて既存のファイルを指せる。
+          # .second-opinion-repro/ の中にリンクを 1 つも許さない。
+          kind="unknown"
+          reason=".second-opinion-repro/ の中にシンボリックリンクがあります（新しく書いたテストか確かめられません）"
         else
-          rerun_rc=0
-          repro_rerun "$tree" "$test_path" "$rerun_tree" "$rerun_out" || rerun_rc=$?
-          case "$rerun_rc" in
-            0) kind="repro" ;;
-            1) kind="norepro" ;;
-            124|137) kind="unknown"; reason="再実行が時間切れ（${REPRO_TIMEOUT} 秒）: $reason" ;;
-            *) kind="unknown"; reason="テストを実行できませんでした（再実行の終了コード $rerun_rc）: $reason" ;;
+          repro_rerun "$tree" "$test_path" "$rerun_tree" "$rerun_out"
+          case "$repro_rerun_status" in
+            ran)
+              rerun_rc="$repro_rerun_rc"
+              case "$rerun_rc" in
+                0) kind="repro" ;;
+                1) kind="norepro" ;;
+                *) kind="unknown"; reason="テストを実行できませんでした（テストの終了コード $rerun_rc）: $reason" ;;
+              esac ;;
+            timeout) rerun_rc="時間切れ"; kind="unknown"; reason="再実行が時間切れ（${REPRO_TIMEOUT} 秒）: $reason" ;;
+            nostart) rerun_rc="起動せず"; kind="unknown"; reason="再実行でテストが起動しませんでした（サンドボックスの終了コード $repro_rerun_rc）: $reason" ;;
+            *) kind="unknown"; reason="再実行の作業ツリーを作れませんでした: $reason" ;;
           esac
           # codex の申告と再実行の結果が食い違えば、そのことを残す（判定は再実行の結果）。
           if [[ "$kind" == "repro" && "$claimed" != "true" ]]; then
@@ -1826,7 +1864,11 @@ run_repro_stage() {
     # 再実行したときは、実行したコマンドと実際の出力を出す。モデルが返した欄・テストの出力は、
     # 制御文字を落とし、改行を含めて全行を字下げして出す。
     if [[ -n "$rerun_rc" ]]; then
-      repro_print_field "コマンド" "bash $test_path（終了コード $rerun_rc）"
+      if [[ "$rerun_rc" =~ ^[0-9]+$ ]]; then
+        repro_print_field "コマンド" "bash $test_path（終了コード $rerun_rc）"
+      else
+        repro_print_field "コマンド" "bash $test_path（$rerun_rc）"
+      fi
       out_text="$(repro_clean < "$rerun_out")"
       out_text="${out_text:0:2000}"
       printf '    出力:\n'

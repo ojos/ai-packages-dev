@@ -91,6 +91,11 @@ if [[ "${1-}" == "sandbox" ]]; then
     ls -A "${CODEX_HOME:-/nonexistent}" 2>/dev/null | wc -l > "$R/rerun-home-count-$n"
     find . -type f -not -path './.git/*' | LC_ALL=C sort > "$R/rerun-files-$n"
     cat sample.txt > "$R/rerun-sample-$n" 2>/dev/null || true
+    if [[ "${FAKE_RERUN_FAIL:-0}" == "1" ]]; then
+      # サンドボックス自体が、テストを起こす前に 1 で失敗する。
+      echo "bwrap: setting up uid map: Permission denied" >&2
+      exit 1
+    fi
     exec "${cmd[@]}"
   fi
   n="$(bump sandbox-calls)"
@@ -167,6 +172,15 @@ if [[ "${1-}" == "exec" ]]; then
       escape)
         mkdir -p .second-opinion-repro
         ok_answer true ".second-opinion-repro/../sample.txt" "r" ;;
+      dirlink)
+        # 途中のディレクトリをリンクにして、既存の追跡ファイルを指す。
+        mkdir -p .second-opinion-repro
+        ln -s ../sub .second-opinion-repro/link
+        ok_answer true ".second-opinion-repro/link/inner.txt" "r" ;;
+      rootlink)
+        rm -rf .second-opinion-repro
+        ln -s sub .second-opinion-repro
+        ok_answer true ".second-opinion-repro/inner.txt" "r" ;;
       symlink)
         mkdir -p .second-opinion-repro
         ln -s ../sample.txt .second-opinion-repro/t.sh
@@ -297,7 +311,7 @@ it "テストを実行できない（command not found = 127）: 「再現しな
 rc=0
 FAKE_REVIEW_ANSWER="$ONE_BUG" FAKE_REPRO_MODE=norun run_review --engine codex || rc=$?
 if [[ "$rc" -eq 1 ]] && both_has '再現を確かめられなかった（反証されていない） — sample.txt:2 [bug]' \
-   && both_has 'テストを実行できませんでした（再実行の終了コード 127）' && both_has '再現した 0 件 / 再現しなかった 0 件 / 確かめられなかった 1 件'; then
+   && both_has 'テストを実行できませんでした（テストの終了コード 127）' && both_has '再現した 0 件 / 再現しなかった 0 件 / 確かめられなかった 1 件'; then
   pass
 else
   fail "rc=$rc: $(cat "$WORK/both")"
@@ -319,6 +333,29 @@ rc=0
 FAKE_REVIEW_ANSWER="$ONE_BUG" FAKE_REPRO_MODE=claimfalse run_review --engine codex || rc=$?
 if [[ "$rc" -eq 1 ]] && both_has '再現した — sample.txt:2 [bug]' \
    && both_has '注意: codex は「再現しなかった」と答えましたが、再実行では誤った結果を観測しました'; then
+  pass
+else
+  fail "rc=$rc: $(cat "$WORK/both")"
+fi
+
+for m in dirlink rootlink; do
+  it "テストのパスの途中か .second-opinion-repro 自体がリンク（$m）なら、再実行せず「確かめられなかった」"
+  rc=0
+  FAKE_REVIEW_ANSWER="$ONE_BUG" FAKE_REPRO_MODE=$m run_review --engine codex || rc=$?
+  if [[ "$rc" -eq 1 && "$(calls_of rerun-calls)" == "0" ]] && both_has '.second-opinion-repro/ の中にシンボリックリンクがあります' \
+     && both_has '再現した 0 件 / 再現しなかった 0 件 / 確かめられなかった 1 件'; then
+    pass
+  else
+    fail "rc=$rc rerun=$(calls_of rerun-calls): $(cat "$WORK/both")"
+  fi
+done
+
+it "再実行でサンドボックス自体が 1 で失敗したら（テストは起動していない）、「再現しなかった」ではなく「確かめられなかった」"
+rc=0
+FAKE_RERUN_FAIL=1 FAKE_REVIEW_ANSWER="$ONE_BUG" FAKE_REPRO_MODE=notreproduced run_review --engine codex || rc=$?
+if [[ "$rc" -eq 1 && "$(calls_of rerun-calls)" == "1" ]] && both_has '再実行でテストが起動しませんでした（サンドボックスの終了コード 1）' \
+   && both_has 'コマンド: bash .second-opinion-repro/t.sh（起動せず）' \
+   && both_has '再現した 0 件 / 再現しなかった 0 件 / 確かめられなかった 1 件'; then
   pass
 else
   fail "rc=$rc: $(cat "$WORK/both")"
@@ -353,7 +390,7 @@ rr="$RECORD/rerun-argv-1"
 if command grep -qxF 'permissions.ws.filesystem={":workspace_roots"="write", ":minimal"="read"}' "$rr" \
    && command grep -qxF 'permissions.ws.network.enabled=false' "$rr" \
    && [[ " $(tr '\n' ' ' < "$rr") " == *' -P ws '* ]] \
-   && [[ " $(tr '\n' ' ' < "$rr") " == *' -- /usr/bin/env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin HOME='*' /bin/bash .second-opinion-repro/t.sh '* ]] \
+   && [[ " $(tr '\n' ' ' < "$rr") " == *' -- /usr/bin/env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin HOME='*' /bin/bash -c '*' repro-rerun .second-opinion-repro/t.sh .second-opinion-rerun-rc-'* ]] \
    && [[ "$(tr -d ' ' < "$RECORD/rerun-home-count-1")" == "0" ]] \
    && ! command grep -qxF -- '--sandbox' "$rr"; then
   pass
