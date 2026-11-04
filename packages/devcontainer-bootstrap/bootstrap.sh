@@ -369,8 +369,11 @@ dcb_file_sha256() {
 # ファイルへ、正本の順序で写す。各ファイルの先頭（frontmatter の後）には、生成物で
 # ある旨と相対リンクの基準（.ai-playbook/ からの相対）を述べる断りの行を足す。条件付きの
 # 規則には、親の見出しを示す行も足す。断りの行は CLAUDE_RULES_NOTICE_PREFIX で始め、本文との
-# 間を空行で区切る（生成物の見分けは、この接頭辞だけで行う。scripts/check-doc-links.sh、
-# tests/test-claude-rules.sh と DCB のテストが使う）。
+# 間を空行で区切る（生成物の見分けは、この接頭辞で始まる先頭行から始める。tests/test-claude-rules.sh
+# と DCB のテストが使う）。scripts/check-doc-links.sh は、断りの 1・2 行目の文面全体と、親の見出しの
+# 行の書式（「> 親の見出し: 「」で始まり「」の一部」で終わる）まで照合する。文面を変えるときは
+# check-doc-links.sh の照合も直す。食い違いは tests/test-check-doc-links.sh の「作り直したままの
+# 生成物がすべて除外される」テストが捕まえる。
 # 空行は正本のとおり写す。ただし各ファイルの末尾の空行だけは落とす（節の終わりの
 # 空行が末尾に残ると、ファイルの末尾が空行で終わり git diff --check に掛かるため）。
 # このため照合は、空行以外の行を厳密に（ちょうど 1 回・順序どおり）、空行は
@@ -6085,28 +6088,54 @@ while IFS= read -r -d '' md; do
   # 断りの行で見分ける（名前だけでは、手で書いた同名の規則まで外れる）。
   case "$md" in
     .claude/rules/ai-playbook*.md)
-      # 外すのは、frontmatter（あれば）の直後の最初の空でない行が断りの接頭辞で始まり、かつ、
+      # 外すのは、frontmatter（あれば）の直後が、生成器が出す断りの行そのままで、かつ、
       # 断りの後の本文の空でない各行が、断りに書かれた正本（リポジトリのルートから読む）に含まれる
       # ときだけ（正本から写した行だけのとき）。手で壊れたリンクを足した生成物、正本が読めない
-      # 生成物は、通常どおり走査する。断りの行（「> 」で始まる連続した行）と frontmatter は、
-      # 生成器が足す行なので本文として数えない。
+      # 生成物は、通常どおり走査する。
+      # 断りの行は「文面を固定して」照合する（読み飛ばす行数を固定するだけでは、断りの位置に
+      # 差し込んだ行も通ってしまうため）。1 行目と 2 行目は生成器の文面と完全に一致する行、
+      # 3 行目（親の見出し）は、あれば「> 親の見出し: 「」で始まり「」の一部」で終わり、リンクの書式
+      # （「](」「<http」「[...]:」の参照定義）を含まない行だけを読み飛ばす。これ以外の「> 」の行は
+      # 本文として正本と照合する。照合の前に、各行の行末の CR を落とす（CRLF の生成物も除外するため）。
+      # ここの文面は生成器（bootstrap.sh の --render-claude-rules）の写しで、変えるときは
+      # 生成器と、この照合の両方を直す。食い違うと、生成器の出力が除外されなくなり、
+      # 試験（作り直したままの生成物がすべて除外される）が落ちる。
       # バッククォートは正規表現の中の文字そのもの（コマンド置換ではない）。単引用符の中なので意図どおり。
       # shellcheck disable=SC2016
       gen_src="$(sed -n 's/^> 生成物: 正本 `\([^`]*\)`.*/\1/p' "$md" | sed -n '1p')"
       case "$gen_src" in
         ""|/*|..|../*|*/../*|*/..) gen_src="" ;;
       esac
-      if [ -n "$gen_src" ] && [ -f "$gen_src" ] && awk 'BEGIN { st = 0; bad = 0 }
-              FILENAME == ARGV[1] { src[$0] = 1; next }
+      # shellcheck disable=SC2016
+      if [ -n "$gen_src" ] && [ -f "$gen_src" ] && GSRC="$gen_src" awk 'BEGIN { st = 0; bad = 0
+                n1 = "> 生成物: 正本 `" ENVIRON["GSRC"] "` から生成したものです。編集は正本へ行ってください（ここを直しても、作り直しで消えます）。"
+                n2 = "> 本文の相対リンクは、このファイルからではなく `.ai-playbook/` からの相対です。"
+                pl = "> 親の見出し: 「"; ps = "」の一部" }
+              { sub(/\r$/, "") }
+              FILENAME == ARGV[1] { src[$0] = 1
+                                    if ($0 ~ /^#/) { h = $0; sub(/^#+[ \t]*/, "", h); sub(/[ \t]+$/, "", h); hd[h] = 1 }
+                                    next }
               FNR == 1 && $0 == "---" { fm = 1; next }
               fm { if ($0 == "---") fm = 0; next }
               st == 0 { if ($0 ~ /^[ \t\r]*$/) next
-                        if ($0 ~ /^> 生成物:/) { st = 1; next }
+                        if ($0 == n1) { st = 1; next }
                         bad = 1; exit }
-              st == 1 { if ($0 ~ /^> /) next
-                        st = 2; if ($0 ~ /^[ \t\r]*$/) next }
-              st == 2 { if ($0 !~ /^[ \t\r]*$/ && !($0 in src)) { bad = 1; exit } }
-              END { exit (st == 2 && !bad) ? 0 : 1 }' "$gen_src" "$md"; then
+              st == 1 { if ($0 == n2) { st = 2; next }
+                        bad = 1; exit }
+              st == 2 { st = 3
+                        if (substr($0, 1, length(pl)) == pl && length($0) >= length(pl) + length(ps) \
+                            && substr($0, length($0) - length(ps) + 1) == ps) {
+                          if (index($0, "](") == 0 && index($0, "<http") == 0 && $0 !~ /\[[^]]*\]:/) next
+                          # リンクの書式を含むときは、見出しがそのまま正本の見出しと一致する場合に限る
+                          # （正本の見出しにリンクがあると、生成器の出した行もリンクの書式を含むため）。
+                          r = substr($0, length(pl) + 1, length($0) - length(pl) - length(ps))
+                          m = split(r, parts, "」「")
+                          ok = 1
+                          for (k = 1; k <= m; k++) if (!(parts[k] in hd)) ok = 0
+                          if (ok) next
+                        } }
+              st == 3 { if ($0 !~ /^[ \t\r]*$/ && !($0 in src)) { bad = 1; exit } }
+              END { exit (st == 3 && !bad) ? 0 : 1 }' "$gen_src" "$md"; then
         excluded_count=$((excluded_count + 1))
         continue
       fi
