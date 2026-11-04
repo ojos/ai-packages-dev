@@ -486,6 +486,114 @@ printf '\n[壊れたリンク](no-such-file.md)\n' >> "$out/.claude/rules/ai-pla
 run_check "$out"
 assert_fail "追記された生成物" "no-such-file.md"
 
+it "断りの直後に足した「> 」の行も本文として照合され、壊れたリンクが検出される（上流の issue 698）"
+out="$(BASE="$CLAUDE_BASE" new_repo)"
+python3 - "$out/.claude/rules/ai-playbook.md" <<'PYEOF'
+import sys
+p = sys.argv[1]
+lines = open(p, encoding="utf-8").read().split("\n")
+lines.insert(2, "> [x](missing.md)")  # 断りの 2 行（0, 1）の直後
+open(p, "w", encoding="utf-8").write("\n".join(lines))
+PYEOF
+(cd "$out" && git add -A) >/dev/null 2>&1
+run_check "$out"
+assert_fail "断りの直後に足した行" "missing.md"
+
+it "親の見出しの行へ壊れたリンクを混ぜた生成物は、除外されず検出される（上流の issue 698）"
+out="$(BASE="$CLAUDE_BASE" new_repo)"
+python3 - "$out/.claude/rules/ai-playbook-doc-formats.md" <<'PYEOF'
+import sys
+p = sys.argv[1]
+lines = open(p, encoding="utf-8").read().split("\n")
+i = next(k for k, l in enumerate(lines) if l.startswith("> 親の見出し: "))
+lines[i] = lines[i].replace("の一部", "[x](missing.md)の一部")
+open(p, "w", encoding="utf-8").write("\n".join(lines))
+PYEOF
+(cd "$out" && git add -A) >/dev/null 2>&1
+run_check "$out"
+assert_fail "親の見出しの行に混ぜた壊れたリンク" "missing.md"
+
+it "正本から作り直したままの生成物（--render-claude-rules の出力）は、すべて除外される（生成器と照合の文面の一致）"
+out="$(BASE="$CLAUDE_BASE" new_repo)"
+(cd "$out" && git rm -q -r -f .claude/rules && rm -rf .claude/rules && mkdir -p .claude/rules \
+  && bash "$BOOTSTRAP" --render-claude-rules .ai-playbook/shared-ai-rules.md .claude/rules && git add -A) >/dev/null 2>&1
+gen_n="$(find "$out/.claude/rules" -name 'ai-playbook*.md' | wc -l | tr -d ' ')"
+run_check "$out"
+if [[ "$CHECK_RC" -eq 0 && "$gen_n" -gt 1 && "$CHECK_OUT" == *"除外 $gen_n 件"* ]]; then pass; else fail "rc=$CHECK_RC gen_n=$gen_n $CHECK_OUT"; fi
+
+it "行末が CRLF の生成物も除外される（正本も CRLF でも同じ）"
+out="$(BASE="$CLAUDE_BASE" new_repo)"
+python3 - "$out/.claude/rules/ai-playbook.md" "$out/.claude/rules/ai-playbook-doc-formats.md" <<'PYEOF'
+import sys
+for p in sys.argv[1:]:
+    t = open(p, encoding="utf-8", newline="").read()
+    open(p, "w", encoding="utf-8", newline="").write(t.replace("\n", "\r\n"))
+PYEOF
+(cd "$out" && git add -A) >/dev/null 2>&1
+run_check "$out"
+if [[ "$CHECK_RC" -eq 0 && "$CHECK_OUT" != *"除外 0 件"* ]]; then pass; else fail "rc=$CHECK_RC $CHECK_OUT"; fi
+
+it "親の見出しに「」を含む行も除外される（リンクの書式を含まなければ）"
+out="$(BASE="$CLAUDE_BASE" new_repo)"
+python3 - "$out/.claude/rules/ai-playbook-doc-formats.md" <<'PYEOF'
+import sys
+p = sys.argv[1]
+lines = open(p, encoding="utf-8").read().split("\n")
+i = next(k for k, l in enumerate(lines) if l.startswith("> 親の見出し: "))
+lines[i] = "> 親の見出し: 「「foo」の扱い」の一部"
+open(p, "w", encoding="utf-8").write("\n".join(lines))
+PYEOF
+(cd "$out" && git add -A) >/dev/null 2>&1
+run_check "$out"
+if [[ "$CHECK_RC" -eq 0 && "$CHECK_OUT" != *"除外 0 件"* ]]; then pass; else fail "rc=$CHECK_RC $CHECK_OUT"; fi
+
+it "正本のパスにバックスラッシュを含む生成物も除外される（awk の -v のエスケープ解釈に依らない）"
+out="$(BASE="$CLAUDE_BASE" new_repo)"
+bs_src='.ai-playbook/a\tb.md'
+if ! cp "$out/.ai-playbook/shared-ai-rules.md" "$out/$bs_src" 2>/dev/null; then
+  pass  # バックスラッシュを含むファイル名を作れない環境では飛ばす
+else
+  python3 - "$out/.claude/rules/ai-playbook.md" <<'PYEOF'
+import sys
+p = sys.argv[1]
+t = open(p, encoding="utf-8").read()
+t = t.replace("`.ai-playbook/shared-ai-rules.md`", "`.ai-playbook/a\\tb.md`", 1)
+open(p, "w", encoding="utf-8").write(t)
+PYEOF
+  (cd "$out" && git add -A) >/dev/null 2>&1
+  run_check "$out"
+  if [[ "$CHECK_RC" -eq 0 && "$CHECK_OUT" != *"除外 0 件"* ]]; then pass; else fail "rc=$CHECK_RC $CHECK_OUT"; fi
+fi
+
+# 正本の見出しにリンクがあると、生成器の出した親の見出しの行もリンクの書式を含む。
+LINKHEAD_REPO="$(BASE="$CLAUDE_BASE" new_repo)"
+python3 - "$LINKHEAD_REPO/.ai-playbook/shared-ai-rules.md" <<'PYEOF'
+import sys
+p = sys.argv[1]
+t = open(p, encoding="utf-8").read()
+t = t.replace("## 7. ドキュメント言語方針", "## 7. [ドキュメント言語方針](guide.md)", 1)
+open(p, "w", encoding="utf-8").write(t)
+PYEOF
+printf '# guide\n' > "$LINKHEAD_REPO/.ai-playbook/guide.md"
+(cd "$LINKHEAD_REPO" && rm -rf .claude/rules && mkdir -p .claude/rules \
+  && bash "$BOOTSTRAP" --render-claude-rules .ai-playbook/shared-ai-rules.md .claude/rules && git add -A) >/dev/null 2>&1
+
+it "正本の見出しにリンクがある生成物は、親の見出しの行がリンクを含んでも除外される"
+run_check "$LINKHEAD_REPO"
+if [[ "$CHECK_RC" -eq 0 && "$(grep -c 'guide.md' "$LINKHEAD_REPO/.claude/rules/ai-playbook-doc-formats.md")" -ge 1 && "$CHECK_OUT" != *"除外 0 件"* ]]; then pass; else fail "rc=$CHECK_RC $CHECK_OUT"; fi
+
+it "正本に無い見出しにリンクを混ぜた親の見出しの行は、除外されず検出される"
+python3 - "$LINKHEAD_REPO/.claude/rules/ai-playbook-doc-formats.md" <<'PYEOF'
+import sys
+p = sys.argv[1]
+t = open(p, encoding="utf-8").read()
+t = t.replace("](guide.md)」", "](missing.md)」", 1)
+open(p, "w", encoding="utf-8").write(t)
+PYEOF
+(cd "$LINKHEAD_REPO" && git add -A) >/dev/null 2>&1
+run_check "$LINKHEAD_REPO"
+assert_fail "正本に無い見出しの行に混ぜたリンク" "missing.md"
+
 it "断りに書かれた正本が読めない生成物は、通常どおり走査される"
 out="$(BASE="$CLAUDE_BASE" new_repo)"
 printf '\n[壊れたリンク](no-such-file.md)\n' >> "$out/.claude/rules/ai-playbook-doc-formats.md"
