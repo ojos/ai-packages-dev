@@ -412,6 +412,57 @@ else
   fail "rc=$rc left=$(find "$WORK/tmp-denied" -mindepth 1 -maxdepth 2 | head -3): $(cat "$WORK/both")"
 fi
 
+it "判定外の配布物への指摘は再現の候補に入れない（上限 1 でも、判定を落とした指摘を再現する）"
+# 元の検査用リポジトリを汚さないよう、写しで仕込む。HEAD の ORIGIN に hash:pkg.txt を記録し、
+# 同じ中身の pkg.txt を索引に足す（hash: の値が前後で同じ = 配布のまま）。
+REPO_SAVED="$REPO"
+REPO="$WORK/repo-dist"
+rm -rf "$REPO"
+cp -a "$REPO_SAVED" "$REPO"
+printf 'echo pkg\n' > "$WORK/pkg.txt"
+mkdir -p "$REPO/.devcontainer"
+if command -v sha256sum >/dev/null 2>&1; then
+  pkg_sha="$(sha256sum "$WORK/pkg.txt" | awk '{print $1}')"  # bsd-ok: 無ければ下の shasum へ分岐する
+else
+  pkg_sha="$(shasum -a 256 "$WORK/pkg.txt" | awk '{print $1}')"
+fi
+printf 'version=1\nhash:pkg.txt=%s\n' "$pkg_sha" > "$REPO/.devcontainer/ORIGIN"
+git -C "$REPO" add .devcontainer/ORIGIN
+git -C "$REPO" commit -q -m origin
+cp "$WORK/pkg.txt" "$REPO/pkg.txt"
+git -C "$REPO" add pkg.txt
+rc=0
+SECOND_OPINION_REPRO_MAX=1 FAKE_REVIEW_ANSWER="$(answer_of "$(finding_json bug pkg.txt 1 '配布物の指摘')" "$(finding_json bug sample.txt 2 '利用側の指摘')")" \
+  run_review --engine codex || rc=$?
+REPO="$REPO_SAVED"
+if [[ "$rc" -eq 1 && "$(calls_of repro-calls)" == "1" ]] && both_has '[配布物・判定外]' \
+   && both_has '[second-opinion] repro 1/1: 再現した — sample.txt:2 [bug]' && ! both_has '— pkg.txt:1' \
+   && both_has '上限で見送った 0 件'; then
+  pass
+else
+  fail "rc=$rc calls=$(calls_of repro-calls): $(cat "$WORK/both")"
+fi
+
+it "再現の作業ツリーは .gitattributes の filter（smudge）を当てずに作る（レビューした blob のまま）"
+REPO_SAVED="$REPO"
+REPO="$WORK/repo-smudge"
+rm -rf "$REPO"
+cp -a "$REPO_SAVED" "$REPO"
+git -C "$REPO" config filter.sm.smudge 'sed s/hello/SMUDGED/'
+git -C "$REPO" config filter.sm.clean cat
+printf 'sample.txt filter=sm\n' > "$REPO/.gitattributes.new"
+cat "$REPO/.gitattributes" >> "$REPO/.gitattributes.new"
+mv "$REPO/.gitattributes.new" "$REPO/.gitattributes"
+git -C "$REPO" add .gitattributes
+rc=0
+FAKE_REVIEW_ANSWER="$ONE_BUG" run_review --engine codex || rc=$?
+REPO="$REPO_SAVED"
+if [[ "$rc" -eq 1 && "$(calls_of rerun-calls)" == "1" && "$(sed -n 1p "$RECORD/rerun-sample-1" 2>/dev/null)" == "hello" ]]; then
+  pass
+else
+  fail "rc=$rc sample=$(cat "$RECORD/rerun-sample-1" 2>/dev/null): $(cat "$WORK/both")"
+fi
+
 it "再実行は、レビューした状態に .second-opinion-repro/ だけを写した別の作業ツリーで行う（codex が外を変えても持ち込まない）"
 rc=0
 FAKE_REVIEW_ANSWER="$ONE_BUG" FAKE_REPRO_MODE=dependsoutside run_review --engine codex || rc=$?

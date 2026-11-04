@@ -1510,15 +1510,15 @@ answer_lacks_scenario() {
 # 関数はどの経路でも 0 で戻る（set -e でスクリプトを落とさない。落とすと、証拠を足す段階の
 # 失敗が判定そのものを変えてしまう）。
 
-# 回答から、ゲート対象の指摘を候補の置き場へ足す。
+# 回答から、ゲート対象の指摘を候補の置き場へ足す。判定（blocking_count）と同じ条件で選ぶ
+# ——配布のままのファイルへの指摘（判定外）を入れると、それが再現の上限を使い、判定を
+# 落とした指摘が「上限で見送った」になる。
 repro_collect() {
-  printf '%s' "$1" | jq -c --argjson blocking "$BLOCKING_JSON" \
-    '.findings[] | select(.category as $c | $blocking | index($c) != null)' \
+  printf '%s' "$1" | jq -c --argjson blocking "$BLOCKING_JSON" "${JQ_DIST_ARGS[@]}" \
+    "$JQ_DIST_DEF"'.findings[] | select((isdist | not) and (.category as $c | $blocking | index($c) != null))' \
     >> "$repro_candidates_file" 2>/dev/null || true
 }
 
-# 端末を操る制御文字（ESC 等）を落とす。改行とタブは残す。モデルが書いたテストの出力が
-# そのまま画面・記録に載るため。
 # 作業ツリーを消す。codex が権限を外したディレクトリ（chmod 000 など）を作っていても消せる
 # よう、先に持ち主の権限を戻す（chmod -R は辿る途中のシンボリックリンクを辿らない）。消せな
 # くても段階を止めず、警告を出して続ける（set -e で完了の行の前に止まらないように）。
@@ -1532,6 +1532,8 @@ repro_rm() {
   return 0
 }
 
+# 端末を操る制御文字（ESC 等）を落とす。改行とタブは残す。モデルが書いたテストの出力が
+# そのまま画面・記録に載るため。
 repro_clean() {
   LC_ALL=C tr -d '\000-\010\013-\037\177'
 }
@@ -1559,9 +1561,13 @@ repro_print_field() {
 # git checkout-index -a と git ls-files はカレントディレクトリより下しか扱わないので、
 # どの分岐もリポジトリの根へ移ってから作る（サブディレクトリから起動しても全体を写す）。
 repro_build_base() {
-  local dest="$1" top
+  local dest="$1" top empty_tree
   mkdir -p "$dest" || return 1
   top="$(git rev-parse --show-toplevel)" || return 1
+  # 取り出すときは、属性を空の木から読ませ、改行の変換も止める。.gitattributes の
+  # filter（smudge）・ident・eol が当たると、レビューした blob と違う中身で再現してしまう。
+  # GIT_ATTR_SOURCE は git 2.40 から。それより古い git は黙って無視する（属性が当たる）。
+  empty_tree="$(git hash-object -t tree /dev/null)" || return 1
   (
     cd "$top" || exit 1
     if [[ -n "$RANGE" && "$RANGE" == *..* ]]; then
@@ -1573,7 +1579,7 @@ repro_build_base() {
       idx="$work_dir/repro-index"
       rm -f "$idx"
       GIT_INDEX_FILE="$idx" git read-tree "$tip" || exit 1
-      GIT_INDEX_FILE="$idx" git checkout-index -a --prefix="$dest/" || exit 1
+      GIT_INDEX_FILE="$idx" GIT_ATTR_SOURCE="$empty_tree" git -c core.autocrlf=false checkout-index -a --prefix="$dest/" || exit 1
     elif [[ -n "$RANGE" ]]; then
       # 単一の rev。`git diff <rev>` は rev と作業ツリーの差なので、作業ツリーの追跡ファイル。
       git ls-files -z | while IFS= read -r -d '' f; do
@@ -1582,7 +1588,7 @@ repro_build_base() {
       done | tar --null -T - -cf - | tar -xf - -C "$dest" || exit 1
     else
       # ステージ済み（既定）と --base は索引の内容。
-      git checkout-index -a --prefix="$dest/" || exit 1
+      GIT_ATTR_SOURCE="$empty_tree" git -c core.autocrlf=false checkout-index -a --prefix="$dest/" || exit 1
     fi
   ) || return 1
   # テストの置き場は空から始める。元からある .second-opinion-repro/ を残すと、codex が
@@ -1594,9 +1600,12 @@ repro_build_base() {
   (
     cd "$dest" || exit 1
     unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
+    # 1 コミットにするときも、filter（clean）や改行の変換を当てない（上と同じ理由）。
+    # 空の木の ID は、このリポジトリで求め直す（レビュー対象と、ハッシュの方式が違いうる）。
     # 呼び出しが `||` の文脈にあり set -e が効かないので、&& でつなぐ。
     git -c init.defaultBranch=main init -q \
-      && git add -A -f \
+      && empty_tree="$(git hash-object -t tree /dev/null)" \
+      && GIT_ATTR_SOURCE="$empty_tree" git -c core.autocrlf=false add -A -f \
       && git -c user.name="second-opinion" -c user.email="second-opinion@invalid.example" \
         -c commit.gpgsign=false -c core.hooksPath=/dev/null \
         commit -q --allow-empty --no-verify -m "reviewed state"
