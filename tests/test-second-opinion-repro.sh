@@ -118,6 +118,8 @@ if [[ "${1-}" == "exec" ]]; then
     case "${FAKE_REPRO_MODE:-reproduced}" in
       reproduced)
         printf '%s\n' '{"reproduced":true,"test_path":".second-opinion-repro/t.sh","command":"bash .second-opinion-repro/t.sh","output_excerpt":"actual: WRONG\nexpected: right","reason":"筋書きどおりの誤った結果が出た"}' > "$answer" ;;
+      norun)
+        printf '%s\n' '{"reproduced":false,"test_path":"","command":"","output_excerpt":"code-mode host is disabled","reason":"道具が使えず実行できなかった"}' > "$answer" ;;
       notreproduced)
         printf '%s\n' '{"reproduced":false,"test_path":".second-opinion-repro/t.sh","command":"bash .second-opinion-repro/t.sh","output_excerpt":"ok","reason":"誤った結果は出なかった"}' > "$answer" ;;
       long)
@@ -229,6 +231,16 @@ fi
 
 it "要約の行に codex を起こした回数が出る"
 if both_has 'codex の起動 1 回'; then pass; else fail "$(cat "$WORK/both")"; fi
+
+it "コマンドが空の「再現しなかった」: 何も実行していないので「確かめられなかった」と数える"
+rc=0
+FAKE_REVIEW_ANSWER="$ONE_BUG" FAKE_REPRO_MODE=norun run_review --engine codex || rc=$?
+if [[ "$rc" -eq 1 ]] && both_has '再現を確かめられなかった（反証されていない） — sample.txt:2 [bug]' \
+   && both_has 'テストを実行していません（コマンドが空）' && both_has '再現した 0 件 / 再現しなかった 0 件 / 確かめられなかった 1 件'; then
+  pass
+else
+  fail "rc=$rc: $(cat "$WORK/both")"
+fi
 
 it "再現しなかった指摘: 「反証されていない」と出て、終了コードは非 0"
 rc=0
@@ -380,11 +392,13 @@ else
   fail "$(cat "$ra" 2>/dev/null)"
 fi
 
-it "再現の起動: 環境を絞る旗があり、シェルの道具は無効にしない"
+it "再現の起動: 環境を絞る旗があり、シェルの道具と code_mode_host は無効にしない"
+# code_mode_host を無効にすると、実機（codex-cli 0.162.1）ではシェルの道具が動かない（#691 の通しの試し）
 if command grep -qxF 'shell_environment_policy.inherit=none' "$ra" \
    && command grep -qxF -- '--ignore-user-config' "$ra" \
    && command grep -qxF 'web_search="disabled"' "$ra" \
-   && command grep -qxF 'browser_use' "$ra" && ! command grep -qxF 'shell_tool' "$ra"; then
+   && command grep -qxF 'browser_use' "$ra" && ! command grep -qxF 'shell_tool' "$ra" \
+   && ! command grep -qxF 'code_mode_host' "$ra"; then
   pass
 else
   fail "$(cat "$ra" 2>/dev/null)"

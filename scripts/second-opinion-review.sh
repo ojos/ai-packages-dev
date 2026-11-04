@@ -1706,13 +1706,16 @@ run_repro_stage() {
 
     # --sandbox は付けない（workspace-write は /tmp への書き込みとディスク全体の読み取りが
     # 残る）。権限プロファイルで絞る。シェルの道具は無効にしない（テストを実行させる）。
+    # code_mode_host も無効にしない。codex-cli 0.162.1 の実機では、これを無効にすると
+    # シェルの道具が「code-mode host is disabled」で動かず、再現テストを実行できなかった
+    # （#691 の通しの試し）。サンドボックスは権限プロファイルで掛かる。
     args=(exec - --color never --skip-git-repo-check --ignore-user-config
           -c 'shell_environment_policy.inherit=none'
           -c 'web_search="disabled"'
           "${repro_perm_args[@]}"
           -c 'default_permissions="ws"'
           --disable browser_use --disable in_app_browser
-          --disable computer_use --disable apps --disable code_mode_host
+          --disable computer_use --disable apps
           --disable view_image --disable goals --disable image_generation
           -C "$tree" --output-schema "$REPRO_SCHEMA_FILE" -o "$answer")
     [[ -n "$MODEL" ]] && args+=(--model "$MODEL")
@@ -1740,7 +1743,15 @@ run_repro_stage() {
       kind="unknown"; reason="回答の形がスキーマと合いません"
     else
       reproduced="$(jq -r '.reproduced' "$answer")"
-      if [[ "$reproduced" == "true" ]]; then kind="repro"; else kind="norepro"; fi
+      if [[ "$reproduced" == "true" ]]; then
+        kind="repro"
+      elif jq -e '.command | test("\\S") | not' "$answer" >/dev/null 2>&1; then
+        # 実行したコマンドが空なのに「再現しなかった」と答えた回答は、何も実行していない
+        # （道具が使えなかった等）。「再現しなかった」と数えず、確かめられなかったとする。
+        kind="unknown"; reason="テストを実行していません（コマンドが空）: $(jq -r '.reason' "$answer" | repro_clean | tr '\n' ' ' | cut -c1-300)"
+      else
+        kind="norepro"
+      fi
     fi
 
     case "$kind" in
