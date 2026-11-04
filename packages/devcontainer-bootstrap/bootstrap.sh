@@ -3116,6 +3116,169 @@ follow_blocker() {
   fi
 }
 
+# 未追跡のファイル（.gitignore で除いたものを除く）の一覧を、$1 のファイルへ書く。名前は改行などを含みうるので、
+# git ls-files -z の NUL 区切りで読み、%q で 1 行にして書く（同じ名前は同じ行になるので、集合の差・積は行で取れる）。
+# git が失敗したら、空の一覧として扱わず 1 を返す（呼ぶ側が追従を止める）。
+list_untracked() {
+  local out="$1" raw="$1.raw" f
+  git -C "$ROOT" ls-files -z --others --exclude-standard > "$raw" 2>/dev/null || { rm -f "$raw"; return 1; }
+  while IFS= read -r -d '' f; do
+    printf '%q\n' "$f"
+  done < "$raw" > "$out" || { rm -f "$raw"; return 1; }
+  rm -f "$raw"
+  return 0
+}
+
+# 集合の差（$2 のうち $1 に無い行）と積（$2 のうち $1 にある行）。awk の連想配列で、一度の走査で取る。
+# $1 が空のファイルでも正しく動くよう、NR == FNR ではなく FILENAME で見分ける。
+lines_not_in() { awk 'FILENAME == ARGV[1] { a[$0] = 1; next } !($0 in a)' "$1" "$2"; }
+lines_in_both() { awk 'FILENAME == ARGV[1] { a[$0] = 1; next } ($0 in a)' "$1" "$2"; }
+
+# 書き込む（または消す）パス $2（ROOT からの相対）と、その祖先（a/b/c なら a/b と a）を、$1 へ %q で 1 行ずつ足す。
+# 祖先は、未追跡のシンボリックリンク（git ls-files --others が 1 エントリとして出す）を拾うため。
+# 祖先は、作業ツリーの中でリンクになっていないかを確かめる元として、$1.anc へもそのまま 1 行ずつ足す。
+# パスと祖先の全部は、存在を直接確かめる元として、$1.raw へもそのまま 1 行ずつ足す。
+plan_emit() {
+  local out="$1" d="$2"
+  printf '%q\n' "$d" >> "$out"
+  printf '%s\n' "$d" >> "$out.raw"
+  while [[ "$d" == */* ]]; do
+    d="${d%/*}"
+    printf '%q\n' "$d" >> "$out"
+    printf '%s\n' "$d" >> "$out.anc"
+    printf '%s\n' "$d" >> "$out.raw"
+  done
+}
+
+# --upgrade --dry-run の出力（$1）から、追従が書き込む（または消す）パスを集めて、$2 へ書く（%q で 1 行ずつ）。
+# 数えるのは書き込みを伴う行だけ: create / update / keep ... -> <P>.dcb-new / remove と、.gitignore・ORIGIN の
+# 書き換え。up-to-date と update は <P>.dcb-new を消すので、<P>.dcb-new も入れる。書き込まない行（up-to-date の P・
+# absent・modified / owned / accepted (template unchanged)・keep (... no longer generated)・テンプレート名の行）は数えない。
+# 行の読み方は、bootstrap.sh が出す既知の形ごとに厳密に決める。先頭（種類と理由）と末尾の注記は既知の文字列として落とし、
+# 残りをパスとする（パスに " (" や " -> " があっても切らない）。.dcb-new の形は、末尾が " -> $ROOT/<同じパス>.dcb-new" で
+# あることを確かめてから読む。どれにも当てはまらない行が 1 行でもあれば、読めない行を標準エラーへ出して 1 を返す
+# （呼ぶ側が安全側で止める）。パスは $ROOT/ から始まる（--output-dir "$ROOT" で流すため）。
+parse_plan_paths() {
+  local in="$1" out="$2" line body rest p tail reason bad=0 n=0 known
+  : > "$out"; : > "$out.anc"; : > "$out.raw"
+  while IFS= read -r line; do
+    case "$line" in
+      "plan: "*) ;;
+      *) continue ;;
+    esac
+    body="${line#plan: }"
+    known=""
+    case "$body" in
+      "github/gitignore templates = "*) known="yes" ;;
+      "create $ROOT/"*)
+        plan_emit "$out" "${body#"create $ROOT/"}"; n=$((n + 1)); known="yes" ;;
+      "update $ROOT/"*)
+        p="${body#"update $ROOT/"}"
+        plan_emit "$out" "$p"; plan_emit "$out" "$p.dcb-new"; n=$((n + 1)); known="yes" ;;
+      "update (baseline match) $ROOT/"*)
+        p="${body#"update (baseline match) $ROOT/"}"
+        plan_emit "$out" "$p"; plan_emit "$out" "$p.dcb-new"; n=$((n + 1)); known="yes" ;;
+      "up-to-date $ROOT/"*)
+        plan_emit "$out" "${body#"up-to-date $ROOT/"}.dcb-new"; n=$((n + 1)); known="yes" ;;
+      "remove $ROOT/"*)
+        plan_emit "$out" "${body#"remove $ROOT/"}"; n=$((n + 1)); known="yes" ;;
+      "absent (recorded as intentionally absent) $ROOT/"*) known="yes" ;;
+      "modified (template unchanged) $ROOT/"* | "owned (template unchanged) $ROOT/"* | "accepted (template unchanged) $ROOT/"*) known="yes" ;;
+      "keep (modified, no longer generated) $ROOT/"*) known="yes" ;;
+      "keep ("*)
+        # keep (<理由>) <P> -> <P>.dcb-new
+        for reason in "symlink or not a regular file" "modified, .dcb-new left" "modified" "no record"; do
+          case "$body" in
+            "keep ($reason) $ROOT/"*)
+              rest="${body#"keep ($reason) $ROOT/"}"
+              p="${rest%" -> $ROOT/"*}"
+              tail="${rest#"$p -> $ROOT/"}"
+              if [[ "$rest" != "$p" && "$tail" == "$p.dcb-new" ]]; then
+                plan_emit "$out" "$p.dcb-new"; n=$((n + 1)); known="yes"
+              fi
+              break
+              ;;
+          esac
+        done
+        ;;
+      "$ROOT/"*" (managed section update)")
+        p="${body#"$ROOT"/}"
+        plan_emit "$out" "${p% (managed section update)}"; n=$((n + 1)); known="yes" ;;
+      "$ROOT/"*" (rewritten from the new version)")
+        p="${body#"$ROOT"/}"
+        plan_emit "$out" "${p% (rewritten from the new version)}"; n=$((n + 1)); known="yes" ;;
+    esac
+    if [[ -z "$known" ]]; then
+      echo "読めない plan: の行: $line" >&2
+      bad=1
+    fi
+  done < "$in"
+  [[ $bad -eq 0 && $n -gt 0 ]]
+}
+
+# 未追跡の一覧（$1）が、追従が書く予定のパス（$2。parse_plan_paths の出力）と重なるかを確かめる。重ならなければ 0。
+# 重なるなら、重なったパスを示して 1。
+report_untracked_overlap() {
+  local overlap anc links="" rp extra=""
+  overlap="$(lines_in_both "$2" "$1")"
+  # 未追跡の一覧は --exclude-standard で ignore 対象を除くので、ignore に一致する未追跡のファイル（例: CLAUDE.md.dcb-new）は
+  # 一覧の照合では漏れる。一覧全体（node_modules/ のように数万件ありうる）を取り直さず、逆向きにも確かめる:
+  # 書き込み先（と祖先）それぞれについて、作業ツリーに通常のファイルかリンクとして在り、かつ追跡していなければ重なりとする。
+  # ディレクトリは対象にしない（中のファイルだけが問題で、ディレクトリ自体は書き換えない）。
+  if [[ -s "$2.raw" ]]; then
+    while IFS= read -r rp; do
+      if [[ -L "$ROOT/$rp" || -f "$ROOT/$rp" ]] && ! git -C "$ROOT" ls-files --error-unmatch -- ":(literal)$rp" >/dev/null 2>&1; then
+        extra="$extra$(printf '%q' "$rp")"$'\n'
+      fi
+    done < <(sort -u "$2.raw")
+  fi
+  if [[ -n "$extra" ]]; then
+    overlap="$(printf '%s\n%s' "$overlap" "$extra" | sed '/^$/d' | sort -u)"
+  fi
+  # 書き込み先の祖先が、作業ツリーの中でシンボリックリンクなら（追跡しているかを問わず）、追従はリンクをたどって
+  # 作業ツリーの外へ書きうる。
+  if [[ -s "$2.anc" ]]; then
+    while IFS= read -r anc; do
+      [[ -L "$ROOT/$anc" ]] && links="$links$anc"$'\n'
+    done < <(sort -u "$2.anc")
+  fi
+  if [[ -n "$links" ]]; then
+    echo "$LOG_PREFIX 追従が書く予定のパスの祖先が、作業ツリーの中でシンボリックリンクになっているため、追従しません（リンクをたどって作業ツリーの外へ書きうるため）。リンク:" >&2
+    printf '%s' "$links" | sed 's/^/  /' >&2
+    echo "$LOG_PREFIX リンクを外すか、コミットか退避をしてからやり直してください。" >&2
+    return 1
+  fi
+  [[ -n "$overlap" ]] || return 0
+  echo "$LOG_PREFIX 追従が書く予定のパス（またはその祖先）と同じ名前の未追跡のファイルがあるため、追従しません（上書きや .dcb-new の置き換えで失うため）。重なったパス:" >&2
+  printf '%s\n' "$overlap" | sed 's/^/  /' >&2
+  echo "$LOG_PREFIX コミットか退避をしてからやり直してください。" >&2
+  return 1
+}
+
+# 取得して照合した bootstrap.sh（$1）を --upgrade --dry-run で走らせ（何も書かない）、書く予定のパスを $2/plan.paths へ
+# 集める。残りの引数は、追従に渡す規範の引数。標準エラーは $2/dry.err へ取る。失敗したときは、止めるときに示す文面（末尾の数行を含む）を
+# $2/dry.fail へ書く（未追跡のファイルが無ければ止めないので、ここでは出さない）。
+# 時間の上限は付けない（timeout が無い環境があるため）。dry-run は、規範の取得元によっては規範をもう一度取得しうる。
+# 失敗した・終わりの印が無い・読めない行がある・パスが 1 つも取れないときは、書く予定のパスを知れないので 1 を返す。
+run_dry_run_plan() {
+  local bs="$1" work="$2" rc
+  shift 2
+  bash "$bs" --upgrade --dry-run --output-dir "$ROOT" "$@" > "$work/dry.out" 2> "$work/dry.err"
+  rc=$?
+  if [[ $rc -eq 0 ]] && grep -Fxq "[bootstrap] dry-run: no files were written" "$work/dry.out" \
+    && parse_plan_paths "$work/dry.out" "$work/plan.paths" 2>> "$work/dry.err"; then
+    return 0
+  fi
+  {
+    echo "$LOG_PREFIX 追従が書く予定のパスを、--upgrade --dry-run の出力から読めませんでした（終了コード $rc）。追従と重なるかを判定できないため、安全側に倒し、未追跡のファイルがあるので追従しません（コミットか退避をしてからやり直してください）。"
+    if [[ -s "$work/dry.err" ]]; then
+      echo "$LOG_PREFIX dry-run の標準エラーの末尾:"
+      tail -n 5 "$work/dry.err" | sed 's/^/  /'
+    fi
+  } > "$work/dry.fail"
+  return 1
+}
+
 # 追従する。$1 は追従する部品（"dcb" "playbook" の空白区切り。聞いて y と答えたもの）。
 # 失敗は 1（何も実行していないか、止めた理由を出している）。
 # DCB を上げないとき（N と答えた・すでに最新・最新より新しい）は、今の版の bootstrap.sh を使い、
@@ -3125,7 +3288,7 @@ follow_blocker() {
 # prompt 以外（手で呼ぶ upgrade）は、キャッシュの最新を読む。
 do_upgrade() {
   local want="$1" shown_dcb="${2:-}" shown_pb="${3:-}" from_prompt="${4:-}" dir latest_dcb="" latest_pb="" want_dcb="" want_pb="" use_tag blocker
-  local work base wantbranch expected actual rc branch_hint changed
+  local work base wantbranch expected actual rc branch_hint changed written rmcmd f q in_tree dry_ok new_untracked new_unknown
   local -a pbargs
   pbargs=()
   dir="$(cache_dir)"
@@ -3164,13 +3327,17 @@ do_upgrade() {
   # 取得（最大 60 秒ずつ）の前に、台帳で他のセッションの git の登録を確かめる（あれば何も変えずに止める）。
   # 以降の失敗の経路では、登録を解放してから戻る。
   ledger_guard || return 1
-  # 差分を読めるよう、作業ツリーが汚れているときは止める（追従の差分と混ざるため）。登録のあとで確かめる。
+  # 差分を読めるよう、追跡しているファイルに変更があるときは止める（追従の差分と混ざるため）。登録のあとで確かめる。
   # 先に確かめると、確かめてから登録するまでに別のセッションが書き込んで解放したとき、汚れたまま進む（#666）。
-  if git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
-    && [[ -n "$(git -C "$ROOT" status --porcelain 2>/dev/null)" ]]; then
-    echo "$LOG_PREFIX 作業ツリーに未コミットの変更があるため、追従しません（差分が混ざるため）。コミットか退避をしてからやり直してください。" >&2
-    release_git_claim
-    return 1
+  # 未追跡のファイルは、ここでは止めない。追従が書く予定のパスと重なるときだけ止める（下の dry-run）。
+  in_tree=""
+  if git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    in_tree="yes"
+    if [[ -n "$(git -C "$ROOT" status --porcelain --untracked-files=no 2>/dev/null)" ]]; then
+      echo "$LOG_PREFIX 作業ツリーに未コミットの変更があるため、追従しません（差分が混ざるため）。コミットか退避をしてからやり直してください。" >&2
+      release_git_claim
+      return 1
+    fi
   fi
 
   work="$(mktemp -d "${TMPDIR:-/tmp}/dcb-update-upgrade.XXXXXX" 2>/dev/null)" || { release_git_claim; return 1; }
@@ -3191,6 +3358,32 @@ do_upgrade() {
   fi
   echo "$LOG_PREFIX bootstrap.sh $use_tag を取得し、SHA256SUMS と照合しました。"
 
+  # 取得と照合のあと、ブランチを切る前に、dry-run を常に 1 回流す（git の作業ツリーのとき）。追従が書く予定のパスと、
+  # 未追跡のファイルが重ならないかを確かめるため。一覧は、取得を待ったあとの今のもの。dry-run が読めなかったときは、
+  # 未追跡のファイルがある場合だけ止める（無ければ従来どおり進め、--upgrade の直前の一覧で、あればそこで止める）。
+  dry_ok=""
+  if [[ -n "$in_tree" ]]; then
+    if ! list_untracked "$work/untracked.dry"; then
+      echo "$LOG_PREFIX 未追跡のファイルの一覧を git から読めませんでした。安全側に倒し、追従しません。" >&2
+      release_git_claim
+      rm -rf "$work"
+      return 1
+    fi
+    if run_dry_run_plan "$work/bootstrap.sh" "$work" ${pbargs[@]+"${pbargs[@]}"}; then
+      dry_ok="yes"
+      if ! report_untracked_overlap "$work/untracked.dry" "$work/plan.paths"; then
+        release_git_claim
+        rm -rf "$work"
+        return 1
+      fi
+    elif [[ -s "$work/untracked.dry" ]]; then
+      cat "$work/dry.fail" >&2
+      release_git_claim
+      rm -rf "$work"
+      return 1
+    fi
+  fi
+
   # 名前には、追従する部品の版だけを入れる（追従しない部品の最新版を入れると、問いかけで示した名前と食い違う）。
   wantbranch="$(follow_branch_name "${want_dcb:+$latest_dcb}" "${want_pb:+$latest_pb}")"
   # 問いかけを経ない（手で呼ぶ upgrade）ときは、追従を始める前に何が起きるかを 1 行出す。
@@ -3201,23 +3394,77 @@ do_upgrade() {
     return 1
   fi
 
+  # --upgrade の直前の未追跡の一覧を控える。dry-run からここまでに増えたものも、重なりの判定から漏らさない
+  # （dry-run は、ブランチを切る前に流した 1 回の結果を使い回す）。失敗のときの「新しくできたファイル」は、
+  # この一覧との差にする（取得を待つあいだに別の端末で作ったファイルを、消す対象として案内しない）。
+  if [[ -n "$in_tree" ]]; then
+    if ! list_untracked "$work/untracked.pre"; then
+      echo "$LOG_PREFIX 未追跡のファイルの一覧を git から読めませんでした。安全側に倒し、追従しません。" >&2
+      restore_branch
+      release_git_claim
+      rm -rf "$work"
+      return 1
+    fi
+    if [[ -z "$dry_ok" ]]; then
+      if [[ -s "$work/untracked.pre" ]]; then
+        cat "$work/dry.fail" >&2
+        restore_branch
+        release_git_claim
+        rm -rf "$work"
+        return 1
+      fi
+    elif ! report_untracked_overlap "$work/untracked.pre" "$work/plan.paths"; then
+      restore_branch
+      release_git_claim
+      rm -rf "$work"
+      return 1
+    fi
+  fi
+
   echo "$LOG_PREFIX bootstrap.sh --upgrade を実行します。"
   bash "$work/bootstrap.sh" --upgrade --output-dir "$ROOT" ${pbargs[@]+"${pbargs[@]}"}
   rc=$?
+  # 追従で新しくできた未追跡のファイル（--upgrade の直前の一覧に無いもの）。一覧を読めなければ new_unknown にする。
+  new_untracked=""
+  new_unknown=""
+  if [[ -n "$in_tree" ]]; then
+    if list_untracked "$work/untracked.post"; then
+      new_untracked="$(lines_not_in "$work/untracked.pre" "$work/untracked.post")"
+    else
+      new_unknown="yes"
+    fi
+  fi
   rm -rf "$work"
   if [[ $rc -ne 0 && $rc -ne 2 ]]; then
     echo "$LOG_PREFIX --upgrade が失敗しました（終了コード $rc）。出力を確かめてください。" >&2
     # 途中で書かれたファイルを自動では戻さない（作業ツリー全体を戻すと、追従のあいだに別の端末で編集したものまで消しうるため）。
     # 何も書かれていなければ、切った作業用のブランチを消して元のブランチへ戻す。書かれていれば、作業用のブランチに留まり
     # （既定ブランチの作業ツリーを汚さない）、戻し方を案内する。
-    if git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
-      && [[ -n "$(git -C "$ROOT" status --porcelain 2>/dev/null)" ]]; then
+    # --upgrade の直前からあった未追跡ファイルは数えない（直前の一覧に無いものだけが、追従で書かれたもの）。
+    written=""
+    if [[ -n "$in_tree" ]]; then
+      if [[ -n "$(git -C "$ROOT" status --porcelain --untracked-files=no 2>/dev/null)" || -n "$new_untracked" || -n "$new_unknown" ]]; then written="yes"; fi
+    fi
+    if [[ -n "$written" ]]; then
       if [[ -n "$BRANCH_MADE" ]]; then
         echo "$LOG_PREFIX 途中で書かれたファイルがあるため、作業用のブランチ $BRANCH_MADE に留まります（$BRANCH_ORIG には戻していません）。" >&2
       else
         echo "$LOG_PREFIX 途中で書かれたファイルが、今のブランチの作業ツリーに残っています。" >&2
       fi
-      echo "$LOG_PREFIX 差分を読んで、要らなければ git restore . と git clean -fd（消す前に git clean -nd で確かめる）で戻してください。" >&2
+      echo "$LOG_PREFIX 差分を読んで、要らなければ、追跡しているファイルの変更は git restore . で戻してください。" >&2
+      if [[ -n "$new_unknown" ]]; then
+        echo "$LOG_PREFIX 追従で新しくできた未追跡のファイルを特定できませんでした。git status で確かめ、追従の前からあったものを消さないようにしてください。" >&2
+      elif [[ -n "$new_untracked" ]]; then
+        echo "$LOG_PREFIX 追従で新しくできた未追跡のファイル（追従の前からあった未追跡のファイルは含みません。git clean は、それらまで消すため使わないでください）:" >&2
+        printf '%s\n' "$new_untracked" | sed -n '1,40p' | sed 's/^/  /' >&2
+        [[ "$(printf '%s\n' "$new_untracked" | wc -l | tr -d ' ')" -le 40 ]] || echo "  （ほかにもあります。git status で確かめてください）" >&2
+        # 一覧の各行は %q で引用してあり、追従先からの相対パス。今いるディレクトリに依らないよう、先に cd する。
+        printf -v q '%q' "$ROOT"
+        rmcmd="cd -- $q && rm --"
+        while IFS= read -r f; do rmcmd="$rmcmd $f"; done < <(printf '%s\n' "$new_untracked" | sed -n '1,40p')
+        echo "$LOG_PREFIX 追従のあいだに別の端末で作ったファイルも含まれうるので、消す前に一覧を確かめてください。" >&2
+        echo "$LOG_PREFIX 要らなければ、上の一覧だけを消してください（消す前に内容を確かめる）: $rmcmd" >&2
+      fi
       BRANCH_MADE=""
     else
       restore_branch
@@ -3229,7 +3476,9 @@ do_upgrade() {
   branch_hint=""
   [[ -z "$BRANCH_MADE" ]] || branch_hint="（作業用のブランチ $BRANCH_MADE に切り替え済みです）"
   if git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    changed="$(git -C "$ROOT" status --short 2>/dev/null | sed -n '1,40p')"
+    # --upgrade の直前からあった未追跡のファイルは出さない（追従で変わったものだけを示す）。
+    changed="$({ git -C "$ROOT" status --short --untracked-files=no 2>/dev/null
+      [[ -z "$new_untracked" ]] || printf '%s\n' "$new_untracked" | sed 's/^/?? /'; } | sed -n '1,40p')"
     echo "$LOG_PREFIX 追従の差分を作業ツリーに残しました。コミット・push・PR はしていません$branch_hint。"
     echo "変わったファイル:"
     if [[ -n "$changed" ]]; then printf '%s\n' "$changed" | sed 's/^/  /'; else echo "  （変わったファイルはありません）"; fi

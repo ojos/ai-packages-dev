@@ -289,8 +289,19 @@ sha_of() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk '{
 FAKE_BOOT="$TEST_TMP_ROOT/fake-bootstrap.sh"
 cat > "$FAKE_BOOT" <<'FB'
 #!/usr/bin/env bash
+out=""; dry=""; for a in "$@"; do [[ "$a" == --dry-run ]] && dry=yes; done
+if [[ -n "$dry" ]]; then
+  # --upgrade --dry-run: 引数は別のファイルへ記録し、FAKE_PLAN の行（出力先は @OUT@）を plan: として出す。
+  printf '%s\n' "$*" >> "$FAKE_BOOT_LOG.dry"
+  while [[ $# -gt 0 ]]; do case "$1" in --output-dir) out="$2"; shift 2 ;; *) shift ;; esac; done
+  [[ "${FAKE_DRY_RC:-0}" == 0 ]] || exit "$FAKE_DRY_RC"
+  # dry-run のあと・--upgrade の前に、別の端末が未追跡ファイルを作った場面を模擬する。
+  [[ -z "${FAKE_DRY_CREATE:-}" ]] || echo late > "$out/$FAKE_DRY_CREATE"
+  while IFS= read -r l; do [[ -n "$l" ]] && echo "plan: ${l//@OUT@/$out}"; done <<< "${FAKE_PLAN:-}"
+  echo "[bootstrap] dry-run: no files were written"
+  exit 0
+fi
 printf '%s\n' "$*" > "$FAKE_BOOT_LOG"
-out=""
 while [[ $# -gt 0 ]]; do case "$1" in --output-dir) out="$2"; shift 2 ;; *) shift ;; esac; done
 [[ -n "${FAKE_BOOT_NOWRITE:-}" ]] || echo changed > "$out/upgraded-marker"
 exit "${FAKE_BOOT_RC:-0}"
@@ -313,7 +324,7 @@ make_repo() { # <out> [生成の追加引数...]
 BOOT_LOG="$TEST_TMP_ROOT/boot.log"
 yes_run() { # <out> <cache> [env...]
   local o="$1" cache="$2"; shift 2
-  : > "$BOOT_LOG"
+  : > "$BOOT_LOG"; rm -f "$BOOT_LOG.dry"
   printf 'y\n' | env PATH="$STUBBIN:$PATH" UPDATE_CHECK_CACHE_DIR="$cache" UPDATE_CHECK_TODAY="$TODAY" UPDATE_CHECK_ASSUME_TTY=1 \
     FAKE_CURL_DIR="$FIX" FAKE_BOOT_LOG="$BOOT_LOG" "$@" "$BASH_BIN" "$o/scripts/update-check.sh" prompt 2>&1
 }
@@ -355,10 +366,167 @@ if [[ ! -s "$BOOT_LOG" ]]; then pass; else fail "実行された"; fi
 
 it "y: 未コミットの変更があれば、追従せずに止める"
 put_release_assets ok
-R5="$(new_workdir)/p"; make_repo "$R5"; echo dirty > "$R5/dirty.txt"
+R5="$(new_workdir)/p"; make_repo "$R5"; echo dirty >> "$R5/.gitignore"
 env PATH="$STUBBIN:$PATH" UPDATE_CHECK_CACHE_DIR="$TEST_TMP_ROOT/cy5" UPDATE_CHECK_TODAY="$TODAY" FAKE_CURL_DIR="$FIX" "$BASH_BIN" "$R5/scripts/update-check.sh" notify >/dev/null 2>&1
 o="$(yes_run "$R5" "$TEST_TMP_ROOT/cy5")"
 if [[ ! -s "$BOOT_LOG" && "$o" == *未コミット* ]]; then pass; else fail "出力: $o"; fi
+
+# ── 未追跡のファイル（上流の issue 704） ───────────────────────────────────
+# 追跡しているファイルの変更は止める。未追跡のファイルは、追従が書く予定のパス（dry-run の plan: の行）と
+# 重なるときだけ止める。dry-run が失敗した・読めないときは、未追跡のファイルがあれば止める。
+reset_fixture; set_latest "$DCB_API" "v0.99.0"; put_release_assets ok
+mk_untracked_repo() { # <out> <cache>
+  make_repo "$1"
+  mkdir -p "$1/misc"; printf 'memo\n' > "$1/misc/note.txt"
+  env PATH="$STUBBIN:$PATH" UPDATE_CHECK_CACHE_DIR="$2" UPDATE_CHECK_TODAY="$TODAY" FAKE_CURL_DIR="$FIX" "$BASH_BIN" "$1/scripts/update-check.sh" notify >/dev/null 2>&1
+}
+
+it "未追跡: 追従と関係の無い未追跡ファイル（misc/note.txt）があっても追従が進み、そのファイルは変わらず残る"
+RU1="$(new_workdir)/p"; mk_untracked_repo "$RU1" "$TEST_TMP_ROOT/cun1"
+o="$(yes_run "$RU1" "$TEST_TMP_ROOT/cun1" FAKE_PLAN=$'create @OUT@/scripts/new-file.sh\nupdate @OUT@/CLAUDE.md\n@OUT@/.gitignore (managed section update)')"
+if [[ "$(cat "$BOOT_LOG")" == "--upgrade --output-dir $RU1" && -s "$BOOT_LOG.dry" && "$(cat "$RU1/misc/note.txt")" == memo \
+  && "$o" == *upgraded-marker* && "$o" != *misc/note.txt* ]]; then pass; else fail "引数: $(cat "$BOOT_LOG") dry: $(cat "$BOOT_LOG.dry" 2>&1) 出力: $o"; fi
+
+it "未追跡: dry-run には、追従と同じ --upgrade --output-dir と規範の引数を渡す"
+RU1B="$(new_workdir)/p"; mk_untracked_repo "$RU1B" "$TEST_TMP_ROOT/cun1b"
+o="$(yes_run "$RU1B" "$TEST_TMP_ROOT/cun1b" FAKE_PLAN="create @OUT@/x")"
+if [[ "$(cat "$BOOT_LOG.dry")" == "--upgrade --dry-run --output-dir $RU1B" ]]; then pass; else fail "dry: $(cat "$BOOT_LOG.dry" 2>&1)"; fi
+
+it "未追跡: 追従で書くパスと同じ名前の未追跡ファイルがあると、そのパスを示して止まる（ブランチも切らない）"
+RU2="$(new_workdir)/p"; mk_untracked_repo "$RU2" "$TEST_TMP_ROOT/cun2"
+mkdir -p "$RU2/.claude/skills/x"; echo mine > "$RU2/.claude/skills/x/SKILL.md"
+o="$(yes_run "$RU2" "$TEST_TMP_ROOT/cun2" FAKE_PLAN=$'update @OUT@/CLAUDE.md\ncreate @OUT@/.claude/skills/x/SKILL.md')"
+if [[ ! -s "$BOOT_LOG" && "$o" == *.claude/skills/x/SKILL.md* && "$o" != *misc/note.txt* && "$o" == *追従しません* \
+  && "$(git -C "$RU2" symbolic-ref --short HEAD)" == main && "$(cat "$RU2/.claude/skills/x/SKILL.md")" == mine ]]; then pass; else fail "出力: $o"; fi
+
+it "未追跡: 追従が置く .dcb-new と同じ名前の未追跡ファイルがあっても止まる"
+RU2B="$(new_workdir)/p"; mk_untracked_repo "$RU2B" "$TEST_TMP_ROOT/cun2b"
+echo mine > "$RU2B/CLAUDE.md.dcb-new"
+o="$(yes_run "$RU2B" "$TEST_TMP_ROOT/cun2b" FAKE_PLAN="keep (modified) @OUT@/CLAUDE.md -> @OUT@/CLAUDE.md.dcb-new")"
+if [[ ! -s "$BOOT_LOG" && "$o" == *CLAUDE.md.dcb-new* ]]; then pass; else fail "出力: $o"; fi
+
+it "未追跡: 追跡しているファイルに未コミットの変更があると、従来どおり止まる（dry-run も流さない）"
+RU3="$(new_workdir)/p"; mk_untracked_repo "$RU3" "$TEST_TMP_ROOT/cun3"
+echo dirty >> "$RU3/.gitignore"
+o="$(yes_run "$RU3" "$TEST_TMP_ROOT/cun3" FAKE_PLAN="create @OUT@/x")"
+if [[ ! -s "$BOOT_LOG" && ! -e "$BOOT_LOG.dry" && "$o" == *未コミット* ]]; then pass; else fail "出力: $o"; fi
+
+it "未追跡: ステージ済みの変更でも止まる"
+RU3B="$(new_workdir)/p"; mk_untracked_repo "$RU3B" "$TEST_TMP_ROOT/cun3b"
+echo dirty >> "$RU3B/.gitignore"; git -C "$RU3B" add .gitignore
+o="$(yes_run "$RU3B" "$TEST_TMP_ROOT/cun3b" FAKE_PLAN="create @OUT@/x")"
+if [[ ! -s "$BOOT_LOG" && "$o" == *未コミット* ]]; then pass; else fail "出力: $o"; fi
+
+it "未追跡: 追従が失敗したときの案内に、追従の前からあった未追跡ファイルは出ず、新しくできたものだけが出る"
+RU4="$(new_workdir)/p"; mk_untracked_repo "$RU4" "$TEST_TMP_ROOT/cun4"
+o="$(yes_run "$RU4" "$TEST_TMP_ROOT/cun4" FAKE_PLAN="create @OUT@/x" FAKE_BOOT_RC=1)"
+if [[ "$o" == *失敗しました* && "$o" == *upgraded-marker* && "$o" == *"git restore ."* && "$o" != *misc/note.txt* && "$o" != *"git clean -fd"* \
+  && -e "$RU4/misc/note.txt" ]]; then pass; else fail "出力: $o"; fi
+
+it "未追跡: 追従が何も書かずに失敗したら、未追跡ファイルがあっても作業用のブランチを消して元へ戻す"
+RU4B="$(new_workdir)/p"; mk_untracked_repo "$RU4B" "$TEST_TMP_ROOT/cun4b"
+o="$(yes_run "$RU4B" "$TEST_TMP_ROOT/cun4b" FAKE_PLAN="create @OUT@/x" FAKE_BOOT_RC=1 FAKE_BOOT_NOWRITE=1)"
+if [[ "$(git -C "$RU4B" symbolic-ref --short HEAD)" == main && -z "$(git -C "$RU4B" branch --list 'chore/*')" && "$o" != *misc/note.txt* ]]; then pass; else fail "出力: $o"; fi
+
+it "未追跡: dry-run が失敗したら、未追跡ファイルがあるだけで止まる"
+RU5="$(new_workdir)/p"; mk_untracked_repo "$RU5" "$TEST_TMP_ROOT/cun5"
+o="$(yes_run "$RU5" "$TEST_TMP_ROOT/cun5" FAKE_PLAN="create @OUT@/x" FAKE_DRY_RC=3)"
+if [[ ! -s "$BOOT_LOG" && "$o" == *読めませんでした* && "$o" == *追従しません* && "$(git -C "$RU5" symbolic-ref --short HEAD)" == main ]]; then pass; else fail "出力: $o"; fi
+
+it "未追跡: dry-run の出力を読めない（plan: の行が無い）ときも、未追跡ファイルがあるだけで止まる"
+RU5B="$(new_workdir)/p"; mk_untracked_repo "$RU5B" "$TEST_TMP_ROOT/cun5b"
+o="$(yes_run "$RU5B" "$TEST_TMP_ROOT/cun5b")"
+if [[ ! -s "$BOOT_LOG" && "$o" == *読めませんでした* ]]; then pass; else fail "出力: $o"; fi
+
+it "未追跡: 失敗の案内の rm は、今いるディレクトリに依らないよう、追従先へ cd してから示す（空白を含むパスも引用する）"
+RU7="$(new_workdir)/p dir"; mkdir -p "$RU7"; mk_untracked_repo "$RU7" "$TEST_TMP_ROOT/cun7"
+o="$(yes_run "$RU7" "$TEST_TMP_ROOT/cun7" FAKE_PLAN="create @OUT@/x" FAKE_BOOT_RC=1)"
+q7="$(printf '%q' "$RU7")"
+if [[ "$o" == *"cd -- $q7 && rm -- upgraded-marker"* ]]; then pass; else fail "出力: $o"; fi
+
+it "未追跡: dry-run のあとに増えた未追跡ファイルは、追従が書くパスと重なるなら、--upgrade の前に止まる"
+RU8="$(new_workdir)/p"; mk_untracked_repo "$RU8" "$TEST_TMP_ROOT/cun8"
+o="$(yes_run "$RU8" "$TEST_TMP_ROOT/cun8" FAKE_PLAN="create @OUT@/late.txt" FAKE_DRY_CREATE=late.txt)"
+if [[ ! -s "$BOOT_LOG" && "$o" == *late.txt* && "$o" == *追従しません* && "$(git -C "$RU8" symbolic-ref --short HEAD)" == main ]]; then pass; else fail "出力: $o"; fi
+
+it "未追跡: --upgrade の直前にあった未追跡ファイル（dry-run のあとに増えたもの）は、失敗の案内で消す対象として示さない"
+RU9="$(new_workdir)/p"; mk_untracked_repo "$RU9" "$TEST_TMP_ROOT/cun9"
+o="$(yes_run "$RU9" "$TEST_TMP_ROOT/cun9" FAKE_PLAN="create @OUT@/x" FAKE_DRY_CREATE=late.txt FAKE_BOOT_RC=1)"
+if [[ "$o" == *失敗しました* && "$o" == *upgraded-marker* && "$o" != *late.txt* && "$o" != *misc/note.txt* && -e "$RU9/late.txt" ]]; then pass; else fail "出力: $o"; fi
+
+it "未追跡: 未追跡ファイルの一覧を git から読めなければ、空として扱わず、追従しない"
+GITFAIL="$TEST_TMP_ROOT/gitfail"; mkdir -p "$GITFAIL"
+REALGIT="$(command -v git)"
+printf '#!/usr/bin/env bash\nfor a in "$@"; do [[ "$a" == ls-files ]] && exit 1; done\nexec "%s" "$@"\n' "$REALGIT" > "$GITFAIL/git"; chmod +x "$GITFAIL/git"
+RU10="$(new_workdir)/p"; mk_untracked_repo "$RU10" "$TEST_TMP_ROOT/cun10"
+o="$(yes_run "$RU10" "$TEST_TMP_ROOT/cun10" PATH="$GITFAIL:$STUBBIN:$PATH" FAKE_PLAN="create @OUT@/x")"
+if [[ ! -s "$BOOT_LOG" && "$o" == *読めませんでした* && "$(git -C "$RU10" symbolic-ref --short HEAD)" == main ]]; then pass; else fail "出力: $o"; fi
+
+it "未追跡: 知らない形の plan: の行が 1 行でもあれば、安全側で止まる"
+RU11="$(new_workdir)/p"; mk_untracked_repo "$RU11" "$TEST_TMP_ROOT/cun11"
+o="$(yes_run "$RU11" "$TEST_TMP_ROOT/cun11" FAKE_PLAN=$'create @OUT@/x\nfrobnicate @OUT@/y')"
+if [[ ! -s "$BOOT_LOG" && "$o" == *読めませんでした* && "$o" == *frobnicate* ]]; then pass; else fail "出力: $o"; fi
+
+it "未追跡: 書き込まない行（up-to-date / absent / template unchanged）の P と同名の未追跡ファイルでは止まらない"
+RU12="$(new_workdir)/p"; mk_untracked_repo "$RU12" "$TEST_TMP_ROOT/cun12"
+echo mine > "$RU12/a.txt"; echo mine > "$RU12/b.txt"; echo mine > "$RU12/c.txt"
+o="$(yes_run "$RU12" "$TEST_TMP_ROOT/cun12" FAKE_PLAN=$'up-to-date @OUT@/a.txt\nabsent (recorded as intentionally absent) @OUT@/b.txt\nmodified (template unchanged) @OUT@/c.txt\ncreate @OUT@/z')"
+if [[ -s "$BOOT_LOG" && "$o" == *upgraded-marker* ]]; then pass; else fail "出力: $o"; fi
+
+it "未追跡: up-to-date / update が消す <P>.dcb-new と同名の未追跡ファイルでは止まる"
+RU13="$(new_workdir)/p"; mk_untracked_repo "$RU13" "$TEST_TMP_ROOT/cun13"
+echo mine > "$RU13/a.txt.dcb-new"
+o="$(yes_run "$RU13" "$TEST_TMP_ROOT/cun13" FAKE_PLAN="up-to-date @OUT@/a.txt")"
+if [[ ! -s "$BOOT_LOG" && "$o" == *a.txt.dcb-new* ]]; then pass; else fail "出力: $o"; fi
+
+it "未追跡: 未追跡ファイルが無くても、dry-run はブランチを切る前に 1 回流し、読めなくても追従は進む"
+RU6="$(new_workdir)/p"; make_repo "$RU6"
+env PATH="$STUBBIN:$PATH" UPDATE_CHECK_CACHE_DIR="$TEST_TMP_ROOT/cun6" UPDATE_CHECK_TODAY="$TODAY" FAKE_CURL_DIR="$FIX" "$BASH_BIN" "$RU6/scripts/update-check.sh" notify >/dev/null 2>&1
+o="$(yes_run "$RU6" "$TEST_TMP_ROOT/cun6")"
+if [[ -s "$BOOT_LOG" && "$(wc -l < "$BOOT_LOG.dry" | tr -d ' ')" == 1 && "$o" != *読めませんでした* ]]; then pass; else fail "出力: $o"; fi
+
+it "未追跡: 書き込み先の祖先が未追跡のシンボリックリンク（作業ツリーの外を指す）なら止まり、外のディレクトリには何も書かれない"
+RU19="$(new_workdir)/p"; mk_untracked_repo "$RU19" "$TEST_TMP_ROOT/cun19"
+OUTSIDE="$(new_workdir)/outside"; mkdir -p "$OUTSIDE"
+ln -s "$OUTSIDE" "$RU19/linked"
+o="$(yes_run "$RU19" "$TEST_TMP_ROOT/cun19" FAKE_PLAN="create @OUT@/linked/skills/x/SKILL.md")"
+if [[ ! -s "$BOOT_LOG" && "$o" == *linked* && "$o" == *追従しません* && -z "$(ls -A "$OUTSIDE")" && "$(git -C "$RU19" symbolic-ref --short HEAD)" == main ]]; then pass; else fail "出力: $o"; fi
+
+it "未追跡: 書き込み先の祖先が追跡しているシンボリックリンクでも止まる"
+RU20="$(new_workdir)/p"; make_repo "$RU20"
+OUTSIDE2="$(new_workdir)/outside"; mkdir -p "$OUTSIDE2"
+ln -s "$OUTSIDE2" "$RU20/tlink"; git -C "$RU20" add tlink; git -C "$RU20" -c user.name=t -c user.email=t@example.com commit -q -m link
+env PATH="$STUBBIN:$PATH" UPDATE_CHECK_CACHE_DIR="$TEST_TMP_ROOT/cun20" UPDATE_CHECK_TODAY="$TODAY" FAKE_CURL_DIR="$FIX" "$BASH_BIN" "$RU20/scripts/update-check.sh" notify >/dev/null 2>&1
+o="$(yes_run "$RU20" "$TEST_TMP_ROOT/cun20" FAKE_PLAN="create @OUT@/tlink/f.txt")"
+if [[ ! -s "$BOOT_LOG" && "$o" == *tlink* && -z "$(ls -A "$OUTSIDE2")" ]]; then pass; else fail "出力: $o"; fi
+
+it "未追跡: ignore に一致する未追跡ファイル（CLAUDE.md.dcb-new）も、追従が消す .dcb-new と同名なら重なりとして止まる"
+RU22="$(new_workdir)/p"; mk_untracked_repo "$RU22" "$TEST_TMP_ROOT/cun22"
+printf '*.dcb-new\n' >> "$RU22/.git/info/exclude"; echo mine > "$RU22/CLAUDE.md.dcb-new"
+o="$(yes_run "$RU22" "$TEST_TMP_ROOT/cun22" FAKE_PLAN="update @OUT@/CLAUDE.md")"
+if [[ ! -s "$BOOT_LOG" && "$o" == *CLAUDE.md.dcb-new* && "$o" == *追従しません* && "$(cat "$RU22/CLAUDE.md.dcb-new")" == mine ]]; then pass; else fail "出力: $o"; fi
+
+it "未追跡: 書き込み先の祖先が普通の未追跡ディレクトリ（misc/）なら、そのディレクトリ自体は一覧に出ないので止めず、中の別のファイルも残る"
+RU21="$(new_workdir)/p"; mk_untracked_repo "$RU21" "$TEST_TMP_ROOT/cun21"
+o="$(yes_run "$RU21" "$TEST_TMP_ROOT/cun21" FAKE_PLAN="create @OUT@/misc/new.txt")"
+if [[ -s "$BOOT_LOG" && "$o" == *upgraded-marker* && "$(cat "$RU21/misc/note.txt")" == memo ]]; then pass; else fail "出力: $o"; fi
+
+it "未追跡: パスに \" (\" を含む未追跡ファイルも、plan: の行の注記と取り違えず、重なりとして検出する"
+RU16="$(new_workdir)/p"; mk_untracked_repo "$RU16" "$TEST_TMP_ROOT/cun16"
+mkdir -p "$RU16/docs"; echo mine > "$RU16/docs/design (draft).md"
+o="$(yes_run "$RU16" "$TEST_TMP_ROOT/cun16" FAKE_PLAN="create @OUT@/docs/design (draft).md")"
+if [[ ! -s "$BOOT_LOG" && "$o" == *"design"*"draft"* && "$o" == *追従しません* && "$(cat "$RU16/docs/design (draft).md")" == mine ]]; then pass; else fail "出力: $o"; fi
+
+it "未追跡: パスに \" -> \" を含む .dcb-new の置き場所も、重なりとして検出する（末尾が同じパスの .dcb-new であることを確かめて読む）"
+RU17="$(new_workdir)/p"; mk_untracked_repo "$RU17" "$TEST_TMP_ROOT/cun17"
+mkdir -p "$RU17/docs"; echo mine > "$RU17/docs/a -> b.md.dcb-new"
+o="$(yes_run "$RU17" "$TEST_TMP_ROOT/cun17" FAKE_PLAN="keep (modified) @OUT@/docs/a -> b.md -> @OUT@/docs/a -> b.md.dcb-new")"
+if [[ ! -s "$BOOT_LOG" && "$o" == *"a"*"b.md.dcb-new"* && "$o" == *追従しません* ]]; then pass; else fail "出力: $o"; fi
+
+it "未追跡: .dcb-new の形が崩れた keep の行（末尾が同じパスの .dcb-new でない）は、読めない行として止まる"
+RU18="$(new_workdir)/p"; mk_untracked_repo "$RU18" "$TEST_TMP_ROOT/cun18"
+o="$(yes_run "$RU18" "$TEST_TMP_ROOT/cun18" FAKE_PLAN="keep (modified) @OUT@/a -> @OUT@/b.dcb-new")"
+if [[ ! -s "$BOOT_LOG" && "$o" == *読めませんでした* ]]; then pass; else fail "出力: $o"; fi
 
 it "y: ai-playbook を tag で使っていて、新しい版があれば --playbook-version を渡す"
 reset_fixture; set_latest "$DCB_API" "v0.99.0"; set_tags "$PB_TAGS" "v9.0.0"; put_release_assets ok
@@ -407,6 +575,27 @@ set_origin_playbook "$R9" url "https://github.com/fork/ai-playbook/archive/refs/
 notify_in "$R9" "$TEST_TMP_ROOT/cy9"
 o="$(yes_run "$R9" "$TEST_TMP_ROOT/cy9")"
 if [[ "$(cat "$BOOT_LOG")" == "--upgrade --output-dir $R9 --playbook-from https://github.com/fork/ai-playbook/archive/refs/tags/v9.0.0.tar.gz" ]]; then pass; else fail "引数: $(cat "$BOOT_LOG") 出力: $o"; fi
+
+it "未追跡: dry-run にも、規範の引数（--playbook-version / --playbook-from）を追従と同じに渡す"
+reset_fixture; set_latest "$DCB_API" "v0.99.0"; set_tags "$PB_TAGS" "v9.0.0"; put_assets_for v0.99.0
+RU14="$(new_workdir)/p"; make_repo "$RU14"
+sed 's/^input:playbook=none$/input:playbook=installed\ninput:playbook-source=tag\ninput:playbook-ref=v0.1.0/' "$RU14/.devcontainer/ORIGIN" > "$RU14/.devcontainer/ORIGIN.new"
+mv "$RU14/.devcontainer/ORIGIN.new" "$RU14/.devcontainer/ORIGIN"
+git -C "$RU14" add -A; git -C "$RU14" -c user.name=t -c user.email=t@example.com commit -q -m origin
+mkdir -p "$RU14/misc"; echo memo > "$RU14/misc/note.txt"
+env PATH="$STUBBIN:$PATH" UPDATE_CHECK_CACHE_DIR="$TEST_TMP_ROOT/cun14" UPDATE_CHECK_TODAY="$TODAY" FAKE_CURL_DIR="$FIX" "$BASH_BIN" "$RU14/scripts/update-check.sh" notify >/dev/null 2>&1
+o="$(yes_run "$RU14" "$TEST_TMP_ROOT/cun14" FAKE_PLAN="create @OUT@/x")"
+d1="$(cat "$BOOT_LOG.dry" 2>/dev/null)"
+reset_fixture; set_latest "$DCB_API" "v0.99.0"; set_tags "https://api.github.com/repos/fork/ai-playbook/tags?per_page=100" "v9.0.0"; put_assets_for v0.99.0
+RU15="$(new_workdir)/p"; make_repo "$RU15"
+set_origin_playbook "$RU15" url "https://github.com/fork/ai-playbook/archive/refs/tags/v0.1.0.tar.gz"
+mkdir -p "$RU15/misc"; echo memo > "$RU15/misc/note.txt"
+notify_in "$RU15" "$TEST_TMP_ROOT/cun15"
+o="$(yes_run "$RU15" "$TEST_TMP_ROOT/cun15" FAKE_PLAN="create @OUT@/x")"
+d2="$(cat "$BOOT_LOG.dry" 2>/dev/null)"
+if [[ "$d1" == "--upgrade --dry-run --output-dir $RU14 --playbook-version v9.0.0" \
+  && "$d2" == "--upgrade --dry-run --output-dir $RU15 --playbook-from https://github.com/fork/ai-playbook/archive/refs/tags/v9.0.0.tar.gz" ]]; then pass; else fail "tag: $d1 url: $d2"; fi
+reset_fixture; set_latest "$DCB_API" "v0.99.0"; put_release_assets ok
 
 it "規範の取得元が adjacent なら、自動では追従せず案内に留め、ブランチも切らない（その版のあいだは聞かない）"
 reset_fixture; set_latest "$DCB_API" "v0.99.0"; put_assets_for v0.99.0
@@ -982,6 +1171,41 @@ o="$(env PATH="$STUBBIN:$PATH" UPDATE_CHECK_CACHE_DIR="$TEST_TMP_ROOT/cy8" UPDAT
 if grep -qx 'version=v0.99.0' "$R8/.devcontainer/ORIGIN" && [[ "$(git -C "$R8" rev-list --count HEAD)" == 1 ]] \
   && [[ "$(git -C "$R8" symbolic-ref --short HEAD)" == "chore/update-dcb-v0.99.0" ]]; then pass; else fail "出力: $o"; fi
 
+it "本物の bootstrap.sh（版だけ新しくした写し）で、未追跡ファイルがあっても --upgrade が通り、そのファイルは残る（本物の dry-run を読む）"
+R8U="$(new_workdir)/p"; make_repo "$R8U"
+mkdir -p "$R8U/misc"; echo memo > "$R8U/misc/note.txt"
+o="$(env PATH="$STUBBIN:$PATH" UPDATE_CHECK_CACHE_DIR="$TEST_TMP_ROOT/cy8u" UPDATE_CHECK_TODAY="$TODAY" FAKE_CURL_DIR="$FIX" \
+  TEST_BASE_IMAGE_UNUSED=1 "$BASH_BIN" "$R8U/scripts/update-check.sh" upgrade </dev/null 2>&1)"
+if grep -qx 'version=v0.99.0' "$R8U/.devcontainer/ORIGIN" && [[ "$(cat "$R8U/misc/note.txt")" == memo ]] && [[ "$o" != *読めませんでした* ]]; then pass; else fail "出力: $o"; fi
+
+it "本物の bootstrap.sh の --upgrade --dry-run の出力を、update-check の判定の関数が全行読める（書式が変わったらここで止まる）"
+RPP="$(new_workdir)/p (draft) -> x"; mkdir -p "$RPP"; make_repo "$RPP"
+# 手を入れたファイル（keep ... -> .dcb-new）と、消えたファイル（create）も出す。
+echo "# local edit" >> "$RPP/.gitignore"
+rm -f "$RPP/scripts/check-git-config.sh"
+bash "$BOOTSTRAP" --upgrade --dry-run --output-dir "$RPP" > "$TEST_TMP_ROOT/real-dry.out" 2>/dev/null
+{
+  echo 'LOG_PREFIX="[t]"'
+  sed -n '/^plan_emit() {/,/^}/p' "$BOOTSTRAP"
+  sed -n '/^parse_plan_paths() {/,/^}/p' "$BOOTSTRAP"
+} > "$TEST_TMP_ROOT/parse-lib.sh"
+err="$(ROOT="$RPP" "$BASH_BIN" -c '. "$1"; parse_plan_paths "$2" "$3"' _ "$TEST_TMP_ROOT/parse-lib.sh" "$TEST_TMP_ROOT/real-dry.out" "$TEST_TMP_ROOT/real-dry.paths" 2>&1)"; rc=$?
+n_plan="$(grep -c '^plan: ' "$TEST_TMP_ROOT/real-dry.out")"
+if [[ $rc -eq 0 && -z "$err" && "$n_plan" -ge 1 && "$(wc -l < "$TEST_TMP_ROOT/real-dry.paths")" -ge 1 ]] \
+  && grep -qx '.devcontainer/ORIGIN' "$TEST_TMP_ROOT/real-dry.paths" && grep -qx 'scripts/check-git-config.sh' "$TEST_TMP_ROOT/real-dry.paths"; then pass; else fail "rc=$rc err=$err plan=$n_plan paths=$(head -5 "$TEST_TMP_ROOT/real-dry.paths" 2>&1)"; fi
+
+it "本物の bootstrap.sh: 追従が置く .dcb-new と同じ名前の未追跡ファイルがあると、本物の dry-run の出力から重なりを検出して止まる"
+R8V="$(new_workdir)/p"; make_repo "$R8V"
+# 記録（hash:）の無いファイルは、手を入れた扱いで keep ... -> .dcb-new になる（現物は未追跡の別の中身）。
+git -C "$R8V" rm -q -f scripts/check-git-config.sh
+grep -v '^hash:scripts/check-git-config.sh=' "$R8V/.devcontainer/ORIGIN" > "$R8V/.devcontainer/ORIGIN.new"; mv "$R8V/.devcontainer/ORIGIN.new" "$R8V/.devcontainer/ORIGIN"
+git -C "$R8V" add -A; git -C "$R8V" -c user.name=t -c user.email=t@example.com commit -q -m "drop"
+echo mine > "$R8V/scripts/check-git-config.sh"; echo mine > "$R8V/scripts/check-git-config.sh.dcb-new"
+o="$(env PATH="$STUBBIN:$PATH" UPDATE_CHECK_CACHE_DIR="$TEST_TMP_ROOT/cy8v" UPDATE_CHECK_TODAY="$TODAY" FAKE_CURL_DIR="$FIX" \
+  TEST_BASE_IMAGE_UNUSED=1 "$BASH_BIN" "$R8V/scripts/update-check.sh" upgrade </dev/null 2>&1)"
+if [[ "$(cat "$R8V/scripts/check-git-config.sh.dcb-new")" == mine && "$o" == *check-git-config.sh.dcb-new* && "$o" == *追従しません* \
+  && "$(git -C "$R8V" symbolic-ref --short HEAD)" == main ]]; then pass; else fail "出力: $o"; fi
+
 # ── 対話シェルでの環境の優先（#635） ─────────────────────────────────────────
 # 対話シェルでは rc の自動読み込みが先に .env で UPDATE_CHECK を上書きする。注入された rc の 2 つの
 # ブロックを取り出し、端末の検査（[ -t 0 ] && [ -t 1 ]）と対話の検査（*i*）だけを外して、そのまま動かす。
@@ -1177,7 +1401,7 @@ it "未コミットの変更で止まったとき、自分の git の登録は�
 reset_fixture; set_latest "$DCB_API" "v0.99.0"; put_assets_for v0.99.0
 RL5="$(new_workdir)/p"; make_repo "$RL5"
 notify_in "$RL5" "$TEST_TMP_ROOT/cyl5"
-echo dirty > "$RL5/dirty.txt"
+echo dirty >> "$RL5/.gitignore"
 o="$(yes_run "$RL5" "$TEST_TMP_ROOT/cyl5" SESSION_LEDGER_ID="$UC_SID")"
 chk="$(ledger_in "$RL5" probe-session check git "$RL5" 2>&1)"
 if [[ ! -s "$BOOT_LOG" && "$o" == *未コミット* && "$chk" == LEDGER_OK* ]]; then pass; else fail "check: $chk 出力: $o"; fi
