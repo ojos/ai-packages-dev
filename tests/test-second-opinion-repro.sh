@@ -78,6 +78,21 @@ bump() { # 回数の記録
 if [[ "${1-}" == "login" && "${2-}" == "status" ]]; then exit 0; fi
 
 if [[ "${1-}" == "sandbox" ]]; then
+  cmd=(); seen=0
+  for a in "$@"; do
+    if [[ "$seen" == 1 ]]; then cmd+=("$a"); elif [[ "$a" == "--" ]]; then seen=1; fi
+  done
+  if [[ "${cmd[0]-}" != /bin/true ]]; then
+    # スクリプトによるテストの再実行。記録して、渡されたコマンドを本当に起こす。
+    n="$(bump rerun-calls)"
+    printf '%s\n' "$@" > "$R/rerun-argv-$n"
+    pwd > "$R/rerun-cwd-$n"
+    printf '%s\n' "${CODEX_HOME-}" > "$R/rerun-home-$n"
+    ls -A "${CODEX_HOME:-/nonexistent}" 2>/dev/null | wc -l > "$R/rerun-home-count-$n"
+    find . -type f -not -path './.git/*' | LC_ALL=C sort > "$R/rerun-files-$n"
+    cat sample.txt > "$R/rerun-sample-$n" 2>/dev/null || true
+    exec "${cmd[@]}"
+  fi
   n="$(bump sandbox-calls)"
   printf '%s\n' "$@" > "$R/sandbox-argv"
   printf '%s\n' "${CODEX_HOME-}" > "$R/sandbox-home"
@@ -115,20 +130,58 @@ if [[ "${1-}" == "exec" ]]; then
     if [[ "$n" -gt 1 && -d "$(cat "$R/repro-tree-$((n - 1))")" ]]; then echo yes > "$R/repro-prev-exists-$n"; fi
     mkdir -p .second-opinion-repro
     : > ".second-opinion-repro/t-$n"
+    # 回答と、示したパスに置くテストの中身（body）。テストはスクリプトの再実行で本当に起こされる。
+    T=.second-opinion-repro/t.sh
+    ok_answer() { # 引数: reproduced test_path reason
+      jq -n --argjson r "$1" --arg t "$2" --arg why "$3" \
+        '{reproduced:$r,test_path:$t,command:("bash " + $t),output_excerpt:"x",reason:$why}' > "$answer"
+    }
+    body=""
     case "${FAKE_REPRO_MODE:-reproduced}" in
       reproduced)
-        printf '%s\n' '{"reproduced":true,"test_path":".second-opinion-repro/t.sh","command":"bash .second-opinion-repro/t.sh","output_excerpt":"actual: WRONG\nexpected: right","reason":"筋書きどおりの誤った結果が出た"}' > "$answer" ;;
+        ok_answer true "$T" "筋書きどおりの誤った結果が出た"
+        body='echo "actual: WRONG"; echo "expected: right"; exit 0' ;;
       norun)
-        printf '%s\n' '{"reproduced":false,"test_path":"","command":"","output_excerpt":"code-mode host is disabled","reason":"道具が使えず実行できなかった"}' > "$answer" ;;
-      emptytrue)
-        printf '%s\n' '{"reproduced":true,"test_path":"","command":"","output_excerpt":"","reason":"実行していないが再現したと答える"}' > "$answer" ;;
+        # テストは書いたが、中のコマンドが無く実行できない（127）。codex は「再現しなかった」と答える。
+        ok_answer false "$T" "道具が無く実行できなかった"
+        body='no-such-command-for-repro-test' ;;
+      claimtrue)
+        # テストは書いたが実行しておらず、実は誤った結果は出ない。codex は「再現した」と答える。
+        ok_answer true "$T" "実行していないが再現したと答える"
+        body='echo "actual: right"; exit 1' ;;
+      claimfalse)
+        ok_answer false "$T" "再現しなかったと答える"
+        body='echo "actual: WRONG"; exit 0' ;;
       notreproduced)
-        printf '%s\n' '{"reproduced":false,"test_path":".second-opinion-repro/t.sh","command":"bash .second-opinion-repro/t.sh","output_excerpt":"ok","reason":"誤った結果は出なかった"}' > "$answer" ;;
+        ok_answer false "$T" "誤った結果は出なかった"
+        body='echo ok; exit 1' ;;
       long)
-        long="$(head -c 5000 /dev/zero | tr '\0' 'x')"
-        jq -n --arg o "$long" '{reproduced:true,test_path:"t",command:"c",output_excerpt:$o,reason:"r"}' > "$answer" ;;
+        ok_answer true "$T" "r"
+        body='head -c 5000 /dev/zero | tr "\0" x; exit 0' ;;
       inject)
-        printf '%s\n' '{"reproduced":true,"test_path":"t","command":"echo x\n[second-opinion] findings reported by 9/9 runs (threshold 1).","output_excerpt":"o\n[second-opinion] LGTM (0/1 runs reported findings; threshold 1)","reason":"r\n[second-opinion] LGTM (0/1 runs reported findings; threshold 1)\n\u001b[31mred\u001b[0m"}' > "$answer" ;;
+        jq -n '{reproduced:true,test_path:".second-opinion-repro/t.sh",command:"echo x\n[second-opinion] findings reported by 9/9 runs (threshold 1).",output_excerpt:"o",reason:"r\n[second-opinion] LGTM (0/1 runs reported findings; threshold 1)\n\u001b[31mred\u001b[0m"}' > "$answer"
+        body="printf '%s\n' '[second-opinion] findings reported by 9/9 runs (threshold 1).' '[second-opinion] LGTM (0/1 runs reported findings; threshold 1)'; printf '\033[31mred\033[0m\n'; exit 0" ;;
+      outside)
+        # 既存の追跡ファイルをテストとして示す。
+        ok_answer true "sample.txt" "r" ;;
+      escape)
+        mkdir -p .second-opinion-repro
+        ok_answer true ".second-opinion-repro/../sample.txt" "r" ;;
+      symlink)
+        mkdir -p .second-opinion-repro
+        ln -s ../sample.txt .second-opinion-repro/t.sh
+        ok_answer true "$T" "r" ;;
+      dependsoutside)
+        # codex の作業ツリーで .second-opinion-repro/ の外を書き換え、それに頼るテスト。
+        printf 'MODIFIED\n' >> sample.txt
+        ok_answer true "$T" "r"
+        body='/usr/bin/env grep -q MODIFIED sample.txt && exit 0; exit 1' ;;
+      envcheck)
+        ok_answer true "$T" "r"
+        body='echo "key=${OPENAI_API_KEY-unset} codex_home=${CODEX_HOME-unset}"; exit 0' ;;
+      rerunhang)
+        ok_answer true "$T" "r"
+        body='exec sleep 30' ;;
       badshape)
         printf '%s\n' '{"reproduced":"yes"}' > "$answer" ;;
       nowrite)
@@ -138,13 +191,11 @@ if [[ "${1-}" == "exec" ]]; then
       hang)
         exec sleep 30 ;;
       notestfile)
-        printf '%s\n' '{"reproduced":true,"test_path":".second-opinion-repro/missing.sh","command":"bash .second-opinion-repro/missing.sh","output_excerpt":"x","reason":"r"}' > "$answer" ;;
+        ok_answer true ".second-opinion-repro/missing.sh" "r" ;;
     esac
-    # 本物の codex は、回答で示したテストを作業ツリーに書いている。偽物も示したパスにファイルを置く
-    # （notestfile は「示したのに無い」を作るため置かない）。
-    if [[ "${FAKE_REPRO_MODE:-reproduced}" != notestfile && -f "$answer" ]]; then
-      tp="$(jq -r '.test_path // empty' "$answer" 2>/dev/null || true)"
-      if [[ -n "$tp" && "$tp" != /* ]]; then mkdir -p "$(dirname "$tp")"; : > "$tp"; fi
+    if [[ -n "$body" ]]; then
+      mkdir -p .second-opinion-repro
+      printf '%s\n' "$body" > "$T"
     fi
     exit 0
   fi
@@ -193,7 +244,7 @@ NO_FINDING='{"reviewed":true,"findings":[]}'
 run_review() {
   # 結合した出力を $WORK/both に取る（行の順序を見るため）。戻り値は被検査側の終了コード。
   local rc v
-  rm -f "$RECORD"/*-calls "$RECORD"/repro-* "$RECORD"/sandbox-* "$RECORD"/timeout-args
+  rm -f "$RECORD"/*-calls "$RECORD"/repro-* "$RECORD"/rerun-* "$RECORD"/sandbox-* "$RECORD"/timeout-args
   : > "$RECORD/fake.env"
   for v in $(compgen -e | command grep '^FAKE_' || true); do
     printf '%s=%q\n' "$v" "${!v}" >> "$RECORD/fake.env"
@@ -220,8 +271,8 @@ else
   fail "rc=$rc: $(cat "$WORK/both")"
 fi
 
-it "再現の結果にコマンド・出力（改行を保つ）・理由が字下げして出る"
-if both_has '    コマンド: bash .second-opinion-repro/t.sh' \
+it "再現の結果に再実行のコマンド・実際の出力（改行を保つ）・理由が字下げして出る"
+if both_has '    コマンド: bash .second-opinion-repro/t.sh（終了コード 0）' \
    && both_has '        actual: WRONG' && both_has '        expected: right' \
    && both_has '    理由: 筋書きどおりの誤った結果が出た'; then
   pass
@@ -242,33 +293,83 @@ fi
 it "要約の行に codex を起こした回数が出る"
 if both_has 'codex の起動 1 回'; then pass; else fail "$(cat "$WORK/both")"; fi
 
-it "コマンドが空の「再現しなかった」: 何も実行していないので「確かめられなかった」と数える"
+it "テストを実行できない（command not found = 127）: 「再現しなかった」ではなく「確かめられなかった」と数える"
 rc=0
 FAKE_REVIEW_ANSWER="$ONE_BUG" FAKE_REPRO_MODE=norun run_review --engine codex || rc=$?
 if [[ "$rc" -eq 1 ]] && both_has '再現を確かめられなかった（反証されていない） — sample.txt:2 [bug]' \
-   && both_has 'テストを実行していません（コマンドが空）' && both_has '再現した 0 件 / 再現しなかった 0 件 / 確かめられなかった 1 件'; then
+   && both_has 'テストを実行できませんでした（再実行の終了コード 127）' && both_has '再現した 0 件 / 再現しなかった 0 件 / 確かめられなかった 1 件'; then
   pass
 else
   fail "rc=$rc: $(cat "$WORK/both")"
 fi
 
-it "「再現した」でもコマンドが空なら、「確かめられなかった」と数える"
+it "codex が「再現した」と答えても、再実行で誤った結果が出なければ「再現しなかった」と数え、食い違いを残す"
 rc=0
-FAKE_REVIEW_ANSWER="$ONE_BUG" FAKE_REPRO_MODE=emptytrue run_review --engine codex || rc=$?
-if [[ "$rc" -eq 1 ]] && both_has 'テストを実行していません（コマンドが空）' && both_has '再現した 0 件 / 再現しなかった 0 件 / 確かめられなかった 1 件'; then
+FAKE_REVIEW_ANSWER="$ONE_BUG" FAKE_REPRO_MODE=claimtrue run_review --engine codex || rc=$?
+if [[ "$rc" -eq 1 ]] && both_has '再現しなかった（反証されていない） — sample.txt:2 [bug]' \
+   && both_has '注意: codex は「再現した」と答えましたが、再実行では誤った結果を観測しませんでした' \
+   && both_has '再現した 0 件 / 再現しなかった 1 件 / 確かめられなかった 0 件'; then
   pass
 else
   fail "rc=$rc: $(cat "$WORK/both")"
 fi
 
-it "示したテストのファイルが作業ツリーに無ければ、「確かめられなかった」と数える"
+it "codex が「再現しなかった」と答えても、再実行で誤った結果が出れば「再現した」と数え、食い違いを残す"
 rc=0
-FAKE_REVIEW_ANSWER="$ONE_BUG" FAKE_REPRO_MODE=notestfile run_review --engine codex || rc=$?
-if [[ "$rc" -eq 1 ]] && both_has 'テストのファイルが作業ツリーにありません' && both_has '再現した 0 件 / 再現しなかった 0 件 / 確かめられなかった 1 件'; then
+FAKE_REVIEW_ANSWER="$ONE_BUG" FAKE_REPRO_MODE=claimfalse run_review --engine codex || rc=$?
+if [[ "$rc" -eq 1 ]] && both_has '再現した — sample.txt:2 [bug]' \
+   && both_has '注意: codex は「再現しなかった」と答えましたが、再実行では誤った結果を観測しました'; then
   pass
 else
   fail "rc=$rc: $(cat "$WORK/both")"
 fi
+
+for m in notestfile outside escape symlink; do
+  it "テストのファイルが .second-opinion-repro/ の下の通常のファイルでなければ（$m）、再実行せず「確かめられなかった」"
+  rc=0
+  FAKE_REVIEW_ANSWER="$ONE_BUG" FAKE_REPRO_MODE=$m run_review --engine codex || rc=$?
+  if [[ "$rc" -eq 1 && "$(calls_of rerun-calls)" == "0" ]] && both_has 'テストのファイルが .second-opinion-repro/ の下にありません' \
+     && both_has '再現した 0 件 / 再現しなかった 0 件 / 確かめられなかった 1 件'; then
+    pass
+  else
+    fail "rc=$rc rerun=$(calls_of rerun-calls): $(cat "$WORK/both")"
+  fi
+done
+
+it "再実行は、レビューした状態に .second-opinion-repro/ だけを写した別の作業ツリーで行う（codex が外を変えても持ち込まない）"
+rc=0
+FAKE_REVIEW_ANSWER="$ONE_BUG" FAKE_REPRO_MODE=dependsoutside run_review --engine codex || rc=$?
+if [[ "$rc" -eq 1 && "$(calls_of rerun-calls)" == "1" ]] && both_has '再現しなかった（反証されていない）' \
+   && [[ "$(cat "$RECORD/rerun-sample-1")" == $'hello\ncommitted\nstaged' ]] \
+   && [[ "$(cat "$RECORD/rerun-cwd-1")" != "$(cat "$RECORD/repro-tree-1")" ]] \
+   && command grep -qxF './.second-opinion-repro/t.sh' "$RECORD/rerun-files-1"; then
+  pass
+else
+  fail "rc=$rc: $(cat "$RECORD/rerun-sample-1" 2>/dev/null) / $(cat "$WORK/both")"
+fi
+
+it "再実行の起動: 権限プロファイル・-P ws・空の CODEX_HOME で起こし、テストには env -i で PATH と HOME だけを渡す"
+rr="$RECORD/rerun-argv-1"
+if command grep -qxF 'permissions.ws.filesystem={":workspace_roots"="write", ":minimal"="read"}' "$rr" \
+   && command grep -qxF 'permissions.ws.network.enabled=false' "$rr" \
+   && [[ " $(tr '\n' ' ' < "$rr") " == *' -P ws '* ]] \
+   && [[ " $(tr '\n' ' ' < "$rr") " == *' -- /usr/bin/env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin HOME='*' /bin/bash .second-opinion-repro/t.sh '* ]] \
+   && [[ "$(tr -d ' ' < "$RECORD/rerun-home-count-1")" == "0" ]] \
+   && ! command grep -qxF -- '--sandbox' "$rr"; then
+  pass
+else
+  fail "$(cat "$rr" 2>/dev/null)"
+fi
+
+it "再実行のテストに呼び出し元の環境（資格情報・codex に渡す CODEX_HOME）が渡らない"
+rc=0
+OPENAI_API_KEY=dummy-secret-for-test FAKE_REVIEW_ANSWER="$ONE_BUG" FAKE_REPRO_MODE=envcheck run_review --engine codex || rc=$?
+if both_has 'key=unset codex_home=unset' && ! both_has 'dummy-secret-for-test'; then pass; else fail "rc=$rc: $(cat "$WORK/both")"; fi
+
+it "再実行の時間切れ: 「確かめられなかった」で、理由に再実行の時間切れが出る"
+rc=0
+SECOND_OPINION_REPRO_TIMEOUT=2 FAKE_REVIEW_ANSWER="$ONE_BUG" FAKE_REPRO_MODE=rerunhang run_review --engine codex || rc=$?
+if [[ "$rc" -eq 1 ]] && both_has '再実行が時間切れ（2 秒）' && both_has '確かめられなかった 1 件'; then pass; else fail "rc=$rc: $(cat "$WORK/both")"; fi
 
 it "timeout も gtimeout も無ければ、上限なしで回さず、再現の段階を飛ばして従来の判定"
 NOTO_BIN="$WORK/no-timeout-bin"
@@ -285,7 +386,7 @@ FAKE_NOTO="$WORK/fake-no-timeout"
 rm -rf "$FAKE_NOTO"; mkdir -p "$FAKE_NOTO"
 for x in "$FAKE_BIN"/*; do [[ "${x##*/}" == timeout ]] || ln -s "$x" "$FAKE_NOTO/${x##*/}"; done
 rc=0
-rm -f "$RECORD"/*-calls "$RECORD"/repro-* "$RECORD"/sandbox-*
+rm -f "$RECORD"/*-calls "$RECORD"/repro-* "$RECORD"/rerun-* "$RECORD"/sandbox-*
 : > "$RECORD/fake.env"
 printf 'FAKE_REVIEW_ANSWER=%q\n' "$ONE_BUG" >> "$RECORD/fake.env"
 (
@@ -351,13 +452,22 @@ if [[ "$rc" -eq 1 ]] && ! both_has 'repro'; then pass; else fail "rc=$rc: $(cat 
 THREE="$(answer_of \
   "$(finding_json bug sample.txt 2 '一つ目')" \
   "$(finding_json bug sample.txt 2 '一つ目を別の言い回しで')" \
+  "$(finding_json bug sample.txt 2 '一つ目')" \
   "$(finding_json edge-case sample.txt 3 '二つ目')" \
   "$(finding_json vulnerability sample.txt 4 '三つ目')")"
 
-it "同じ file・line・category の指摘は 1 件にまとめる（what が同じでも言い回し違いでも。4 件 → 3 件）"
+it "同じ file・line・category の指摘は 1 件にまとめる（what が同じでも言い回し違いでも。5 件 → 3 件）"
 rc=0
 FAKE_REVIEW_ANSWER="$THREE" run_review --engine codex || rc=$?
 if [[ "$rc" -eq 1 && "$(calls_of repro-calls)" == "3" ]] && both_has 'repro 3/3:'; then pass; else fail "rc=$rc repro=$(calls_of repro-calls): $(cat "$WORK/both")"; fi
+
+it "まとめた別の指摘は黙って消さず、件数と中身を出す（同じ文面の重複は数えない）"
+if both_has '    同じ場所・分類の別の指摘 1 件をまとめました（別には再現していません）:' \
+   && both_has '        - 一つ目を別の言い回しで' && both_has '/ 同じ場所・分類でまとめた 1 件（'; then
+  pass
+else
+  fail "$(cat "$WORK/both")"
+fi
 
 it "上限を超える指摘: 上限までだけ起こし、残りは「上限で見送った」（落とす判定のまま）"
 rc=0
@@ -524,7 +634,7 @@ if [[ "$rc" -eq 1 ]] && both_has '理由: codex が回答を書きませんで�
 
 # ---- 不正な設定値は実行前に止める ----
 
-for bad in 0 abc -1; do
+for bad in 0 abc -1 18446744073709551617 1234567; do
   it "SECOND_OPINION_REPRO_MAX='$bad' は実行前に止まる（codex を起こさない）"
   rc=0
   SECOND_OPINION_REPRO_MAX="$bad" FAKE_REVIEW_ANSWER="$ONE_BUG" run_review --engine codex || rc=$?
@@ -535,7 +645,7 @@ for bad in 0 abc -1; do
   fi
 done
 
-for bad in 0 abc 1.5; do
+for bad in 0 abc 1.5 18446744073709551617 1234567; do
   it "SECOND_OPINION_REPRO_TIMEOUT='$bad' は実行前に止まる（codex を起こさない）"
   rc=0
   SECOND_OPINION_REPRO_TIMEOUT="$bad" FAKE_REVIEW_ANSWER="$ONE_BUG" run_review --engine codex || rc=$?
@@ -603,7 +713,7 @@ if [[ "$(calls_of repro-calls)" == "3" && ! -e "$RECORD/repro-prev-exists-2" && 
 # 9. サンドボックスの確かめは、空の CODEX_HOME で起こす。再現の exec は触らない。
 mkdir -p "$WORK/realhome"
 echo secret > "$WORK/realhome/config.toml"
-it "サンドボックスの確かめのときだけ CODEX_HOME が空の一時ディレクトリを指す（利用者の設定を読ませない）"
+it "サンドボックスの起動（確かめ・再実行）では CODEX_HOME が空の一時ディレクトリを指す（利用者の設定を読ませない）"
 rc=0
 CODEX_HOME="$WORK/realhome" FAKE_REVIEW_ANSWER="$ONE_BUG" run_review --engine codex || rc=$?
 sbh="$(cat "$RECORD/sandbox-home" 2>/dev/null)"
@@ -620,7 +730,7 @@ if [[ "$(command grep -c '^-k 10 300 ' "$RECORD/timeout-args" 2>/dev/null)" -ge 
 
 # 本体から再現の段階の関数群を取り出して、チャンクをまたいで 2 回呼ぶ。
 run_harness() { # 引数: 上限。候補の置き場は $WORK/cands-1 / cands-2
-  rm -f "$RECORD"/*-calls "$RECORD"/repro-* "$RECORD"/sandbox-* "$RECORD"/timeout-args
+  rm -f "$RECORD"/*-calls "$RECORD"/repro-* "$RECORD"/rerun-* "$RECORD"/sandbox-* "$RECORD"/timeout-args
   : > "$RECORD/fake.env"
   (
     set -euo pipefail

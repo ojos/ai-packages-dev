@@ -1,16 +1,16 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "second-opinion-repro",
-  "description": "第二意見の再現の段階（second-opinion-review.sh）で、codex が返す回答の形。指摘が実際に起きるかを、再現テストを書いて実行した結果。判定そのものはこの回答では決まらない——再現した・しなかったのどちらでも、指摘は従来どおり落とす（証拠が増えるだけ）。",
+  "description": "第二意見の再現の段階（second-opinion-review.sh）で、codex が返す回答の形。指摘が実際に起きるかを、再現テストを書いて実行した結果。再現した・しなかったは、この回答の reproduced ではなく、スクリプトが test_path のテストを再実行した終了コードで決める。判定そのものはこの回答では決まらない——再現した・しなかったのどちらでも、指摘は従来どおり落とす（証拠が増えるだけ）。",
   "type": "object",
   "properties": {
     "reproduced": {
       "type": "boolean",
-      "description": "失敗の筋書きどおりの誤った結果が、実際に実行して出たときだけ true。出なかった・実行できなかったときは false。"
+      "description": "失敗の筋書きどおりの誤った結果が、実際に実行して出たときだけ true。出なかった・実行できなかったときは false。codex の申告であり、再実行の結果と食い違えばその旨を出力に残す。"
     },
     "test_path": {
       "type": "string",
-      "description": "書いた再現テストのパス（作業場所からの相対。.second-opinion-repro/ の下）。書けなかったときは空文字。"
+      "description": "書いた再現テストのパス（.second-opinion-repro/ から始まる相対パス）。bash のスクリプトで、作業場所の根から bash <test_path> で起こし、誤った結果を観測したら終了コード 0、観測しなかったら 1 で終わる。書けなかったときは空文字。"
     },
     "command": {
       "type": "string",
