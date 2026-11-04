@@ -8,8 +8,8 @@
 # SC2296（severity error）を出す状態で配布され、`scripts/` を静的解析する受け入れ条件を
 # 持つ利用プロジェクトが、配布物のせいで赤になっていた（注記を手で足して回避していた）。
 #
-# 検査の深さ: -S warning。info / style まで拾うと配布物の書きぶりに関する好みが検査へ
-# 混ざり、赤の意味が薄れる。SC2296 は severity error なのでこの範囲に入る。
+# 検査の深さ: 既定の重大度（-S 指定なし）。配布先は scripts/ を既定の重大度で検査するため、
+# info / style の指摘も配布物のせいで赤になる。#589 で packages/ の .sh を既定に揃えたのと同じ。
 #
 # 出力書式に gcc を選ぶ理由: 既定の tty 書式は指摘箇所のソース行をそのまま出力する。
 # 生成物のコメントは日本語で、ロケールが POSIX の環境では shellcheck がその行を
@@ -25,6 +25,9 @@
 # 関数 2 つ分（agy の導入とテレメトリ無効化）を丸ごと足す唯一のフラグで、外すと
 # その本体が静的解析を一度も通らないまま配布される。
 #
+# 同じく --with-codex も含める。acceptance.sh / fix-mount-owner.sh / install-ai-tools.sh /
+# post-rebuild-check.sh の 4 本は codex のときだけ生成が変わり、外すとその部分が検査されない。
+#
 # 空振りさせない: 生成に失敗した、あるいは対象が 0 件だった場合を合格にしない。
 # 検証していないことを合格として報告するのが最悪であり、この不変条件は
 # scripts/acceptance.sh が ran_any で採っている考え方と同じ。
@@ -33,8 +36,6 @@ set -uo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 echo "test-generated-shellcheck"
-
-SEVERITY=warning
 
 # 全構成を通じて実際に shellcheck へ掛けた本数。0 のまま終わったら落とす。
 CHECKED_TOTAL=0
@@ -64,11 +65,11 @@ check_generated_scripts() {
     fail "$label: scripts/load-project-env.sh が生成されていない"
   fi
 
-  it "$label: 生成物が素で shellcheck -S $SEVERITY を通る"
+  it "$label: 生成物が素で shellcheck（既定の重大度）を通る"
   while IFS= read -r f; do
     [[ -n "$f" ]] || continue
     checked=$((checked + 1))
-    if report="$(shellcheck -S "$SEVERITY" -f gcc "$f" 2>&1)"; then
+    if report="$(shellcheck -f gcc "$f" 2>&1)"; then
       continue
     fi
     failed=$((failed + 1))
@@ -98,7 +99,7 @@ check_generated_scripts "$out" "素の構成"
 outf="$(new_workdir)/full"
 bash "$BOOTSTRAP" \
   --project-name test --languages node,go,python,php,rust,ruby \
-  --with-aws --with-gcp --with-claude --with-gemini --with-antigravity --with-copilot --with-copilot-review \
+  --with-aws --with-gcp --with-claude --with-gemini --with-codex --with-antigravity --with-copilot --with-copilot-review \
   --playbook-from "$PLAYBOOK_SRC" \
   --base-image "$TEST_BASE_IMAGE" \
   --output-dir "$outf" >/dev/null 2>&1
