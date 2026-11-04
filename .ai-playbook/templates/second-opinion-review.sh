@@ -173,7 +173,8 @@ done
 unset __name
 
 if [[ -f "$__SCRIPT_DIR/load-project-env.sh" ]]; then
-  # shellcheck source=scripts/load-project-env.sh
+  # 配布先の scripts/ では load-project-env.sh を辿れず、-x でも SC1091（info）になるため辿らせない。
+  # shellcheck source=/dev/null
   . "$__SCRIPT_DIR/load-project-env.sh"
 fi
 
