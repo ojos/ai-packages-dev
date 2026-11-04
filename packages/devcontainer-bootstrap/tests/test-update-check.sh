@@ -1214,4 +1214,119 @@ reset_fixture; set_latest "$DCB_API" "v0.99.0"
 o="$(run_uc "$TEST_TMP_ROOT/cmsg" notify)"
 if [[ "$o" == *"UPDATE_CHECK=off（環境の値。無ければ .env の値）"* ]]; then pass; else fail "出力: $o"; fi
 
+it "古い版（末尾が素の main）が走っている最中に bootstrap.sh の置き換えで新しい中身にしても、余計な出力が無く main は 1 回だけ走る（上流の issue 696）"
+SR="$TEST_TMP_ROOT/selfrewrite"; mkdir -p "$SR"
+# 古い版: 末尾が素の main "$@"。main は置き換えを呼び、実行回数を数え、7 を返す。
+# 新しい版: 古い版の末尾に、元の位置の直後で実行される文が来る形（修正の有無で差が出る）。
+{
+  sed '$d' "$UC"
+  cat <<'OLD'
+main() {
+  echo run >> "$SR_COUNT"
+  SRC="$SR_NEW" DEST="$0" "$SR_BASH" -c '. "$SR_LIB"; upgrade_replace_file "$SRC" "$DEST"'
+  return 7
+}
+main "$@"
+OLD
+} > "$SR/uc.sh"
+chmod 755 "$SR/uc.sh"
+{ cat "$SR/uc.sh"; echo 'echo SHOULD_NOT_RUN'; echo 'main "$@"'; } > "$SR/new.sh"
+# bootstrap.sh から置き換えの関数だけを取り出す（本体は走らせない）。
+{
+  sed -n '/^file_mode_octal() {/,/^}/p' "$BOOTSTRAP"
+  sed -n '/^upgrade_overwrite_in_place() {/,/^}/p' "$BOOTSTRAP"
+  sed -n '/^upgrade_replace_file() {/,/^}/p' "$BOOTSTRAP"
+} > "$SR/lib.sh"
+: > "$SR/count"
+o="$(SR_COUNT="$SR/count" SR_NEW="$SR/new.sh" SR_BASH="$BASH_BIN" SR_LIB="$SR/lib.sh" "$BASH_BIN" "$SR/uc.sh" 2>&1 </dev/null)"; rc=$?
+runs="$(wc -l < "$SR/count" | tr -d ' ')"
+if [[ "$rc" == 7 && -z "$o" && "$runs" == 1 ]]; then pass; else fail "終了コード $rc、実行回数 $runs、出力: $o"; fi
+
+# 置き換えの関数だけを bootstrap.sh から取り出す（本体は走らせない）。
+repl() { # src dest: upgrade_replace_file を呼ぶ。標準エラーも出力へ含める。
+  "$BASH_BIN" -c '. "$SR_LIB"; upgrade_replace_file "$1" "$2"' _ "$1" "$2" 2>&1
+}
+inode_of() { ls -i "$1" | awk '{print $1}'; }
+
+it "置き換えた *.sh のモードが保たれ、一時ファイルが残らない（独立の準備）"
+SM="$TEST_TMP_ROOT/selfrewrite-mode"; mkdir -p "$SM"
+printf '#!/bin/sh\necho old\n' > "$SM/a.sh"; chmod 755 "$SM/a.sh"
+printf '#!/bin/sh\necho new\n' > "$SM/new.sh"
+o="$(SR_LIB="$SR/lib.sh" repl "$SM/new.sh" "$SM/a.sh")"
+if [[ "$(stat -c %a "$SM/a.sh" 2>/dev/null || stat -f %Lp "$SM/a.sh")" == 755 && -z "$o" \
+  && -z "$(find "$SM" -name '*.dcb-tmp.*')" ]] && cmp -s "$SM/a.sh" "$SM/new.sh"; then pass; else fail "モード・中身・一時ファイル: $o"; fi
+
+it "*.sh 以外は同じ場所に上書きされる（inode が変わらない）"
+printf 'old\n' > "$SM/b.md"; printf 'new\n' > "$SM/new.md"
+ino="$(inode_of "$SM/b.md")"
+o="$(SR_LIB="$SR/lib.sh" repl "$SM/new.md" "$SM/b.md")"
+if [[ "$(inode_of "$SM/b.md")" == "$ino" ]] && cmp -s "$SM/b.md" "$SM/new.md" && [[ -z "$o" ]]; then pass; else fail "inode か中身: $o"; fi
+
+it "親ディレクトリに書けないとき、警告を出して上書きに戻り、止まらない"
+if [[ "$(id -u)" == 0 ]]; then
+  echo "  skip（root では親への書き込み禁止が効かない）"
+else
+  SW="$TEST_TMP_ROOT/selfrewrite-ro"; mkdir -p "$SW"
+  printf '#!/bin/sh\necho old\n' > "$SW/a.sh"; chmod 755 "$SW/a.sh"
+  chmod a-w "$SW"
+  o="$(SR_LIB="$SR/lib.sh" repl "$SM/new.sh" "$SW/a.sh")"; rc=$?
+  chmod u+w "$SW"
+  if [[ "$rc" == 0 && "$o" == *warn* && "$o" == *上書き* ]] && cmp -s "$SW/a.sh" "$SM/new.sh"; then pass; else fail "rc=$rc 出力: $o"; fi
+fi
+
+it "置き換えの途中で TERM を受けると、一時ファイルを消し、置き換え先を上書きせず、143 で終わる"
+ST="$TEST_TMP_ROOT/selfrewrite-term"; mkdir -p "$ST"
+printf '#!/bin/sh\necho old\n' > "$ST/a.sh"; chmod 755 "$ST/a.sh"; cp "$ST/a.sh" "$ST/keep.sh"
+# 一時ファイルを作った後の chmod で、自分へ TERM を送る。
+o="$(SR_LIB="$SR/lib.sh" "$BASH_BIN" -c '. "$SR_LIB"; chmod() { kill -TERM $$; sleep 2; }; upgrade_replace_file "$1" "$2"; echo AFTER' _ "$SM/new.sh" "$ST/a.sh" 2>&1)"; rc=$?
+if [[ "$rc" == 143 && "$o" != *AFTER* && -z "$(find "$ST" -name '*.dcb-tmp.*')" ]] && cmp -s "$ST/a.sh" "$ST/keep.sh"; then pass; else fail "rc=$rc 出力: $o"; fi
+
+it "呼び出し元の EXIT の片づけが、置き換えの途中の TERM でも走る（印のファイルが作られ、一時ファイルが残らず、非 0 で終わる）"
+SK="$TEST_TMP_ROOT/selfrewrite-term2"; mkdir -p "$SK"
+printf '#!/bin/sh\necho old\n' > "$SK/a.sh"; chmod 755 "$SK/a.sh"
+o="$(SR_LIB="$SR/lib.sh" SR_MARK="$SK/mark" "$BASH_BIN" -c '. "$SR_LIB"; trap "touch \"$SR_MARK\"" EXIT; chmod() { kill -TERM $$; sleep 2; }; upgrade_replace_file "$1" "$2"; echo AFTER' _ "$SM/new.sh" "$SK/a.sh" 2>&1)"; rc=$?
+if [[ "$rc" != 0 && "$o" != *AFTER* && -e "$SK/mark" && -z "$(find "$SK" -name '*.dcb-tmp.*')" ]]; then pass; else fail "rc=$rc 印=$([[ -e $SK/mark ]] && echo あり || echo なし) 出力: $o"; fi
+
+it "呼び出し元が何もせず戻る TERM の trap を持っていても、置き換えの途中の TERM で置き換えが続かず、非 0 で終わる"
+SN="$TEST_TMP_ROOT/selfrewrite-term3"; mkdir -p "$SN"
+printf '#!/bin/sh\necho old\n' > "$SN/a.sh"; chmod 755 "$SN/a.sh"; cp "$SN/a.sh" "$SN/keep.sh"
+o="$(SR_LIB="$SR/lib.sh" "$BASH_BIN" -c '. "$SR_LIB"; trap : TERM; chmod() { kill -TERM $$; sleep 2; }; upgrade_replace_file "$1" "$2"; echo AFTER' _ "$SM/new.sh" "$SN/a.sh" 2>&1)"; rc=$?
+if [[ "$rc" != 0 && "$o" != *AFTER* && -z "$(find "$SN" -name '*.dcb-tmp.*')" ]] && cmp -s "$SN/a.sh" "$SN/keep.sh"; then pass; else fail "rc=$rc 出力: $o"; fi
+
+it "中断の trap は mktemp より前に設定される"
+body="$(sed -n '/^upgrade_replace_file() {/,/^}/p' "$BOOTSTRAP")"
+ln_trap="$(printf '%s\n' "$body" | grep -n "trap 'rm -f" | head -1 | cut -d: -f1)"
+ln_mk="$(printf '%s\n' "$body" | grep -n 'mktemp' | head -1 | cut -d: -f1)"
+if [[ -n "$ln_trap" && -n "$ln_mk" && "$ln_trap" -lt "$ln_mk" ]]; then pass; else fail "trap=$ln_trap mktemp=$ln_mk"; fi
+
+it "上書きに失敗したら、成功扱いにせず、エラーを出して非 0 で止まる"
+SF="$TEST_TMP_ROOT/selfrewrite-fail"; mkdir -p "$SF"
+printf 'old\n' > "$SF/b.md"; chmod a-w "$SF/b.md"
+if [[ "$(id -u)" == 0 ]]; then
+  echo "  skip（root では書き込み禁止が効かない）"
+else
+  o="$(SR_LIB="$SR/lib.sh" "$BASH_BIN" -c '. "$SR_LIB"; upgrade_replace_file "$1" "$2"; echo AFTER' _ "$SM/new.md" "$SF/b.md" 2>&1)"; rc=$?
+  chmod u+w "$SF/b.md"
+  if [[ "$rc" != 0 && "$o" == *error* && "$o" != *AFTER* ]]; then pass; else fail "rc=$rc 出力: $o"; fi
+fi
+
+it "末尾の main; exit だけの防御: 新しい末尾を持つスクリプトを同じ場所の上書きで書き換えても、main は 1 回だけ走る"
+SD="$TEST_TMP_ROOT/selfrewrite-exit"; mkdir -p "$SD"
+{
+  sed '$d' "$UC"
+  cat <<'NEWT'
+main() {
+  echo run >> "$SR_COUNT"
+  cat "$SR_NEW" > "$0"
+  return 7
+}
+main "$@"; exit $?
+NEWT
+} > "$SD/uc.sh"
+{ cat "$SD/uc.sh"; echo 'echo SHOULD_NOT_RUN'; } > "$SD/new.sh"
+: > "$SD/count"
+o="$(SR_COUNT="$SD/count" SR_NEW="$SD/new.sh" "$BASH_BIN" "$SD/uc.sh" 2>&1 </dev/null)"; rc=$?
+runs="$(wc -l < "$SD/count" | tr -d ' ')"
+if [[ "$rc" == 7 && -z "$o" && "$runs" == 1 ]]; then pass; else fail "rc=$rc 実行回数 $runs 出力: $o"; fi
+
 exit_with_result

@@ -2937,6 +2937,9 @@ release_git_claim() {
 
 # refresh_cache の作業用のファイル。中断（Ctrl-C・接続の打ち切り）でも片づける。
 RC_TMP="" RC_STAGE=""
+# trap から呼ぶ（直接は呼ばない）。末尾を main "$@"; exit $? にしてから、shellcheck が
+# 呼び出し元を見つけられず SC2329（info）を出すため抑える。
+# shellcheck disable=SC2329
 cleanup_exit() {
   local d
   release_git_claim
@@ -3367,7 +3370,11 @@ main() {
   esac
 }
 
-main "$@"
+# upgrade が走らせる bootstrap.sh --upgrade は、このファイルを一時ファイルへ書いて rename で
+# 置き換える（走っている bash は古い inode を読み続けるので壊れない）。これが主な対策。
+# 末尾の exit は防御で、戻った後にファイルを読み進めず main の戻り値で終わらせる
+# （上流の issue 696）。
+main "$@"; exit $?
 TMPL
       ;;
     'scripts/setup-git-identity.sh')
@@ -14348,6 +14355,67 @@ upgrade_baseline_matches() {
   [[ "$(dcb_file_sha256 "$cur")" == "$curh" ]]
 }
 
+# 既存の通常ファイル $2 を $1 の中身で置き換える。呼び出し側がシンボリックリンクと通常ファイル
+# 以外を先に除いている。
+#
+# *.sh（走っているかもしれないスクリプト。update-check.sh --upgrade が自分自身を置き換える）は、
+# 同じディレクトリの一時ファイルへ書き、モードを元に揃えて mv（rename）で差し替える。その場で
+# 上書きすると、走っている bash が開いている同じ inode の中身が変わり、古いオフセットで新しい
+# 中身を読み続けて壊れる（上流の issue 696）。rename なら走っている bash は古い inode を
+# 読み続ける。代わりに所有者・グループ・ACL・ハードリンクを保てない。
+# 親に書けない等で rename できないときは警告して、従来の上書きへ戻す。
+# 限界:
+#   - 上書きへ戻ったときは、実行中の古い版のスクリプトで元の不具合が起こりうる（親ディレクトリ
+#     に書けず、ファイルには書けるときだけ。末尾の exit が残る防御）。
+#   - mv の直前に置き換え先がディレクトリへのリンクに差し替わる競合は、dcb_place_file と同じく
+#     mv の後の確かめ直しでしか検出しない。
+# 中断: trap は mktemp より前に設定する（作ってから設定するまでの隙間で中断されても残さない）。
+# INT / TERM は一時ファイルを消し、元の trap を戻してから exit 130 / 143 で終わる。シグナルの
+# 送り直しはしない（呼び出し元が何もせず戻る trap を持っていても、置き換えが続かないように）。
+# exit なので呼び出し元の EXIT の片づけは走るが、呼び出し元の INT / TERM の trap は走らない。
+# 中断の要求に従って止まることを優先した。EXIT は消すだけで終了コードを変えない。
+#
+# *.sh 以外は従来どおり cat で中身だけ同じ場所へ差し替える（mv / cp だとモード・所有者・
+# ハードリンクが変わりうるため）。
+# 中身だけ同じ場所へ上書きする。失敗したらエラーを出して止める（従来は set -e で止まっていた）。
+upgrade_overwrite_in_place() {
+  if ! cat "$1" > "$2"; then
+    echo "error: $2 へ書けません。止めます。" >&2
+    exit 1
+  fi
+}
+
+upgrade_replace_file() {
+  local src="$1" dest="$2" mode tmp="" old_trap
+  if [[ "$dest" != *.sh ]]; then
+    upgrade_overwrite_in_place "$src" "$dest"
+    return 0
+  fi
+  mode="$(file_mode_octal "$dest")"
+  : "${mode:=755}"
+  old_trap="$(trap -p EXIT INT TERM)"
+  # 単引用符: $tmp と $old_trap は、trap が走る時点（この関数の中）の値で読む。
+  trap 'rm -f -- "${tmp:-}"' EXIT
+  trap 'rm -f -- "${tmp:-}"; trap - EXIT INT TERM; eval "${old_trap:-}"; exit 130' INT
+  trap 'rm -f -- "${tmp:-}"; trap - EXIT INT TERM; eval "${old_trap:-}"; exit 143' TERM
+  if tmp="$(mktemp "$dest.dcb-tmp.XXXXXX" 2>/dev/null)" \
+    && cat "$src" > "$tmp" && chmod "$mode" "$tmp" && mv -f "$tmp" "$dest" 2>/dev/null; then
+    trap - EXIT INT TERM
+    [[ -z "$old_trap" ]] || eval "$old_trap"
+    # mv のあいだに dest がリンクへ置き換えられていないかを確かめ直す（dcb_place_file と同じ）。
+    if [[ -L "$dest" || ! -f "$dest" ]]; then
+      echo "error: $dest が書き込み中にリンクへ置き換えられました。止めます。" >&2
+      exit 1
+    fi
+    return 0
+  fi
+  rm -f -- "$tmp"
+  trap - EXIT INT TERM
+  [[ -z "$old_trap" ]] || eval "$old_trap"
+  echo "warn: $dest を rename で置き換えられないため、その場で上書きします（走っている間に置き換わる場合の防御は、スクリプト末尾の exit だけになります）。" >&2
+  upgrade_overwrite_in_place "$src" "$dest"
+}
+
 upgrade_apply_file() {
   local dest="$1" src="$2" rel newh curh rec acc mode verb baseline_match="false"
   rel="${dest#"$OUTPUT_DIR"/}"
@@ -14432,8 +14500,7 @@ upgrade_apply_file() {
       echo "plan: update$note $dest"
       return 0
     fi
-    # cat で中身だけ差し替える（mv / cp だとモード・所有者が変わりうる）。
-    cat "$src" > "$dest"
+    upgrade_replace_file "$src" "$dest"
     rm -f "$dest.dcb-new"
     if [[ "$baseline_match" == "true" ]]; then
       echo "write: $dest (upgraded, baseline match)"
