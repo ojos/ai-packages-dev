@@ -728,6 +728,188 @@ $(printf '%s\n' "$acc" | sed 's/^/    /')"
 }
 resolve_referenced_context
 
+# DCB が配置し、配布のままのファイル（上流でレビュー済み）の一覧を DISTRIBUTED_PATHS
+# （改行区切り）へ入れる。**差分からは外さず、依頼文にも添えない**（差分は全部渡す。添え書きは
+# モデルの報告を控えさせる）。一覧は JSON スキーマ方式（antigravity / codex）の判定だけが使い、
+# これらを指す指摘を落とす件数に数えない。gemini は判定トークン方式なので、一覧を作らず判定も変えない。
+# 一覧に入る条件・版の決め方・限界の正本は、packages/devcontainer-bootstrap/README.md の
+# 「ループコーディング支援」にある、太字の項「第二意見: 配布のままのファイルへの指摘」。ここへ複製しない。
+#
+# 差分に現れたパスは git diff --raw -z --no-renames で取る。本体の差分（改名の検出あり）とは
+# 引数が違い、改名は削除 + 追加として扱われる。追加は新しい記録との照合を通るので、改名で
+# 除かれる方向には働かず、安全側に倒れる。
+sha256_of_stdin() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 | awk '{print $1}'
+  elif command -v openssl >/dev/null 2>&1; then
+    openssl dgst -sha256 | awk '{print $NF}'
+  else
+    return 1
+  fi
+}
+
+# 版 <版> の中の <パス> の中身を出す。版: index / worktree / リビジョン。無ければ失敗。
+show_at() {
+  case "$1" in
+    index) git cat-file -e ":$2" 2>/dev/null && git show ":$2" 2>/dev/null ;;
+    worktree) [[ -f "$REPO_TOP/$2" ]] && cat -- "$REPO_TOP/$2" ;;
+    *) git cat-file -e "$1:$2" 2>/dev/null && git show "$1:$2" 2>/dev/null ;;
+  esac
+}
+
+# 中身の sha256。DCB は現物（作業ツリーのバイト列）からハッシュを書く。索引の版は、作業ツリーと
+# 索引に（改行などの正規化を通した）差が無ければ作業ツリーのバイト列で、あれば索引の blob で
+# ハッシュする。assume-unchanged / skip-worktree の印があるファイルは git diff が作業ツリーの
+# 違いを見ないので、作業ツリーを使わず blob でハッシュする（ls-files -v の先頭の文字が H のものだけ作業ツリーを使う）（core.autocrlf=true の CRLF の現物でも、DCB が書いた値と合う）。
+# 版から中身を読めなかったら失敗を返す（空の出力をハッシュして、空ファイルの記録と取り違えない）。
+# 呼び出し元の $tmp（作業用ディレクトリ）を使う。
+content_sha256() {
+  if [[ "$1" == index && -f "$REPO_TOP/$2" ]] && git cat-file -e ":$2" 2>/dev/null \
+    && [[ "$(git -C "$REPO_TOP" ls-files -v -- ":(literal)$2" 2>/dev/null | cut -c1)" == H ]] \
+    && git -C "$REPO_TOP" diff --quiet -- ":(literal)$2" 2>/dev/null; then
+    sha256_of_stdin < "$REPO_TOP/$2"
+  else
+    show_at "$1" "$2" > "$tmp/content" || return 1
+    sha256_of_stdin < "$tmp/content"
+  fi
+}
+
+find_distributed_paths() {
+  local after="$1" before="$2" tmp rel rec actual meta bread=0
+  local raw_re='^:([0-7]+) ([0-7]+) [0-9a-f]+ [0-9a-f]+ ([A-Z])$'
+  shift 2
+  DISTRIBUTED_PATHS=""
+  [[ "$ENGINE_JSON" -eq 1 ]] || return 0
+  tmp="$(mktemp -d "${TMPDIR:-/tmp}/so-distributed.XXXXXX" 2>/dev/null)" || return 0
+  if [[ -n "$before" ]] && show_at "$before" .devcontainer/ORIGIN > "$tmp/before" 2>/dev/null; then
+    bread=1
+  else
+    : > "$tmp/before"
+  fi
+  if show_at "$after" .devcontainer/ORIGIN > "$tmp/after" 2>/dev/null; then
+    # 前後の ORIGIN だけから、ORIGIN 側の条件（hash: があり owned: が無い、(a) または (b)）を
+    # 満たすパスを「記録のハッシュ<TAB>パス」で出す（ハッシュを先に置くので、パスにタブを含んでもよい）。判定に要る行（hash: / owned: / version=）の
+    # 読み取りはここで行う（package_owned_paths は参照の抽出用の別の読み取り）。
+    awk -v bread="$bread" '
+      function path_of(line, pre,   s, k) {
+        s = substr(line, length(pre) + 1)
+        for (k = length(s); k > 1; k--) if (substr(s, k, 1) == "=") return substr(s, 1, k - 1)
+        return ""
+      }
+      function val_of(line, pre, p) { return substr(line, length(pre) + length(p) + 2) }
+      FILENAME == ARGV[1] {
+        if ($0 ~ /^hash:/) { p = path_of($0, "hash:"); if (p != "" && !(p in bh)) bh[p] = val_of($0, "hash:", p) }
+        else if ($0 ~ /^version=/ && !bseen) { bver = substr($0, 9); bseen = 1 }
+        next
+      }
+      {
+        if ($0 ~ /^hash:/) { p = path_of($0, "hash:"); if (p != "" && !(p in ah)) { ah[p] = val_of($0, "hash:", p); order[++n] = p } }
+        else if ($0 ~ /^owned:/) { p = path_of($0, "owned:"); if (p != "") own[p] = 1 }
+        else if ($0 ~ /^version=/ && !aseen) { aver = substr($0, 9); aseen = 1 }
+      }
+      END {
+        for (i = 1; i <= n; i++) {
+          p = order[i]
+          if (p in own) continue
+          # (b) は前後の両方に version= があり、値が違うときだけ（行の削除・追加では成り立たない）
+          if (ah[p] !~ /^[0-9a-f]+$/ || length(ah[p]) != 64) continue
+          if ((p in bh && bh[p] == ah[p]) || (bread == 1 && bseen && aseen && aver != bver)) print ah[p] "\t" p
+        }
+      }
+    ' "$tmp/before" "$tmp/after" > "$tmp/cand" 2>/dev/null || : > "$tmp/cand"
+    git diff --raw -z --no-renames --no-abbrev "$@" -- > "$tmp/raw" 2>/dev/null || : > "$tmp/raw"
+    # -z の出力は NUL 区切りで、「:<旧モード> <新モード> <旧> <新> <状態>」とパスが交互に来る。
+    # NUL のまま読むので、改行を含むパス名でも見出しとパスの並びはずれない。
+    while IFS= read -r -d '' meta && IFS= read -r -d '' rel; do
+      [[ "$meta" =~ $raw_re ]] || continue
+      # 差分に現れたパスは、配布物かどうかを問わず全部、NUL 区切りのまま控える（指摘の file の照合に使う）
+      printf '%s\0' "$rel" >> "$DIST_DIR/diffpaths"
+      # 追加か、モード・種別が変わらない変更だけ（M で旧新が違う、T などは対象にしない）
+      [[ "${BASH_REMATCH[3]}" == A || ( "${BASH_REMATCH[3]}" == M && "${BASH_REMATCH[1]}" == "${BASH_REMATCH[2]}" ) ]] || continue
+      rec="$(CAND_PATH="$rel" awk '{ if (substr($0, 66) == ENVIRON["CAND_PATH"]) { print substr($0, 1, 64); exit } }' "$tmp/cand")"
+      [[ "$rec" =~ ^[0-9a-f]{64}$ ]] || continue
+      actual="$(content_sha256 "$after" "$rel")" || continue
+      if [[ "$actual" == "$rec" ]]; then
+        DISTRIBUTED_PATHS="${DISTRIBUTED_PATHS:+$DISTRIBUTED_PATHS$'\n'}$rel"
+      fi
+    done < "$tmp/raw"
+  fi
+  rm -rf "$tmp"
+}
+
+REPO_TOP="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+[[ -n "$REPO_TOP" ]] || REPO_TOP="."
+DISTRIBUTED_PATHS=""
+# 判定に渡す一覧の置き場（JSON スキーマ方式だけ）。大きくなりうるので、引数ではなくファイルで渡す。
+DIST_DIR=""
+if [[ "$ENGINE_JSON" -eq 1 ]]; then
+  DIST_DIR="$(mktemp -d "${TMPDIR:-/tmp}/so-dist.XXXXXX")" || {
+    echo "error: 作業用ディレクトリを作れませんでした" >&2
+    exit 1
+  }
+  trap 'rm -rf "$DIST_DIR"' EXIT
+  : > "$DIST_DIR/diffpaths"
+fi
+dist_tracked=index
+if [[ -n "$RANGE" ]]; then
+  if [[ "$RANGE" == *...* ]]; then
+    dist_before="${RANGE%%...*}"; dist_after="${RANGE##*...}"
+    [[ -n "$dist_before" ]] || dist_before="HEAD"
+    [[ -n "$dist_after" ]] || dist_after="HEAD"
+    dist_before="$(git merge-base "$dist_before" "$dist_after" 2>/dev/null || true)"
+  elif [[ "$RANGE" == *..* ]]; then
+    dist_before="${RANGE%%..*}"; dist_after="${RANGE##*..}"
+    [[ -n "$dist_before" ]] || dist_before="HEAD"
+    [[ -n "$dist_after" ]] || dist_after="HEAD"
+  else
+    dist_before="$RANGE"; dist_after="worktree"
+  fi
+  dist_tracked="$dist_after"
+  find_distributed_paths "$dist_after" "$dist_before" "$RANGE"
+elif [[ -n "$BASE" ]]; then
+  find_distributed_paths index "$BASE" --cached "$BASE"
+else
+  find_distributed_paths index HEAD --cached
+fi
+DISTRIBUTED_COUNT=0
+JQ_DIST_ARGS=()
+if [[ "$ENGINE_JSON" -eq 1 ]]; then
+  dist_json_fail() {
+    echo "error: 配布のままのファイルの一覧を JSON にできませんでした" >&2
+    exit 1
+  }
+  printf '[]' > "$DIST_DIR/dist.json"
+  printf '[]' > "$DIST_DIR/tracked.json"
+  if [[ -n "$DISTRIBUTED_PATHS" ]]; then
+    DISTRIBUTED_COUNT="$(printf '%s\n' "$DISTRIBUTED_PATHS" | grep -c . || true)"
+    echo "[second-opinion] 配布のままのファイル ${DISTRIBUTED_COUNT} 件への指摘は判定に数えません（差分はそのままレビューします）"
+    # 相対パスと、リポジトリの根を前に持つ絶対パスの両方を並べる（指摘の file の形のゆれに備える）
+    dist_all=""
+    while IFS= read -r dist_rel; do
+      [[ -n "$dist_rel" ]] || continue
+      dist_all="${dist_all}${dist_rel}"$'\n'"${REPO_TOP}/${dist_rel}"$'\n'
+    done <<<"$DISTRIBUTED_PATHS"
+    printf '%s' "$dist_all" | jq -R . | jq -s -c 'map(select(. != ""))' > "$DIST_DIR/dist.json" || dist_json_fail
+    # レビューする版で追跡しているパス（NUL 区切りのまま JSON にする）
+    case "$dist_tracked" in
+      index|worktree) git -C "$REPO_TOP" ls-files -z ;;
+      *) git -C "$REPO_TOP" ls-tree -r -z --name-only "$dist_tracked" ;;
+    esac | jq -R -s -c 'split("\u0000") | map(select(. != ""))' > "$DIST_DIR/tracked.json" || dist_json_fail
+  fi
+  jq -R -s -c 'split("\u0000") | map(select(. != ""))' < "$DIST_DIR/diffpaths" > "$DIST_DIR/diff.json" || dist_json_fail
+  JQ_DIST_ARGS=(--slurpfile dist "$DIST_DIR/dist.json" --slurpfile diff "$DIST_DIR/diff.json" --slurpfile tracked "$DIST_DIR/tracked.json")
+fi
+# 指摘の file が配布のままのファイルかどうか。候補を (a) 先頭の ./ だけを落とした形、(b) (a) から
+# 末尾の :行番号を落とした形、(c) (b) から先頭の a/ か b/（unified diff の見出しの接頭辞）を落とした形の
+# 順に作り、最初に「実在するパス」（差分に現れたパス $diff と、レビューする版で追跡しているパス
+# $tracked）と一致したもので決める。どれとも一致しなければ (c) で配布物の一覧と比べる。
+# 決まったパスが配布物の一覧 $dist にあるときだけ真。絶対パスは、根を前に持つもの（上の一覧に
+# 並べた）だけ一致する。実在する利用側の a/x や x:12 を、配布物 x と取り違えないための順序。
+# shellcheck disable=SC2016  # jq の式で、シェルの展開ではない
+JQ_DIST_DEF='def isdist: (.file | sub("^(\\./)+"; "")) as $a | ($a | sub(":[0-9]+(:[0-9]+)?$"; "")) as $b | ($b | sub("^[ab]/"; "")) as $c | ([$a, $b, $c] | map(select(. as $x | any($diff[0][]; . == $x) or any($tracked[0][]; . == $x))) | first // $c) as $f | any($dist[0][]; . == $f);'
+
 # 文脈（枝の issue の全文と、参照された issue / PR の要約）をプロンプトの末尾へ
 # 足す。エンジンによって本文は分かれるが、文脈の足し方は分けない。
 append_context() {
@@ -863,7 +1045,7 @@ echo "[second-opinion] reviewing $scope (engine=$ENGINE, runs=$RUNS)"
 work_dir="$(mktemp -d "${TMPDIR:-/tmp}/second-opinion.XXXXXX")"
 diff_file="$work_dir/review.diff"
 stderr_file="$work_dir/stderr"
-trap 'rm -rf "$work_dir"' EXIT
+trap 'rm -rf "$work_dir" "${DIST_DIR:-}"' EXIT
 printf '%s\n' "$diff_text" > "$diff_file"
 
 # codex 専用の受け渡し口。他の 2 エンジンは使わないため /dev/null のまま残す。
@@ -1210,14 +1392,27 @@ answer_is_valid() {
 # 落とす指摘の数。ゲート対象の判定は BLOCKING_JSON 1 つに寄せる（answer_lacks_scenario と
 # 同じ一覧で数える。別々に組み立てると、片方だけ直ったときに数え方が食い違う）。
 blocking_count() {
-  printf '%s' "$1" | jq --argjson blocking "$BLOCKING_JSON" \
-    '[.findings[] | select(.category as $c | $blocking | index($c) != null)] | length'
+  local n
+  n="$(printf '%s' "$1" | jq --argjson blocking "$BLOCKING_JSON" "${JQ_DIST_ARGS[@]}" \
+    "$JQ_DIST_DEF"'[.findings[] | select((isdist | not) and (.category as $c | $blocking | index($c) != null))] | length')" || return 1
+  # 数でない出力（空など）を 0 件と読まない。失敗は呼び出し側が実行失敗として落とす。
+  [[ "$n" =~ ^[0-9]+$ ]] || return 1
+  printf '%s\n' "$n"
+}
+
+# 配布のままのファイルを指していて、本来ならゲート対象の指摘の数（判定外にした分）。
+dist_hit_count() {
+  local n
+  n="$(printf '%s' "$1" | jq --argjson blocking "$BLOCKING_JSON" "${JQ_DIST_ARGS[@]}" \
+    "$JQ_DIST_DEF"'[.findings[] | select(isdist and (.category as $c | $blocking | index($c) != null))] | length')" || return 1
+  [[ "$n" =~ ^[0-9]+$ ]] || return 1
+  printf '%s\n' "$n"
 }
 
 # 人が読む形にする。報告は 4 点の外（promise-mismatch / other）も出す。
 print_findings() {
-  printf '%s' "$1" | jq -r '.findings[] |
-    "  [" + .category + "] " + (if .file == "" then "(場所の特定なし)" else .file + ":" + (.line | tostring) end) + "\n" +
+  printf '%s' "$1" | jq -r "${JQ_DIST_ARGS[@]}" "$JQ_DIST_DEF"'.findings[] |
+    "  [" + .category + "]" + (if isdist then "[配布物・判定外]" else "" end) + " " + (if .file == "" then "(場所の特定なし)" else .file + ":" + (.line | tostring) end) + "\n" +
     "    何が: " + .what + "\n" +
     "    なぜ: " + .why + "\n" +
     "    失敗の筋書き: " + (if (.failure_scenario | test("\\S")) then .failure_scenario else "(なし)" end)'
@@ -1230,13 +1425,19 @@ print_findings() {
 # 筋書きを書けない指摘は反証できていない推測で、通過を左右させない。報告だけの
 # 種類は空でよい。形の崩れとは理由を分けて示す——原因の読み取れない赤は、偽の赤と
 # 同じようにゲートへの信頼を削る。
+# 戻り値: 0 = ある / 1 = 無い / 2 = jq が失敗した（「無い」と読まない。呼び出し側が実行失敗にする）
 answer_lacks_scenario() {
-  printf '%s' "$1" | jq -e --argjson blocking "$BLOCKING_JSON" '
+  local rc
+  printf '%s' "$1" | jq -e --argjson blocking "$BLOCKING_JSON" "${JQ_DIST_ARGS[@]}" "$JQ_DIST_DEF"'
     .reviewed == true
     and any(.findings[];
-        (.category as $c | $blocking | index($c) != null)
+        (isdist | not)
+        and (.category as $c | $blocking | index($c) != null)
         and (.failure_scenario | test("\\S") | not))
   ' >/dev/null 2>&1
+  rc=$?
+  [[ "$rc" -le 1 ]] && return "$rc"
+  return 2
 }
 
 # 過半数。N=1 なら 1、N=2 なら 2、N=3 なら 2、N=4 なら 3。
@@ -1384,8 +1585,14 @@ $PROMPT" --output-format json --json-schema "$SCHEMA_FILE")
       answer_problem=""
       if ! answer_is_valid "$answer_json"; then
         answer_problem="回答を JSON として読めませんでした"
-      elif answer_lacks_scenario "$answer_json"; then
-        answer_problem="ゲート対象の指摘に失敗の筋書き（failure_scenario）がありません"
+      else
+        lacks_rc=0
+        answer_lacks_scenario "$answer_json" || lacks_rc=$?
+        if [[ "$lacks_rc" -eq 0 ]]; then
+          answer_problem="ゲート対象の指摘に失敗の筋書き（failure_scenario）がありません"
+        elif [[ "$lacks_rc" -ne 1 ]]; then
+          answer_problem="回答の検査（jq）に失敗しました"
+        fi
       fi
       if [[ -n "$answer_problem" ]]; then
         # **「読めなかった」を「指摘なし」に倒さない。** レビューしていないものを
@@ -1415,7 +1622,18 @@ $PROMPT" --output-format json --json-schema "$SCHEMA_FILE")
         exit 1
       fi
 
-      blocking="$(blocking_count "$answer_json")"
+      if ! blocking="$(blocking_count "$answer_json")"; then
+        echo "error: 落とす指摘の数を数えられませんでした（jq の失敗。engine=$ENGINE, run $run/$RUNS）。レビューは成立していません" >&2
+        exit 1
+      fi
+      if ! dist_hits="$(dist_hit_count "$answer_json")"; then
+        echo "error: 配布物への指摘の数を数えられませんでした（jq の失敗。engine=$ENGINE, run $run/$RUNS）。レビューは成立していません" >&2
+        exit 1
+      fi
+      if [[ "$dist_hits" -gt 0 ]]; then
+        # 「落とさない指摘」とは別の行（最後の要約の行の文言と順序は変えない）
+        echo "$log_prefix run $run/$RUNS: 配布物への指摘 ${dist_hits} 件は判定外"
+      fi
       total="$(printf '%s' "$answer_json" | jq '.findings | length')"
       if [[ "$blocking" -eq 0 ]]; then
         if [[ "$total" -eq 0 ]]; then
