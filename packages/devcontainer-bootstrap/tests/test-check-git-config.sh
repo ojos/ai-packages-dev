@@ -88,7 +88,37 @@ credential.https://example.com.helper	!evil-cred-url
 gpg.program	evil-gpg
 gpg.ssh.program	evil-gpg-ssh
 remote.origin.uploadpack	evil-upload
-remote.origin.receivepack	evil-receive'
+remote.origin.receivepack	evil-receive
+core.pager	evil-pager
+pager.log	evil-pager-log
+core.alternateRefsCommand	evil-alt
+gpg.ssh.defaultKeyCommand	evil-keycmd
+interactive.diffFilter	evil-difffilter
+mergetool.x.cmd	evil-mergetool
+difftool.x.cmd	evil-difftool
+trailer.x.cmd	evil-trailer
+mergetool.x.path	evil-mt-path
+difftool.x.path	evil-dt-path
+submodule.x.update	!evil-submodule
+protocol.ext.allow	always
+protocol.allow	always
+sendemail.sendmailcmd	evil-sendmail
+sendemail.tocmd	evil-tocmd
+sendemail.cccmd	evil-cccmd
+sendemail.work.sendmailcmd	evil-sendmail-id
+sendemail.work.tocmd	evil-tocmd-id
+sendemail.work.cccmd	evil-cccmd-id
+sendemail.headercmd	evil-headercmd
+sendemail.work.headercmd	evil-headercmd-id
+sendemail.smtpserver	/tmp/evil-smtp
+sendemail.work.smtpserver	/tmp/evil-smtp-id
+trailer.x.command	evil-trailer-command
+man.x.cmd	evil-man
+man.x.path	evil-man-path
+browser.x.cmd	evil-browser
+browser.x.path	evil-browser-path
+instaweb.httpd	evil-httpd
+alias.x	!evil-alias'
 
 while IFS="$(printf '\t')" read -r key val; do
   it "$key を検出して 1 で終わる"
@@ -118,6 +148,56 @@ if [[ "$rc1" -eq 0 && "$CHECK_RC" -eq 0 ]]; then pass; else fail "rc=$rc1/$CHECK
 it "core.fsmonitor が整数のときは検出しない（git は整数も真偽値として読む）"
 repo="$(new_repo)"
 (cd "$repo" && git config --local core.fsmonitor 2)
+run_check "$repo"
+if [[ "$CHECK_RC" -eq 0 ]]; then pass; else fail "rc=$CHECK_RC out=$CHECK_OUT"; fi
+
+it "pager.<コマンド> が真偽値（false / true）のときは検出しない（コマンドではない）"
+repo="$(new_repo)"
+(cd "$repo" && git config --local pager.log false && git config --local pager.diff true)
+run_check "$repo"
+if [[ "$CHECK_RC" -eq 0 ]]; then pass; else fail "rc=$CHECK_RC out=$CHECK_OUT"; fi
+
+for v in 0 yes no on off -1 12 999999999 TRUE ''; do
+  it "pager.log の値が確実に真偽値と言える形（'$v'）なら検出しない"
+  repo="$(new_repo)"
+  (cd "$repo" && git config --local pager.log "$v")
+  run_check "$repo"
+  if [[ "$CHECK_RC" -eq 0 ]]; then pass; else fail "rc=$CHECK_RC out=$CHECK_OUT"; fi
+done
+
+# 08 / 09 は git が整数として読めず、コマンドとして実行する。git が真偽値として読む
+# ' 1' / 1k / +1 / 0x10 も、狭く取る判定では検出する（誤検出側へ倒す）。
+# 2147483648 / 999999999999999999 は int に収まらず、git はコマンドとして実行する。
+for v in truex 1x 'less -R' 'k' 08 09 007 ' 1' 1k +1 0x10 2147483648 999999999999999999; do
+  it "pager.log の値が確実な真偽値の形でない（'$v'）なら検出する"
+  repo="$(new_repo)"
+  (cd "$repo" && git config --local pager.log "$v")
+  run_check "$repo"
+  if [[ "$CHECK_RC" -eq 1 ]]; then pass; else fail "rc=$CHECK_RC out=$CHECK_OUT"; fi
+done
+
+it "submodule.<名前>.update が「!」で始まらない値（checkout など）なら検出しない"
+repo="$(new_repo)"
+(cd "$repo" && git config --local submodule.x.update checkout && git config --local submodule.y.update none)
+run_check "$repo"
+if [[ "$CHECK_RC" -eq 0 ]]; then pass; else fail "rc=$CHECK_RC out=$CHECK_OUT"; fi
+
+it "protocol.ext.allow=never と protocol.allow=never は検出しない"
+repo="$(new_repo)"
+(cd "$repo" && git config --local protocol.ext.allow never && git config --local protocol.allow never)
+run_check "$repo"
+if [[ "$CHECK_RC" -eq 0 ]]; then pass; else fail "rc=$CHECK_RC out=$CHECK_OUT"; fi
+
+it "protocol.allow=user は検出する（既定で ext を許していない git でも、利用者の操作で ext が通る）"
+repo="$(new_repo)"
+(cd "$repo" && git config --local protocol.allow user)
+run_check "$repo"
+if [[ "$CHECK_RC" -eq 1 ]]; then pass; else fail "rc=$CHECK_RC out=$CHECK_OUT"; fi
+
+it "alias.<名前> は「!」で始まらない値、sendemail の smtpserver は「/」を含まない値（ホスト名）なら検出しない"
+repo="$(new_repo)"
+(cd "$repo" && git config --local alias.st status && git config --local sendemail.smtpserver smtp.example.com \
+  && git config --local sendemail.work.smtpserver smtp.example.com)
 run_check "$repo"
 if [[ "$CHECK_RC" -eq 0 ]]; then pass; else fail "rc=$CHECK_RC out=$CHECK_OUT"; fi
 
@@ -259,6 +339,29 @@ if [[ "$HOOK_OUT" == *"2 件"* && "$HOOK_OUT" == *"diff.<名前>.textconv"* \
 else
   fail "$HOOK_OUT"
 fi
+
+it "--hook と --summary は、新しい種類を固定の表記で出し、仕込んだ側の名前を出さない"
+repo="$(new_repo)"
+(cd "$repo" && git config --local pager.IGNORE-ME evil \
+  && git config --local mergetool.IGNORE-MT.path evil \
+  && git config --local difftool.IGNORE-DT.path evil \
+  && git config --local submodule.IGNORE-SM.update '!evil' \
+  && git config --local sendemail.IGNORE-ID.sendmailcmd evil \
+  && git config --local sendemail.IGNORE-ID.tocmd evil \
+  && git config --local protocol.ext.allow always \
+  && git config --local alias.IGNORE-AL '!evil' \
+  && git config --local man.IGNORE-MAN.cmd evil)
+HOOK_OUT="$(cd "$repo" && bash scripts/check-git-config.sh --hook 2>/dev/null)"
+SUM_OUT="$(cd "$repo" && bash scripts/check-git-config.sh --summary 2>/dev/null)"
+okall=1
+for out in "$HOOK_OUT" "$SUM_OUT"; do
+  for k in 'pager.<コマンド>' 'mergetool.<名前>.path' 'difftool.<名前>.path' 'submodule.<名前>.update' \
+    'sendemail.<識別名>.sendmailcmd' 'sendemail.<識別名>.tocmd' 'protocol.ext.allow' 'alias.<名前>' 'man.<名前>.cmd'; do
+    [[ "$out" == *"$k"* ]] || okall=0
+  done
+  [[ "$out" != *IGNORE* && "$out" != *evil* ]] || okall=0
+done
+if [[ "$okall" -eq 1 ]]; then pass; else fail "hook=$HOOK_OUT summary=$SUM_OUT"; fi
 
 it "--hook は、設定を読めないとき、判定できなかったことを決まった文言で文脈へ出す（黙らない）"
 repo="$(new_repo)"

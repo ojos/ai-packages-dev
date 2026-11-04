@@ -6,6 +6,11 @@
 >
 > 同じ理由で、issue 参照は `ojos/ai-packages-dev#NNN` の形で書いてください。裸の `#NNN` は GitHub のオートリンクが**配布先リポジトリの issue** として解決するため、配布後は存在しない issue や無関係な issue を指します。
 
+## 未リリース
+
+### Summary
+- **`scripts/check-git-config.sh` が、ページャーなどの設定を検出するようになった**（ojos/ai-packages-dev#694）。`core.pager` と `pager.<コマンド>`（git が端末でページャーを使う操作で実行する）が漏れていた。同じ種類（git が外部コマンドとして実行する設定）の漏れも足した: `core.alternateRefsCommand`・`interactive.diffFilter`・`gpg.ssh.defaultKeyCommand`・`mergetool.<名前>.cmd` / `path`・`difftool.<名前>.cmd` / `path`・`trailer.<名前>.cmd`・`submodule.<名前>.update`（値が「!」で始まるものだけ）・`protocol.ext.allow` と `protocol.allow`（`never` 以外）・`sendemail` の `sendmailcmd` / `tocmd` / `cccmd` / `headercmd` と `smtpserver`（プログラムのパスのときだけ。識別名つきの形を含む）・`trailer.<名前>.command`・`alias.<名前>`（値が「!」で始まるものだけ）・`man.<名前>.cmd` / `path`・`browser.<名前>.cmd` / `path`・`instaweb.httpd`。`core.fsmonitor` と `pager.<コマンド>` で値を真偽値として除くのは、確実に真偽値と言える形（true / false / yes / no / on / off / 空と、先頭に 0 を付けない 9 桁までの 10 進の整数）だけにした。`08` のように git が整数として読めない値はコマンドとして実行されるため、見逃さない側へ倒した（`1k`・`0x10` のように git が真偽値として読む形も検出する）。
+
 ## v0.24.0
 
 ### Summary

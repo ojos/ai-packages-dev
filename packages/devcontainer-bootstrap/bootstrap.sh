@@ -4817,14 +4817,23 @@ TMPL
 #
 # 検出するキー（大文字小文字を区別しない）:
 #   core.fsmonitor / core.hooksPath / core.sshCommand / core.askPass / core.gitProxy / core.editor
+#   core.pager / pager.<コマンド> / core.alternateRefsCommand / interactive.diffFilter
 #   sequence.editor / credential.helper / credential.<URL>.helper
-#   gpg.program / gpg.<形式>.program
+#   gpg.program / gpg.<形式>.program / gpg.ssh.defaultKeyCommand
 #   diff.external / diff.<名前>.textconv / diff.<名前>.command
 #   filter.<名前>.clean / smudge / process
 #   merge.<名前>.driver
+#   mergetool.<名前>.cmd / mergetool.<名前>.path / difftool.<名前>.cmd / difftool.<名前>.path
+#   trailer.<名前>.cmd / trailer.<名前>.command / submodule.<名前>.update / alias.<名前>
+#   man.<名前>.cmd / man.<名前>.path / browser.<名前>.cmd / browser.<名前>.path / instaweb.httpd
+#   protocol.ext.allow / protocol.allow
+#   sendemail.sendmailcmd / tocmd / cccmd / headercmd / smtpserver と、それぞれの
+#   sendemail.<識別名>.* の形
 #   remote.<名前>.uploadpack / remote.<名前>.receivepack
-#   （core.fsmonitor の値が真偽値・整数のときは、組み込みのデーモンの指定でコマンドではない
-#   ので検出しない）
+#   （値で除くもの: core.fsmonitor と pager.<コマンド> は、値が確実に真偽値と言える形の
+#   ときはコマンドではないので検出しない。submodule.<名前>.update と alias.<名前> は値が
+#   「!」で始まるものだけ、sendemail の smtpserver は値に「/」を含むもの（プログラムの
+#   パス）だけ、protocol.ext.allow と protocol.allow は never 以外のときだけ検出する）
 #
 # 範囲: local（--local。--includes で includeIf の先まで）と worktree（--worktree。
 #   extensions.worktreeConfig があるときだけ）。global と system は対象にしない。
@@ -4881,9 +4890,32 @@ esac
 kind_of() {
   case "${1}" in
     core.fsmonitor | core.hookspath | core.sshcommand | core.askpass | core.gitproxy | core.editor | \
+      core.pager | core.alternaterefscommand | gpg.ssh.defaultkeycommand | interactive.difffilter | \
       sequence.editor | credential.helper | gpg.program | diff.external)
       printf '%s' "${1}"
       ;;
+    pager.*) printf 'pager.<コマンド>' ;;
+    mergetool.*.path) printf 'mergetool.<名前>.path' ;;
+    difftool.*.path) printf 'difftool.<名前>.path' ;;
+    submodule.*.update) printf 'submodule.<名前>.update' ;;
+    protocol.ext.allow | protocol.allow | sendemail.sendmailcmd | sendemail.tocmd | sendemail.cccmd)
+      printf '%s' "${1}"
+      ;;
+    sendemail.headercmd | sendemail.smtpserver | instaweb.httpd) printf '%s' "${1}" ;;
+    sendemail.*.headercmd) printf 'sendemail.<識別名>.headercmd' ;;
+    sendemail.*.smtpserver) printf 'sendemail.<識別名>.smtpserver' ;;
+    trailer.*.command) printf 'trailer.<名前>.command' ;;
+    man.*.cmd) printf 'man.<名前>.cmd' ;;
+    man.*.path) printf 'man.<名前>.path' ;;
+    browser.*.cmd) printf 'browser.<名前>.cmd' ;;
+    browser.*.path) printf 'browser.<名前>.path' ;;
+    alias.*) printf 'alias.<名前>' ;;
+    sendemail.*.sendmailcmd) printf 'sendemail.<識別名>.sendmailcmd' ;;
+    sendemail.*.tocmd) printf 'sendemail.<識別名>.tocmd' ;;
+    sendemail.*.cccmd) printf 'sendemail.<識別名>.cccmd' ;;
+    mergetool.*.cmd) printf 'mergetool.<名前>.cmd' ;;
+    difftool.*.cmd) printf 'difftool.<名前>.cmd' ;;
+    trailer.*.cmd) printf 'trailer.<名前>.cmd' ;;
     credential.*.helper) printf 'credential.<URL>.helper' ;;
     gpg.*.program) printf 'gpg.<形式>.program' ;;
     diff.*.textconv) printf 'diff.<名前>.textconv' ;;
@@ -4897,14 +4929,18 @@ kind_of() {
   esac
 }
 
-# core.fsmonitor の値が、組み込みのデーモンの指定（真偽値・整数）か。git は整数も
-# 真偽値として読む。
-is_builtin_fsmonitor() {
+# 値が、確実に git の真偽値と言える形か（コマンドではない値）。true / false / yes / no /
+# on / off / 空（大文字小文字を区別しない）と、先頭に 0 を付けない 10 進の整数（符号は - だけ、
+# 9 桁まで。git は真偽値の整数を int で読むので、範囲を超える値はコマンドになる）だけを
+# 真偽値とみなす。git の整数の読み方（先頭の空白・+・k / m / g・16 進・
+# 8 進）には寄せない。08 のように git が整数として読めない値はコマンドとして実行される
+# ため、読み方を真似て外すと見逃しになる。狭く取った分の誤検出（余計な警告）は許す。
+is_git_bool() {
   local v="${1}" r=1
   shopt -s nocasematch
   case "$v" in true | false | yes | no | on | off | "") r=0 ;; esac
   shopt -u nocasematch
-  [[ "$v" =~ ^-?[0-9]+$ ]] && r=0
+  [[ "$v" =~ ^-?(0|[1-9][0-9]{0,8})$ ]] && r=0
   return "$r"
 }
 
@@ -4982,9 +5018,14 @@ run_check() {
       # diff.<名前> などの <名前> だけ）。そのため照合は $key のままで足りる。
       kind="$(kind_of "$key")"
       [[ -n "$kind" ]] || continue
-      if [[ "$kind" == core.fsmonitor ]] && is_builtin_fsmonitor "$val"; then
-        continue
-      fi
+      # 値で対象外になるもの（コマンドを実行させない値）。
+      case "$kind" in
+        core.fsmonitor | 'pager.<コマンド>') is_git_bool "$val" && continue ;;
+        'submodule.<名前>.update' | 'alias.<名前>') [[ "$val" == '!'* ]] || continue ;;
+        sendemail.smtpserver | 'sendemail.<識別名>.smtpserver') [[ "$val" == */* ]] || continue ;;
+        protocol.ext.allow) [[ "$val" == never ]] && continue ;;
+        protocol.allow) [[ "$val" == never ]] && continue ;;
+      esac
       is_allowed "$key" "$val" && continue
       # 重複は取り除かない。worktree の設定は local と別のファイルだけを読むので重ならず、
       # 改行を含められる値で重複を判定すると、値に別の設定の記録を埋め込んで、その設定を
