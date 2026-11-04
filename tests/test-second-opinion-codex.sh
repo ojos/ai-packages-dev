@@ -44,6 +44,11 @@ echo "test-second-opinion-codex"
 # 問わない）。--runs を明示指定する検査だけが、その値を確実に使う。
 unset SECOND_OPINION_ENGINE SECOND_OPINION_RUNS SECOND_OPINION_MODEL
 
+# 再現の段階（#691）は、レビューの起動の配線とは別の検査（tests/test-second-opinion-repro.sh）。
+# ここの仕込みの codex は exec を 1 種類としか見ないので、指摘ありの回で再現の起動が
+# 記録（引数・標準入力）を上書きしないよう、段階を止めておく。
+export SECOND_OPINION_REPRO=off
+
 REVIEW="$REPO_ROOT/scripts/second-opinion-review.sh"
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/test-second-opinion-codex.XXXXXX")"

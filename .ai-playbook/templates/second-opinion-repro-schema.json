@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "second-opinion-repro",
+  "description": "第二意見の再現の段階（second-opinion-review.sh）で、codex が返す回答の形。指摘が実際に起きるかを、再現テストを書いて実行した結果。判定そのものはこの回答では決まらない——再現した・しなかったのどちらでも、指摘は従来どおり落とす（証拠が増えるだけ）。",
+  "type": "object",
+  "properties": {
+    "reproduced": {
+      "type": "boolean",
+      "description": "失敗の筋書きどおりの誤った結果が、実際に実行して出たときだけ true。出なかった・実行できなかったときは false。"
+    },
+    "test_path": {
+      "type": "string",
+      "description": "書いた再現テストのパス（作業場所からの相対。.second-opinion-repro/ の下）。書けなかったときは空文字。"
+    },
+    "command": {
+      "type": "string",
+      "description": "テストを実行したコマンド。実行しなかったときは空文字。"
+    },
+    "output_excerpt": {
+      "type": "string",
+      "description": "実行出力の要点の抜粋。長い出力は要点だけにする。"
+    },
+    "reason": {
+      "type": "string",
+      "description": "reproduced の根拠。再現した場合は何が起きたか、しなかった場合はなぜ起きなかった（または確かめられなかった）か。"
+    }
+  },
+  "required": ["reproduced", "test_path", "command", "output_excerpt", "reason"],
+  "additionalProperties": false
+}

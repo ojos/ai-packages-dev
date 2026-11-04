@@ -12,6 +12,7 @@
 | ファイル | 概要 |
 |---|---|
 | `scripts/second-opinion-review.sh` | 別ベンダーのモデルによる第二意見（クロスモデル二段ゲートの2段目）。`--engine` で実行 CLI（gemini / antigravity / codex）を選ぶ。 |
+| `scripts/second-opinion-repro-schema.json` | 第二意見の再現の段階（`--engine codex` のとき）で codex が返す回答の形。`second-opinion-review.sh` と対。正本は `.ai-playbook/templates/second-opinion-repro-schema.json`。 |
 | `scripts/fix-mount-owner.sh` | 永続 volume のマウント先を remoteUser 所有へ戻す（postCreate の先頭）。 |
 | `scripts/install-ai-tools.sh` | AI CLI ツール導入（claude / gemini / codex は npm で、版の下限より古ければ入れ替える。agy は配布元のマニフェストを取り SHA-512 を照合して置く）。あわせて agy のテレメトリを既定で無効化する。 |
 | `scripts/load-project-env.sh` | プロジェクト .env を source せず安全にパースして export（ホスト env を後勝ちで上書き）。 |

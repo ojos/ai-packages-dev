@@ -13,6 +13,12 @@
 - **生成する `scripts/*.sh` が、shellcheck の既定の重大度（info まで）で通る**（ojos/ai-packages-dev#697）。`scripts/check-doc-links.sh` の生成物判定の行が SC2016（info）を出し、`scripts/` を重大度の指定なしで shellcheck する配布先の受け入れ検証を落としていた。この行には理由を添えて抑止を付けた。生成物の検査（開発リポジトリの試験）も `-S warning` から既定の重大度へ揃え、`--with-codex` の構成も検査に含めた。`second-opinion-review.sh`（ai-playbook の雛形）の `load-project-env.sh` の読み込みは、配布先で辿れない SC1091（info）を避けるため、ほかの生成物と同じ書き方（`source=/dev/null`）にした。
 - **`scripts/check-doc-links.sh` が、生成した規則の断り書きに続けて足した「> 」の行も本文として照合する**（ojos/ai-packages-dev#698）。これまでは断り書きの後の「> 」で始まる行を条件なしに読み飛ばしていたため、そこに壊れたリンクを足しても、生成物として除外されて検出できなかった。読み飛ばすのは、生成器が出す断り書きの 1・2 行目（文面全体が一致するもの）と、書式が生成器どおりでリンクを含まない「親の見出し」の行だけにした。行末の CR は落としてから照合する（CRLF の作業ツリーでも生成物を除外する）。
 - **`--upgrade` が実行中のスクリプトを置き換えても、そのスクリプトが壊れなくなった**（ojos/ai-packages-dev#696）。生成する `scripts/update-check.sh` の upgrade は、`bootstrap.sh --upgrade` を通じて自分自身を置き換える。これまでは同じ場所への上書きだったので、bash が古い位置のまま新しい中身を読み続け、終了時に `command not found` や `unbound variable` が出ていた。`*.sh` の置き換えを「同じディレクトリの一時ファイルに書き、モードを合わせて rename する」形にしたので、走っている bash は古い中身を読み続ける。置き換えるのは新しい `bootstrap.sh` なので、この版より古い `update-check.sh` からの追従にも効く。rename では所有者・グループ・ACL・ハードリンクが保たれないので、`*.sh` 以外は従来どおり同じ場所へ上書きする。親ディレクトリに書けないなどで rename できないときは、警告を出して従来の上書きに戻る。`update-check.sh` の末尾は `main "$@"; exit $?` の 1 行にした（防御）。
+- **規範を配置する構成で、`scripts/second-opinion-repro-schema.json` を `scripts/second-opinion-schema.json` と並べて配置する**（ojos/ai-packages-dev#691）。第二意見の再現の段階（エンジンが codex のとき。判定は変えない）が読む回答の形で、`second-opinion-review.sh` と対。由来記録（ORIGIN）にも載る。
+- **この版は、`templates/second-opinion-repro-schema.json` を持つ ai-playbook（未リリースの次の版）を要求する。** 持たない古い規範を指定すると、書き込みの前に雛形の欠けで止まる。
+
+### 移行
+- `bootstrap.sh --upgrade` で追従する（手を入れていなければ置き換わる）。再現の段階は codex のとき既定で有効になり、指摘ごとに codex を 1 回起こす。止めるには `.env` に `SECOND_OPINION_REPRO=off`。
+- 破壊的変更はない。
 
 ## v0.24.0
 
