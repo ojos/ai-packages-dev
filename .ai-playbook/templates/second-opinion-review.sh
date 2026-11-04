@@ -1603,7 +1603,10 @@ repro_prepare_once() {
   elif command -v gtimeout >/dev/null 2>&1; then
     repro_timeout_cmd=(gtimeout -k 10 "$REPRO_TIMEOUT")
   else
-    echo "[second-opinion] repro: timeout コマンドが無いため、時間の上限なしで回します"
+    # 上限なしで回すと、止まらない再現テストでゲート全体が返らなくなる。上限を掛けられない
+    # なら段階そのものを飛ばし、従来の判定に戻す（止めたときと同じ安全側）。
+    repro_skip_msg="[second-opinion] repro: timeout も gtimeout も無いため、時間の上限を掛けられません。再現の段階を飛ばします"
+    return 0
   fi
 
   rm -rf "$repro_base"
@@ -1637,7 +1640,7 @@ repro_prepare_once() {
 # 再現の段階の本体。$repro_candidates_file の指摘を重複なくまとめ、残りの予算まで再現させる。
 run_repro_stage() {
   local cands n limit skipped i f label tree answer errfile input remaining
-  local n_repro=0 n_norepro=0 n_unknown=0 calls=0 rc kind reason reproduced
+  local n_repro=0 n_norepro=0 n_unknown=0 calls=0 rc kind reason reproduced test_path
   local cmd_text out_text
   local -a args
 
@@ -1743,12 +1746,16 @@ run_repro_stage() {
       kind="unknown"; reason="回答の形がスキーマと合いません"
     else
       reproduced="$(jq -r '.reproduced' "$answer")"
-      if [[ "$reproduced" == "true" ]]; then
-        kind="repro"
-      elif jq -e '.command | test("\\S") | not' "$answer" >/dev/null 2>&1; then
-        # 実行したコマンドが空なのに「再現しなかった」と答えた回答は、何も実行していない
-        # （道具が使えなかった等）。「再現しなかった」と数えず、確かめられなかったとする。
+      test_path="$(jq -r '.test_path' "$answer")"
+      if jq -e '.command | test("\\S") | not' "$answer" >/dev/null 2>&1; then
+        # 実行したコマンドが空の回答は、reproduced の値によらず、何も実行していない
+        # （道具が使えなかった等）。再現した・しなかったのどちらにも数えず、確かめられなかったとする。
         kind="unknown"; reason="テストを実行していません（コマンドが空）: $(jq -r '.reason' "$answer" | repro_clean | tr '\n' ' ' | cut -c1-300)"
+      elif [[ -z "$test_path" || "$test_path" == /* || "$test_path" == *..* || ! -f "$tree/$test_path" ]]; then
+        # テストのファイルが作業ツリーの中に無い回答も、実行の裏付けが無い。
+        kind="unknown"; reason="テストのファイルが作業ツリーにありません（test_path: $(printf '%s' "$test_path" | repro_clean | tr '\n' ' ' | cut -c1-200)）"
+      elif [[ "$reproduced" == "true" ]]; then
+        kind="repro"
       else
         kind="norepro"
       fi

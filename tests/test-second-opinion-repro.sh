@@ -120,6 +120,8 @@ if [[ "${1-}" == "exec" ]]; then
         printf '%s\n' '{"reproduced":true,"test_path":".second-opinion-repro/t.sh","command":"bash .second-opinion-repro/t.sh","output_excerpt":"actual: WRONG\nexpected: right","reason":"筋書きどおりの誤った結果が出た"}' > "$answer" ;;
       norun)
         printf '%s\n' '{"reproduced":false,"test_path":"","command":"","output_excerpt":"code-mode host is disabled","reason":"道具が使えず実行できなかった"}' > "$answer" ;;
+      emptytrue)
+        printf '%s\n' '{"reproduced":true,"test_path":"","command":"","output_excerpt":"","reason":"実行していないが再現したと答える"}' > "$answer" ;;
       notreproduced)
         printf '%s\n' '{"reproduced":false,"test_path":".second-opinion-repro/t.sh","command":"bash .second-opinion-repro/t.sh","output_excerpt":"ok","reason":"誤った結果は出なかった"}' > "$answer" ;;
       long)
@@ -135,7 +137,15 @@ if [[ "${1-}" == "exec" ]]; then
         echo "fake repro failure" >&2; exit 3 ;;
       hang)
         exec sleep 30 ;;
+      notestfile)
+        printf '%s\n' '{"reproduced":true,"test_path":".second-opinion-repro/missing.sh","command":"bash .second-opinion-repro/missing.sh","output_excerpt":"x","reason":"r"}' > "$answer" ;;
     esac
+    # 本物の codex は、回答で示したテストを作業ツリーに書いている。偽物も示したパスにファイルを置く
+    # （notestfile は「示したのに無い」を作るため置かない）。
+    if [[ "${FAKE_REPRO_MODE:-reproduced}" != notestfile && -f "$answer" ]]; then
+      tp="$(jq -r '.test_path // empty' "$answer" 2>/dev/null || true)"
+      if [[ -n "$tp" && "$tp" != /* ]]; then mkdir -p "$(dirname "$tp")"; : > "$tp"; fi
+    fi
     exit 0
   fi
 
@@ -240,6 +250,54 @@ if [[ "$rc" -eq 1 ]] && both_has '再現を確かめられなかった（反証�
   pass
 else
   fail "rc=$rc: $(cat "$WORK/both")"
+fi
+
+it "「再現した」でもコマンドが空なら、「確かめられなかった」と数える"
+rc=0
+FAKE_REVIEW_ANSWER="$ONE_BUG" FAKE_REPRO_MODE=emptytrue run_review --engine codex || rc=$?
+if [[ "$rc" -eq 1 ]] && both_has 'テストを実行していません（コマンドが空）' && both_has '再現した 0 件 / 再現しなかった 0 件 / 確かめられなかった 1 件'; then
+  pass
+else
+  fail "rc=$rc: $(cat "$WORK/both")"
+fi
+
+it "示したテストのファイルが作業ツリーに無ければ、「確かめられなかった」と数える"
+rc=0
+FAKE_REVIEW_ANSWER="$ONE_BUG" FAKE_REPRO_MODE=notestfile run_review --engine codex || rc=$?
+if [[ "$rc" -eq 1 ]] && both_has 'テストのファイルが作業ツリーにありません' && both_has '再現した 0 件 / 再現しなかった 0 件 / 確かめられなかった 1 件'; then
+  pass
+else
+  fail "rc=$rc: $(cat "$WORK/both")"
+fi
+
+it "timeout も gtimeout も無ければ、上限なしで回さず、再現の段階を飛ばして従来の判定"
+NOTO_BIN="$WORK/no-timeout-bin"
+rm -rf "$NOTO_BIN"; mkdir -p "$NOTO_BIN"
+for d in /usr/local/sbin /usr/local/bin /usr/sbin /usr/bin /sbin /bin; do
+  [[ -d "$d" ]] || continue
+  for x in "$d"/*; do
+    b="${x##*/}"
+    case "$b" in timeout|gtimeout) continue ;; esac
+    [[ -e "$NOTO_BIN/$b" || ! -x "$x" ]] || ln -s "$x" "$NOTO_BIN/$b"
+  done
+done
+FAKE_NOTO="$WORK/fake-no-timeout"
+rm -rf "$FAKE_NOTO"; mkdir -p "$FAKE_NOTO"
+for x in "$FAKE_BIN"/*; do [[ "${x##*/}" == timeout ]] || ln -s "$x" "$FAKE_NOTO/${x##*/}"; done
+rc=0
+rm -f "$RECORD"/*-calls "$RECORD"/repro-* "$RECORD"/sandbox-*
+: > "$RECORD/fake.env"
+printf 'FAKE_REVIEW_ANSWER=%q\n' "$ONE_BUG" >> "$RECORD/fake.env"
+(
+  cd "$REPO" || exit 1
+  FAKE_REVIEW_ANSWER="$ONE_BUG" PATH="$FAKE_NOTO:$NOTO_BIN" bash "$REVIEW" --engine codex > "$WORK/both" 2>&1
+) || rc=$?
+if [[ "$rc" -eq 1 && "$(calls_of repro-calls)" == "0" ]] \
+   && both_has 'timeout も gtimeout も無いため、時間の上限を掛けられません。再現の段階を飛ばします' \
+   && ! both_has '時間の上限なしで回します'; then
+  pass
+else
+  fail "rc=$rc repro=$(calls_of repro-calls): $(cat "$WORK/both")"
 fi
 
 it "再現しなかった指摘: 「反証されていない」と出て、終了コードは非 0"

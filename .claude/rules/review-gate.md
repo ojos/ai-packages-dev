@@ -112,6 +112,8 @@ bash scripts/second-opinion-review.sh --engine codex           # エンジン切
 - **再現の段階（`codex` のときだけ。#691）**: 多数決でゲート対象の指摘が残ったチャンクで、指摘ごとに（`SECOND_OPINION_REPRO_MAX` まで。実行全体で共有）codex をサンドボックスで起こし、再現テストを書かせて実行させ、結果を出力に足します。**終了コードは変わりません**——再現した指摘も、再現しなかった指摘（「反証されていない」）も、確かめられなかった指摘（時間切れ・失敗・回答の形の崩れ）も、従来どおり落とします。足すのは証拠だけです。完了の行（`LGTM (` / `findings reported by ` / `chunks reported findings`）の文言と順序は変えません（`loop-gate.sh` と `second-opinion-record.sh` が読む）。再現の行はその前に出ます。
   - 作業ツリーは `work_dir` の下に作ります（`--range A..B` / `A...B` は B の木、`--range` が単一の rev なら作業ツリーの追跡ファイル、ステージ済み・`--base` は索引の内容）。中で `git init` して 1 コミットにし、指摘ごとにまっさらな写しを使います。
   - サンドボックスは codex の権限プロファイルです（`permissions.ws.filesystem` は作業ツリーだけ書き込み・最小限の読み取り、`permissions.ws.network.enabled=false`、`default_permissions="ws"`。`--sandbox` は付けません）。`--sandbox workspace-write` は /tmp への書き込みとディスク全体の読み取り（`~/.codex/auth.json` を含む）が残るため使いません（#691 の実測）。最初の再現の前に `codex sandbox` で起こせるかを 1 回確かめ、起こせなければ段階を飛ばして従来の判定に戻ります。
+  - 実行したコマンドが空の回答と、示したテストのファイルが作業ツリーに無い回答は、`reproduced` の値によらず「確かめられなかった」と数えます（実行の裏付けが無いため）。
+  - `timeout` も `gtimeout` も無い環境では、時間の上限を掛けられないので、再現の段階を飛ばして従来の判定に戻ります（上限なしでは回しません）。
   - codex 以外のエンジンでは `[second-opinion] repro: エンジン <名前> では再現の段階を行いません（codex だけ）` を出して従来どおりです。
   - 費用: 指摘 1 件につき codex を 1 回起こします。起こした回数は最後の要約の行に出ます。別ベンダーの反証（#692）と、再現したテストの保存・再実行（#693）は後続です。
 - **エンジンの指定が無いまま既定の codex で回るとき、`gemini` か `agy` が見つかれば、`[second-opinion] notice:` で始まる 2 行を stderr に出します。** 複数を入れた構成で `.env` を写し忘れた作業ツリーが、黙って既定の codex で回るのを防ぐためです。終了コードと判定は変わらず、codex だけの構成では出しません。文面に `(engine=` の形を含めないのは、`loop-gate.sh` が出力の最初の `(engine=` から記録のエンジン名を読むためです。
