@@ -13797,6 +13797,7 @@ required_playbook_templates() {
     'entry.md' \
     'second-opinion-review.sh' \
     'second-opinion-schema.json' \
+    'second-opinion-repro-schema.json' \
     'second-opinion-record.sh' \
     'second-opinion-gate-exempt.sh' \
     'second-opinion-gate.yml'
@@ -13974,6 +13975,7 @@ playbook_installed_rel_paths() {
       '.github/copilot-instructions.md' \
       'scripts/second-opinion-review.sh' \
       'scripts/second-opinion-schema.json' \
+      'scripts/second-opinion-repro-schema.json' \
       'scripts/second-opinion-record.sh' \
       'scripts/second-opinion-gate-exempt.sh' \
       '.github/workflows/second-opinion-gate.yml'
@@ -14080,6 +14082,11 @@ install_playbook_rules() {
   # 落ちる経路だけが残る。実行属性は不要（JSON であり実行対象ではない）。
   tpl="$(require_playbook_template second-opinion-schema.json)"
   apply_file_with_policy "$tpl" "$OUTPUT_DIR/scripts/second-opinion-schema.json"
+
+  # 再現の段階（codex のときだけ）が読む回答の形。second-opinion-review.sh と対で配置する。
+  # 片方だけ置くと、再現の段階が「スキーマが見つかりません」で飛ばされる経路だけが残る。
+  tpl="$(require_playbook_template second-opinion-repro-schema.json)"
+  apply_file_with_policy "$tpl" "$OUTPUT_DIR/scripts/second-opinion-repro-schema.json"
 
   # 第二意見を配置するときは、回したことの記録と、回し忘れを確認する側もあわせて
   # 配置する。片方だけ置くと「第二意見はあるが、回したか誰も確かめていない」状態が

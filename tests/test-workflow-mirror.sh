@@ -62,7 +62,8 @@ second-opinion-gate-exempt.sh'
 # 一致を必須にする JSON の雛形。second-opinion-review.sh（JSON スキーマ方式で判定する
 # エンジン）が読む回答の形そのものなので、.sh と同じく導入先が書き換える前提ではない
 # ——内容が 1 文字でもずれれば、判定基準（category の enum）が雛形と写しで食い違う。
-MIRRORED_JSONS='second-opinion-schema.json'
+MIRRORED_JSONS='second-opinion-schema.json
+second-opinion-repro-schema.json'
 
 # 検査対象外にする雛形。
 #

@@ -10,6 +10,16 @@
 
 ### Summary
 - **第二意見（`templates/second-opinion-review.sh`）が、パッケージが配布したままのファイルへの指摘を判定に数えない**（ojos/ai-packages-dev#695）。DCB の追従で配布物の差分が入ると、配布先の第二意見が配布物そのものを指摘して、利用側の loop-gate を落としていた。差分は今までどおり全部渡し、codex / antigravity の JSON の判定で、指摘の `file` が「配布のままのファイル」を指すものを落とす件数から除く（出力には「配布物・判定外」として残す）。「配布のまま」とは、DCB の `.devcontainer/ORIGIN` に `hash:` の記録があり `owned:` が無く、中身の sha256 が記録と一致し、モードが変わらず、`hash:` の値が変更の前後で同じか、前後の両方に `version=` があってその値が違う（本当の追従）ものを指す。ORIGIN が無い構成では何も変わらない。gemini では判定は変わらない。条件と限界の正本は DCB の README（「第二意見: 配布のままのファイルへの指摘」）。
+- **`second-opinion-review.sh` に再現の段階を足した（エンジンが codex のときだけ。判定は変えない）**（ojos/ai-packages-dev#691）。多数決でゲート対象の指摘が残ったチャンクで、指摘ごとに（1 回の実行全体の上限つき）codex をサンドボックスで起こし、レビューした状態の使い捨ての作業ツリーで再現テストを書かせて実行させ、結果（再現した／再現しなかった／確かめられなかった）を出力に足す。**終了コードは変わらない**——再現した指摘も、再現しなかった指摘（「反証されていない」）も、従来どおり落とす。証拠が増えるだけで、判定が緩くなることはない。 再現した・しなかったは codex の申告では決めず、codex が書いたテスト（`.second-opinion-repro/` の下の bash のスクリプト）だけをまっさらな写しへ移し、スクリプト自身が同じサンドボックスで実行した終了コードで決める（0 = 再現した、1 = 再現しなかった、それ以外 = 確かめられなかった。申告と食い違えばその旨を残す）。テストが起動しなかった再実行（サンドボックス自体の失敗）と、テストが `.second-opinion-repro/` の下の通常のファイルでない回答・その中にシンボリックリンクがある回答は「確かめられなかった」と数える。レビューした状態に元からある `.second-opinion-repro/` は作業ツリーから除き（元からあるファイルを新しいテストとして数えないため）、使い終わった作業ツリーを消せなくても警告を出して続ける。作業ツリーは `.gitattributes` の filter・改行の変換を当てずに作り（`GIT_ATTR_SOURCE`。git 2.40 以降）、判定外の配布物への指摘は再現の候補に入れない。`timeout` も `gtimeout` も無い環境では段階を飛ばす（上限なしでは回さない）。同じ file・line・category の指摘は 1 件にまとめて再現し、まとめた指摘の件数と中身は出力に残す。
+  - サンドボックスは codex の権限プロファイル（作業ツリーの中だけ書ける・最小限の読み取り・ネットワークなし・環境変数は許可リストだけ）。`--sandbox workspace-write` は、/tmp への書き込みとディスク全体の読み取りが残るため使わない。起こせないときは、その旨を出して段階を飛ばし、従来の判定に戻る。
+  - 環境変数 `SECOND_OPINION_REPRO=off`（段階ごと止める。出力は従来と同じ）、`SECOND_OPINION_REPRO_MAX`（既定 5）、`SECOND_OPINION_REPRO_TIMEOUT`（既定 300 秒。codex の回と再実行のそれぞれ）。不正な値（6 桁を超えるものを含む）は実行前に止める。
+  - 完了の行（`LGTM (` / `findings reported by ` / `N/M chunks reported findings`）の文言と順序は変えない。再現の行は、そのチャンクの集計のあと・完了の行の前に出る。
+- **`templates/second-opinion-repro-schema.json` を足した**（ojos/ai-packages-dev#691）。再現の段階で codex が返す回答の形（`reproduced` / `test_path` / `command` / `output_excerpt` / `reason`）。雛形は 19 種になる。
+
+### 移行
+- **`second-opinion-repro-schema.json` と `second-opinion-review.sh` は組で更新する。** スキーマが `scripts/` に無いと、再現の段階は「スキーマが見つかりません」と出して飛ばされる（判定は従来どおり）。導入手順は `cp .ai-playbook/templates/second-opinion-repro-schema.json scripts/`。
+- 再現の段階は codex のときに既定で有効になり、指摘ごとに codex を 1 回起こす（時間と費用が増える）。止めるには `.env` に `SECOND_OPINION_REPRO=off`。
+- 破壊的変更はない。
 
 ## v0.13.0
 

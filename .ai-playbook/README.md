@@ -73,7 +73,7 @@ ai-playbook・devcontainer-bootstrap（DCB）・devcontainer-host（devhost）�
 | `loop-workflow.md` | ループコーディング運用の規範（受け入れ検証の機械ゲート化・verify ランナー契約・収束） |
 | `loop-coding-guide.md` | ループコーディングの解説ガイド（従来ワークフローとの違い・考え方。`loop-workflow.md` の解説版） |
 | `intake/` | intake テンプレート、相談テンプレート、判定 reason code |
-| `templates/` | 導入用の雛形 18 種（`entry.md` 実行環境の入口ファイル / `claude-entry-imports.md` Claude Code の入口ファイルの末尾に足す規範の取り込みの節 / `claude-entry-imports-rules.md` 同じ節の、共通規範の全文を取り込まず `.claude/rules/` の規則へ分ける版 / `project-ai-rules.md` プロジェクト共通ルール / `second-opinion-review.sh` 第二意見レビューの実装例 / `second-opinion-schema.json` 第二意見の回答の形（JSON スキーマ方式で判定するエンジン用） / `second-opinion-record.sh` 第二意見の記録・投稿の実装例 / `second-opinion-gate-exempt.sh` 記録を求めない PR の判定本体 / `second-opinion-gate.yml` 第二意見が回されたことの確認側の実装例 / `copilot-review.yml` リモート最終ゲートの要求側の実装例 / `review-gate.yml` リモート最終ゲートの確認側の実装例 / `review-usable.sh` 確認側が使う「読まれたか」の判定本体 / `check-review-usable.sh` 上記の表駆動の自己検査 / `claude-skill-intake.md` Claude Code の intake 起点スキル / `claude-skill-land.md` Claude Code の PR 確認・マージ起点スキル / `claude-skill-peers.md` Claude Code の、ほかのセッションの一覧・送信・一斉送信の呼び出し口スキル / `claude-agent-explorer.md`・`claude-agent-implementer.md` Claude Code の委譲先エージェント定義） |
+| `templates/` | 導入用の雛形 19 種（`entry.md` 実行環境の入口ファイル / `claude-entry-imports.md` Claude Code の入口ファイルの末尾に足す規範の取り込みの節 / `claude-entry-imports-rules.md` 同じ節の、共通規範の全文を取り込まず `.claude/rules/` の規則へ分ける版 / `project-ai-rules.md` プロジェクト共通ルール / `second-opinion-review.sh` 第二意見レビューの実装例 / `second-opinion-schema.json` 第二意見の回答の形（JSON スキーマ方式で判定するエンジン用） / `second-opinion-repro-schema.json` 第二意見の再現の段階（codex のとき）の回答の形 / `second-opinion-record.sh` 第二意見の記録・投稿の実装例 / `second-opinion-gate-exempt.sh` 記録を求めない PR の判定本体 / `second-opinion-gate.yml` 第二意見が回されたことの確認側の実装例 / `copilot-review.yml` リモート最終ゲートの要求側の実装例 / `review-gate.yml` リモート最終ゲートの確認側の実装例 / `review-usable.sh` 確認側が使う「読まれたか」の判定本体 / `check-review-usable.sh` 上記の表駆動の自己検査 / `claude-skill-intake.md` Claude Code の intake 起点スキル / `claude-skill-land.md` Claude Code の PR 確認・マージ起点スキル / `claude-skill-peers.md` Claude Code の、ほかのセッションの一覧・送信・一斉送信の呼び出し口スキル / `claude-agent-explorer.md`・`claude-agent-implementer.md` Claude Code の委譲先エージェント定義） |
 | `.gitignore` | このパッケージを開発するときの追跡除外設定。規範ではないため配布・取り込みの対象外（`shared-ai-rules.md` 14 章） |
 
 共通ルールの補足として、AI からの質問は一問ずつ行い、各質問には意図を添え、回答は選択肢優先で提示します。
@@ -254,12 +254,15 @@ Claude Code の `CLAUDE.md` だけは、取り込みの 2 行で規範の全文�
 mkdir -p scripts
 cp .ai-playbook/templates/second-opinion-review.sh scripts/
 cp .ai-playbook/templates/second-opinion-schema.json scripts/
+cp .ai-playbook/templates/second-opinion-repro-schema.json scripts/
 chmod +x scripts/second-opinion-review.sh
 ```
 
 雛形は 1 つの実装例です。要件（別ベンダー・非対話・**重大な指摘が無いことを機械的に判定できる形で返す**こと。返し方は「出力の最後の行に置く一意な判定トークン」と「回答の形をスキーマで強制し、指摘の種別から判定を導出する」の 2 通りを認めます）を満たせば別の手段でかまいません。
 
 この雛形は認証手段の違う 3 つの CLI から選べます（`--engine gemini|antigravity|codex`。既定は `codex`）。エンジンを指定せずに既定の `codex` で回るとき、`gemini` か `agy` が PATH にあれば、その旨と指定方法を stderr に `[second-opinion] notice:` で知らせます（判定は変えません）。エンジンを指定せず、codex が使えない（CLI が無い・ログインしていない）ときは、既定が gemini から codex に変わった旨の案内を `[second-opinion] hint:` で出して止まります。gemini の CLI と `GEMINI_API_KEY` が揃っていれば、`--engine gemini` か `.env` の `SECOND_OPINION_ENGINE=gemini` で使い続けられることも示します。gemini へは自動で切り替えません。どの CLI をどう導入するかはプロジェクト層が決めます。判定ロジックはエンジンによらず 1 か所に集約してあり、エンジンごとに違うのは CLI 名・認証・差分の渡し方・判定方式（判定トークン方式か JSON スキーマ方式か）の 4 点です。構造化出力を強制する旗を持たない gemini だけが判定トークン方式を使い、残り（antigravity / codex）は `second-opinion-schema.json` が強制する JSON で判定します。**どのエンジンにもツールを解禁しません。** 差分はプロンプトへ埋め込み、モデルにファイルも環境も触らせません（書き込みを止められることだけでは、ツールを解禁する根拠にならないためです。モデルにはファイルも環境も触らせず、実行環境を最小にします）。
+
+エンジンが `codex` のときだけ、多数決でゲート対象の指摘が残ったチャンクで、指摘ごとに（1 回の実行全体の上限つき）codex をサンドボックス（作業ツリーの中だけ書ける・最小限の読み取り・ネットワークなし）で起こし、レビューした状態の使い捨ての作業ツリーで再現テストを書かせて実行させ、結果を出力に足します（`second-opinion-repro-schema.json` が回答の形を強制します）。再現したかどうかは codex の申告ではなく、書かせたテストだけをまっさらな写しへ移してスクリプト自身が同じサンドボックスで実行した終了コードで決めます。**判定（終了コード）は変えません**——再現した指摘も、再現しなかった指摘（「反証されていない」）も従来どおり落とします。`SECOND_OPINION_REPRO=off` で止め、`SECOND_OPINION_REPRO_MAX`（既定 5）と `SECOND_OPINION_REPRO_TIMEOUT`（既定 300 秒）で上限を決めます。サンドボックスを起こせないときは、その旨を出して段階を飛ばします。
 
 **codex は、渡す環境変数・作業場所・ツールを最小にして起動します。** `.env` を読み込む前の環境から許可リストの変数（`HOME` / `CODEX_HOME` / `PATH` / ロケール / `TMPDIR` / `TERM` / プロキシ / 証明書の指定）だけを控え、`env -i` で起動した codex へその分だけ渡します。作業場所は秘密を置かない使い捨てのディレクトリです。加えて、`--ignore-user-config`・`shell_environment_policy.inherit=none`・各ツールの `--disable`・`web_search` の無効化を渡します。これらの旗の名前は codex の版に依存し、受け付けない版では codex が失敗して止まります。この絞り込みによる影響は 2 つです。
 

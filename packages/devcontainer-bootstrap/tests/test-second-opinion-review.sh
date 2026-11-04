@@ -32,6 +32,7 @@ mk_review_repo() {
   mkdir -p "$dir/scripts"
   cp "$REVIEW" "$dir/scripts/second-opinion-review.sh"
   cp "$SCHEMA" "$dir/scripts/second-opinion-schema.json"
+  cp "$(dirname "$SCHEMA")/second-opinion-repro-schema.json" "$dir/scripts/second-opinion-repro-schema.json"
   (
     cd "$dir" && git init -q \
       && printf 'base\n' > a.txt && git add a.txt \
@@ -264,6 +265,7 @@ measured_antigravity_prompt_bytes() {
   mkdir -p "$mdir/scripts" "$mbin"
   cp "$review_file" "$mdir/scripts/second-opinion-review.sh"
   cp "$(dirname "$review_file")/second-opinion-schema.json" "$mdir/scripts/second-opinion-schema.json"
+  cp "$(dirname "$review_file")/second-opinion-repro-schema.json" "$mdir/scripts/second-opinion-repro-schema.json"
   (
     cd "$mdir" && git init -q \
       && printf 'base\n' > a.txt && git add a.txt \

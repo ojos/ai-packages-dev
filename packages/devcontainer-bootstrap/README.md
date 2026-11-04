@@ -581,6 +581,16 @@ bash scripts/verify.sh
 bash scripts/loop-gate.sh
 ```
 
+### 第二意見の再現の段階
+
+エンジンが `codex` のとき、`scripts/second-opinion-review.sh` は、多数決でゲート対象の指摘が残ったチャンクで、指摘ごとに（上限つき）codex をサンドボックスで起こし、再現テストを書かせて実行させ、結果（再現した／再現しなかった／確かめられなかった）を出力へ足します。再現したかどうかは codex の申告ではなく、codex が書いたテスト（`.second-opinion-repro/` の下）だけをまっさらな写しへ移してスクリプト自身が同じサンドボックスで実行した終了コード（0 = 再現した、1 = 再現しなかった、それ以外 = 確かめられなかった）で決めます。同じ file・line・category の指摘は 1 件にまとめて再現し、まとめた指摘の件数と中身は出力に残します。**判定（終了コード）は変えません。** 再現した指摘も、再現しなかった指摘（「反証されていない」）も、確かめられなかった指摘も、従来どおり落とします。足すのは証拠だけで、判定が緩くなることはありません。
+
+- 作業ツリー: レビューした状態（`--range A..B` は B の木、`--range` が単一の rev なら作業ツリーの追跡ファイル、ステージ済み・`--base` は索引の内容）を一時ディレクトリへ作り、`git init` して 1 コミットにします。指摘ごとにまっさらな写しを使います。
+- サンドボックス: codex の権限プロファイルで、作業ツリーの中だけ書ける・最小限の読み取り・ネットワークなしに絞ります（`--sandbox workspace-write` は /tmp への書き込みとディスク全体の読み取りが残るため使いません）。環境変数は許可リストだけを渡します。最初の再現の前に `codex sandbox` で起こせるかを 1 回確かめ、起こせなければ、その旨を出して段階を飛ばし、従来の判定に戻ります。
+- codex 以外のエンジンでは段階を行わず、その旨を 1 行出して従来どおりに判定します。
+- 環境変数（`.env` でも指定できます）: `SECOND_OPINION_REPRO=off` で段階ごと止めます（出力は従来と同じ。値は空・`on`・`off` だけを受け、`0` や `false` などは実行前に止めます）。`SECOND_OPINION_REPRO_MAX`（既定 5。1 以上の整数で 6 桁まで）は 1 回の実行全体（チャンクをまたいで共有）で再現する指摘の上限で、超えた分は「上限で見送った（反証されていない）」と数えます。`SECOND_OPINION_REPRO_TIMEOUT`（既定 300。1 以上の整数・秒で 6 桁まで）は 1 件あたりの時間の上限です（codex の回とスクリプトの再実行のそれぞれに掛けます）。不正な値は実行前に止めます。
+- 費用: 指摘 1 件につき codex を 1 回起こします。起こした回数は、段階の最後の要約の行に出ます。
+
 ### 受け入れ条件の二層（ローカル層 / 外部層）
 
 受け入れ条件を 1 種類として扱うと、**外部認証やネットワークを要する検査が接地信号へ混ざります。** 認証の失効やオフラインで赤くなり、**実装が正しいのにループが止まります。** そのため 2 層に分けます（規範の正本は ai-playbook の `loop-workflow.md`「受け入れ条件の二層」）。
@@ -1108,6 +1118,7 @@ OAuth トークン（`CLAUDE_CODE_OAUTH_TOKEN`）を `remoteEnv` へ注入する
 - `CLAUDE.md` / `AGENTS.md` / `.github/copilot-instructions.md`
 - `scripts/second-opinion-review.sh`（第二意見レビュー。`scripts/loop-gate.sh` が存在を検出して自動で直列化します。上記「ループコーディング支援」参照）
 - `scripts/second-opinion-schema.json`（JSON スキーマ方式で判定するエンジン（antigravity / codex）が読む回答の形。`second-opinion-review.sh` と対で配置します）
+- `scripts/second-opinion-repro-schema.json`（再現の段階（エンジンが codex のときだけ）で codex が返す回答の形。`second-opinion-review.sh` と対で配置します。再現の段階は判定を変えません。詳細は下記「[第二意見の再現の段階](#第二意見の再現の段階)」）
 - `scripts/second-opinion-record.sh` / `scripts/second-opinion-gate-exempt.sh` / `.github/workflows/second-opinion-gate.yml`（第二意見が回されたことの記録と確認側。`--with-copilot-review` の有無に関わらず配置します。上記「ループコーディング支援」参照）
 - `.github/workflows/copilot-review.yml` / `.github/workflows/review-gate.yml` / `scripts/review-usable.sh` / `scripts/check-review-usable.sh`（`--with-copilot-review` を併せて選択した場合のみ。4 本で 1 組。下記参照）
 - `.claude/skills/intake/SKILL.md`（`--with-claude` を併せて指定した場合のみ。intake 起点スキル）
