@@ -206,6 +206,16 @@ if [[ "${1-}" == "exec" ]]; then
         exec sleep 30 ;;
       notestfile)
         ok_answer true ".second-opinion-repro/missing.sh" "r" ;;
+      preexisting)
+        # テストを書かず、レビューした状態に元からある .second-opinion-repro/old.sh のパスを答える。
+        ok_answer true ".second-opinion-repro/old.sh" "元からあるテストを答える" ;;
+      denied)
+        # 再現はするが、作業ツリーに権限を外したディレクトリ（中にファイル）を残す。
+        ok_answer true "$T" "r"
+        body='echo "actual: WRONG"; exit 0'
+        mkdir -p .second-opinion-repro/denied
+        : > .second-opinion-repro/denied/f
+        chmod 000 .second-opinion-repro/denied ;;
     esac
     if [[ -n "$body" ]]; then
       mkdir -p .second-opinion-repro
@@ -372,6 +382,35 @@ for m in notestfile outside escape symlink; do
     fail "rc=$rc rerun=$(calls_of rerun-calls): $(cat "$WORK/both")"
   fi
 done
+
+it "レビューした状態に元からある .second-opinion-repro/ は作業ツリーから除く（元からあるテストのパスを答えても「再現した」にならない）"
+mkdir -p "$REPO/.second-opinion-repro"
+printf '%s\n' 'echo PREEXISTING; exit 0' > "$REPO/.second-opinion-repro/old.sh"
+git -C "$REPO" add .second-opinion-repro/old.sh
+rc=0
+FAKE_REVIEW_ANSWER="$ONE_BUG" FAKE_REPRO_MODE=preexisting run_review --engine codex || rc=$?
+git -C "$REPO" rm -q --cached .second-opinion-repro/old.sh
+rm -rf "$REPO/.second-opinion-repro"
+if [[ "$rc" -eq 1 && "$(calls_of rerun-calls)" == "0" && "$(cat "$RECORD/repro-pre-1" 2>/dev/null | wc -l)" -eq 0 ]] \
+   && both_has 'テストのファイルが .second-opinion-repro/ の下にありません' \
+   && both_has '再現した 0 件 / 再現しなかった 0 件 / 確かめられなかった 1 件' && ! both_has 'PREEXISTING'; then
+  pass
+else
+  fail "rc=$rc rerun=$(calls_of rerun-calls) pre=$(cat "$RECORD/repro-pre-1" 2>/dev/null): $(cat "$WORK/both")"
+fi
+
+it "codex が権限を外したディレクトリを作業ツリーに残しても、消してから続け、集計と完了の行を出す"
+mkdir -p "$WORK/tmp-denied"
+rc=0
+FAKE_REVIEW_ANSWER="$ONE_BUG" FAKE_REPRO_MODE=denied TMPDIR="$WORK/tmp-denied" run_review --engine codex || rc=$?
+if [[ "$rc" -eq 1 ]] && both_has '[second-opinion] repro 1/1: 再現した' \
+   && both_has '再現した 1 件 / 再現しなかった 0 件 / 確かめられなかった 0 件' \
+   && both_has '[second-opinion] findings reported by' && ! both_has '消せませんでした' \
+   && [[ -z "$(find "$WORK/tmp-denied" -mindepth 1 -print -quit)" ]]; then
+  pass
+else
+  fail "rc=$rc left=$(find "$WORK/tmp-denied" -mindepth 1 -maxdepth 2 | head -3): $(cat "$WORK/both")"
+fi
 
 it "再実行は、レビューした状態に .second-opinion-repro/ だけを写した別の作業ツリーで行う（codex が外を変えても持ち込まない）"
 rc=0

@@ -62,6 +62,10 @@
 #   テストの終了コードは包みが作業ツリーの中のファイルへ書き、それが無ければ「テストが起動
 #   しなかった」として確かめられなかったに数える（サンドボックス自体の失敗の 1 と区別するため）。
 #   `.second-opinion-repro/` の中にシンボリックリンクがある回答は、再実行しない。
+#   レビューした状態に元からある `.second-opinion-repro/` は、作業ツリーを作るときに除く
+#   （codex がテストを書かずに、元からあるファイルのパスを答えるだけで「再現した」にならないように）。
+#   使い終わった作業ツリーを消せなくても（codex が権限を外したディレクトリを作ったなど）、
+#   警告を出して続け、完了の行の前で止まらない。
 #   結果（再現した／しなかった／確かめられなかった）を出力へ足す。**終了コードは変えない**——再現した指摘も、再現しなかった指摘も、
 #   確かめられなかった指摘も、従来どおり落とす（再現しなかったものは「反証されていない」。
 #   反証は別の段階の役目）。証拠が増えるだけで、判定が緩くなることはない。
@@ -1515,6 +1519,19 @@ repro_collect() {
 
 # 端末を操る制御文字（ESC 等）を落とす。改行とタブは残す。モデルが書いたテストの出力が
 # そのまま画面・記録に載るため。
+# 作業ツリーを消す。codex が権限を外したディレクトリ（chmod 000 など）を作っていても消せる
+# よう、先に持ち主の権限を戻す（chmod -R は辿る途中のシンボリックリンクを辿らない）。消せな
+# くても段階を止めず、警告を出して続ける（set -e で完了の行の前に止まらないように）。
+repro_rm() {
+  local p
+  for p in "$@"; do
+    [[ -e "$p" || -L "$p" ]] || continue
+    chmod -R u+rwx -- "$p" 2>/dev/null || true
+    rm -rf -- "$p" 2>/dev/null || echo "[second-opinion] repro: 使い終わった作業ツリーを消せませんでした（${p##*/}。続けます）"
+  done
+  return 0
+}
+
 repro_clean() {
   LC_ALL=C tr -d '\000-\010\013-\037\177'
 }
@@ -1568,6 +1585,9 @@ repro_build_base() {
       git checkout-index -a --prefix="$dest/" || exit 1
     fi
   ) || return 1
+  # テストの置き場は空から始める。元からある .second-opinion-repro/ を残すと、codex が
+  # テストを書かずに、そこにあるファイルのパスを答えるだけで、それが再実行されてしまう。
+  rm -rf "$dest/.second-opinion-repro" || return 1
   # テストが git を使えるように、全体を 1 コミットにする。identity はコミットにだけ
   # 一時的に渡し、グローバル設定を変えない。呼び出し元の GIT_* を引き継がない。
   # 追跡しているが ignore に当たるファイルも落とさないよう -f で足す。
@@ -1666,9 +1686,12 @@ repro_rerun() {
   local src="$1" test_path="$2" dest="$3" out="$4" rc=0 rc_rel
   repro_rerun_status=""
   repro_rerun_rc=""
-  rm -rf "$dest"
+  repro_rm "$dest"
   # 写すのは .second-opinion-repro/ だけ。codex が外のファイルを変えていても、それに頼る
   # テストは再実行で通らない（レビューした状態の上でだけ確かめる）。
+  # codex が権限を外したディレクトリを残していても写せるよう、先に持ち主の権限を戻す
+  # （呼び出し元で .second-opinion-repro/ の中にリンクが無いことを確かめてある）。
+  chmod -R u+rwx -- "$src/.second-opinion-repro" 2>/dev/null || true
   if ! cp -a "$repro_base" "$dest" 2>"$out" || ! cp -a "$src/.second-opinion-repro" "$dest/" 2>>"$out"; then
     repro_rerun_status="copyfail"
     return 0
@@ -1744,7 +1767,7 @@ run_repro_stage() {
     tree="$work_dir/repro-tree-$i"
     rerun_tree="$work_dir/repro-rerun-$i"
     rerun_out="$work_dir/repro-rerun-out-$i"
-    rm -rf "$tree"
+    repro_rm "$tree"
     kind=""
     reason=""
     note=""
@@ -1882,7 +1905,7 @@ run_repro_stage() {
       printf '%s' "$f" | jq -r '.merged[] | gsub("[\\n\\r]"; " ")' | repro_clean | sed 's/^/        - /'
     fi
     # 使い終わった写しはすぐ消す（指摘の数だけ作業ツリーが残らないように）。
-    rm -rf "$tree" "$rerun_tree"
+    repro_rm "$tree" "$rerun_tree"
   done
 
   echo "[second-opinion] repro: 再現した $n_repro 件 / 再現しなかった $n_norepro 件 / 確かめられなかった $n_unknown 件 / 上限で見送った $skipped 件 / 同じ場所・分類でまとめた $merged_total 件（codex の起動 $calls 回。実行全体の上限 $REPRO_MAX 件・${REPRO_TIMEOUT} 秒）"
