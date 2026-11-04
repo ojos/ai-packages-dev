@@ -1532,6 +1532,18 @@ repro_rm() {
   return 0
 }
 
+# $1（.second-opinion-repro）の中にシンボリックリンクが 1 つも無ければ 0。$1 自体がリンク
+# なら 1。先に持ち主の権限を戻してから探す——codex が権限を外したディレクトリの中は find が
+# 読めず、リンクを見落とす（そのあと再実行の写しで権限を戻すと、リンクごと写ってしまう）。
+# find が失敗したら、無いとは言えないので 1。
+repro_no_links() {
+  local d="$1" found
+  [[ -L "$d" ]] && return 1
+  chmod -R u+rwx -- "$d" 2>/dev/null || true
+  found="$(find "$d" -type l -print -quit 2>/dev/null)" || return 1
+  [[ -z "$found" ]]
+}
+
 # 端末を操る制御文字（ESC 等）を落とす。改行とタブは残す。モデルが書いたテストの出力が
 # そのまま画面・記録に載るため。
 repro_clean() {
@@ -1698,9 +1710,7 @@ repro_rerun() {
   repro_rm "$dest"
   # 写すのは .second-opinion-repro/ だけ。codex が外のファイルを変えていても、それに頼る
   # テストは再実行で通らない（レビューした状態の上でだけ確かめる）。
-  # codex が権限を外したディレクトリを残していても写せるよう、先に持ち主の権限を戻す
-  # （呼び出し元で .second-opinion-repro/ の中にリンクが無いことを確かめてある）。
-  chmod -R u+rwx -- "$src/.second-opinion-repro" 2>/dev/null || true
+  # 権限は、呼び出し元がリンクの検査（repro_no_links）の前に戻してある。
   if ! cp -a "$repro_base" "$dest" 2>"$out" || ! cp -a "$src/.second-opinion-repro" "$dest/" 2>>"$out"; then
     repro_rerun_status="copyfail"
     return 0
@@ -1852,8 +1862,7 @@ run_repro_stage() {
               || -L "$tree/$test_path" || ! -f "$tree/$test_path" ]]; then
           kind="unknown"
           reason="テストのファイルが .second-opinion-repro/ の下にありません（test_path: $(printf '%s' "$test_path" | repro_clean | tr '\n' ' ' | cut -c1-200)）"
-        elif [[ -L "$tree/.second-opinion-repro" ]] \
-             || [[ -n "$(find "$tree/.second-opinion-repro" -type l -print -quit 2>/dev/null)" ]]; then
+        elif ! repro_no_links "$tree/.second-opinion-repro"; then
           # 途中のディレクトリをリンクにすると、末尾の検査をすり抜けて既存のファイルを指せる。
           # .second-opinion-repro/ の中にリンクを 1 つも許さない。
           kind="unknown"

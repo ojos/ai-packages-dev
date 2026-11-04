@@ -206,6 +206,13 @@ if [[ "${1-}" == "exec" ]]; then
         exec sleep 30 ;;
       notestfile)
         ok_answer true ".second-opinion-repro/missing.sh" "r" ;;
+      hiddenlink)
+        # 通常のテストを書き、権限を外したディレクトリの中にリンクを隠す（find が読めない場所）。
+        ok_answer true "$T" "r"
+        body='echo "actual: WRONG"; exit 0'
+        mkdir -p .second-opinion-repro/locked
+        ln -s ../../sample.txt .second-opinion-repro/locked/l
+        chmod 000 .second-opinion-repro/locked ;;
       preexisting)
         # テストを書かず、レビューした状態に元からある .second-opinion-repro/old.sh のパスを答える。
         ok_answer true ".second-opinion-repro/old.sh" "元からあるテストを答える" ;;
@@ -348,8 +355,8 @@ else
   fail "rc=$rc: $(cat "$WORK/both")"
 fi
 
-for m in dirlink rootlink; do
-  it "テストのパスの途中か .second-opinion-repro 自体がリンク（$m）なら、再実行せず「確かめられなかった」"
+for m in dirlink rootlink hiddenlink; do
+  it "テストのパスの途中か .second-opinion-repro 自体がリンク、または権限を外したディレクトリの中にリンク（$m）なら、再実行せず「確かめられなかった」"
   rc=0
   FAKE_REVIEW_ANSWER="$ONE_BUG" FAKE_REPRO_MODE=$m run_review --engine codex || rc=$?
   if [[ "$rc" -eq 1 && "$(calls_of rerun-calls)" == "0" ]] && both_has '.second-opinion-repro/ の中にシンボリックリンクがあります' \
