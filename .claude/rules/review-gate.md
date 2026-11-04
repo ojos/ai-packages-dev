@@ -105,11 +105,11 @@ bash scripts/second-opinion-review.sh --engine codex           # エンジン切
 | `--model <name>` | `SECOND_OPINION_MODEL` | 各 CLI の既定 | 使用モデル |
 | `--runs <n>` | `SECOND_OPINION_RUNS` | `1` | 実行回数（1 以上の整数。不正値は実行前に停止） |
 | — | `SECOND_OPINION_AGENT_CONFIG_PATHS` | 未設定 | `loop-gate.sh` が渡す、レビュー範囲のうちエージェントの設定・フックに当たるパスの一覧（改行区切り）。空でなければ依頼文の末尾に、重点的に見るよう添える |
-| — | `SECOND_OPINION_REPRO` | 有効（`off` で止める） | 再現の段階（エンジンが `codex` のときだけ。下記）を止める。`off` のときは何も足さず、出力は従来と同じ |
-| — | `SECOND_OPINION_REPRO_MAX` | `5` | 1 回に再現する指摘の上限（1 以上の整数。不正値は実行前に停止）。超えた分は「上限で見送った（反証されていない）」と数える |
+| — | `SECOND_OPINION_REPRO` | 有効（`off` で止める） | 再現の段階（エンジンが `codex` のときだけ。下記）を止める。空・`on`・`off` だけを受け、それ以外（`0`・`false`・`OFF` など）は実行前に停止する。`off` のときは何も足さず、出力は従来と同じ |
+| — | `SECOND_OPINION_REPRO_MAX` | `5` | 1 回の実行全体で再現する指摘の上限（チャンクをまたいで共有。1 以上の整数。不正値は実行前に停止）。超えた分は「上限で見送った（反証されていない）」と数える |
 | — | `SECOND_OPINION_REPRO_TIMEOUT` | `300` | 再現 1 件あたりの時間の上限（秒。1 以上の整数。不正値は実行前に停止） |
 
-- **再現の段階（`codex` のときだけ。#691）**: 多数決でゲート対象の指摘が残ったチャンクで、指摘ごとに（`SECOND_OPINION_REPRO_MAX` まで）codex をサンドボックスで起こし、再現テストを書かせて実行させ、結果を出力に足します。**終了コードは変わりません**——再現した指摘も、再現しなかった指摘（「反証されていない」）も、確かめられなかった指摘（時間切れ・失敗・回答の形の崩れ）も、従来どおり落とします。足すのは証拠だけです。完了の行（`LGTM (` / `findings reported by ` / `chunks reported findings`）の文言と順序は変えません（`loop-gate.sh` と `second-opinion-record.sh` が読む）。再現の行はその前に出ます。
+- **再現の段階（`codex` のときだけ。#691）**: 多数決でゲート対象の指摘が残ったチャンクで、指摘ごとに（`SECOND_OPINION_REPRO_MAX` まで。実行全体で共有）codex をサンドボックスで起こし、再現テストを書かせて実行させ、結果を出力に足します。**終了コードは変わりません**——再現した指摘も、再現しなかった指摘（「反証されていない」）も、確かめられなかった指摘（時間切れ・失敗・回答の形の崩れ）も、従来どおり落とします。足すのは証拠だけです。完了の行（`LGTM (` / `findings reported by ` / `chunks reported findings`）の文言と順序は変えません（`loop-gate.sh` と `second-opinion-record.sh` が読む）。再現の行はその前に出ます。
   - 作業ツリーは `work_dir` の下に作ります（`--range A..B` / `A...B` は B の木、`--range` が単一の rev なら作業ツリーの追跡ファイル、ステージ済み・`--base` は索引の内容）。中で `git init` して 1 コミットにし、指摘ごとにまっさらな写しを使います。
   - サンドボックスは codex の権限プロファイルです（`permissions.ws.filesystem` は作業ツリーだけ書き込み・最小限の読み取り、`permissions.ws.network.enabled=false`、`default_permissions="ws"`。`--sandbox` は付けません）。`--sandbox workspace-write` は /tmp への書き込みとディスク全体の読み取り（`~/.codex/auth.json` を含む）が残るため使いません（#691 の実測）。最初の再現の前に `codex sandbox` で起こせるかを 1 回確かめ、起こせなければ段階を飛ばして従来の判定に戻ります。
   - codex 以外のエンジンでは `[second-opinion] repro: エンジン <名前> では再現の段階を行いません（codex だけ）` を出して従来どおりです。

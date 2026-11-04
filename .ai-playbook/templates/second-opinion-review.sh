@@ -67,7 +67,7 @@
 #     ディスク全体の読み取りが残るため。シェルの道具は無効にしない（テストを実行させる）。
 #     起こせないときは、その旨を出して段階を飛ばし、従来の判定に戻る。
 #   - SECOND_OPINION_REPRO=off で段階ごと止める（出力は従来と同じ）。
-#     SECOND_OPINION_REPRO_MAX（既定 5）は 1 回に再現する指摘の上限、
+#     SECOND_OPINION_REPRO_MAX（既定 5）は 1 回の実行全体（チャンクをまたいで共有）で再現する指摘の上限、
 #     SECOND_OPINION_REPRO_TIMEOUT（既定 300）は 1 件あたりの秒数の上限。
 #   - codex 以外のエンジンでは段階を行わず、その旨を 1 行出して従来どおり。
 #
@@ -234,8 +234,8 @@ options:
   -h, --help            ヘルプ
 
 environment:
-  SECOND_OPINION_REPRO          off で再現の段階（codex のときだけ）を止める
-  SECOND_OPINION_REPRO_MAX      1 回に再現する指摘の上限（既定: 5）
+  SECOND_OPINION_REPRO          off で再現の段階（codex のときだけ）を止める（空・on・off のみ）
+  SECOND_OPINION_REPRO_MAX      1 回の実行全体で再現する指摘の上限（既定: 5。チャンクをまたいで共有）
   SECOND_OPINION_REPRO_TIMEOUT  再現 1 件あたりの時間の上限（秒。既定: 300）
 
 engines:
@@ -302,6 +302,15 @@ fi
 # つもりのゲートが実際には効いていない状態になる）。基数は 10 に固定する（上記 RUNS と同じ理由）。
 REPRO="${SECOND_OPINION_REPRO:-}"
 REPRO_MAX="${SECOND_OPINION_REPRO_MAX:-5}"
+# off 以外の値で段階を止めたつもりになる事故（0・false・OFF 等が黙って「有効」になる）を避け、
+# 空・on・off だけを受ける。
+case "$REPRO" in
+  ""|on|off) ;;
+  *)
+    echo "error: SECOND_OPINION_REPRO は空・on・off のいずれかで指定してください: $REPRO" >&2
+    exit 1
+    ;;
+esac
 REPRO_TIMEOUT="${SECOND_OPINION_REPRO_TIMEOUT:-300}"
 if [[ ! "$REPRO_MAX" =~ ^[0-9]+$ ]] || [[ $((10#$REPRO_MAX)) -lt 1 ]]; then
   echo "error: SECOND_OPINION_REPRO_MAX は 1 以上の整数で指定してください: $REPRO_MAX" >&2
@@ -1506,42 +1515,58 @@ repro_indent() {
   sed 's/^/        /'
 }
 
+# モデルが返した欄を `    <見出し>: 本文` の形で出す。1 行目は見出しの後ろに続け、
+# 2 行目以降は全行を字下げする（行頭に `[second-opinion]` が来ない）。制御文字は落とす。
+repro_print_field() {
+  local head="$1" text first rest
+  text="$(printf '%s' "$2" | repro_clean)"
+  first="${text%%$'\n'*}"
+  printf '    %s: %s\n' "$head" "$first"
+  if [[ "$text" == *$'\n'* ]]; then
+    rest="${text#*$'\n'}"
+    printf '%s\n' "$rest" | repro_indent
+  fi
+}
+
 # レビューした状態を $1 に作る。成功で 0。失敗は 1（理由は標準エラーへ）。
+# git checkout-index -a と git ls-files はカレントディレクトリより下しか扱わないので、
+# どの分岐もリポジトリの根へ移ってから作る（サブディレクトリから起動しても全体を写す）。
 repro_build_base() {
-  local dest="$1" tip idx top
+  local dest="$1" top
   mkdir -p "$dest" || return 1
-  if [[ -n "$RANGE" && "$RANGE" == *..* ]]; then
-    # A..B / A...B は B の木。B が空（`A..`）なら HEAD。
-    # git archive ではなく一時の索引を使う。archive は export-ignore / export-subst で
-    # 中身を変えうるため、レビューした状態と食い違う。
-    tip="${RANGE##*..}"
-    [[ -n "$tip" ]] || tip="HEAD"
-    idx="$work_dir/repro-index"
-    rm -f "$idx"
-    GIT_INDEX_FILE="$idx" git read-tree "$tip" || return 1
-    GIT_INDEX_FILE="$idx" git checkout-index -a --prefix="$dest/" || return 1
-  elif [[ -n "$RANGE" ]]; then
-    # 単一の rev。`git diff <rev>` は rev と作業ツリーの差なので、作業ツリーの追跡ファイル。
-    top="$(git rev-parse --show-toplevel)" || return 1
-    (
-      cd "$top" || exit 1
+  top="$(git rev-parse --show-toplevel)" || return 1
+  (
+    cd "$top" || exit 1
+    if [[ -n "$RANGE" && "$RANGE" == *..* ]]; then
+      # A..B / A...B は B の木。B が空（`A..`）なら HEAD。
+      # git archive ではなく一時の索引を使う。archive は export-ignore / export-subst で
+      # 中身を変えうるため、レビューした状態と食い違う。
+      tip="${RANGE##*..}"
+      [[ -n "$tip" ]] || tip="HEAD"
+      idx="$work_dir/repro-index"
+      rm -f "$idx"
+      GIT_INDEX_FILE="$idx" git read-tree "$tip" || exit 1
+      GIT_INDEX_FILE="$idx" git checkout-index -a --prefix="$dest/" || exit 1
+    elif [[ -n "$RANGE" ]]; then
+      # 単一の rev。`git diff <rev>` は rev と作業ツリーの差なので、作業ツリーの追跡ファイル。
       git ls-files -z | while IFS= read -r -d '' f; do
         # 作業ツリーで消えたファイルとサブモジュール（ディレクトリ）は除く。
         if [[ -L "$f" ]] || [[ -f "$f" ]]; then printf '%s\0' "$f"; fi
-      done | tar --null -T - -cf - | tar -xf - -C "$dest"
-    ) || return 1
-  else
-    # ステージ済み（既定）と --base は索引の内容。
-    git checkout-index -a --prefix="$dest/" || return 1
-  fi
+      done | tar --null -T - -cf - | tar -xf - -C "$dest" || exit 1
+    else
+      # ステージ済み（既定）と --base は索引の内容。
+      git checkout-index -a --prefix="$dest/" || exit 1
+    fi
+  ) || return 1
   # テストが git を使えるように、全体を 1 コミットにする。identity はコミットにだけ
   # 一時的に渡し、グローバル設定を変えない。呼び出し元の GIT_* を引き継がない。
+  # 追跡しているが ignore に当たるファイルも落とさないよう -f で足す。
   (
     cd "$dest" || exit 1
     unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
     # 呼び出しが `||` の文脈にあり set -e が効かないので、&& でつなぐ。
     git -c init.defaultBranch=main init -q \
-      && git add -A \
+      && git add -A -f \
       && git -c user.name="second-opinion" -c user.email="second-opinion@invalid.example" \
         -c commit.gpgsign=false -c core.hooksPath=/dev/null \
         commit -q --allow-empty --no-verify -m "reviewed state"
@@ -1549,75 +1574,110 @@ repro_build_base() {
   return 0
 }
 
-# 再現の段階の本体。$repro_candidates_file の指摘を重複なくまとめ、上限まで再現させる。
-run_repro_stage() {
-  local cands n limit skipped i f label base tree answer errfile input
-  local n_repro=0 n_norepro=0 n_unknown=0 calls=0 rc kind reason reproduced
-  local cmd_text out_text sb_out sb_last
-  local perm_args timeout_cmd
-  local -a args
+# 1 回の実行で共有する状態（チャンクごとにやり直さない）。
+#   repro_used        これまでに再現へ回した指摘の数（SECOND_OPINION_REPRO_MAX の予算を共有する）
+#   repro_prepare     基の作業ツリーとサンドボックスの確かめの結果: "" 未実施 / ok / skip
+#   repro_skip_msg    skip のときに出す文（チャンクごとに同じ文を出す）
+repro_used=0
+repro_prepare=""
+repro_skip_msg=""
+repro_base="$work_dir/repro-base"
+repro_perm_args=(-c 'permissions.ws.filesystem={":workspace_roots"="write", ":minimal"="read"}'
+                 -c 'permissions.ws.network.enabled=false')
+repro_timeout_cmd=()
 
-  cands="$(jq -s -c '
-    reduce .[] as $f ([];
-      if any(.[]; .file == $f.file and .line == $f.line and .category == $f.category and .what == $f.what)
-      then . else . + [$f] end)' "$repro_candidates_file" 2>/dev/null || true)"
-  n="$(printf '%s' "$cands" | jq 'length' 2>/dev/null || echo 0)"
-  [[ "$n" =~ ^[0-9]+$ ]] || n=0
-  [[ "$n" -ge 1 ]] || return 0
+# 基の作業ツリーとサンドボックスの確かめを、1 回の実行で 1 度だけ行う。
+repro_prepare_once() {
+  local rc=0 sb_out sb_last sb_home
+  [[ -z "$repro_prepare" ]] || return 0
+  repro_prepare="skip"
 
   if [[ ! -f "$REPRO_SCHEMA_FILE" ]]; then
-    echo "[second-opinion] repro: 再現用のスキーマが見つかりません（$REPRO_SCHEMA_FILE）。再現の段階を飛ばします"
+    repro_skip_msg="[second-opinion] repro: 再現用のスキーマが見つかりません（$REPRO_SCHEMA_FILE）。再現の段階を飛ばします"
     return 0
   fi
 
-  limit="$n"
-  skipped=0
-  if [[ "$n" -gt "$REPRO_MAX" ]]; then
-    limit="$REPRO_MAX"
-    skipped=$((n - REPRO_MAX))
-  fi
-
-  # 権限プロファイル: 作業ツリーの中だけ書ける・最小限の読み取り・ネットワークなし。
-  perm_args=(-c 'permissions.ws.filesystem={":workspace_roots"="write", ":minimal"="read"}'
-             -c 'permissions.ws.network.enabled=false')
-
-  timeout_cmd=()
+  # --kill-after: TERM で止まらないプロセスも、猶予のあとに KILL で止める。
   if command -v timeout >/dev/null 2>&1; then
-    timeout_cmd=(timeout "$REPRO_TIMEOUT")
+    repro_timeout_cmd=(timeout -k 10 "$REPRO_TIMEOUT")
   elif command -v gtimeout >/dev/null 2>&1; then
-    timeout_cmd=(gtimeout "$REPRO_TIMEOUT")
+    repro_timeout_cmd=(gtimeout -k 10 "$REPRO_TIMEOUT")
   else
     echo "[second-opinion] repro: timeout コマンドが無いため、時間の上限なしで回します"
   fi
 
-  base="$work_dir/repro-base"
-  rm -rf "$base"
-  if ! repro_build_base "$base" 2>"$stderr_file"; then
-    echo "[second-opinion] repro: レビューした状態の作業ツリーを作れません（$(awk 'NF{l=$0} END{print l}' "$stderr_file")）。再現の段階を飛ばします"
+  rm -rf "$repro_base"
+  if ! repro_build_base "$repro_base" 2>"$stderr_file"; then
+    repro_skip_msg="[second-opinion] repro: レビューした状態の作業ツリーを作れません（$(awk 'NF{l=$0} END{print l}' "$stderr_file")）。再現の段階を飛ばします"
     return 0
   fi
 
   # サンドボックスを起こせるかを、最初の再現の前に 1 回だけ確かめる。起こせないまま
   # 進むと、指摘ごとに時間を捨てる。
-  rc=0
-  sb_out="$(cd "$base" && ${timeout_cmd[@]+"${timeout_cmd[@]}"} env -i ${CODEX_ENV_PASS[@]+"${CODEX_ENV_PASS[@]}"} \
-    "$CLI" sandbox "${perm_args[@]}" -P ws -C "$base" -- /bin/true 2>&1)" || rc=$?
+  #
+  # `codex sandbox` には --ignore-user-config が無い（codex-cli 0.162.1）。利用者の
+  # ~/.codex/config.toml が効くと、確かめがその設定に左右される。確かめには資格情報が
+  # 要らない（モデルを呼ばない）ので、この確かめのときだけ CODEX_HOME を空の一時
+  # ディレクトリにする。env -i の後ろに置くので、許可リストで渡した CODEX_HOME に勝つ。
+  # 再現の codex exec は資格情報が要るので CODEX_HOME はいじらず、--ignore-user-config で絞る。
+  sb_home="$work_dir/repro-sandbox-home"
+  rm -rf "$sb_home"
+  mkdir -p "$sb_home"
+  sb_out="$(cd "$repro_base" && ${repro_timeout_cmd[@]+"${repro_timeout_cmd[@]}"} env -i ${CODEX_ENV_PASS[@]+"${CODEX_ENV_PASS[@]}"} CODEX_HOME="$sb_home" \
+    "$CLI" sandbox "${repro_perm_args[@]}" -P ws -C "$repro_base" -- /bin/true 2>&1)" || rc=$?
   if [[ "$rc" -ne 0 ]]; then
     sb_last="$(printf '%s\n' "$sb_out" | repro_clean | awk 'NF{l=$0} END{print l}')"
-    echo "[second-opinion] repro: codex のサンドボックスを起こせません（${sb_last:-終了コード $rc}）。再現の段階を飛ばします"
+    repro_skip_msg="[second-opinion] repro: codex のサンドボックスを起こせません（${sb_last:-終了コード $rc}）。再現の段階を飛ばします"
     return 0
   fi
+  repro_prepare="ok"
+  return 0
+}
+
+# 再現の段階の本体。$repro_candidates_file の指摘を重複なくまとめ、残りの予算まで再現させる。
+run_repro_stage() {
+  local cands n limit skipped i f label tree answer errfile input remaining
+  local n_repro=0 n_norepro=0 n_unknown=0 calls=0 rc kind reason reproduced
+  local cmd_text out_text
+  local -a args
+
+  # 同じ欠陥が言い回し違いで複数残る（--runs 2 以上）と上限を食うので、
+  # file・line・category が同じものを 1 件にまとめる（what は含めない。代表は最初に出たもの）。
+  cands="$(jq -s -c '
+    reduce .[] as $f ([];
+      if any(.[]; .file == $f.file and .line == $f.line and .category == $f.category)
+      then . else . + [$f] end)' "$repro_candidates_file" 2>/dev/null || true)"
+  n="$(printf '%s' "$cands" | jq 'length' 2>/dev/null || echo 0)"
+  [[ "$n" =~ ^[0-9]+$ ]] || n=0
+  [[ "$n" -ge 1 ]] || return 0
+
+  repro_prepare_once
+  if [[ "$repro_prepare" != "ok" ]]; then
+    echo "$repro_skip_msg"
+    return 0
+  fi
+
+  # 上限は 1 回の実行全体の予算。チャンクをまたいで共有する。
+  remaining=$((REPRO_MAX - repro_used))
+  limit="$n"
+  skipped=0
+  if [[ "$n" -gt "$remaining" ]]; then
+    limit="$remaining"
+    skipped=$((n - remaining))
+  fi
+  repro_used=$((repro_used + limit))
 
   i=0
   while [[ "$i" -lt "$limit" ]]; do
     f="$(printf '%s' "$cands" | jq -c ".[$i]")"
     i=$((i + 1))
-    label="$(printf '%s' "$f" | jq -r '(if .file == "" then "(場所の特定なし)" else .file + ":" + (.line | tostring) end) + " [" + .category + "]"')"
+    # 場所の表示にもモデルの文字列（file）が入る。制御文字を落とし、1 行にする。
+    label="$(printf '%s' "$f" | jq -r '(if .file == "" then "(場所の特定なし)" else .file + ":" + (.line | tostring) end) + " [" + .category + "]"' | repro_clean | tr '\n' ' ')"
 
     # 指摘ごとにまっさらな写しを使う（前の指摘のテストが混ざらないように）。
     tree="$work_dir/repro-tree-$i"
     rm -rf "$tree"
-    if ! cp -a "$base" "$tree" 2>"$stderr_file"; then
+    if ! cp -a "$repro_base" "$tree" 2>"$stderr_file"; then
       n_unknown=$((n_unknown + 1))
       echo "[second-opinion] repro $i/$n: 再現を確かめられなかった（反証されていない） — $label"
       echo "    理由: 作業ツリーの写しを作れませんでした"
@@ -1649,7 +1709,7 @@ run_repro_stage() {
     args=(exec - --color never --skip-git-repo-check --ignore-user-config
           -c 'shell_environment_policy.inherit=none'
           -c 'web_search="disabled"'
-          "${perm_args[@]}"
+          "${repro_perm_args[@]}"
           -c 'default_permissions="ws"'
           --disable browser_use --disable in_app_browser
           --disable computer_use --disable apps --disable code_mode_host
@@ -1659,12 +1719,12 @@ run_repro_stage() {
 
     calls=$((calls + 1))
     rc=0
-    (cd "$tree" && ${timeout_cmd[@]+"${timeout_cmd[@]}"} env -i ${CODEX_ENV_PASS[@]+"${CODEX_ENV_PASS[@]}"} \
+    (cd "$tree" && ${repro_timeout_cmd[@]+"${repro_timeout_cmd[@]}"} env -i ${CODEX_ENV_PASS[@]+"${CODEX_ENV_PASS[@]}"} \
       "$CLI" "${args[@]}" <"$input" >/dev/null 2>"$errfile") || rc=$?
 
     kind=""
     reason=""
-    if [[ "$rc" -eq 124 ]]; then
+    if [[ "$rc" -eq 124 || "$rc" -eq 137 ]]; then
       kind="unknown"; reason="時間切れ（${REPRO_TIMEOUT} 秒）"
     elif [[ "$rc" -ne 0 ]]; then
       kind="unknown"; reason="codex が終了コード $rc で失敗しました"
@@ -1697,19 +1757,22 @@ run_repro_stage() {
           n_norepro=$((n_norepro + 1))
           echo "[second-opinion] repro $i/$n: 再現しなかった（反証されていない） — $label"
         fi
-        cmd_text="$(jq -r '.command' "$answer" | repro_clean)"
+        # モデルが返した欄は、制御文字を落とし、改行を含めて全行を字下げして出す。
+        cmd_text="$(jq -r '.command' "$answer")"
         out_text="$(jq -r '.output_excerpt' "$answer" | repro_clean)"
-        reason="$(jq -r '.reason' "$answer" | repro_clean)"
+        reason="$(jq -r '.reason' "$answer")"
         out_text="${out_text:0:2000}"
-        printf '    コマンド: %s\n' "$cmd_text"
+        repro_print_field "コマンド" "$cmd_text"
         printf '    出力:\n'
         printf '%s\n' "$out_text" | repro_indent
-        printf '    理由: %s\n' "$reason"
+        repro_print_field "理由" "$reason"
         ;;
     esac
+    # 使い終わった写しはすぐ消す（指摘の数だけ作業ツリーが残らないように）。
+    rm -rf "$tree"
   done
 
-  echo "[second-opinion] repro: 再現した $n_repro 件 / 再現しなかった $n_norepro 件 / 確かめられなかった $n_unknown 件 / 上限で見送った $skipped 件（codex の起動 $calls 回。上限 $REPRO_MAX 件・${REPRO_TIMEOUT} 秒）"
+  echo "[second-opinion] repro: 再現した $n_repro 件 / 再現しなかった $n_norepro 件 / 確かめられなかった $n_unknown 件 / 上限で見送った $skipped 件（codex の起動 $calls 回。実行全体の上限 $REPRO_MAX 件・${REPRO_TIMEOUT} 秒）"
   if [[ "$skipped" -gt 0 ]]; then
     echo "[second-opinion] repro: 上限のため再現を見送った $skipped 件は、反証されていません（落とす判定のまま）"
   fi
