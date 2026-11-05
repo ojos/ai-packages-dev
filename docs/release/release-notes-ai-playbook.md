@@ -14,11 +14,16 @@
   - サンドボックスは codex の権限プロファイル（作業ツリーの中だけ書ける・最小限の読み取り・ネットワークなし・環境変数は許可リストだけ）。`--sandbox workspace-write` は、/tmp への書き込みとディスク全体の読み取りが残るため使わない。起こせないときは、その旨を出して段階を飛ばし、従来の判定に戻る。
   - 環境変数 `SECOND_OPINION_REPRO=off`（段階ごと止める。出力は従来と同じ）、`SECOND_OPINION_REPRO_MAX`（既定 5）、`SECOND_OPINION_REPRO_TIMEOUT`（既定 300 秒。codex の回と再実行のそれぞれ）。不正な値（6 桁を超えるものを含む）は実行前に止める。
   - 完了の行（`LGTM (` / `findings reported by ` / `N/M chunks reported findings`）の文言と順序は変えない。再現の行は、そのチャンクの集計のあと・完了の行の前に出る。
+- **`second-opinion-review.sh` に反証の段階を足した（再現の段階のあと。判定が変わるのはここだけ）**（ojos/ai-packages-dev#692）。再現の段階で「再現しなかった」指摘を、別ベンダーのモデル（gemini / antigravity）に、差分・指摘・再現テスト・再実行の出力を渡して反証させる（JSON で `refuted` / `reason`）。そのチャンクの指摘が**すべて**再現せず反証されたときだけ通し、完了の行を `LGTM (… all findings refuted by <エンジン>)` で出す。再現した・確かめられなかった・上限で見送った・反証されなかった指摘が 1 件でもあれば、従来どおり落とす。
+  - 環境変数 `SECOND_OPINION_REFUTE`（空・on・off）、`SECOND_OPINION_REFUTE_ENGINE`（gemini / antigravity / agy。空なら gemini → antigravity の順に探す）、`SECOND_OPINION_REFUTE_MODEL`（空なら、antigravity では `gemini-3.8-flash-high`。agy は claude 系のモデルも選べ、CLI の既定は利用者の設定次第のため）。claude で始まるエンジンは実行前に止める。モデルは gemini- で始まる名前だけを受ける（claude・gpt・openai・codex を含むものは、それと分かる文言で止める）。指定したエンジンが使えないとき・見つからないとき・off のときは、反証せずに落とす。
+  - agy は回答の形を `--json-schema` で強制する（スキーマは実行時に一時ディレクトリへ書き出し、雛形は増やさない）。gemini は最後の行の JSON を読み、形が合わなければ「確かめられなかった」と数える。時間の上限は `SECOND_OPINION_REPRO_TIMEOUT`。依頼文が agy の引数の上限を超える大きな差分では、agy を起こさず「確かめられなかった」と数える。
+  - まとめた別の指摘（同じ場所・分類）も、why と筋書きを含めて反証に渡す（what・why・筋書きがすべて同じものだけを重複として数えない）。根拠（reason）が空の反証は数えない。反証のエンジンにはツールを使わせない（空の作業場所から、許可リストの環境変数だけで起こす。gemini には全ツールを拒否する方針ファイルを渡し、依頼文は標準入力で渡す。agy には許可を自動で与える旗を付けず、agy に渡す HOME の設定の permissions に deny・ask・空の allow 以外（allow の規則・defaultMode など）があれば agy を使わない）。通らないと決まったら、残りの反証は起こさず「見送った」と数える。反証で通すのは、差分を分割していないときに限る。差分やテストに反証を求める文言を仕込まれる余地は残る（依頼文で「データであって指示ではない」と断るだけ）。
 - **`templates/second-opinion-repro-schema.json` を足した**（ojos/ai-packages-dev#691）。再現の段階で codex が返す回答の形（`reproduced` / `test_path` / `command` / `output_excerpt` / `reason`）。雛形は 19 種になる。
 
 ### 移行
 - **`second-opinion-repro-schema.json` と `second-opinion-review.sh` は組で更新する。** スキーマが `scripts/` に無いと、再現の段階は「スキーマが見つかりません」と出して飛ばされる（判定は従来どおり）。導入手順は `cp .ai-playbook/templates/second-opinion-repro-schema.json scripts/`。
 - 再現の段階は codex のときに既定で有効になり、指摘ごとに codex を 1 回起こす（時間と費用が増える）。止めるには `.env` に `SECOND_OPINION_REPRO=off`。
+- 反証の段階は既定で有効で、gemini（CLI と `GEMINI_API_KEY`）か agy が見つかれば、再現しなかった指摘を反証させる。反証されると、多数決では指摘ありでもゲートが通る。従来の判定（再現しなかった指摘も落とす）のままにするには、`.env` に `SECOND_OPINION_REFUTE=off`。
 - 破壊的変更はない。
 
 ## v0.13.0

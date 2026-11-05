@@ -12977,6 +12977,13 @@ SECOND_OPINION_ENGINE=__ENGINE_DEFAULT__
 # （scripts/second-opinion-review.sh が持つ）。gemini / antigravity は空のままで
 # 各 CLI の既定。
 SECOND_OPINION_MODEL=
+
+# 第二意見の反証のエンジン（gemini | antigravity。空なら使えるものを gemini → antigravity の
+# 順に探す）。エンジンが codex のとき、再現の段階で再現しなかった指摘を別ベンダーのモデルに
+# 反証させ、指摘がすべて反証されたときだけ通す。claude は実装と同じベンダーのため選べない
+# （SECOND_OPINION_REFUTE_MODEL も gemini- で始まる名前だけを受ける）。見つからなければ反証せず、
+# 再現しなかった指摘は落とす。止めるには SECOND_OPINION_REFUTE=off。
+SECOND_OPINION_REFUTE_ENGINE=
 ENGTMPL
   elif has_with codex; then
     cat <<'ENGTMPL' | second_opinion_engine_fill "$engine_default" "$key_line" "$key_note"
@@ -12992,6 +12999,13 @@ SECOND_OPINION_ENGINE=__ENGINE_DEFAULT__
 # 第二意見のモデル（空なら各エンジンの既定）。codex の既定は gpt-6-sol
 # （scripts/second-opinion-review.sh が持つ）。gemini は空のままで CLI の既定。
 SECOND_OPINION_MODEL=
+
+# 第二意見の反証のエンジン（gemini | antigravity。空なら使えるものを gemini → antigravity の
+# 順に探す）。エンジンが codex のとき、再現の段階で再現しなかった指摘を別ベンダーのモデルに
+# 反証させ、指摘がすべて反証されたときだけ通す。claude は実装と同じベンダーのため選べない
+# （SECOND_OPINION_REFUTE_MODEL も gemini- で始まる名前だけを受ける）。見つからなければ反証せず、
+# 再現しなかった指摘は落とす。止めるには SECOND_OPINION_REFUTE=off。
+SECOND_OPINION_REFUTE_ENGINE=
 ENGTMPL
   else
     cat <<'ENGTMPL' | second_opinion_engine_fill "$engine_default" "$key_line" "$key_note"

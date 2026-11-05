@@ -16,6 +16,7 @@
 - **規範を配置する構成で、`scripts/second-opinion-repro-schema.json` を `scripts/second-opinion-schema.json` と並べて配置する**（ojos/ai-packages-dev#691）。第二意見の再現の段階（エンジンが codex のとき。判定は変えない）が読む回答の形で、`second-opinion-review.sh` と対。由来記録（ORIGIN）にも載る。
 - **この版は、`templates/second-opinion-repro-schema.json` を持つ ai-playbook（未リリースの次の版）を要求する。** 持たない古い規範を指定すると、書き込みの前に雛形の欠けで止まる。
 - **生成する `scripts/update-check.sh` の upgrade が、追従と関係の無い未追跡ファイルでは止まらなくなった**（ojos/ai-packages-dev#704）。これまでは未追跡のファイルが 1 つでもあれば「未コミットの変更」として止まっていたため、作業物を未追跡で置いている利用者は、別の作業ツリーを作って追従していた。追跡しているファイルの変更では従来どおり止める。未追跡のファイルは、取得して照合した `bootstrap.sh` の `--upgrade --dry-run` が示す書き込み先（`.dcb-new` を含む）と重なるときだけ、そのパスを示して止める。dry-run が失敗した・読めない・知らない形の行を含むときは、未追跡のファイルがあるだけで止める（安全側）。追従が失敗したときの案内は、`--upgrade` の直前に無かった（追従で新しくできた）ファイルだけを、ルートへ `cd` したうえで `rm` する形にした。`git clean -fd` は勧めない。
+- **codex を含む構成の `.env.example` に、`SECOND_OPINION_REFUTE_ENGINE` の空の欄を足した**（ojos/ai-packages-dev#692）。第二意見の反証の段階（ai-playbook の次の版。再現しなかった指摘を別ベンダーのモデルに反証させる）のエンジンを選ぶ欄で、空なら gemini → antigravity の順に探す。codex を含まない構成には出さない。
 
 ### 移行
 - `bootstrap.sh --upgrade` で追従する（手を入れていなければ置き換わる）。再現の段階は codex のとき既定で有効になり、指摘ごとに codex を 1 回起こす。止めるには `.env` に `SECOND_OPINION_REPRO=off`。

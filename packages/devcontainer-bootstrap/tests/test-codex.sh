@@ -249,6 +249,22 @@ else
   fail "gemini 併用で gemini が記入されていない: $(grep -h '^SECOND_OPINION_ENGINE=' "$OUT_GC/.env.example" "$OUT_GA/.env.example" 2>/dev/null)"
 fi
 
+it "codex を含む構成（単独・gemini 併用・antigravity 併用）の .env.example に、反証のエンジンの欄が空で入る（#692）"
+if grep -q '^SECOND_OPINION_REFUTE_ENGINE=$' "$OUT_CX/.env.example" 2>/dev/null \
+   && grep -q '^SECOND_OPINION_REFUTE_ENGINE=$' "$OUT_GC/.env.example" 2>/dev/null \
+   && grep -q '^SECOND_OPINION_REFUTE_ENGINE=$' "$OUT_AC/.env.example" 2>/dev/null; then
+  pass
+else
+  fail "反証のエンジンの欄が無い: $(grep -c '^SECOND_OPINION_REFUTE_ENGINE=' "$OUT_CX/.env.example" "$OUT_GC/.env.example" "$OUT_AC/.env.example" 2>/dev/null)"
+fi
+
+it "codex を含まない構成（gemini + antigravity）の .env.example には、反証のエンジンの欄を出さない（反証は codex のときだけ）"
+if ! grep -q 'SECOND_OPINION_REFUTE' "$OUT_GA/.env.example" 2>/dev/null; then
+  pass
+else
+  fail "codex を含まない構成に反証の欄がある"
+fi
+
 it "antigravity + codex では volume が重複しない（別名のまま 2 本）"
 cmp_ac="$(compose_of "$OUT_AC")"
 n_gem="$(grep -cE '^  gemini-storage:' "$cmp_ac" 2>/dev/null || true)"
