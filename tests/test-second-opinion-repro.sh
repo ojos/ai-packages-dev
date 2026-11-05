@@ -1472,6 +1472,29 @@ else
   fail "rc=$rc before=[$before]: $(cat "$WORK/both")"
 fi
 
+it "入れ替え（一時の置き場から保存先への mv）に失敗しても、前に保存したテストを戻して残す"
+sd="$(saved_dirs)"
+before="$(cat "$sd/saved_at" 2>/dev/null)"
+cat > "$FAKE_BIN/mv" <<'FAKE'
+#!/usr/bin/env bash
+# 一時の置き場（.tmp-）から保存先への入れ替えだけを失敗させる。ほかは本物の mv へ渡す。
+if [[ "${1-}" == */.tmp-* ]]; then echo "mv: fake failure" >&2; exit 1; fi
+dir="$(cd "$(dirname "$0")" && pwd)"
+real="$(PATH="${PATH//$dir:/}" command -v mv)"
+exec "$real" "$@"
+FAKE
+chmod +x "$FAKE_BIN/mv"
+rc=0
+FAKE_REVIEW_ANSWER="$ONE_BUG" FAKE_REPRO_MODE=condbug run_review --engine codex || rc=$?
+rm -f "$FAKE_BIN/mv"
+if [[ "$rc" -eq 1 && -n "$before" && "$(cat "$sd/saved_at" 2>/dev/null)" == "$before" && -f "$sd/.second-opinion-repro/t.sh" ]] \
+   && both_has '保存: 保存できませんでした（前に保存したものがあれば残します' \
+   && [[ -z "$(find "$SAVED_ROOT" -mindepth 1 -maxdepth 1 -name '.*' 2>/dev/null)" ]]; then
+  pass
+else
+  fail "rc=$rc before=[$before] left=[$(find "$SAVED_ROOT" -mindepth 1 -maxdepth 1 2>/dev/null)]: $(cat "$WORK/both")"
+fi
+
 it "detached HEAD では、保存したテストをコミットに紐づけ、別のコミットのものは再実行しない"
 rm -rf "$SAVED_ROOT"
 cur_branch="$(git -C "$REPO" symbolic-ref --short HEAD)"

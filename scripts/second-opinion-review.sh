@@ -1904,7 +1904,7 @@ repro_rerun() {
 # たびの写しを重くしないため）。保存できなくても段階を止めない（判定は変えない。警告だけ出す）。
 REPRO_SAVE_MAX_KB=1024
 repro_save() {
-  local tree="$1" test_path="$2" f="$3" id dest br kb tmp
+  local tree="$1" test_path="$2" f="$3" id dest br kb tmp old
   [[ -n "$REPRO_SAVED_ROOT" ]] || { echo "    保存: 保存先（git rev-parse --git-path second-opinion）を求められないため、保存しません"; return 0; }
   br="$(repro_branch)"
   id="$(printf '%s' "$f" | jq -c --arg br "$br" '{branch: $br, file, line, category}' | git hash-object --stdin 2>/dev/null)" || id=""
@@ -1916,15 +1916,19 @@ repro_save() {
   fi
   dest="$REPRO_SAVED_ROOT/$id"
   # 一時の置き場（ドットで始まる名前。再実行の対象の一覧には入らない）へ写し終えてから置き換える。
-  # 先に消すと、写しに失敗したとき、まだ再現する欠陥の前のテストまで失う。
+  # 前のものは消さずに別名へ退け、新しいものを入れてから消す（入れ替えに失敗したら戻す）。
+  # 先に消すと、写しや入れ替えに失敗したとき、まだ再現する欠陥の前のテストまで失う。
   tmp="$REPRO_SAVED_ROOT/.tmp-$id-$$"
-  repro_rm "$tmp" >/dev/null
+  old="$REPRO_SAVED_ROOT/.old-$id-$$"
+  repro_rm "$tmp" "$old" >/dev/null
   if mkdir -p "$tmp" && cp -a "$tree/.second-opinion-repro" "$tmp/" \
      && printf '%s\n' "$test_path" > "$tmp/test_path" \
      && printf '%s\n' "$br" > "$tmp/branch" \
      && printf '%s' "$f" | jq -c 'del(.merged)' > "$tmp/finding.json" \
      && printf '%s %s\n' "$(git rev-parse HEAD 2>/dev/null || echo -)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$tmp/saved_at" \
-     && repro_rm "$dest" >/dev/null && [[ ! -e "$dest" ]] && mv "$tmp" "$dest"; then
+     && { [[ ! -e "$dest" ]] || mv "$dest" "$old"; } \
+     && { mv "$tmp" "$dest" || { [[ ! -e "$old" ]] || mv "$old" "$dest"; false; }; }; then
+    repro_rm "$old" >/dev/null
     echo "    保存: 次のゲートで再実行します（$dest）"
   else
     repro_rm "$tmp" >/dev/null
