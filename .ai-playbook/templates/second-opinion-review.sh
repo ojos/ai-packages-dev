@@ -102,7 +102,9 @@
 #   - 反証のエンジンにはツールを使わせない。秘密の無い空の作業場所から、codex と同じ許可リストの
 #     環境変数だけ（gemini は GEMINI_API_KEY を足す）を `env -i` で渡して起こす。gemini は全ツールを
 #     拒否する方針ファイル（--admin-policy）を渡し、依頼文は標準入力で渡す。agy は許可を自動で
-#     与える旗を付けない（許可の要るツールは非対話の実行で拒否される）。
+#     与える旗を付けない（許可の要るツールは非対話の実行で拒否される）。利用者の設定に許可の規則
+#     （permissions.allow）があれば、agy は反証に使わない（許可したツールは非対話でも使うため）。
+#   - SECOND_OPINION_REFUTE_MODEL は gemini- で始まる名前だけを受ける（別名で同じベンダーを選ばないため）。
 #   - 時間の上限は SECOND_OPINION_REPRO_TIMEOUT。SECOND_OPINION_REFUTE=off で段階ごと止める
 #     （再現しなかった指摘は落とす判定のまま）。エンジンが見つからないときも同じで、設定を案内する。
 #
@@ -395,6 +397,13 @@ case "$REFUTE_MODEL" in
     ;;
   *[Gg][Pp][Tt]*|*[Oo][Pp][Ee][Nn][Aa][Ii]*|*[Cc][Oo][Dd][Ee][Xx]*)
     echo "error: SECOND_OPINION_REFUTE_MODEL に OpenAI 系のモデルは指定できません（レビューする codex と同じベンダーのため。agy は OpenAI 系のモデルも選べます）: $REFUTE_MODEL" >&2
+    exit 1
+    ;;
+  ""|gemini-*) ;;
+  *)
+    # 名前に claude・gpt を含まない別名（例: sonnet）で同じベンダーのモデルを選べるので、
+    # 拒む名前を並べるのではなく、gemini のモデルだけを受ける。
+    echo "error: SECOND_OPINION_REFUTE_MODEL は gemini- で始まるモデル名だけを指定できます（別名で実装やレビューと同じベンダーのモデルを選ばないため）: $REFUTE_MODEL" >&2
     exit 1
     ;;
 esac
@@ -2085,7 +2094,16 @@ refute_prepare_once() {
   fi
   local gemini_ok=0 agy_ok=0
   command -v gemini >/dev/null 2>&1 && [[ -n "${GEMINI_API_KEY:-}" ]] && gemini_ok=1
-  command -v agy >/dev/null 2>&1 && agy_ok=1
+  # agy は利用者の設定（permissions.allow）で許可したツールを、非対話の実行でも使う。許可の規則が
+  # あれば（読めない設定も同じ）、差分に仕込んだ文言でツールを使わせうるので、反証には使わない。
+  local agy_settings="${HOME:-}/.gemini/antigravity-cli/settings.json" agy_why="agy の CLI がありません"
+  if command -v agy >/dev/null 2>&1; then
+    if [[ ! -e "$agy_settings" ]] || jq -e '(.permissions.allow // []) | length == 0' "$agy_settings" >/dev/null 2>&1; then
+      agy_ok=1
+    else
+      agy_why="agy の設定（$agy_settings）に許可の規則（permissions.allow）があるか、設定を読めません。反証のエンジンにはツールを使わせないため、使いません"
+    fi
+  fi
   case "$REFUTE_ENGINE" in
     gemini)
       if [[ "$gemini_ok" -ne 1 ]]; then
@@ -2095,7 +2113,7 @@ refute_prepare_once() {
       refute_engine="gemini" ;;
     antigravity)
       if [[ "$agy_ok" -ne 1 ]]; then
-        refute_skip_msg="[second-opinion] refute: 指定した反証のエンジン antigravity を使えません（agy の CLI がありません）。再現しなかった指摘は、反証されていないので落とします"
+        refute_skip_msg="[second-opinion] refute: 指定した反証のエンジン antigravity を使えません（$agy_why）。再現しなかった指摘は、反証されていないので落とします"
         return 0
       fi
       refute_engine="antigravity" ;;
@@ -2103,7 +2121,7 @@ refute_prepare_once() {
       if [[ "$gemini_ok" -eq 1 ]]; then refute_engine="gemini"
       elif [[ "$agy_ok" -eq 1 ]]; then refute_engine="antigravity"
       else
-        refute_skip_msg="[second-opinion] refute: 反証のエンジンが見つかりません。再現しなかった指摘は、反証されていないので落とします。反証させるには、gemini の CLI と GEMINI_API_KEY か、agy の CLI を導入し、.env の SECOND_OPINION_REFUTE_ENGINE（gemini / antigravity）で選んでください（空なら gemini → antigravity の順に探します）"
+        refute_skip_msg="[second-opinion] refute: 反証のエンジンが見つかりません。再現しなかった指摘は、反証されていないので落とします。反証させるには、gemini の CLI と GEMINI_API_KEY か、agy の CLI を導入し、.env の SECOND_OPINION_REFUTE_ENGINE（gemini / antigravity）で選んでください（空なら gemini → antigravity の順に探します。agy: $agy_why）"
         return 0
       fi ;;
   esac
@@ -2160,9 +2178,11 @@ refute_one() {
       printf '%s' "$f" | jq -c '.merged[] | {category, file, line, what, why, failure_scenario}'
     fi
     printf '\n%s\n' "## 再現テスト（bash のスクリプト）"
-    printf '%s\n' "$test_text" | head -c 8000
+    # パイプで切り詰めると、出力が大きいとき printf が SIGPIPE を受け、pipefail で書き出し全体が
+    # 失敗する。here-string で渡す（head が途中で閉じても、書き手のシェルは失敗しない）。
+    head -c 8000 <<<"$test_text"
     printf '\n%s\n' "## 再実行の結果（終了コード $rerun_code。0 なら誤った結果を観測、1 なら観測せず）"
-    printf '%s\n' "$rerun_text" | head -c 4000
+    head -c 4000 <<<"$rerun_text"
   } > "$input" 2>/dev/null || { refute_reason="依頼文を書き出せません"; return 0; }
 
   case "$refute_engine" in

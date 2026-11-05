@@ -1109,6 +1109,31 @@ else
   fail "rc=$rc calls=$(calls_of refute-calls): $(cat "$WORK/both")"
 fi
 
+it "反証: gemini- で始まらないモデル名（claude・gpt を含まない別名）は実行前に拒む"
+rc=0
+SECOND_OPINION_REFUTE_MODEL=sonnet FAKE_REVIEW_ANSWER="$ONE_BUG" run_review --engine codex || rc=$?
+if [[ "$rc" -eq 1 && "$(calls_of review-calls)" == "0" ]] && both_has 'SECOND_OPINION_REFUTE_MODEL は gemini- で始まるモデル名だけを指定できます'; then
+  pass
+else
+  fail "rc=$rc review=$(calls_of review-calls): $(cat "$WORK/both")"
+fi
+
+it "反証: agy の設定に許可の規則（permissions.allow）があれば、agy を反証に使わず「反証されていない」で非 0"
+mkdir -p "$WORK/home-allow/.gemini/antigravity-cli"
+printf '%s\n' '{"permissions":{"allow":["command(cat)"]}}' > "$WORK/home-allow/.gemini/antigravity-cli/settings.json"
+rc=0
+HOME="$WORK/home-allow" FAKE_REVIEW_ANSWER="$ONE_BUG" FAKE_REPRO_MODE=notreproduced FAKE_REFUTE_MODE=refuted run_review --engine codex || rc=$?
+cp "$WORK/both" "$WORK/both-auto"
+rc2=0
+HOME="$WORK/home-allow" SECOND_OPINION_REFUTE_ENGINE=antigravity FAKE_REVIEW_ANSWER="$ONE_BUG" FAKE_REPRO_MODE=notreproduced FAKE_REFUTE_MODE=refuted run_review --engine codex || rc2=$?
+if [[ "$rc" -eq 1 && "$rc2" -eq 1 && "$(calls_of refute-calls)" == "0" ]] \
+   && command grep -qF '反証のエンジンが見つかりません' "$WORK/both-auto" && command grep -qF 'permissions.allow' "$WORK/both-auto" \
+   && both_has '指定した反証のエンジン antigravity を使えません' && both_has 'permissions.allow'; then
+  pass
+else
+  fail "rc=$rc rc2=$rc2 calls=$(calls_of refute-calls): $(cat "$WORK/both-auto" "$WORK/both")"
+fi
+
 it "反証: OpenAI 系のモデル（レビューする codex と同じベンダー）は実行前に拒む"
 rc=0
 SECOND_OPINION_REFUTE_MODEL=gpt-oss-120b-medium FAKE_REVIEW_ANSWER="$ONE_BUG" run_review --engine codex || rc=$?
@@ -1205,6 +1230,32 @@ out="$(
   repro_collect_ok=1; repro_collect "$ans" 3; echo "mismatch=$repro_collect_ok"
 )"
 if [[ "$out" == *"match=1"* && "$out" == *"mismatch=0"* ]]; then pass; else fail "$out"; fi
+
+it "反証: refute_one は、テストの中身や再実行の出力が大きくても依頼文を書き出す（切り詰めで pipefail に落ちない）"
+rm -f "$RECORD"/refute-*
+printf 'FAKE_REFUTE_MODE=refuted\n' > "$RECORD/fake.env"
+out="$(
+  set -euo pipefail
+  cd "$REPO"
+  export PATH="$AGY_BIN:$FAKE_BIN:$SAFE_PATH"
+  RANGE=""; BASE=""; MODEL=""; CLI=codex; ENGINE=codex; REPRO=""
+  REFUTE=""; REFUTE_ENGINE="antigravity"; REFUTE_MODEL=""
+  REPRO_MAX=5; REPRO_TIMEOUT=60
+  REPRO_SCHEMA_FILE="$REPO_ROOT/scripts/second-opinion-repro-schema.json"
+  CODEX_ENV_PASS=("PATH=$PATH" "HOME=$HOME")
+  BLOCKING_JSON='["bug"]'
+  diff_text="d"
+  work_dir="$WORK/refute-big"; rm -rf "$work_dir"; mkdir -p "$work_dir"
+  stderr_file="$work_dir/stderr"
+  repro_candidates_file="$work_dir/cands"
+  # shellcheck disable=SC1090
+  . <(sed -n '/^# ここから再現の段階/,/^# 過半数/p' "$REVIEW")
+  refute_prepare_once
+  big="$(head -c 300000 /dev/zero | tr '\0' x)"
+  refute_one "$(finding_json bug a.txt 1 w1 | jq -c '. + {merged: []}')" "$big" "$big" 1 1
+  echo "kind=$refute_kind reason=$refute_reason"
+)" || true
+if [[ "$out" == *"kind=refuted"* ]]; then pass; else fail "$out"; fi
 
 # ---- 段階を直接呼ぶ試験（codex は常に 1 チャンクなので、複数チャンクの共有はここで見る）----
 
