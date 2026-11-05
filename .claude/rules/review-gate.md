@@ -104,6 +104,7 @@ bash scripts/second-opinion-review.sh --engine codex           # エンジン切
 | `--engine <name>` | `SECOND_OPINION_ENGINE` | `codex` | レビューを実行する CLI（`gemini` / `antigravity` / `codex`）。どちらでも指定せず `gemini` か `agy` が PATH にあるときは、既定の codex を使う旨を stderr に知らせる（判定は変えない）。どちらでも指定せず codex が使えない（CLI が無い・未ログイン）ときは、移行の案内を stderr に出して止まる（gemini へ自動で切り替えない） |
 | `--model <name>` | `SECOND_OPINION_MODEL` | 各 CLI の既定 | 使用モデル |
 | `--runs <n>` | `SECOND_OPINION_RUNS` | `1` | 実行回数（1 以上の整数。不正値は実行前に停止） |
+| `--rerun-saved` | — | — | レビューせず、再現の段階が今の枝で保存した再現テストを、`--range` / `--base` の状態の上で codex のサンドボックスで再実行する（`--engine` / `--model` / `--runs` は使わない）。まだ再現すれば終了コード 3。`loop-gate.sh` が第二意見より前に呼ぶ（下記「再現したテストの保存と再実行」） |
 | — | `SECOND_OPINION_AGENT_CONFIG_PATHS` | 未設定 | `loop-gate.sh` が渡す、レビュー範囲のうちエージェントの設定・フックに当たるパスの一覧（改行区切り）。空でなければ依頼文の末尾に、重点的に見るよう添える |
 | — | `SECOND_OPINION_REPRO` | 有効（`off` で止める） | 再現の段階（エンジンが `codex` のときだけ。下記）を止める。空・`on`・`off` だけを受け、それ以外（`0`・`false`・`OFF` など）は実行前に停止する。`off` のときは何も足さず、出力は従来と同じ |
 | — | `SECOND_OPINION_REPRO_MAX` | `5` | 1 回の実行全体で再現する指摘の上限（チャンクをまたいで共有。1 以上の整数で 6 桁まで。不正値は実行前に停止）。超えた分は「上限で見送った（反証されていない）」と数える |
