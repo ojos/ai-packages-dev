@@ -1127,11 +1127,40 @@ cp "$WORK/both" "$WORK/both-auto"
 rc2=0
 HOME="$WORK/home-allow" SECOND_OPINION_REFUTE_ENGINE=antigravity FAKE_REVIEW_ANSWER="$ONE_BUG" FAKE_REPRO_MODE=notreproduced FAKE_REFUTE_MODE=refuted run_review --engine codex || rc2=$?
 if [[ "$rc" -eq 1 && "$rc2" -eq 1 && "$(calls_of refute-calls)" == "0" ]] \
-   && command grep -qF '反証のエンジンが見つかりません' "$WORK/both-auto" && command grep -qF 'permissions.allow' "$WORK/both-auto" \
-   && both_has '指定した反証のエンジン antigravity を使えません' && both_has 'permissions.allow'; then
+   && command grep -qF '反証のエンジンが見つかりません' "$WORK/both-auto" && command grep -qF 'permissions に、許可を広げうる規則' "$WORK/both-auto" \
+   && both_has '指定した反証のエンジン antigravity を使えません' && both_has 'permissions に、許可を広げうる規則'; then
   pass
 else
   fail "rc=$rc rc2=$rc2 calls=$(calls_of refute-calls): $(cat "$WORK/both-auto" "$WORK/both")"
+fi
+
+it "反証: agy の設定の permissions に defaultMode などがあれば、agy を反証に使わない（deny・ask だけなら使う）"
+mkdir -p "$WORK/home-mode/.gemini/antigravity-cli" "$WORK/home-deny/.gemini/antigravity-cli"
+printf '%s\n' '{"permissions":{"defaultMode":"bypassPermissions"}}' > "$WORK/home-mode/.gemini/antigravity-cli/settings.json"
+printf '%s\n' '{"colorScheme":"x","permissions":{"allow":[],"deny":["command(rm)"],"ask":["command(curl)"]}}' > "$WORK/home-deny/.gemini/antigravity-cli/settings.json"
+rc=0
+HOME="$WORK/home-mode" SECOND_OPINION_REFUTE_ENGINE=antigravity FAKE_REVIEW_ANSWER="$ONE_BUG" FAKE_REPRO_MODE=notreproduced FAKE_REFUTE_MODE=refuted run_review --engine codex || rc=$?
+mode_calls="$(calls_of refute-calls)"; cp "$WORK/both" "$WORK/both-mode"
+rc2=0
+HOME="$WORK/home-deny" SECOND_OPINION_REFUTE_ENGINE=antigravity FAKE_REVIEW_ANSWER="$ONE_BUG" FAKE_REPRO_MODE=notreproduced FAKE_REFUTE_MODE=refuted run_review --engine codex || rc2=$?
+if [[ "$rc" -eq 1 && "$mode_calls" == "0" && "$rc2" -eq 0 && "$(calls_of refute-calls)" == "1" ]] \
+   && command grep -qF 'defaultMode' "$WORK/both-mode"; then
+  pass
+else
+  fail "rc=$rc mode_calls=$mode_calls rc2=$rc2 calls=$(calls_of refute-calls): $(cat "$WORK/both-mode" "$WORK/both")"
+fi
+
+it "反証: .env が HOME を書き換えても、agy に渡す HOME（読み込む前の値）の設定で判定する"
+mkdir -p "$WORK/home-clean"
+printf 'HOME=%s\n' "$WORK/home-clean" > "$WORK/home.env"
+rc=0
+PROJECT_ENV_FILE="$WORK/home.env" HOME="$WORK/home-allow" SECOND_OPINION_REFUTE_ENGINE=antigravity \
+  FAKE_REVIEW_ANSWER="$ONE_BUG" FAKE_REPRO_MODE=notreproduced FAKE_REFUTE_MODE=refuted run_review --engine codex || rc=$?
+if [[ "$rc" -eq 1 && "$(calls_of refute-calls)" == "0" ]] && both_has '指定した反証のエンジン antigravity を使えません' \
+   && both_has "$WORK/home-allow/.gemini/antigravity-cli/settings.json"; then
+  pass
+else
+  fail "rc=$rc calls=$(calls_of refute-calls): $(cat "$WORK/both")"
 fi
 
 it "反証: OpenAI 系のモデル（レビューする codex と同じベンダー）は実行前に拒む"

@@ -102,8 +102,9 @@
 #   - 反証のエンジンにはツールを使わせない。秘密の無い空の作業場所から、codex と同じ許可リストの
 #     環境変数だけ（gemini は GEMINI_API_KEY を足す）を `env -i` で渡して起こす。gemini は全ツールを
 #     拒否する方針ファイル（--admin-policy）を渡し、依頼文は標準入力で渡す。agy は許可を自動で
-#     与える旗を付けない（許可の要るツールは非対話の実行で拒否される）。利用者の設定に許可の規則
-#     （permissions.allow）があれば、agy は反証に使わない（許可したツールは非対話でも使うため）。
+#     与える旗を付けない（許可の要るツールは非対話の実行で拒否される）。agy に渡す HOME の設定の
+#     permissions に、deny・ask・空の allow 以外（allow の規則、defaultMode など）があれば、agy は
+#     反証に使わない（許可したツールは非対話でも使うため）。
 #   - SECOND_OPINION_REFUTE_MODEL は gemini- で始まる名前だけを受ける（別名で同じベンダーを選ばないため）。
 #   - 時間の上限は SECOND_OPINION_REPRO_TIMEOUT。SECOND_OPINION_REFUTE=off で段階ごと止める
 #     （再現しなかった指摘は落とす判定のまま）。エンジンが見つからないときも同じで、設定を案内する。
@@ -2094,14 +2095,22 @@ refute_prepare_once() {
   fi
   local gemini_ok=0 agy_ok=0
   command -v gemini >/dev/null 2>&1 && [[ -n "${GEMINI_API_KEY:-}" ]] && gemini_ok=1
-  # agy は利用者の設定（permissions.allow）で許可したツールを、非対話の実行でも使う。許可の規則が
-  # あれば（読めない設定も同じ）、差分に仕込んだ文言でツールを使わせうるので、反証には使わない。
-  local agy_settings="${HOME:-}/.gemini/antigravity-cli/settings.json" agy_why="agy の CLI がありません"
+  # agy は利用者の設定（permissions）で許可したツールを、非対話の実行でも使う。許可を広げうる
+  # 設定があれば（読めない設定も同じ）、差分に仕込んだ文言でツールを使わせうるので、反証には使わない。
+  # 認める形を限る: permissions は無いか、空の allow と deny / ask だけ（defaultMode などは認めない）。
+  # 調べるのは agy に渡す HOME（.env を読む前に控えた値）の設定。.env が HOME を書き換えても、
+  # agy が読む設定とずれないようにする。
+  local agy_home="" agy_env agy_settings agy_why="agy の CLI がありません"
+  for agy_env in ${CODEX_ENV_PASS[@]+"${CODEX_ENV_PASS[@]}"}; do
+    [[ "$agy_env" == HOME=* ]] && agy_home="${agy_env#HOME=}"
+  done
+  agy_settings="$agy_home/.gemini/antigravity-cli/settings.json"
   if command -v agy >/dev/null 2>&1; then
-    if [[ ! -e "$agy_settings" ]] || jq -e '(.permissions.allow // []) | length == 0' "$agy_settings" >/dev/null 2>&1; then
+    if [[ ! -e "$agy_settings" ]] || jq -e '(.permissions // {}) | type == "object"
+        and ((keys - ["allow", "deny", "ask"]) | length == 0) and ((.allow // []) | length == 0)' "$agy_settings" >/dev/null 2>&1; then
       agy_ok=1
     else
-      agy_why="agy の設定（$agy_settings）に許可の規則（permissions.allow）があるか、設定を読めません。反証のエンジンにはツールを使わせないため、使いません"
+      agy_why="agy の設定（$agy_settings）の permissions に、許可を広げうる規則（allow・defaultMode など。deny と ask 以外）があるか、設定を読めません。反証のエンジンにはツールを使わせないため、使いません"
     fi
   fi
   case "$REFUTE_ENGINE" in
