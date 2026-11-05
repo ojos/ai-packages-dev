@@ -109,6 +109,16 @@
 #   - 時間の上限は SECOND_OPINION_REPRO_TIMEOUT。SECOND_OPINION_REFUTE=off で段階ごと止める
 #     （再現しなかった指摘は落とす判定のまま）。エンジンが見つからないときも同じで、設定を案内する。
 #
+# 再現したテストの保存と再実行:
+#   再現の段階で「再現した」テストを、追跡しない記録の場所（git rev-parse --git-path second-opinion
+#   の下の repro/<指摘の ID>/）へ保存する。loop-gate.sh は、第二意見より前に --rerun-saved で
+#   これを再実行する（レビューはしない。同じ codex のサンドボックスで、--range / --base の状態の上）。
+#   保存したテストは保存したときの枝に紐づき、今の枝で保存したものだけを再実行する。
+#   まだ再現すれば終了コード 3（GATE_FAIL）。再現しなくなったら「直った」の印を付けて以後は再実行せず、
+#   リポジトリのテストへ移す案内を出す（自動では書き出さない）。確かめられなかったテストと、
+#   サンドボックスを起こせないときは落とさない（再実行を足す前の判定に戻る）。
+#   SECOND_OPINION_REPRO=off で再実行も止まる。
+#
 # 判定のぶれについて:
 #   このレビューは非決定的で、同じ差分でも実行のたびに結果が変わる。いずれの CLI にも
 #   temperature / seed に相当するオプションは無く、フラグでは決定化できない。
@@ -255,6 +265,8 @@ ENGINE_SPECIFIED=0
 [[ -n "${SECOND_OPINION_ENGINE:-}" ]] && ENGINE_SPECIFIED=1
 MODEL="${SECOND_OPINION_MODEL:-}"
 RUNS="${SECOND_OPINION_RUNS:-${GEMINI_REVIEW_RUNS:-1}}"
+# --rerun-saved: レビューせず、保存した再現テストを再実行する（下記「保存した再現テストの再実行」）。
+RERUN_SAVED=0
 
 usage() {
   cat <<'EOF'
@@ -269,6 +281,10 @@ options:
   --model <name>        使用モデル（既定: 各 CLI の既定。SECOND_OPINION_MODEL でも指定可）
   --runs <n>            実行回数（既定: 1。SECOND_OPINION_RUNS でも指定可）
                         指摘を報告した run が過半数に達したときだけ非 0 で終わる
+  --rerun-saved         レビューせず、再現の段階が今の枝で保存した再現テストを、--range /
+                        --base の状態の上で codex のサンドボックスで再実行する（--engine /
+                        --model / --runs は使わない）。まだ再現するテストがあれば終了コード 3。
+                        再現しなくなったテストには「直った」の印を付ける
   -h, --help            ヘルプ
 
 environment:
@@ -301,6 +317,7 @@ while [[ $# -gt 0 ]]; do
     --engine) need_value "$1" "${2-}"; ENGINE="$2"; ENGINE_SPECIFIED=1; shift 2 ;;
     --model)  need_value "$1" "${2-}"; MODEL="$2";  shift 2 ;;
     --runs)   need_value "$1" "${2-}"; RUNS="$2";   shift 2 ;;
+    --rerun-saved) RERUN_SAVED=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "error: unknown option: $1" >&2; usage; exit 1 ;;
   esac
@@ -361,6 +378,62 @@ if [[ ! "$REPRO_TIMEOUT" =~ ^[0-9]{1,6}$ ]] || [[ $((10#$REPRO_TIMEOUT)) -lt 1 ]
 fi
 REPRO_MAX=$((10#$REPRO_MAX))
 REPRO_TIMEOUT=$((10#$REPRO_TIMEOUT))
+
+# 再現の段階が再現したテストを保存する場所（追跡しない。worktree ごとに分かれる）。
+# 記録（second-opinion-record.sh）と同じ git rev-parse --git-path second-opinion の下。
+# 求められなければ空（保存も再実行もしない）。
+repro_saved_root() {
+  local d
+  d="$(git rev-parse --git-path second-opinion 2>/dev/null)" || return 1
+  [[ -n "$d" ]] || return 1
+  # 相対パスで返ることがあるので、作業場所に左右されないよう絶対パスにする。
+  d="$(cd "$(dirname "$d")" 2>/dev/null && pwd)/$(basename "$d")" || return 1
+  printf '%s/repro\n' "$d"
+}
+REPRO_SAVED_ROOT="$(repro_saved_root || true)"
+
+# 今の枝の名前（detached HEAD なら "(detached <HEAD のコミット>)"）。保存したテストは保存した
+# ときの枝に紐づけ、同じ作業ツリーで枝を切り替えても、ほかの枝のテストを再実行しない（その枝に
+# しか無い欠陥のテストが別の枝で「直った」と数えられたり、無関係な枝を落としたりしないため）。
+# detached HEAD はコミットごとに分ける（別のコミットを開いても、前のコミットのテストを回さない）。
+repro_branch() {
+  git symbolic-ref --short -q HEAD 2>/dev/null \
+    || echo "(detached $(git rev-parse -q --verify HEAD 2>/dev/null || echo unknown))"
+}
+
+# 再実行の対象（今の枝で保存したもののうち「直った」の印が無いもの）の一覧。1 行 1 件のディレクトリ。
+repro_saved_pending() {
+  local d br
+  [[ -n "$REPRO_SAVED_ROOT" && -d "$REPRO_SAVED_ROOT" ]] || return 0
+  br="$(repro_branch)"
+  for d in "$REPRO_SAVED_ROOT"/*/; do
+    d="${d%/}"
+    [[ -f "$d/test_path" && -d "$d/.second-opinion-repro" && ! -e "$d/fixed" ]] || continue
+    [[ "$(head -n 1 "$d/branch" 2>/dev/null)" == "$br" ]] || continue
+    printf '%s\n' "$d"
+  done
+}
+
+if [[ "$RERUN_SAVED" -eq 1 ]]; then
+  # 止める手段は再現の段階と同じ（SECOND_OPINION_REPRO=off）。止めたときは、保存した
+  # テストを見ない（再実行を足す前のゲートと同じ）。
+  if [[ "$REPRO" == "off" ]]; then
+    echo "[second-opinion] rerun: SECOND_OPINION_REPRO=off のため、保存した再現テストを再実行しません"
+    exit 0
+  fi
+  if [[ -z "$(repro_saved_pending)" ]]; then
+    echo "[second-opinion] rerun: 再実行する保存した再現テストはありません"
+    exit 0
+  fi
+  # 再実行は codex のサンドボックスだけで行う（モデルは呼ばないので、ログインは要らない）。
+  # 使えなければ飛ばす（再実行を足す前のゲートと同じ判定に戻る。止めはしない）。
+  if ! command -v codex >/dev/null 2>&1; then
+    echo "[second-opinion] rerun: codex が無いため、保存した再現テストを再実行できません（飛ばします）"
+    exit 0
+  fi
+  ENGINE="codex"
+  ENGINE_SPECIFIED=1
+fi
 # 再現の回答の形。再現の段階を行うときだけ読む。
 REPRO_SCHEMA_FILE="$__SCRIPT_DIR/second-opinion-repro-schema.json"
 
@@ -490,7 +563,7 @@ case "$ENGINE" in
     # ここで見ないと失敗が遅い。未ログインのまま exec へ進むと、CLI は再接続を
     # 試したうえで認証エラーで落ちる。レビューの前段で時間を捨て、しかも
     # 出てくるのは「回答が空」に近い形なので、ログインしていないことが読み取りにくい。
-    codex login status >/dev/null 2>&1 || {
+    [[ "$RERUN_SAVED" -eq 1 ]] || codex login status >/dev/null 2>&1 || {
       echo "error: codex にログインしていません。'codex login' を対話で 1 度通してから再実行してください" >&2
       codex_default_hint
       exit 1
@@ -609,7 +682,7 @@ resolve_issue_context() {
   issue_context="$body"
   echo "[second-opinion] issue #$num の scope と acceptance を文脈に載せます"
 }
-resolve_issue_context
+[[ "$RERUN_SAVED" -eq 1 ]] || resolve_issue_context
 
 # 差分とコミットメッセージが参照している issue / PR の文脈。他の issue / PR の
 # 状態（未マージ・完了・日付等）を知らないと出せない指摘があり、`gh` はこのスクリプト
@@ -860,7 +933,7 @@ $(printf '%s\n' "$acc" | sed 's/^/    /')"
     echo "[second-opinion] 引けなかったため載せません: ${unreadable% }" >&2
   fi
 }
-resolve_referenced_context
+[[ "$RERUN_SAVED" -eq 1 ]] || resolve_referenced_context
 
 # DCB が配置し、配布のままのファイル（上流でレビュー済み）の一覧を DISTRIBUTED_PATHS
 # （改行区切り）へ入れる。**差分からは外さず、依頼文にも添えない**（差分は全部渡す。添え書きは
@@ -987,7 +1060,9 @@ if [[ "$ENGINE_JSON" -eq 1 ]]; then
   : > "$DIST_DIR/diffpaths"
 fi
 dist_tracked=index
-if [[ -n "$RANGE" ]]; then
+if [[ "$RERUN_SAVED" -eq 1 ]]; then
+  : # 再実行ではレビューしないので、配布のままのファイルの一覧は求めない
+elif [[ -n "$RANGE" ]]; then
   if [[ "$RANGE" == *...* ]]; then
     dist_before="${RANGE%%...*}"; dist_after="${RANGE##*...}"
     [[ -n "$dist_before" ]] || dist_before="HEAD"
@@ -1168,9 +1243,10 @@ else
 
 $REPORT_RULES_JSON"
 fi
-append_context
-
-echo "[second-opinion] reviewing $scope (engine=$ENGINE, runs=$RUNS)"
+if [[ "$RERUN_SAVED" -eq 0 ]]; then
+  append_context
+  echo "[second-opinion] reviewing $scope (engine=$ENGINE, runs=$RUNS)"
+fi
 
 # 一時領域は全エンジンで使う。gemini は差分の受け渡しに、antigravity は分割した
 # チャンクの置き場に、codex は標準入力へ流すファイルと -o の回答先に、全エンジンとも
@@ -1818,6 +1894,49 @@ repro_rerun() {
   return 0
 }
 
+# 再現した指摘のテストを保存する（次のゲートで loop-gate.sh が --rerun-saved で再実行する）。
+# 引数: $1 = codex が使った作業ツリー、$2 = テストのパス、$3 = 指摘（候補の JSON）。
+# 置き場は $REPRO_SAVED_ROOT/<ID>/ で、.second-opinion-repro/ を丸ごと（テストが使う補助の
+# ファイルを含む）、test_path・finding.json・branch・saved_at を置く。ID は枝と file・line・
+# category から作る（モデルが書く what は言い回しが揺れるので使わない。再現の段階も同じ 3 つで
+# まとめている）。同じ枝で同じ場所の指摘がもう一度再現したら置き換える（「直った」の印も消える）。
+# 大きすぎるもの（REPRO_SAVE_MAX_KB を超える）は保存しない（記録の場所を膨らませず、再実行の
+# たびの写しを重くしないため）。保存できなくても段階を止めない（判定は変えない。警告だけ出す）。
+REPRO_SAVE_MAX_KB=1024
+repro_save() {
+  local tree="$1" test_path="$2" f="$3" id dest br kb tmp old
+  [[ -n "$REPRO_SAVED_ROOT" ]] || { echo "    保存: 保存先（git rev-parse --git-path second-opinion）を求められないため、保存しません"; return 0; }
+  br="$(repro_branch)"
+  id="$(printf '%s' "$f" | jq -c --arg br "$br" '{branch: $br, file, line, category}' | git hash-object --stdin 2>/dev/null)" || id=""
+  [[ "$id" =~ ^[0-9a-f]{40,64}$ ]] || { echo "    保存: 指摘の ID を作れないため、保存しません"; return 0; }
+  kb="$(du -sk "$tree/.second-opinion-repro" 2>/dev/null | awk '{print $1}')" || kb=""
+  if [[ ! "$kb" =~ ^[0-9]+$ ]] || [[ "$kb" -gt "$REPRO_SAVE_MAX_KB" ]]; then
+    echo "    保存: テストの置き場が大きすぎるか大きさを測れないため、保存しません（${kb:-?} KiB。上限 ${REPRO_SAVE_MAX_KB} KiB）"
+    return 0
+  fi
+  dest="$REPRO_SAVED_ROOT/$id"
+  # 一時の置き場（ドットで始まる名前。再実行の対象の一覧には入らない）へ写し終えてから置き換える。
+  # 前のものは消さずに別名へ退け、新しいものを入れてから消す（入れ替えに失敗したら戻す）。
+  # 先に消すと、写しや入れ替えに失敗したとき、まだ再現する欠陥の前のテストまで失う。
+  tmp="$REPRO_SAVED_ROOT/.tmp-$id-$$"
+  old="$REPRO_SAVED_ROOT/.old-$id-$$"
+  repro_rm "$tmp" "$old" >/dev/null
+  if mkdir -p "$tmp" && cp -a "$tree/.second-opinion-repro" "$tmp/" \
+     && printf '%s\n' "$test_path" > "$tmp/test_path" \
+     && printf '%s\n' "$br" > "$tmp/branch" \
+     && printf '%s' "$f" | jq -c 'del(.merged)' > "$tmp/finding.json" \
+     && printf '%s %s\n' "$(git rev-parse HEAD 2>/dev/null || echo -)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$tmp/saved_at" \
+     && { [[ ! -e "$dest" ]] || mv "$dest" "$old"; } \
+     && { mv "$tmp" "$dest" || { [[ ! -e "$old" ]] || mv "$old" "$dest"; false; }; }; then
+    repro_rm "$old" >/dev/null
+    echo "    保存: 次のゲートで再実行します（$dest）"
+  else
+    repro_rm "$tmp" >/dev/null
+    echo "    保存: 保存できませんでした（前に保存したものがあれば残します。判定は変えません）"
+  fi
+  return 0
+}
+
 # 再現の段階の本体。$repro_candidates_file の指摘を重複なくまとめ、残りの予算まで再現させる。
 run_repro_stage() {
   local cands n limit skipped i f label tree rerun_tree rerun_out answer errfile input remaining
@@ -2010,6 +2129,7 @@ run_repro_stage() {
       printf '    同じ場所・分類の別の指摘 %s 件をまとめました（別には再現していません）:\n' "$merged_n"
       printf '%s' "$f" | jq -r '.merged[] | .what | gsub("[\\n\\r]"; " ")' | repro_clean | sed 's/^/        - /'
     fi
+    [[ "$kind" != "repro" ]] || repro_save "$tree" "$test_path" "$f"
     # 再現しなかった指摘だけを、別ベンダーに反証させる。再現した・確かめられなかった指摘は
     # 反証に回さない（落とす判定のまま）。まとめた別の指摘も一緒に渡し、すべて反証されたときだけ通す。
     if [[ "$kind" != "norepro" ]]; then
@@ -2261,6 +2381,86 @@ maybe_run_repro() {
   run_repro_stage
   return 0
 }
+
+# 保存した再現テストの再実行（--rerun-saved。loop-gate.sh が第二意見より前に呼ぶ）。
+# 保存したテストを、--range / --base で決まる状態（再現の段階と同じ作り方）のまっさらな写しへ
+# 移し、再現の段階と同じ codex のサンドボックスで実行する。
+#   終了コード 0（まだ誤った結果が出る）→ まだ再現する。1 件でもあれば終了コード 3 で終わる
+#                                         （3 だけを「まだ再現する」に使う。設定の誤りなど、ほかの
+#                                         失敗の 1 と分け、loop-gate.sh が落とすのは 3 のときだけにする）
+#   終了コード 1（誤った結果が出ない）  → 直った。「直った」の印（fixed）を付け、以後は再実行しない。
+#                                         リポジトリのテストへ移す案内を出す（移すのは人。自動では書き出さない）
+#   それ以外（起動しない・時間切れなど）→ 確かめられなかった。警告だけ出す（落とさない）
+# サンドボックスを起こせないときは、飛ばして 0（再実行を足す前のゲートと同じ判定に戻る）。
+run_rerun_saved() {
+  local d i=0 n_still=0 n_fixed=0 n_unknown=0 test_path label out rerun_tree rc_text msg out_text
+  local -a dirs=()
+  while IFS= read -r d; do [[ -n "$d" ]] && dirs+=("$d"); done < <(repro_saved_pending)
+  repro_prepare_once
+  if [[ "$repro_prepare" != "ok" ]]; then
+    msg="${repro_skip_msg/再現の段階を飛ばします/保存した再現テストの再実行を飛ばします}"
+    echo "${msg/#\[second-opinion\] repro:/[second-opinion] rerun:}"
+    return 0
+  fi
+  for d in ${dirs[@]+"${dirs[@]}"}; do
+    i=$((i + 1))
+    test_path="$(head -n 1 "$d/test_path" 2>/dev/null)" || test_path=""
+    label="$(jq -r '"\(.file):\(.line) [\(.category)] \(.what)" | gsub("[\\n\\r]"; " ")' "$d/finding.json" 2>/dev/null | repro_clean)" || label=""
+    label="${label:0:300}"
+    [[ -n "$label" ]] || label="${d##*/}"
+    rerun_tree="$work_dir/rerun-saved-$i"
+    out="$work_dir/rerun-saved-out-$i"
+    rc_text=""
+    if [[ "$test_path" != .second-opinion-repro/?* || "$test_path" == *..* \
+          || -L "$d/$test_path" || ! -f "$d/$test_path" ]] || ! repro_no_links "$d/.second-opinion-repro"; then
+      repro_rerun_status="badsaved"
+    else
+      repro_rerun "$d" "$test_path" "$rerun_tree" "$out"
+    fi
+    case "$repro_rerun_status:${repro_rerun_rc:-}" in
+      ran:0)
+        n_still=$((n_still + 1))
+        echo "[second-opinion] rerun $i/${#dirs[@]}: まだ再現する — $label" ;;
+      ran:1)
+        n_fixed=$((n_fixed + 1))
+        echo "[second-opinion] rerun $i/${#dirs[@]}: 直った（誤った結果が出なくなった） — $label"
+        if printf '%s %s\n' "$(git rev-parse HEAD 2>/dev/null || echo -)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$d/fixed" 2>/dev/null; then
+          repro_print_field "案内" "このテストをリポジトリのテストへ移すと、同じ欠陥の再発を CI でも拾えます（保存先: $d/$test_path）。以後このゲートでは再実行しません。不要なら保存先を消してください"
+        else
+          repro_print_field "案内" "「直った」の印を書けませんでした（$d）。次のゲートでも再実行します。このテストをリポジトリのテストへ移し、保存先を消してください"
+        fi ;;
+      ran:*) rc_text="テストの終了コード $repro_rerun_rc" ;;
+      timeout:*) rc_text="時間切れ（${REPRO_TIMEOUT} 秒）" ;;
+      nostart:*) rc_text="テストが起動しませんでした（サンドボックスの終了コード $repro_rerun_rc）" ;;
+      badsaved:*) rc_text="保存したテストの形が崩れています（.second-opinion-repro/ の下の通常のファイルでない、またはリンクがある）" ;;
+      *) rc_text="再実行の作業ツリーを作れませんでした" ;;
+    esac
+    if [[ -n "$rc_text" ]]; then
+      n_unknown=$((n_unknown + 1))
+      echo "[second-opinion] rerun $i/${#dirs[@]}: 確かめられなかった（落としません） — $label"
+      repro_print_field "理由" "$rc_text"
+    fi
+    if [[ -f "$out" && "$repro_rerun_status" == "ran" ]]; then
+      repro_print_field "コマンド" "bash $test_path（終了コード $repro_rerun_rc）"
+      out_text="$(repro_clean < "$out")"
+      printf '    出力:\n'
+      printf '%s\n' "${out_text:0:2000}" | repro_indent
+    fi
+    repro_rm "$rerun_tree"
+  done
+  echo "[second-opinion] rerun: まだ再現する $n_still 件 / 直った $n_fixed 件 / 確かめられなかった $n_unknown 件（保存先 $REPRO_SAVED_ROOT）"
+  if [[ "$n_still" -gt 0 ]]; then
+    echo "[second-opinion] rerun: 前のゲートで再現した欠陥が、まだ直っていません。直してから回し直してください（扱いを変えるなら、保存先の該当のディレクトリを消します）"
+    return 3
+  fi
+  return 0
+}
+
+if [[ "$RERUN_SAVED" -eq 1 ]]; then
+  rerun_rc=0
+  run_rerun_saved || rerun_rc=$?
+  exit "$rerun_rc"
+fi
 
 # 過半数。N=1 なら 1、N=2 なら 2、N=3 なら 2、N=4 なら 3。
 threshold=$((RUNS / 2 + 1))

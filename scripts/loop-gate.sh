@@ -46,6 +46,16 @@
 #   ステージ済みが空のまま reviewer の既定へ流すと、空の差分を見て「対象なし」で
 #   通る偽の緑になるので、commit 済み範囲を必ず明示して渡す。
 #
+# 保存した再現テストの再実行:
+#   第二意見の再現の段階が「再現した」テストを保存していれば（second-opinion-review.sh が
+#   --rerun-saved を持つ版のときだけ）、第二意見より前に、同じ範囲の状態の上で再実行する。
+#   まだ再現すれば（終了コード 3）GATE_FAIL（前のゲートで実行して確かめた欠陥が、まだ直っていない）。
+#   ほかの失敗（再実行できなかった）は警告だけ出して進む（再実行を足す前の判定に戻る）。
+#   再現しなくなったテストには「直った」の印が付き、リポジトリのテストへ移す案内が出る。
+#   再実行の出力は、第二意見の記録の末尾にも残す（先頭に置くと、記録がエンジン名と回数を
+#   拾う最初の `(engine=` に、モデルが書いたテストの出力が先に来うるため）。
+#   既定の reviewer の経路だけで行う（LOOP_GATE_REVIEW_CMD で差し替え・無効化したときは行わない）。
+#
 # 第二意見の記録:
 #   第二意見は手元でしか走らず、受け入れ検証のように CI が再実行して確かめられない。
 #   回したことを記録に残し、確認側（second-opinion-gate.yml）が push 後の別の契機で
@@ -351,15 +361,37 @@ main() {
     if [[ -f "$HERE/second-opinion-review.sh" ]]; then
       resolve_review_range
       resolve_agent_config_paths
-      local review_ok=0
+      local review_ok=0 rerun_rc=0 so_capture so_scope="" rerun_capture
+      so_capture="$(mktemp "${TMPDIR:-/tmp}/loop-gate-second-opinion.XXXXXX")"
+      rerun_capture="$(mktemp "${TMPDIR:-/tmp}/loop-gate-rerun.XXXXXX")"
+      # 保存した再現テストを、第二意見より前に再実行する（冒頭「保存した再現テストの再実行」）。
+      # 古い版の reviewer は --rerun-saved を持たないので、持つときだけ呼ぶ（版のずれで止めない）。
+      # 落とすのは「まだ再現する」（終了コード 3）のときだけ。ほかの失敗は再実行できなかったと
+      # みなし、警告して進む（設定の誤りなどは、続く第二意見の実行でも同じく表に出る）。
+      if [[ "$REVIEW_NO_TARGET" -ne 1 ]] && grep -q -- '--rerun-saved' "$HERE/second-opinion-review.sh"; then
+        local -a rerun_args=()
+        if [[ -n "$REVIEW_BASE" ]]; then
+          rerun_args=(--base "$REVIEW_BASE")
+        elif [[ -n "$REVIEW_RANGE" ]]; then
+          rerun_args=(--range "$REVIEW_RANGE")
+        fi
+        bash "$HERE/second-opinion-review.sh" --rerun-saved ${rerun_args[@]+"${rerun_args[@]}"} 2>&1 \
+          | tee "$rerun_capture" || rerun_rc=$?
+        if [[ "$rerun_rc" -eq 3 ]]; then
+          rm -f "$so_capture" "$rerun_capture"
+          echo "[loop-gate] saved reproduction tests still reproduce" >&2
+          echo "GATE_FAIL"
+          exit 1
+        elif [[ "$rerun_rc" -ne 0 ]]; then
+          echo "[loop-gate] WARN: 保存した再現テストを再実行できませんでした（終了コード $rerun_rc。判定は変えずに進みます）" >&2
+        fi
+      fi
       # 出力を捕まえる。**回し直しでは代われない**——第二意見は非決定的で、同じ差分
       # でも実行のたびに結果が変わる（review-workflow.md「第二意見の非決定性」）。
       # 記録に残すべきは**push を通したその実行**なので、ここで捕まえるしかない。
       #
       # `tee` で通すので、利用者に見える出力は変わらない。`pipefail` が効いているため、
       # レビュー側の終了コードは `tee` に隠れない。
-      local so_capture so_scope=""
-      so_capture="$(mktemp "${TMPDIR:-/tmp}/loop-gate-second-opinion.XXXXXX")"
       if [[ -n "$REVIEW_BASE" ]]; then
         # ステージ済みがあるときは、起点から索引までを渡す（コミット済みとステージ済みの両方）。
         if [[ -n "$REVIEW_RANGE_REASON" ]]; then
@@ -395,8 +427,12 @@ main() {
 
       # 記録は**判定の前に**残す。指摘が出た実行も記録に値する（何が出たのかが
       # 残らないと、直したのか黙って落としたのかを後から確かめられない）。
+      # 再実行の出力は、第二意見の出力の後ろに足してから記録する（冒頭「保存した再現テストの再実行」）。
+      if [[ -s "$rerun_capture" && -s "$so_capture" ]]; then
+        cat "$rerun_capture" >> "$so_capture"
+      fi
       record_second_opinion "$so_capture" "$so_scope" "$review_ok"
-      rm -f "$so_capture"
+      rm -f "$so_capture" "$rerun_capture"
 
       if [[ "$review_ok" -ne 0 ]]; then
         echo "[loop-gate] second opinion reported findings" >&2
