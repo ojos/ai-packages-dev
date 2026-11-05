@@ -97,7 +97,12 @@
 #     agy は claude 系のモデルも選べ、CLI の既定は利用者の設定次第なので、モデルの指定が無ければ
 #     gemini のモデル（gemini-3.8-flash-high）を渡す。
 #   - agy は回答の形を --json-schema で強制する。gemini は強制できないので、最後の行の JSON を
-#     読み、形が合わなければ「確かめられなかった」（反証されたとは数えない）。
+#     読み、形が合わなければ「確かめられなかった」（反証されたとは数えない）。refuted が true でも
+#     reason が空なら「確かめられなかった」。
+#   - 反証のエンジンにはツールを使わせない。秘密の無い空の作業場所から、codex と同じ許可リストの
+#     環境変数だけ（gemini は GEMINI_API_KEY を足す）を `env -i` で渡して起こす。gemini は全ツールを
+#     拒否する方針ファイル（--admin-policy）を渡し、依頼文は標準入力で渡す。agy は許可を自動で
+#     与える旗を付けない（許可の要るツールは非対話の実行で拒否される）。
 #   - 時間の上限は SECOND_OPINION_REPRO_TIMEOUT。SECOND_OPINION_REFUTE=off で段階ごと止める
 #     （再現しなかった指摘は落とす判定のまま）。エンジンが見つからないときも同じで、設定を案内する。
 #
@@ -1815,12 +1820,13 @@ run_repro_stage() {
   # file・line・category が同じものを 1 件にまとめる（代表は最初に出たもの）。
   # まとめた側の指摘は丸ごと .merged に残し、出力に what を出す（別の欠陥を黙って消さない）。
   # 反証の段階には why と失敗の筋書きも渡す（what だけでは、別の欠陥を確かめずに通しうる）。
-  # 代表と同じ文面の重複は数えない。
+  # 代表かまとめた指摘と what・why・失敗の筋書きがすべて同じものだけを重複として数えない
+  # （what が同じでも筋書きが違えば別の指摘として残し、反証に渡す）。
   cands="$(jq -s -c '
     reduce .[] as $f ([];
       (map(.file == $f.file and .line == $f.line and .category == $f.category) | index(true)) as $k
       | if $k == null then . + [$f + {merged: []}]
-        elif $f.what == .[$k].what or any(.[$k].merged[]; .what == $f.what) then .
+        elif any(([.[$k]] + .[$k].merged)[]; .what == $f.what and .why == $f.why and .failure_scenario == $f.failure_scenario) then .
         else .[$k].merged += [$f] end)' "$repro_candidates_file" 2>/dev/null || true)"
   n="$(printf '%s' "$cands" | jq 'length' 2>/dev/null || echo 0)"
   [[ "$n" =~ ^[0-9]+$ ]] || n=0
@@ -2059,6 +2065,8 @@ refute_skip_msg=""
 refute_engine=""
 refute_calls=0
 refute_schema_file="$work_dir/refute-schema.json"
+refute_policy_file="$work_dir/refute-policy.toml"
+refute_cwd="$work_dir/refute-cwd"
 # refute_one の結果: refuted / notrefuted / unknown と、その理由。
 refute_kind=""
 refute_reason=""
@@ -2112,6 +2120,14 @@ refute_prepare_once() {
     refute_skip_msg="[second-opinion] refute: 回答の形を書き出せません。再現しなかった指摘は、反証されていないので落とします"
     return 0
   }
+  # 反証のエンジンにはツールを使わせない。gemini は全ツールを拒否する方針ファイル（管理者の
+  # 層。利用者の設定より優先される）を渡す。agy は許可を自動で与える旗を付けず、許可の要る
+  # ツールは非対話の実行で拒否される。どちらも秘密の無い空の作業場所から起こす。
+  if ! { printf '%s\n' '[[rule]]' 'toolName = "*"' 'decision = "deny"' 'priority = 999' > "$refute_policy_file" \
+          && mkdir -p "$refute_cwd"; }; then
+    refute_skip_msg="[second-opinion] refute: 反証のエンジンの作業場所を用意できません。再現しなかった指摘は、反証されていないので落とします"
+    return 0
+  fi
   refute_prepare="ok"
   return 0
 }
@@ -2151,21 +2167,25 @@ refute_one() {
 
   case "$refute_engine" in
     gemini)
-      args=(--skip-trust --include-directories "$work_dir" -p "@$input
-上記の依頼に従い、JSON を 1 行だけ返してください。")
+      # 依頼文は標準入力で渡す（ファイルの読み取りを許すディレクトリを渡さない）。環境は
+      # codex と同じ許可リストに GEMINI_API_KEY だけを足し、.env の他の値は渡さない。
+      args=(--skip-trust --admin-policy "$refute_policy_file" -p "上記の依頼に従い、JSON を 1 行だけ返してください。")
       [[ -n "$REFUTE_MODEL" ]] && args=(-m "$REFUTE_MODEL" "${args[@]}")
-      out="$(${repro_timeout_cmd[@]+"${repro_timeout_cmd[@]}"} gemini "${args[@]}" </dev/null 2>"$errf")" || rc=$?
+      out="$(cd "$refute_cwd" && ${repro_timeout_cmd[@]+"${repro_timeout_cmd[@]}"} env -i ${CODEX_ENV_PASS[@]+"${CODEX_ENV_PASS[@]}"} GEMINI_API_KEY="${GEMINI_API_KEY:-}" \
+        gemini "${args[@]}" <"$input" 2>"$errf")" || rc=$?
       ;;
     antigravity)
       # agy は依頼文を引数で受ける。1 つの引数の上限（Linux で 128 KiB）を超えると起動できない
       # ので、超えるときは起こさず「確かめられなかった」にする（反証されたとは数えない）。
       if [[ "$(wc -c < "$input")" -gt 120000 ]]; then
-        refute_reason="依頼文が大きすぎて agy に渡せません（差分が大きい。gemini ならファイルで渡せます）"
+        refute_reason="依頼文が大きすぎて agy に渡せません（差分が大きい。gemini なら標準入力で渡せます）"
         return 0
       fi
-      args=(-p "$(cat "$input")" --output-format json --json-schema "$refute_schema_file")
+      # 依頼文の中のスラッシュコマンドを展開させない。環境は codex と同じ許可リストだけを渡す。
+      args=(-p "$(cat "$input")" --disable-slash-commands --output-format json --json-schema "$refute_schema_file")
       [[ -n "$REFUTE_MODEL" ]] && args=(--model "$REFUTE_MODEL" "${args[@]}")
-      out="$(${repro_timeout_cmd[@]+"${repro_timeout_cmd[@]}"} agy "${args[@]}" </dev/null 2>"$errf")" || rc=$?
+      out="$(cd "$refute_cwd" && ${repro_timeout_cmd[@]+"${repro_timeout_cmd[@]}"} env -i ${CODEX_ENV_PASS[@]+"${CODEX_ENV_PASS[@]}"} \
+        agy "${args[@]}" </dev/null 2>"$errf")" || rc=$?
       ;;
   esac
   refute_calls=$((refute_calls + 1))
@@ -2190,6 +2210,11 @@ refute_one() {
   fi
   refute_reason="$(printf '%s' "$ans" | jq -r '.reason')"
   if [[ "$(printf '%s' "$ans" | jq -r '.refuted')" == "true" ]]; then
+    # 根拠の無い反証は数えない（空白だけの reason は「確かめられなかった」）。
+    if ! printf '%s' "$ans" | jq -e '.reason | test("\\S")' >/dev/null 2>&1; then
+      refute_reason="反証された回答に根拠（reason）がありません"
+      return 0
+    fi
     refute_kind="refuted"
   else
     refute_kind="notrefuted"

@@ -270,15 +270,21 @@ R="$(cd "$(dirname "$0")/.." && pwd)/record"
 [[ -f "$R/fake.env" ]] && . "$R/fake.env"
 for a in "$@"; do
   if [[ "$a" == *"上記の依頼に従い"* ]]; then
-    # 反証の起動。依頼文はファイル（@パス）で受け取る。
+    # 反証の起動。依頼文は標準入力で受け取る。作業場所・漏れた環境変数・方針ファイルも記録する。
     n=$(( $(cat "$R/refute-gemini-calls" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$R/refute-gemini-calls"
     printf '%s\n' "$*" | cut -c1-200 > "$R/refute-gemini-args-$n"
+    cat > "$R/refute-gemini-stdin-$n"
+    pol=""; prev=""
+    for b in "$@"; do [[ "$prev" == --admin-policy ]] && pol="$b"; prev="$b"; done
+    printf 'cwd=%s leak=%s key=%s policy=%s\n' "$PWD" "${LEAK_SENTINEL:-none}" "${GEMINI_API_KEY:-none}" \
+      "$(tr '\n' ' ' < "$pol" 2>/dev/null)" > "$R/refute-gemini-env-$n"
     echo "考えています……"
     case "${FAKE_REFUTE_MODE:-}" in
       refuted) echo '{"refuted": true, "reason": "gemini: 起きない"}' ;;
       notrefuted) echo '{"refuted": false, "reason": "gemini: 起きうる"}' ;;
       badshape) echo 'たぶん起きません' ;;
       pretty) printf '%s\n' '```json' '{' '  "refuted": true,' '  "reason": "gemini: 整形しても起きない"' '}' '```' ;;
+      emptyreason) echo '{"refuted": true, "reason": "  "}' ;;
       *) echo "fake gemini: FAKE_REFUTE_MODE がありません" >&2; exit 99 ;;
     esac
     exit 0
@@ -303,6 +309,9 @@ for a in "$@"; do
 done
 printf '%s' "$prompt" > "$R/refute-prompt-$n"
 printf 'model=%s schema=%s\n' "$model" "$([[ -f "$schema" ]] && echo yes || echo no)" > "$R/refute-args-$n"
+printf 'cwd=%s leak=%s slash=%s skip=%s\n' "$PWD" "${LEAK_SENTINEL:-none}" \
+  "$([[ " $* " == *" --disable-slash-commands "* ]] && echo off || echo on)" \
+  "$([[ " $* " == *" --dangerously-skip-permissions "* ]] && echo yes || echo no)" > "$R/refute-env-$n"
 case "${FAKE_REFUTE_MODE:-}" in
   refuted) ans='{"refuted":true,"reason":"起きない"}' ;;
   notrefuted) ans='{"refuted":false,"reason":"起きうる"}' ;;
@@ -310,6 +319,7 @@ case "${FAKE_REFUTE_MODE:-}" in
     if [[ "$prompt" == *'"file":"sample.txt"'* ]]; then ans='{"refuted":true,"reason":"起きない"}'
     else ans='{"refuted":false,"reason":"起きうる"}'; fi ;;
   badshape) ans='{"refuted":"yes"}' ;;
+  emptyreason) ans='{"refuted":true,"reason":""}' ;;
   fail) echo "fake agy failure" >&2; exit 3 ;;
   *) echo "fake agy: FAKE_REFUTE_MODE がありません" >&2; exit 99 ;;
 esac
@@ -1112,6 +1122,59 @@ it "反証: gemini の回答が整形した複数行の JSON でも読む"
 rc=0
 GEMINI_API_KEY=dummy FAKE_REVIEW_ANSWER="$ONE_BUG" FAKE_REPRO_MODE=notreproduced FAKE_REFUTE_MODE=pretty run_review --engine codex || rc=$?
 if [[ "$rc" -eq 0 ]] && both_has '反証された（gemini。記録だけにして通す）: gemini: 整形しても起きない'; then pass; else fail "rc=$rc: $(cat "$WORK/both")"; fi
+
+it "反証: refuted が true でも根拠（reason）が空なら「確かめられなかった」で非 0（agy・gemini）"
+rc=0
+FAKE_REVIEW_ANSWER="$ONE_BUG" FAKE_REPRO_MODE=notreproduced FAKE_REFUTE_MODE=emptyreason run_review --engine codex || rc=$?
+rc2=0
+cp "$WORK/both" "$WORK/both-agy"
+GEMINI_API_KEY=dummy FAKE_REVIEW_ANSWER="$ONE_BUG" FAKE_REPRO_MODE=notreproduced FAKE_REFUTE_MODE=emptyreason run_review --engine codex || rc2=$?
+if [[ "$rc" -eq 1 && "$rc2" -eq 1 ]] && command grep -qF '反証を確かめられなかった（antigravity。落とす）: 反証された回答に根拠（reason）がありません' "$WORK/both-agy" \
+   && both_has '反証を確かめられなかった（gemini。落とす）: 反証された回答に根拠（reason）がありません' && ! both_has 'all findings refuted'; then
+  pass
+else
+  fail "rc=$rc rc2=$rc2: $(cat "$WORK/both-agy" "$WORK/both")"
+fi
+
+it "反証: what が同じでも失敗の筋書きが違う指摘は捨てず、まとめた指摘として依頼文に入れる"
+rc=0
+FAKE_REVIEW_ANSWER="$(answer_of "$(finding_json bug sample.txt 2 '同じ要約')" \
+  "$(jq -n -c '{category:"bug",file:"sample.txt",line:2,what:"同じ要約",why:"y",failure_scenario:"別の筋書き"}')")" \
+  FAKE_REPRO_MODE=notreproduced FAKE_REFUTE_MODE=refuted run_review --engine codex || rc=$?
+if [[ "$rc" -eq 0 ]] && command grep -qF '"failure_scenario":"別の筋書き"' "$RECORD/refute-prompt-1" \
+   && both_has '同じ場所・分類でまとめた 1 件'; then
+  pass
+else
+  fail "rc=$rc: $(cat "$WORK/both")"
+fi
+
+it "反証: what・why・失敗の筋書きがすべて同じ指摘だけは重複として数えない"
+rc=0
+FAKE_REVIEW_ANSWER="$(answer_of "$(finding_json bug sample.txt 2 '同じ要約')" "$(finding_json bug sample.txt 2 '同じ要約')")" \
+  FAKE_REPRO_MODE=notreproduced FAKE_REFUTE_MODE=refuted run_review --engine codex || rc=$?
+if [[ "$rc" -eq 0 ]] && both_has '同じ場所・分類でまとめた 0 件'; then pass; else fail "rc=$rc: $(cat "$WORK/both")"; fi
+
+it "反証: agy は空の作業場所から、呼び出し元の環境変数を渡さず、スラッシュコマンドと許可の自動付与なしで起こす"
+rc=0
+LEAK_SENTINEL=leaked FAKE_REVIEW_ANSWER="$ONE_BUG" FAKE_REPRO_MODE=notreproduced FAKE_REFUTE_MODE=refuted run_review --engine codex || rc=$?
+env_line="$(cat "$RECORD/refute-env-1" 2>/dev/null)"
+if [[ "$rc" -eq 0 && "$env_line" == *"/refute-cwd leak=none slash=off skip=no" ]] && [[ "$env_line" != *"cwd=$REPO"* ]]; then
+  pass
+else
+  fail "rc=$rc env=$env_line"
+fi
+
+it "反証: gemini は空の作業場所から、全ツールを拒否する方針と標準入力の依頼文で、GEMINI_API_KEY 以外の環境変数を渡さず起こす"
+rc=0
+LEAK_SENTINEL=leaked GEMINI_API_KEY=dummy FAKE_REVIEW_ANSWER="$ONE_BUG" FAKE_REPRO_MODE=notreproduced FAKE_REFUTE_MODE=refuted run_review --engine codex || rc=$?
+env_line="$(cat "$RECORD/refute-gemini-env-1" 2>/dev/null)"
+if [[ "$rc" -eq 0 && "$env_line" == *"/refute-cwd leak=none key=dummy policy=[[rule]] toolName = \"*\" decision = \"deny\" priority = 999 " ]] \
+   && command grep -qF '# 反証の依頼' "$RECORD/refute-gemini-stdin-1" \
+   && ! command grep -qF -- '--include-directories' "$RECORD/refute-gemini-args-1" && ! command grep -qF '@' "$RECORD/refute-gemini-args-1"; then
+  pass
+else
+  fail "rc=$rc env=$env_line args=$(cat "$RECORD/refute-gemini-args-1" 2>/dev/null)"
+fi
 
 it "反証: 依頼文が agy の引数の上限を超えるなら、起こさず「確かめられなかった」で非 0"
 REPO_SAVED="$REPO"
