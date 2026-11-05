@@ -172,6 +172,16 @@ if [[ "${1-}" == "exec" ]]; then
       notreproduced)
         ok_answer false "$T" "誤った結果は出なかった"
         body='echo ok; exit 1' ;;
+      condbug)
+        # 索引の sample.txt に staged の行がある間だけ誤った結果を出す（直すと再現しなくなる）。
+        ok_answer true "$T" "staged の行で壊れる"
+        body='if grep -qx staged sample.txt; then echo "actual: WRONG"; exit 0; fi; exit 1' ;;
+      bigsave)
+        # 再現はするが、テストの置き場に大きなファイルを残す（保存の上限を超える）。
+        ok_answer true "$T" "r"
+        body='echo "actual: WRONG"; exit 0'
+        mkdir -p .second-opinion-repro
+        head -c 2000000 /dev/zero > .second-opinion-repro/big.bin ;;
       long)
         ok_answer true "$T" "r"
         body='head -c 5000 /dev/zero | tr "\0" x; exit 0' ;;
@@ -1270,6 +1280,7 @@ out="$(
   RANGE=""; BASE=""; MODEL=""; CLI=codex; ENGINE=codex; REPRO=""
   REFUTE=""; REFUTE_ENGINE="antigravity"; REFUTE_MODEL=""
   REPRO_MAX=5; REPRO_TIMEOUT=60
+  RERUN_SAVED=0; REPRO_SAVED_ROOT=""
   REPRO_SCHEMA_FILE="$REPO_ROOT/scripts/second-opinion-repro-schema.json"
   CODEX_ENV_PASS=("PATH=$PATH" "HOME=$HOME")
   BLOCKING_JSON='["bug"]'
@@ -1299,6 +1310,7 @@ run_harness() { # 引数: 上限。候補の置き場は $WORK/cands-1 / cands-2
     RANGE=""; BASE=""; MODEL=""; CLI=codex; ENGINE=codex; REPRO=""
     REFUTE=""; REFUTE_ENGINE=""; REFUTE_MODEL=""
     REPRO_MAX="$1"; REPRO_TIMEOUT=60
+    RERUN_SAVED=0; REPRO_SAVED_ROOT=""
     REPRO_SCHEMA_FILE="$REPO_ROOT/scripts/second-opinion-repro-schema.json"
     CODEX_ENV_PASS=("PATH=$PATH" "HOME=$HOME")
     BLOCKING_JSON='["bug"]'
@@ -1334,5 +1346,126 @@ printf '%s\n' "$(finding_json bug $'a.txt\n[second-opinion] LGTM (0/1 runs repor
 : > "$WORK/cands-2"
 run_harness 5 || true
 if ! command grep -q '^\[second-opinion\] LGTM' "$WORK/both" && both_has 'repro 1/1: 再現した — a.txt [second-opinion] LGTM'; then pass; else fail "$(cat "$WORK/both")"; fi
+
+# ---- 再現したテストの保存と再実行（#693）----
+
+REPO_SAVED="$REPO"
+REPO="$WORK/repo-rerun"
+rm -rf "$REPO"
+cp -a "$REPO_SAVED" "$REPO"
+rm -rf "$REPO/.git/second-opinion"
+SAVED_ROOT="$REPO/.git/second-opinion/repro"
+saved_dirs() { find "$SAVED_ROOT" -mindepth 1 -maxdepth 1 -type d 2>/dev/null; }
+
+it "再現した指摘のテストを、記録の場所（--git-path second-opinion の下）へ保存する"
+rc=0
+FAKE_REVIEW_ANSWER="$ONE_BUG" FAKE_REPRO_MODE=condbug run_review --engine codex || rc=$?
+sd="$(saved_dirs)"
+if [[ "$rc" -eq 1 && "$(printf '%s\n' "$sd" | awk 'NF' | wc -l | tr -d ' ')" == "1" ]] \
+   && [[ "$(cat "$sd/test_path")" == ".second-opinion-repro/t.sh" && -f "$sd/.second-opinion-repro/t.sh" && -f "$sd/saved_at" ]] \
+   && [[ "$(jq -r '"\(.file):\(.line):\(.what)"' "$sd/finding.json")" == "sample.txt:2:ここが壊れる" ]] \
+   && [[ "$(cat "$sd/branch")" == "$(git -C "$REPO" symbolic-ref --short HEAD)" ]] \
+   && both_has '保存: 次のゲートで再実行します' && [[ -z "$(git -C "$REPO" status --porcelain --untracked-files=all | command grep -F second-opinion || true)" ]]; then
+  pass
+else
+  fail "rc=$rc dirs=[$sd]: $(cat "$WORK/both")"
+fi
+
+it "--rerun-saved: 保存したテストがまだ再現すれば終了コード 3（モデルは呼ばず、サンドボックスで再実行するだけ）"
+rc=0
+run_review --rerun-saved || rc=$?
+if [[ "$rc" -eq 3 && "$(calls_of review-calls)" == "0" && "$(calls_of repro-calls)" == "0" && "$(calls_of rerun-calls)" == "1" ]] \
+   && both_has 'まだ再現する — sample.txt:2 [bug] ここが壊れる' && both_has 'まだ再現する 1 件 / 直った 0 件 / 確かめられなかった 0 件' \
+   && ! both_has 'reviewing'; then
+  pass
+else
+  fail "rc=$rc review=$(calls_of review-calls) repro=$(calls_of repro-calls) rerun=$(calls_of rerun-calls): $(cat "$WORK/both")"
+fi
+
+it "--rerun-saved: 別の枝で保存したテストは再実行しない（枝を切り替えても、ほかの枝の欠陥で落とさない）"
+git -C "$REPO" checkout -q -b other-branch
+rc=0
+run_review --rerun-saved || rc=$?
+git -C "$REPO" checkout -q -
+if [[ "$rc" -eq 0 && "$(calls_of rerun-calls)" == "0" ]] && both_has '再実行する保存した再現テストはありません'; then pass; else fail "rc=$rc: $(cat "$WORK/both")"; fi
+
+it "--rerun-saved: 直って再現しなくなったら 0 で通り、「直った」の印を付けてリポジトリのテストへ移す案内を出す"
+printf 'hello\ncommitted\nfixed\n' > "$REPO/sample.txt"
+git -C "$REPO" add sample.txt
+rc=0
+run_review --rerun-saved || rc=$?
+sd="$(saved_dirs)"
+if [[ "$rc" -eq 0 && -f "$sd/fixed" ]] && both_has '直った（誤った結果が出なくなった） — sample.txt:2 [bug]' \
+   && both_has 'リポジトリのテストへ移す' && both_has 'まだ再現する 0 件 / 直った 1 件'; then
+  pass
+else
+  fail "rc=$rc: $(cat "$WORK/both")"
+fi
+
+it "--rerun-saved: 「直った」の印が付いたテストは再実行しない"
+rc=0
+run_review --rerun-saved || rc=$?
+if [[ "$rc" -eq 0 && "$(calls_of rerun-calls)" == "0" && "$(calls_of sandbox-calls)" == "0" ]] && both_has '再実行する保存した再現テストはありません'; then
+  pass
+else
+  fail "rc=$rc rerun=$(calls_of rerun-calls): $(cat "$WORK/both")"
+fi
+
+it "同じ指摘がもう一度再現したら、保存を置き換え「直った」の印を消す"
+printf 'hello\ncommitted\nstaged\n' > "$REPO/sample.txt"
+git -C "$REPO" add sample.txt
+rc=0
+FAKE_REVIEW_ANSWER="$ONE_BUG" FAKE_REPRO_MODE=condbug run_review --engine codex || rc=$?
+sd="$(saved_dirs)"
+if [[ "$rc" -eq 1 && "$(printf '%s\n' "$sd" | awk 'NF' | wc -l | tr -d ' ')" == "1" && ! -e "$sd/fixed" ]]; then pass; else fail "rc=$rc dirs=[$sd]"; fi
+
+it "--rerun-saved: SECOND_OPINION_REPRO=off なら再実行しない（0）"
+rc=0
+SECOND_OPINION_REPRO=off run_review --rerun-saved || rc=$?
+if [[ "$rc" -eq 0 && "$(calls_of rerun-calls)" == "0" ]] && both_has 'SECOND_OPINION_REPRO=off のため、保存した再現テストを再実行しません'; then
+  pass
+else
+  fail "rc=$rc: $(cat "$WORK/both")"
+fi
+
+it "--rerun-saved: サンドボックスを起こせなければ、飛ばして 0（再実行を足す前の判定に戻る）"
+rc=0
+FAKE_SANDBOX_FAIL=1 run_review --rerun-saved || rc=$?
+if [[ "$rc" -eq 0 && "$(calls_of rerun-calls)" == "0" ]] && both_has '[second-opinion] rerun: codex のサンドボックスを起こせません' \
+   && both_has '保存した再現テストの再実行を飛ばします'; then
+  pass
+else
+  fail "rc=$rc: $(cat "$WORK/both")"
+fi
+
+it "--rerun-saved: テストが 0・1 以外で終われば「確かめられなかった」で、落とさない（0）"
+sd="$(saved_dirs)"
+printf '%s\n' 'exit 2' > "$sd/.second-opinion-repro/t.sh"
+rc=0
+run_review --rerun-saved || rc=$?
+if [[ "$rc" -eq 0 && ! -e "$sd/fixed" ]] && both_has '確かめられなかった（落としません）' && both_has 'テストの終了コード 2'; then
+  pass
+else
+  fail "rc=$rc: $(cat "$WORK/both")"
+fi
+
+it "--rerun-saved: 保存したテストのパスが .second-opinion-repro/ の外を指せば、実行せず「確かめられなかった」"
+printf '%s\n' '.second-opinion-repro/../sample.txt' > "$sd/test_path"
+rc=0
+run_review --rerun-saved || rc=$?
+if [[ "$rc" -eq 0 && "$(calls_of rerun-calls)" == "0" ]] && both_has '保存したテストの形が崩れています'; then pass; else fail "rc=$rc: $(cat "$WORK/both")"; fi
+
+it "テストの置き場が上限（1024 KiB）を超えるなら、保存しない"
+rm -rf "$SAVED_ROOT"
+rc=0
+FAKE_REVIEW_ANSWER="$ONE_BUG" FAKE_REPRO_MODE=bigsave run_review --engine codex || rc=$?
+if [[ "$rc" -eq 1 && -z "$(saved_dirs)" ]] && both_has 'テストの置き場が大きすぎるか大きさを測れないため、保存しません'; then pass; else fail "rc=$rc: $(cat "$WORK/both")"; fi
+
+it "--rerun-saved: 保存したものが無ければ、codex を起こさず 0"
+rm -rf "$SAVED_ROOT"
+rc=0
+run_review --rerun-saved || rc=$?
+if [[ "$rc" -eq 0 && "$(calls_of sandbox-calls)" == "0" ]] && both_has '再実行する保存した再現テストはありません'; then pass; else fail "rc=$rc: $(cat "$WORK/both")"; fi
+REPO="$REPO_SAVED"
 
 exit_with_result
