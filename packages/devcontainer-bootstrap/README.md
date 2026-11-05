@@ -590,6 +590,7 @@ bash scripts/loop-gate.sh
 - codex 以外のエンジンでは段階を行わず、その旨を 1 行出して従来どおりに判定します。
 - 環境変数（`.env` でも指定できます）: `SECOND_OPINION_REPRO=off` で段階ごと止めます（出力は従来と同じ。値は空・`on`・`off` だけを受け、`0` や `false` などは実行前に止めます）。`SECOND_OPINION_REPRO_MAX`（既定 5。1 以上の整数で 6 桁まで）は 1 回の実行全体（チャンクをまたいで共有）で再現する指摘の上限で、超えた分は「上限で見送った（反証されていない）」と数えます。`SECOND_OPINION_REPRO_TIMEOUT`（既定 300。1 以上の整数・秒で 6 桁まで）は 1 件あたりの時間の上限です（codex の回とスクリプトの再実行のそれぞれに掛けます）。不正な値は実行前に止めます。
 - 費用: 指摘 1 件につき codex を 1 回起こします。起こした回数は、段階の最後の要約の行に出ます。
+- 反証の段階: 再現しなかった指摘を、別ベンダーのモデル（`gemini` / `antigravity`）に反証させます。そのチャンクの指摘が**すべて**、再現せず反証されたときだけ通し（完了の行は `LGTM (… all findings refuted by <エンジン>)`）、1 件でも反証されなければ従来どおり落とします。エンジンは `.env` の `SECOND_OPINION_REFUTE_ENGINE`（codex を含む構成の `.env.example` に空の欄があります。空なら gemini → antigravity の順に探します）で選び、`SECOND_OPINION_REFUTE_MODEL` でモデルを選べます（空なら、antigravity では `gemini-3.8-flash-high`、gemini では CLI の既定）。`claude` で始まるエンジンと、`claude` を含むモデル（実装と同じベンダー）、`gpt`・`openai`・`codex` を含むモデル（レビューする codex と同じベンダー）は実行前に止めます。`SECOND_OPINION_REFUTE=off` か、エンジンが見つからないときは、反証せずに落とします。
 
 ### 受け入れ条件の二層（ローカル層 / 外部層）
 

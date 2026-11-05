@@ -26,7 +26,8 @@ set -uo pipefail
 echo "test-second-opinion-repro"
 
 unset SECOND_OPINION_ENGINE SECOND_OPINION_RUNS SECOND_OPINION_MODEL \
-      SECOND_OPINION_REPRO SECOND_OPINION_REPRO_MAX SECOND_OPINION_REPRO_TIMEOUT CODEX_HOME
+      SECOND_OPINION_REPRO SECOND_OPINION_REPRO_MAX SECOND_OPINION_REPRO_TIMEOUT CODEX_HOME \
+      SECOND_OPINION_REFUTE SECOND_OPINION_REFUTE_ENGINE SECOND_OPINION_REFUTE_MODEL GEMINI_API_KEY
 
 REVIEW="$REPO_ROOT/scripts/second-opinion-review.sh"
 
@@ -38,9 +39,20 @@ export PROJECT_ENV_FILE="$WORK/empty.env"
 : > "$PROJECT_ENV_FILE"
 
 FAKE_BIN="$WORK/bin"
+AGY_BIN="$WORK/bin-agy"
 RECORD="$WORK/record"
 REPO="$WORK/repo"
-mkdir -p "$FAKE_BIN" "$RECORD" "$REPO"
+mkdir -p "$FAKE_BIN" "$AGY_BIN" "$RECORD" "$REPO"
+
+# 本物の agy / gemini を呼ばない。反証の段階は、見つかった CLI を自分で探して起こすため、
+# それらを置いた場所を PATH から外す（仕込みは FAKE_BIN / AGY_BIN に置く）。
+SAFE_PATH=""
+IFS=: read -r -a __path_dirs <<< "$PATH"
+for __d in "${__path_dirs[@]}"; do
+  [[ -n "$__d" ]] || continue
+  if [[ -x "$__d/agy" || -x "$__d/gemini" ]]; then continue; fi
+  SAFE_PATH="${SAFE_PATH:+$SAFE_PATH:}$__d"
+done
 
 # 検査用のリポジトリ。HEAD~1 = base、HEAD = 差分を当てた状態、索引 = さらに 1 行足した状態、
 # 作業ツリー = 索引にさらに 1 行足した状態。4 つの状態を内容で見分ける。
@@ -254,10 +266,56 @@ chmod +x "$FAKE_BIN/timeout"
 # gemini の仕込み（codex 以外のエンジンの検査用）。指摘ありを返す。
 cat > "$FAKE_BIN/gemini" <<'FAKE'
 #!/usr/bin/env bash
+R="$(cd "$(dirname "$0")/.." && pwd)/record"
+[[ -f "$R/fake.env" ]] && . "$R/fake.env"
+for a in "$@"; do
+  if [[ "$a" == *"上記の依頼に従い"* ]]; then
+    # 反証の起動。依頼文はファイル（@パス）で受け取る。
+    n=$(( $(cat "$R/refute-gemini-calls" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$R/refute-gemini-calls"
+    printf '%s\n' "$*" | cut -c1-200 > "$R/refute-gemini-args-$n"
+    echo "考えています……"
+    case "${FAKE_REFUTE_MODE:-}" in
+      refuted) echo '{"refuted": true, "reason": "gemini: 起きない"}' ;;
+      notrefuted) echo '{"refuted": false, "reason": "gemini: 起きうる"}' ;;
+      badshape) echo 'たぶん起きません' ;;
+      pretty) printf '%s\n' '```json' '{' '  "refuted": true,' '  "reason": "gemini: 整形しても起きない"' '}' '```' ;;
+      *) echo "fake gemini: FAKE_REFUTE_MODE がありません" >&2; exit 99 ;;
+    esac
+    exit 0
+  fi
+done
 echo "問題があります: a.ts:1"
 echo "VERDICT: FINDINGS"
 FAKE
 chmod +x "$FAKE_BIN/gemini"
+
+# 反証用の agy の仕込み。依頼文（-p）とモデル・スキーマの指定を記録し、FAKE_REFUTE_MODE で答える。
+# 指定が無ければ失敗する（反証は「確かめられなかった」になり、従来どおり落とす）。
+cat > "$AGY_BIN/agy" <<'FAKE'
+#!/usr/bin/env bash
+R="$(cd "$(dirname "$0")/.." && pwd)/record"
+[[ -f "$R/fake.env" ]] && . "$R/fake.env"
+n=$(( $(cat "$R/refute-calls" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$R/refute-calls"
+prompt=""; model=""; schema=""; prev=""
+for a in "$@"; do
+  case "$prev" in -p) prompt="$a" ;; --model) model="$a" ;; --json-schema) schema="$a" ;; esac
+  prev="$a"
+done
+printf '%s' "$prompt" > "$R/refute-prompt-$n"
+printf 'model=%s schema=%s\n' "$model" "$([[ -f "$schema" ]] && echo yes || echo no)" > "$R/refute-args-$n"
+case "${FAKE_REFUTE_MODE:-}" in
+  refuted) ans='{"refuted":true,"reason":"起きない"}' ;;
+  notrefuted) ans='{"refuted":false,"reason":"起きうる"}' ;;
+  mixed)
+    if [[ "$prompt" == *'"file":"sample.txt"'* ]]; then ans='{"refuted":true,"reason":"起きない"}'
+    else ans='{"refuted":false,"reason":"起きうる"}'; fi ;;
+  badshape) ans='{"refuted":"yes"}' ;;
+  fail) echo "fake agy failure" >&2; exit 3 ;;
+  *) echo "fake agy: FAKE_REFUTE_MODE がありません" >&2; exit 99 ;;
+esac
+printf '{"conversation_id":"x","status":"SUCCESS","response":"...","structured_output":%s}\n' "$ans"
+FAKE
+chmod +x "$AGY_BIN/agy"
 
 # ゲート対象の指摘 1 件の回答。引数: category file line what
 finding_json() {
@@ -275,14 +333,16 @@ NO_FINDING='{"reviewed":true,"findings":[]}'
 run_review() {
   # 結合した出力を $WORK/both に取る（行の順序を見るため）。戻り値は被検査側の終了コード。
   local rc v
-  rm -f "$RECORD"/*-calls "$RECORD"/repro-* "$RECORD"/rerun-* "$RECORD"/sandbox-* "$RECORD"/timeout-args
+  rm -f "$RECORD"/*-calls "$RECORD"/repro-* "$RECORD"/rerun-* "$RECORD"/sandbox-* "$RECORD"/timeout-args "$RECORD"/refute-*
   : > "$RECORD/fake.env"
   for v in $(compgen -e | command grep '^FAKE_' || true); do
     printf '%s=%q\n' "$v" "${!v}" >> "$RECORD/fake.env"
   done
   (
     cd "$REPO/${RUN_SUBDIR:-}" || exit 1
-    PATH="$FAKE_BIN:$PATH" bash "$REVIEW" "$@" > "$WORK/both" 2>&1
+    p="$FAKE_BIN:$SAFE_PATH"
+    [[ "${FAKE_NO_AGY:-0}" == 1 ]] || p="$AGY_BIN:$p"
+    PATH="$p" bash "$REVIEW" "$@" > "$WORK/both" 2>&1
   )
   rc=$?
   return "$rc"
@@ -860,17 +920,241 @@ if [[ "$(cat "$RECORD/repro-home-1" 2>/dev/null)" == "$WORK/realhome" ]]; then p
 it "timeout に -k 10 を付けている（サンドボックスの確かめと再現の両方）"
 if [[ "$(command grep -c '^-k 10 300 ' "$RECORD/timeout-args" 2>/dev/null)" -ge 2 ]]; then pass; else fail "$(cat "$RECORD/timeout-args" 2>/dev/null)"; fi
 
+# ---- 反証の段階（#692）----
+
+TWO_BUG="$(answer_of "$(finding_json bug sample.txt 2 'ここが壊れる')" "$(finding_json bug sub/inner.txt 1 'こちらも壊れる')")"
+
+it "反証: 再現しなかった指摘がすべて反証されたら、LGTM の完了の行で exit 0（agy。回答の形を強制する）"
+rc=0
+FAKE_REVIEW_ANSWER="$ONE_BUG" FAKE_REPRO_MODE=notreproduced FAKE_REFUTE_MODE=refuted run_review --engine codex || rc=$?
+if [[ "$rc" -eq 0 && "$(calls_of refute-calls)" == "1" ]] \
+   && both_has '[second-opinion] LGTM (1/1 runs reported findings; threshold 1; all findings refuted by antigravity)' \
+   && both_has '反証: 反証された（antigravity。記録だけにして通す）: 起きない' \
+   && both_has '[second-opinion] refute: 反証された 1 件 / 反証されなかった 0 件 / 確かめられなかった 0 件 / 見送った 0 件（エンジン antigravity、起動 1 回）' \
+   && ! both_has 'findings reported by' \
+   && [[ "$(cat "$RECORD/refute-args-1")" == "model=gemini-3.8-flash-high schema=yes" ]] \
+   && command grep -qF '# 反証の依頼' "$RECORD/refute-prompt-1" && command grep -qF 'ここが壊れる' "$RECORD/refute-prompt-1" \
+   && command grep -qF 'echo ok; exit 1' "$RECORD/refute-prompt-1"; then
+  pass
+else
+  fail "rc=$rc calls=$(calls_of refute-calls) args=$(cat "$RECORD/refute-args-1" 2>/dev/null): $(cat "$WORK/both")"
+fi
+
+it "反証: 1 件でも反証されなければ、従来の完了の行で非 0"
+rc=0
+FAKE_REVIEW_ANSWER="$TWO_BUG" FAKE_REPRO_MODE=notreproduced FAKE_REFUTE_MODE=mixed run_review --engine codex || rc=$?
+if [[ "$rc" -eq 1 && "$(calls_of refute-calls)" == "2" ]] \
+   && both_has '反証された 1 件 / 反証されなかった 1 件 / 確かめられなかった 0 件' \
+   && both_has '反証: 反証されなかった（antigravity。落とす）: 起きうる' \
+   && both_has '[second-opinion] findings reported by 1/1 runs (threshold 1).' && ! both_has 'all findings refuted'; then
+  pass
+else
+  fail "rc=$rc calls=$(calls_of refute-calls): $(cat "$WORK/both")"
+fi
+
+it "反証: 再現した指摘は反証に回さず、非 0"
+rc=0
+FAKE_REVIEW_ANSWER="$ONE_BUG" FAKE_REPRO_MODE=reproduced FAKE_REFUTE_MODE=refuted run_review --engine codex || rc=$?
+if [[ "$rc" -eq 1 && "$(calls_of refute-calls)" == "0" ]] && ! both_has '[second-opinion] refute:'; then
+  pass
+else
+  fail "rc=$rc calls=$(calls_of refute-calls): $(cat "$WORK/both")"
+fi
+
+it "反証: 上限で見送った指摘があれば、通らないと決まっているので反証を起こさず、非 0"
+rc=0
+SECOND_OPINION_REPRO_MAX=1 FAKE_REVIEW_ANSWER="$TWO_BUG" FAKE_REPRO_MODE=notreproduced FAKE_REFUTE_MODE=refuted run_review --engine codex || rc=$?
+if [[ "$rc" -eq 1 && "$(calls_of refute-calls)" == "0" ]] && both_has '上限で見送った 1 件' \
+   && both_has '反証: 見送った（ほかの指摘で落とすことが決まっているため。反証されていない）' && ! both_has 'all findings refuted'; then
+  pass
+else
+  fail "rc=$rc calls=$(calls_of refute-calls): $(cat "$WORK/both")"
+fi
+
+it "反証: 反証のエンジンが無ければ、「反証されていない」で非 0 と設定の案内"
+rc=0
+FAKE_NO_AGY=1 FAKE_REVIEW_ANSWER="$ONE_BUG" FAKE_REPRO_MODE=notreproduced FAKE_REFUTE_MODE=refuted run_review --engine codex || rc=$?
+if [[ "$rc" -eq 1 && "$(calls_of refute-calls)" == "0" && "$(calls_of refute-gemini-calls)" == "0" ]] \
+   && both_has '反証のエンジンが見つかりません。再現しなかった指摘は、反証されていないので落とします' \
+   && both_has 'SECOND_OPINION_REFUTE_ENGINE'; then
+  pass
+else
+  fail "rc=$rc: $(cat "$WORK/both")"
+fi
+
+it "反証: gemini で反証するときは、agy の既定のモデル（gemini-3.8-flash-high）を gemini に渡さない"
+rc=0
+GEMINI_API_KEY=dummy FAKE_REVIEW_ANSWER="$ONE_BUG" FAKE_REPRO_MODE=notreproduced FAKE_REFUTE_MODE=refuted run_review --engine codex || rc=$?
+if [[ "$rc" -eq 0 ]] && ! command grep -qF 'gemini-3.8-flash-high' "$RECORD/refute-gemini-args-1"; then pass; else fail "rc=$rc args=$(cat "$RECORD/refute-gemini-args-1" 2>/dev/null)"; fi
+
+it "反証: 指定が無ければ gemini（CLI と GEMINI_API_KEY）を先に使う。gemini は最後の行の JSON を読む"
+rc=0
+GEMINI_API_KEY=dummy FAKE_REVIEW_ANSWER="$ONE_BUG" FAKE_REPRO_MODE=notreproduced FAKE_REFUTE_MODE=refuted run_review --engine codex || rc=$?
+if [[ "$rc" -eq 0 && "$(calls_of refute-gemini-calls)" == "1" && "$(calls_of refute-calls)" == "0" ]] \
+   && both_has 'all findings refuted by gemini' && both_has '反証された（gemini。記録だけにして通す）: gemini: 起きない'; then
+  pass
+else
+  fail "rc=$rc gemini=$(calls_of refute-gemini-calls) agy=$(calls_of refute-calls): $(cat "$WORK/both")"
+fi
+
+it "反証: 設定したエンジン（SECOND_OPINION_REFUTE_ENGINE）が優先される（gemini が使えても antigravity）"
+rc=0
+GEMINI_API_KEY=dummy SECOND_OPINION_REFUTE_ENGINE=antigravity FAKE_REVIEW_ANSWER="$ONE_BUG" FAKE_REPRO_MODE=notreproduced FAKE_REFUTE_MODE=refuted \
+  run_review --engine codex || rc=$?
+if [[ "$rc" -eq 0 && "$(calls_of refute-calls)" == "1" && "$(calls_of refute-gemini-calls)" == "0" ]] && both_has 'all findings refuted by antigravity'; then
+  pass
+else
+  fail "rc=$rc gemini=$(calls_of refute-gemini-calls) agy=$(calls_of refute-calls): $(cat "$WORK/both")"
+fi
+
+it "反証: 設定したエンジンが使えなければ、別のエンジンへ移らず「反証されていない」で非 0"
+rc=0
+SECOND_OPINION_REFUTE_ENGINE=gemini FAKE_REVIEW_ANSWER="$ONE_BUG" FAKE_REPRO_MODE=notreproduced FAKE_REFUTE_MODE=refuted run_review --engine codex || rc=$?
+if [[ "$rc" -eq 1 && "$(calls_of refute-calls)" == "0" ]] && both_has '指定した反証のエンジン gemini を使えません'; then
+  pass
+else
+  fail "rc=$rc agy=$(calls_of refute-calls): $(cat "$WORK/both")"
+fi
+
+for v in claude Claude-Code; do
+  it "反証: SECOND_OPINION_REFUTE_ENGINE=$v は実行前に拒む（実装と同じベンダー）"
+  rc=0
+  SECOND_OPINION_REFUTE_ENGINE=$v FAKE_REVIEW_ANSWER="$ONE_BUG" run_review --engine codex || rc=$?
+  if [[ "$rc" -eq 1 && "$(calls_of review-calls)" == "0" ]] && both_has 'SECOND_OPINION_REFUTE_ENGINE に claude は指定できません'; then
+    pass
+  else
+    fail "rc=$rc review=$(calls_of review-calls): $(cat "$WORK/both")"
+  fi
+done
+
+it "反証: claude 系のモデル（agy で選べる）は実行前に拒む"
+rc=0
+SECOND_OPINION_REFUTE_ENGINE=agy SECOND_OPINION_REFUTE_MODEL=claude-sonnet FAKE_REVIEW_ANSWER="$ONE_BUG" run_review --engine codex || rc=$?
+if [[ "$rc" -eq 1 && "$(calls_of review-calls)" == "0" ]] && both_has 'SECOND_OPINION_REFUTE_MODEL に claude 系のモデルは指定できません'; then
+  pass
+else
+  fail "rc=$rc review=$(calls_of review-calls): $(cat "$WORK/both")"
+fi
+
+it "反証: 不正な SECOND_OPINION_REFUTE / SECOND_OPINION_REFUTE_ENGINE は実行前に止める"
+rc1=0; rc2=0
+SECOND_OPINION_REFUTE=0 FAKE_REVIEW_ANSWER="$ONE_BUG" run_review --engine codex || rc1=$?
+o1="$(cat "$WORK/both")"
+SECOND_OPINION_REFUTE_ENGINE=codex FAKE_REVIEW_ANSWER="$ONE_BUG" run_review --engine codex || rc2=$?
+if [[ "$rc1" -eq 1 && "$rc2" -eq 1 && "$o1" == *"SECOND_OPINION_REFUTE は空・on・off"* ]] && both_has 'SECOND_OPINION_REFUTE_ENGINE は空・gemini・antigravity'; then
+  pass
+else
+  fail "rc1=$rc1 rc2=$rc2: $o1 / $(cat "$WORK/both")"
+fi
+
+it "反証: モデルの指定（SECOND_OPINION_REFUTE_MODEL）を agy へ渡す"
+rc=0
+SECOND_OPINION_REFUTE_MODEL=gemini-x FAKE_REVIEW_ANSWER="$ONE_BUG" FAKE_REPRO_MODE=notreproduced FAKE_REFUTE_MODE=refuted run_review --engine codex || rc=$?
+if [[ "$rc" -eq 0 && "$(cat "$RECORD/refute-args-1" 2>/dev/null)" == "model=gemini-x schema=yes" ]]; then pass; else fail "rc=$rc args=$(cat "$RECORD/refute-args-1" 2>/dev/null)"; fi
+
+it "反証: SECOND_OPINION_REFUTE=off なら反証を起こさず、「反証されていない」で非 0"
+rc=0
+SECOND_OPINION_REFUTE=off FAKE_REVIEW_ANSWER="$ONE_BUG" FAKE_REPRO_MODE=notreproduced FAKE_REFUTE_MODE=refuted run_review --engine codex || rc=$?
+if [[ "$rc" -eq 1 && "$(calls_of refute-calls)" == "0" ]] && both_has 'SECOND_OPINION_REFUTE=off のため、反証の段階を行いません'; then
+  pass
+else
+  fail "rc=$rc: $(cat "$WORK/both")"
+fi
+
+for m in badshape fail; do
+  it "反証: agy の回答が崩れる・失敗する（$m）なら「確かめられなかった」で非 0"
+  rc=0
+  FAKE_REVIEW_ANSWER="$ONE_BUG" FAKE_REPRO_MODE=notreproduced FAKE_REFUTE_MODE=$m run_review --engine codex || rc=$?
+  if [[ "$rc" -eq 1 ]] && both_has '反証: 反証を確かめられなかった（antigravity。落とす）' && both_has '確かめられなかった 1 件 / 見送った 0 件（エンジン antigravity'; then
+    pass
+  else
+    fail "rc=$rc: $(cat "$WORK/both")"
+  fi
+done
+
+it "反証: gemini の回答の最後の行が JSON でなければ「確かめられなかった」で非 0"
+rc=0
+GEMINI_API_KEY=dummy FAKE_REVIEW_ANSWER="$ONE_BUG" FAKE_REPRO_MODE=notreproduced FAKE_REFUTE_MODE=badshape run_review --engine codex || rc=$?
+if [[ "$rc" -eq 1 ]] && both_has '反証を確かめられなかった（gemini。落とす）: 反証のエンジンの回答の形が合いません'; then pass; else fail "rc=$rc: $(cat "$WORK/both")"; fi
+
+it "反証: 同じ場所・分類でまとめた別の指摘も、why と失敗の筋書きを含めて依頼文に入れる"
+rc=0
+FAKE_REVIEW_ANSWER="$(answer_of "$(finding_json bug sample.txt 2 '一つ目の欠陥')" "$(finding_json bug sample.txt 2 '二つ目の欠陥')")" \
+  FAKE_REPRO_MODE=notreproduced FAKE_REFUTE_MODE=refuted run_review --engine codex || rc=$?
+if [[ "$rc" -eq 0 ]] && command grep -qF '同じ場所・分類でまとめた別の指摘' "$RECORD/refute-prompt-1" \
+   && command grep -qF '"what":"二つ目の欠陥","why":"y","failure_scenario":"s"' "$RECORD/refute-prompt-1"; then
+  pass
+else
+  fail "rc=$rc: $(cat "$RECORD/refute-prompt-1" 2>/dev/null | tail -20)"
+fi
+
+it "反証: 反証されなかった指摘のあとは、通らないと決まっているので残りの反証を見送る"
+rc=0
+FAKE_REVIEW_ANSWER="$(answer_of "$(finding_json bug sub/inner.txt 1 'こちらも壊れる')" "$(finding_json bug sample.txt 2 'ここが壊れる')")" \
+  FAKE_REPRO_MODE=notreproduced FAKE_REFUTE_MODE=mixed run_review --engine codex || rc=$?
+if [[ "$rc" -eq 1 && "$(calls_of refute-calls)" == "1" ]] \
+   && both_has '反証された 0 件 / 反証されなかった 1 件 / 確かめられなかった 0 件 / 見送った 1 件'; then
+  pass
+else
+  fail "rc=$rc calls=$(calls_of refute-calls): $(cat "$WORK/both")"
+fi
+
+it "反証: OpenAI 系のモデル（レビューする codex と同じベンダー）は実行前に拒む"
+rc=0
+SECOND_OPINION_REFUTE_MODEL=gpt-oss-120b-medium FAKE_REVIEW_ANSWER="$ONE_BUG" run_review --engine codex || rc=$?
+if [[ "$rc" -eq 1 && "$(calls_of review-calls)" == "0" ]] && both_has 'SECOND_OPINION_REFUTE_MODEL に OpenAI 系のモデルは指定できません'; then
+  pass
+else
+  fail "rc=$rc review=$(calls_of review-calls): $(cat "$WORK/both")"
+fi
+
+it "反証: gemini の回答が整形した複数行の JSON でも読む"
+rc=0
+GEMINI_API_KEY=dummy FAKE_REVIEW_ANSWER="$ONE_BUG" FAKE_REPRO_MODE=notreproduced FAKE_REFUTE_MODE=pretty run_review --engine codex || rc=$?
+if [[ "$rc" -eq 0 ]] && both_has '反証された（gemini。記録だけにして通す）: gemini: 整形しても起きない'; then pass; else fail "rc=$rc: $(cat "$WORK/both")"; fi
+
+it "反証: 依頼文が agy の引数の上限を超えるなら、起こさず「確かめられなかった」で非 0"
+REPO_SAVED="$REPO"
+REPO="$WORK/repo-big"
+rm -rf "$REPO"
+cp -a "$REPO_SAVED" "$REPO"
+head -c 130000 /dev/zero | tr '\0' 'x' | fold -w 100 > "$REPO/big.txt"
+git -C "$REPO" add big.txt
+rc=0
+FAKE_REVIEW_ANSWER="$ONE_BUG" FAKE_REPRO_MODE=notreproduced FAKE_REFUTE_MODE=refuted run_review --engine codex || rc=$?
+REPO="$REPO_SAVED"
+if [[ "$rc" -eq 1 && "$(calls_of refute-calls)" == "0" ]] && both_has '依頼文が大きすぎて agy に渡せません'; then
+  pass
+else
+  fail "rc=$rc calls=$(calls_of refute-calls): $(tail -20 "$WORK/both")"
+fi
+
+it "反証: 候補へ集めた件数が、ゲート対象の件数と合わなければ印を落とす（見ていない指摘を通さない）"
+out="$(
+  set -uo pipefail
+  work_dir="$WORK/collect"; rm -rf "$work_dir"; mkdir -p "$work_dir"
+  repro_candidates_file="$work_dir/cands"; : > "$repro_candidates_file"
+  BLOCKING_JSON='["bug"]'; JQ_DIST_ARGS=(); JQ_DIST_DEF='def isdist: false;'
+  # shellcheck disable=SC1090
+  . <(awk '/^repro_collect\(\) \{/,/^}/' "$REVIEW")
+  ans="$(answer_of "$(finding_json bug a.txt 1 w1)" "$(finding_json bug b.txt 2 w2)")"
+  repro_collect_ok=1; repro_collect "$ans" 2; echo "match=$repro_collect_ok"
+  repro_collect_ok=1; repro_collect "$ans" 3; echo "mismatch=$repro_collect_ok"
+)"
+if [[ "$out" == *"match=1"* && "$out" == *"mismatch=0"* ]]; then pass; else fail "$out"; fi
+
 # ---- 段階を直接呼ぶ試験（codex は常に 1 チャンクなので、複数チャンクの共有はここで見る）----
 
 # 本体から再現の段階の関数群を取り出して、チャンクをまたいで 2 回呼ぶ。
 run_harness() { # 引数: 上限。候補の置き場は $WORK/cands-1 / cands-2
-  rm -f "$RECORD"/*-calls "$RECORD"/repro-* "$RECORD"/rerun-* "$RECORD"/sandbox-* "$RECORD"/timeout-args
+  rm -f "$RECORD"/*-calls "$RECORD"/repro-* "$RECORD"/rerun-* "$RECORD"/sandbox-* "$RECORD"/timeout-args "$RECORD"/refute-*
   : > "$RECORD/fake.env"
   (
     set -euo pipefail
     cd "$REPO"
-    export PATH="$FAKE_BIN:$PATH"
+    export PATH="$AGY_BIN:$FAKE_BIN:$SAFE_PATH"
     RANGE=""; BASE=""; MODEL=""; CLI=codex; ENGINE=codex; REPRO=""
+    REFUTE=""; REFUTE_ENGINE=""; REFUTE_MODEL=""
     REPRO_MAX="$1"; REPRO_TIMEOUT=60
     REPRO_SCHEMA_FILE="$REPO_ROOT/scripts/second-opinion-repro-schema.json"
     CODEX_ENV_PASS=("PATH=$PATH" "HOME=$HOME")
