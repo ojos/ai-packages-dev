@@ -392,11 +392,13 @@ repro_saved_root() {
 }
 REPRO_SAVED_ROOT="$(repro_saved_root || true)"
 
-# 今の枝の名前（detached HEAD なら "(detached)"）。保存したテストは保存したときの枝に紐づけ、
-# 同じ作業ツリーで枝を切り替えても、ほかの枝のテストを再実行しない（その枝にしか無い欠陥の
-# テストが別の枝で「直った」と数えられたり、無関係な枝を落としたりしないため）。
+# 今の枝の名前（detached HEAD なら "(detached <HEAD のコミット>)"）。保存したテストは保存した
+# ときの枝に紐づけ、同じ作業ツリーで枝を切り替えても、ほかの枝のテストを再実行しない（その枝に
+# しか無い欠陥のテストが別の枝で「直った」と数えられたり、無関係な枝を落としたりしないため）。
+# detached HEAD はコミットごとに分ける（別のコミットを開いても、前のコミットのテストを回さない）。
 repro_branch() {
-  git symbolic-ref --short -q HEAD 2>/dev/null || echo "(detached)"
+  git symbolic-ref --short -q HEAD 2>/dev/null \
+    || echo "(detached $(git rev-parse -q --verify HEAD 2>/dev/null || echo unknown))"
 }
 
 # 再実行の対象（今の枝で保存したもののうち「直った」の印が無いもの）の一覧。1 行 1 件のディレクトリ。
@@ -1902,7 +1904,7 @@ repro_rerun() {
 # たびの写しを重くしないため）。保存できなくても段階を止めない（判定は変えない。警告だけ出す）。
 REPRO_SAVE_MAX_KB=1024
 repro_save() {
-  local tree="$1" test_path="$2" f="$3" id dest br kb
+  local tree="$1" test_path="$2" f="$3" id dest br kb tmp
   [[ -n "$REPRO_SAVED_ROOT" ]] || { echo "    保存: 保存先（git rev-parse --git-path second-opinion）を求められないため、保存しません"; return 0; }
   br="$(repro_branch)"
   id="$(printf '%s' "$f" | jq -c --arg br "$br" '{branch: $br, file, line, category}' | git hash-object --stdin 2>/dev/null)" || id=""
@@ -1913,16 +1915,20 @@ repro_save() {
     return 0
   fi
   dest="$REPRO_SAVED_ROOT/$id"
-  repro_rm "$dest" >/dev/null
-  if mkdir -p "$dest" && cp -a "$tree/.second-opinion-repro" "$dest/" \
-     && printf '%s\n' "$test_path" > "$dest/test_path" \
-     && printf '%s\n' "$br" > "$dest/branch" \
-     && printf '%s' "$f" | jq -c 'del(.merged)' > "$dest/finding.json" \
-     && printf '%s %s\n' "$(git rev-parse HEAD 2>/dev/null || echo -)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$dest/saved_at"; then
+  # 一時の置き場（ドットで始まる名前。再実行の対象の一覧には入らない）へ写し終えてから置き換える。
+  # 先に消すと、写しに失敗したとき、まだ再現する欠陥の前のテストまで失う。
+  tmp="$REPRO_SAVED_ROOT/.tmp-$id-$$"
+  repro_rm "$tmp" >/dev/null
+  if mkdir -p "$tmp" && cp -a "$tree/.second-opinion-repro" "$tmp/" \
+     && printf '%s\n' "$test_path" > "$tmp/test_path" \
+     && printf '%s\n' "$br" > "$tmp/branch" \
+     && printf '%s' "$f" | jq -c 'del(.merged)' > "$tmp/finding.json" \
+     && printf '%s %s\n' "$(git rev-parse HEAD 2>/dev/null || echo -)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$tmp/saved_at" \
+     && repro_rm "$dest" >/dev/null && [[ ! -e "$dest" ]] && mv "$tmp" "$dest"; then
     echo "    保存: 次のゲートで再実行します（$dest）"
   else
-    repro_rm "$dest" >/dev/null
-    echo "    保存: 保存できませんでした（判定は変えません）"
+    repro_rm "$tmp" >/dev/null
+    echo "    保存: 保存できませんでした（前に保存したものがあれば残します。判定は変えません）"
   fi
   return 0
 }

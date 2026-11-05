@@ -1455,6 +1455,43 @@ rc=0
 run_review --rerun-saved || rc=$?
 if [[ "$rc" -eq 0 && "$(calls_of rerun-calls)" == "0" ]] && both_has '保存したテストの形が崩れています'; then pass; else fail "rc=$rc: $(cat "$WORK/both")"; fi
 
+it "保存に失敗しても、前に保存したテストは消さない（一時の置き場に写し終えてから置き換える）"
+rm -rf "$SAVED_ROOT"
+FAKE_REVIEW_ANSWER="$ONE_BUG" FAKE_REPRO_MODE=condbug run_review --engine codex || true
+sd="$(saved_dirs)"
+before="$(cat "$sd/saved_at" 2>/dev/null)"
+chmod a-w "$SAVED_ROOT"
+rc=0
+FAKE_REVIEW_ANSWER="$ONE_BUG" FAKE_REPRO_MODE=condbug run_review --engine codex || rc=$?
+chmod u+w "$SAVED_ROOT"
+if [[ "$rc" -eq 1 && -n "$before" && "$(cat "$sd/saved_at" 2>/dev/null)" == "$before" && -f "$sd/.second-opinion-repro/t.sh" ]] \
+   && both_has '保存: 保存できませんでした（前に保存したものがあれば残します' \
+   && [[ -z "$(find "$SAVED_ROOT" -mindepth 1 -maxdepth 1 -name '.tmp-*' 2>/dev/null)" ]]; then
+  pass
+else
+  fail "rc=$rc before=[$before]: $(cat "$WORK/both")"
+fi
+
+it "detached HEAD では、保存したテストをコミットに紐づけ、別のコミットのものは再実行しない"
+rm -rf "$SAVED_ROOT"
+cur_branch="$(git -C "$REPO" symbolic-ref --short HEAD)"
+git -C "$REPO" checkout -q --detach
+FAKE_REVIEW_ANSWER="$ONE_BUG" FAKE_REPRO_MODE=condbug run_review --engine codex || true
+sd="$(saved_dirs)"
+head_sha="$(git -C "$REPO" rev-parse HEAD)"
+saved_branch="$(cat "$sd/branch" 2>/dev/null)"
+rc1=0
+run_review --rerun-saved || rc1=$?
+printf '(detached %s)\n' "$(git -C "$REPO" rev-parse HEAD~1)" > "$sd/branch"
+rc2=0
+run_review --rerun-saved || rc2=$?
+git -C "$REPO" checkout -q "$cur_branch"
+if [[ "$saved_branch" == "(detached $head_sha)" && "$rc1" -eq 3 && "$rc2" -eq 0 ]] && both_has '再実行する保存した再現テストはありません'; then
+  pass
+else
+  fail "branch=[$saved_branch] rc1=$rc1 rc2=$rc2: $(cat "$WORK/both")"
+fi
+
 it "テストの置き場が上限（1024 KiB）を超えるなら、保存しない"
 rm -rf "$SAVED_ROOT"
 rc=0
