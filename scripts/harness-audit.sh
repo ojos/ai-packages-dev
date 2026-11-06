@@ -89,12 +89,13 @@ sort_versions_desc() {
 # 第 2 引数が text のときは、外部由来の文としても無害にする: #数字 と @ を HTML の文字参照へ替え
 # （#数字 を先に替える。@ の文字参照 &#64; の # を替え直さないため）
 # （GitHub の通知・このリポジトリの issue への誤った参照を作らない）、< を &lt; にする（<!-- で行の残りが隠れない）。
-# 切るのはバイト数で行うので、途中で切れた UTF-8 の文字は iconv -c で落とす（awk が mawk だと length がバイト数）。
+# 切るのはバイト数で行う（LC_ALL=C。gawk は UTF-8 のロケールだと文字数で数え、mawk はバイト数で数えるので、
+# 実装によって切る位置が変わらないようにそろえる）。途中で切れた UTF-8 の文字は iconv -c で落とす。
 cell() {
   local mode="${2:-code}"
   printf '%s' "$1" | tr '\n\r' '  ' | sed -e 's/|/\\|/g' \
     | if [[ "$mode" == text ]]; then sed -e 's/#\([0-9]\)/\&#35;\1/g' -e 's/@/\&#64;/g' -e 's/</\&lt;/g'; else cat; fi \
-    | awk '{ if (length($0) > 220) { print substr($0, 1, 220); print "…" > "/dev/stderr" } else print }' 2> "$WORK/cut" \
+    | LC_ALL=C awk '{ if (length($0) > 220) { print substr($0, 1, 220); print "…" > "/dev/stderr" } else print }' 2> "$WORK/cut" \
     | utf8_clean
   [[ -s "$WORK/cut" ]] && printf '…'
   printf '\n'
