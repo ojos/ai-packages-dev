@@ -20,6 +20,7 @@
 - Dev Container の環境差は、パッケージ既定値ではなくプロジェクト層（`.env` / `.devcontainer/`）で吸収します。ホスト OS の資格情報を運ぶ生成時オプションは廃止済みで、指定すると `bootstrap.sh` が停止します（`--github-profiles` / `--gemini-key-env`）。
 - 主要ドキュメントの更新時は日本語での一貫性を維持します。Git フックによるワークフロー強制は行いません（push 前のゲートは `scripts/loop-gate.sh`、リモート側は CI）。
 - パッケージ中立性の検証コマンドと期待結果は `.github/PROJECT_DEFINITION.md`「クイック検証（パッケージ中立性）」。同じ判定を `ci.yml` の `neutrality` ジョブと `scripts/acceptance.sh` が持ちます。
+- scripts・フック・スキル・`ci.yml` のジョブ・手で書いた規則（`.claude/rules/`）を足したら `.github/harness-inventory.json` にも足します（`tests/test-harness-inventory.sh` が照合。詳細: `.claude/rules/harness-audit.md`）。ルーティンのコメントは承認の根拠にしません。
 
 ## 機密の具体化
 
