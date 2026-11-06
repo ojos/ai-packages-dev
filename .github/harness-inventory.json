@@ -1,0 +1,554 @@
+{
+  "version": 1,
+  "items": [
+    {
+      "id": "scripts/acceptance.sh",
+      "kind": "script",
+      "path": "scripts/acceptance.sh",
+      "compensates": null,
+      "keywords": [],
+      "issue": "#146"
+    },
+    {
+      "id": "scripts/audit-failure-notify.sh",
+      "kind": "script",
+      "path": "scripts/audit-failure-notify.sh",
+      "compensates": null,
+      "keywords": [],
+      "issue": "#193"
+    },
+    {
+      "id": "scripts/check-control-chars.sh",
+      "kind": "script",
+      "path": "scripts/check-control-chars.sh",
+      "compensates": null,
+      "keywords": [],
+      "issue": "#327"
+    },
+    {
+      "id": "scripts/check-doc-links.sh",
+      "kind": "script",
+      "path": "scripts/check-doc-links.sh",
+      "compensates": null,
+      "keywords": [],
+      "issue": "#371"
+    },
+    {
+      "id": "scripts/check-git-config.sh",
+      "kind": "script",
+      "path": "scripts/check-git-config.sh",
+      "compensates": "エージェントが書き換えうる git の設定（任意のコードを実行させうるもの）を本体が信頼確認や遮断で扱わない不足",
+      "keywords": [
+        "git config",
+        "untrusted repo"
+      ],
+      "issue": "#671"
+    },
+    {
+      "id": "scripts/check-neutrality.sh",
+      "kind": "script",
+      "path": "scripts/check-neutrality.sh",
+      "compensates": null,
+      "keywords": [],
+      "issue": "#161"
+    },
+    {
+      "id": "scripts/check-no-secrets.sh",
+      "kind": "script",
+      "path": "scripts/check-no-secrets.sh",
+      "compensates": "機密混入の検知を本体が持たない不足（コミット前の走査）",
+      "keywords": [
+        "secret scanning",
+        "secrets scanning",
+        "secret detection"
+      ],
+      "issue": "#264"
+    },
+    {
+      "id": "scripts/check-release-commit-verified.sh",
+      "kind": "script",
+      "path": "scripts/check-release-commit-verified.sh",
+      "compensates": null,
+      "keywords": [],
+      "issue": null
+    },
+    {
+      "id": "scripts/check-repo-security.sh",
+      "kind": "script",
+      "path": "scripts/check-repo-security.sh",
+      "compensates": null,
+      "keywords": [],
+      "issue": "#394"
+    },
+    {
+      "id": "scripts/check-shell-portability.sh",
+      "kind": "script",
+      "path": "scripts/check-shell-portability.sh",
+      "compensates": null,
+      "keywords": [],
+      "issue": null
+    },
+    {
+      "id": "scripts/check-table-breaks.sh",
+      "kind": "script",
+      "path": "scripts/check-table-breaks.sh",
+      "compensates": null,
+      "keywords": [],
+      "issue": "#327"
+    },
+    {
+      "id": "scripts/claude-session-wrapper.sh",
+      "kind": "script",
+      "path": "scripts/claude-session-wrapper.sh",
+      "compensates": "セッションの宛先名へ場所と作業ツリーを自動で含められない不足",
+      "keywords": [
+        "claudeprocesswrapper",
+        "session name from"
+      ],
+      "issue": "#502"
+    },
+    {
+      "id": "scripts/confirm-merge-hook.sh",
+      "kind": "script",
+      "path": "scripts/confirm-merge-hook.sh",
+      "compensates": "マージ実行の前の手動承認を権限の許可だけでは保証できない不足",
+      "keywords": [
+        "merge confirmation",
+        "ask rules",
+        "permission rules for bash"
+      ],
+      "issue": "#312"
+    },
+    {
+      "id": "scripts/fix-mount-owner.sh",
+      "kind": "script",
+      "path": "scripts/fix-mount-owner.sh",
+      "compensates": null,
+      "keywords": [],
+      "issue": "#134"
+    },
+    {
+      "id": "scripts/harness-audit.sh",
+      "kind": "script",
+      "path": "scripts/harness-audit.sh",
+      "compensates": null,
+      "keywords": [],
+      "issue": "#710"
+    },
+    {
+      "id": "scripts/install-ai-tools.sh",
+      "kind": "script",
+      "path": "scripts/install-ai-tools.sh",
+      "compensates": null,
+      "keywords": [],
+      "issue": null
+    },
+    {
+      "id": "scripts/load-project-env.sh",
+      "kind": "script",
+      "path": "scripts/load-project-env.sh",
+      "compensates": "プロジェクトの .env を環境変数より優先して読む仕組みが本体に無い不足",
+      "keywords": [
+        "env file",
+        "dotenv",
+        "project env"
+      ],
+      "issue": null
+    },
+    {
+      "id": "scripts/loop-gate.sh",
+      "kind": "script",
+      "path": "scripts/loop-gate.sh",
+      "compensates": "push 前に検証とレビューを直列に通す単一入口が本体に無い不足",
+      "keywords": [
+        "pre-push",
+        "stop hook"
+      ],
+      "issue": "#146"
+    },
+    {
+      "id": "scripts/measure-agent-usage.sh",
+      "kind": "script",
+      "path": "scripts/measure-agent-usage.sh",
+      "compensates": "サブエージェントの役割別トークン使用量を本体が集計して出さない不足",
+      "keywords": [
+        "usage by subagent",
+        "per-agent usage",
+        "subagent usage",
+        "subagent cost",
+        "agent usage report"
+      ],
+      "issue": "#279"
+    },
+    {
+      "id": "scripts/on-attach.sh",
+      "kind": "script",
+      "path": "scripts/on-attach.sh",
+      "compensates": null,
+      "keywords": [],
+      "issue": null
+    },
+    {
+      "id": "scripts/post-rebuild-check.sh",
+      "kind": "script",
+      "path": "scripts/post-rebuild-check.sh",
+      "compensates": null,
+      "keywords": [],
+      "issue": null
+    },
+    {
+      "id": "scripts/release-packages.sh",
+      "kind": "script",
+      "path": "scripts/release-packages.sh",
+      "compensates": null,
+      "keywords": [],
+      "issue": null
+    },
+    {
+      "id": "scripts/second-opinion-gate-exempt.sh",
+      "kind": "script",
+      "path": "scripts/second-opinion-gate-exempt.sh",
+      "compensates": null,
+      "keywords": [],
+      "issue": null
+    },
+    {
+      "id": "scripts/second-opinion-record.sh",
+      "kind": "script",
+      "path": "scripts/second-opinion-record.sh",
+      "compensates": "第二意見の実行を PR に残して回し忘れを捕まえる仕組みが本体に無い不足",
+      "keywords": [],
+      "issue": null
+    },
+    {
+      "id": "scripts/second-opinion-review.sh",
+      "kind": "script",
+      "path": "scripts/second-opinion-review.sh",
+      "compensates": "実装したモデルとは別ベンダーのモデルによるレビューが本体に無い不足",
+      "keywords": [
+        "cross-model",
+        "review model",
+        "second opinion"
+      ],
+      "issue": "#270"
+    },
+    {
+      "id": "scripts/session-coord-hook.sh",
+      "kind": "script",
+      "path": "scripts/session-coord-hook.sh",
+      "compensates": "別々のセッションが同じ issue・文書・作業ツリーを同時に触る衝突を本体が防がない不足",
+      "keywords": [
+        "session conflict",
+        "concurrent session",
+        "same worktree"
+      ],
+      "issue": "#395"
+    },
+    {
+      "id": "scripts/session-ledger.sh",
+      "kind": "script",
+      "path": "scripts/session-ledger.sh",
+      "compensates": "並行セッションが触るものを確かめ合う共有台帳が本体に無い不足",
+      "keywords": [
+        "agent teams",
+        "shared task list",
+        "concurrent session"
+      ],
+      "issue": "#395"
+    },
+    {
+      "id": "scripts/session-peers.sh",
+      "kind": "script",
+      "path": "scripts/session-peers.sh",
+      "compensates": "同じプロジェクトのセッションだけの一覧・宛先の解決・一斉送信が本体に無い不足",
+      "keywords": [
+        "sendmessage",
+        "listagents",
+        "peer session"
+      ],
+      "issue": "#502"
+    },
+    {
+      "id": "scripts/setup-git-identity.sh",
+      "kind": "script",
+      "path": "scripts/setup-git-identity.sh",
+      "compensates": null,
+      "keywords": [],
+      "issue": "#134"
+    },
+    {
+      "id": "scripts/terraform-refuse-destroy.sh",
+      "kind": "script",
+      "path": "scripts/terraform-refuse-destroy.sh",
+      "compensates": null,
+      "keywords": [],
+      "issue": "#487"
+    },
+    {
+      "id": "scripts/update-release-status.sh",
+      "kind": "script",
+      "path": "scripts/update-release-status.sh",
+      "compensates": null,
+      "keywords": [],
+      "issue": null
+    },
+    {
+      "id": "scripts/verify-commit-identity-selftest.sh",
+      "kind": "script",
+      "path": "scripts/verify-commit-identity-selftest.sh",
+      "compensates": null,
+      "keywords": [],
+      "issue": "#369"
+    },
+    {
+      "id": "scripts/verify-commit-identity.sh",
+      "kind": "script",
+      "path": "scripts/verify-commit-identity.sh",
+      "compensates": null,
+      "keywords": [],
+      "issue": "#145"
+    },
+    {
+      "id": "scripts/verify.sh",
+      "kind": "script",
+      "path": "scripts/verify.sh",
+      "compensates": "受け入れ条件を非対話で機械判定する接地信号が本体に無い不足",
+      "keywords": [
+        "goal condition",
+        "verification loop"
+      ],
+      "issue": "#146"
+    },
+    {
+      "id": "skill/intake",
+      "kind": "skill",
+      "path": ".claude/skills/intake/SKILL.md",
+      "compensates": "要件定義の聞き取りから issue 起票までの手順を本体が持たない不足",
+      "keywords": [
+        "interview mode",
+        "requirements gathering"
+      ],
+      "issue": "#162"
+    },
+    {
+      "id": "skill/land",
+      "kind": "skill",
+      "path": ".claude/skills/land/SKILL.md",
+      "compensates": "PR 作成後の確認からマージまでを進める手順を本体が持たない不足",
+      "keywords": [
+        "auto-merge",
+        "pr babysit",
+        "watch pull request"
+      ],
+      "issue": null
+    },
+    {
+      "id": "skill/peers",
+      "kind": "skill",
+      "path": ".claude/skills/peers/SKILL.md",
+      "compensates": "同じプロジェクトのセッション一覧と宛先の解決を本体が持たない不足",
+      "keywords": [],
+      "issue": "#502"
+    },
+    {
+      "id": "SessionStart/*/session-coord-hook.sh",
+      "kind": "hook",
+      "path": "scripts/session-coord-hook.sh",
+      "compensates": "別セッションの登録の確認（着手時）",
+      "keywords": [],
+      "issue": "#395"
+    },
+    {
+      "id": "SessionStart/*/check-git-config.sh",
+      "kind": "hook",
+      "path": "scripts/check-git-config.sh",
+      "compensates": "危険な git の設定の検出（セッション開始時）",
+      "keywords": [],
+      "issue": "#671"
+    },
+    {
+      "id": "PreToolUse/Bash/confirm-merge-hook.sh",
+      "kind": "hook",
+      "path": "scripts/confirm-merge-hook.sh",
+      "compensates": "マージ実行の前の承認",
+      "keywords": [],
+      "issue": "#312"
+    },
+    {
+      "id": "PreToolUse/Bash/session-coord-hook.sh",
+      "kind": "hook",
+      "path": "scripts/session-coord-hook.sh",
+      "compensates": "作業ツリーでの git 操作・重いゲートの前の台帳の確認",
+      "keywords": [],
+      "issue": "#395"
+    },
+    {
+      "id": "PreToolUse/Edit|Write/session-coord-hook.sh",
+      "kind": "hook",
+      "path": "scripts/session-coord-hook.sh",
+      "compensates": "共有文書の編集の前の台帳の確認",
+      "keywords": [],
+      "issue": "#395"
+    },
+    {
+      "id": "PostToolUse/Bash/session-coord-hook.sh",
+      "kind": "hook",
+      "path": "scripts/session-coord-hook.sh",
+      "compensates": "実行のあいだだけ持つ登録の解放",
+      "keywords": [],
+      "issue": "#395"
+    },
+    {
+      "id": "PostToolUseFailure/Bash/session-coord-hook.sh",
+      "kind": "hook",
+      "path": "scripts/session-coord-hook.sh",
+      "compensates": "失敗した Bash でも登録を解放",
+      "keywords": [],
+      "issue": "#395"
+    },
+    {
+      "id": "SessionEnd/*/session-coord-hook.sh",
+      "kind": "hook",
+      "path": "scripts/session-coord-hook.sh",
+      "compensates": "セッション終了時に自分の登録を解放",
+      "keywords": [],
+      "issue": "#395"
+    },
+    {
+      "id": "ci/shell",
+      "kind": "ci-job",
+      "path": ".github/workflows/ci.yml",
+      "compensates": null,
+      "keywords": [],
+      "issue": null
+    },
+    {
+      "id": "ci/self-devcontainer",
+      "kind": "ci-job",
+      "path": ".github/workflows/ci.yml",
+      "compensates": null,
+      "keywords": [],
+      "issue": null
+    },
+    {
+      "id": "ci/project-tests",
+      "kind": "ci-job",
+      "path": ".github/workflows/ci.yml",
+      "compensates": null,
+      "keywords": [],
+      "issue": null
+    },
+    {
+      "id": "ci/dcb-tests",
+      "kind": "ci-job",
+      "path": ".github/workflows/ci.yml",
+      "compensates": null,
+      "keywords": [],
+      "issue": null
+    },
+    {
+      "id": "ci/devhost-tests",
+      "kind": "ci-job",
+      "path": ".github/workflows/ci.yml",
+      "compensates": null,
+      "keywords": [],
+      "issue": null
+    },
+    {
+      "id": "ci/consistency",
+      "kind": "ci-job",
+      "path": ".github/workflows/ci.yml",
+      "compensates": null,
+      "keywords": [],
+      "issue": null
+    },
+    {
+      "id": "ci/terraform",
+      "kind": "ci-job",
+      "path": ".github/workflows/ci.yml",
+      "compensates": null,
+      "keywords": [],
+      "issue": null
+    },
+    {
+      "id": "ci/neutrality",
+      "kind": "ci-job",
+      "path": ".github/workflows/ci.yml",
+      "compensates": null,
+      "keywords": [],
+      "issue": null
+    },
+    {
+      "id": "rule/intake-flow",
+      "kind": "rule",
+      "path": ".claude/rules/intake-flow.md",
+      "compensates": "要件定義の聞き取りの手順を本体が持たない不足",
+      "keywords": [],
+      "issue": null
+    },
+    {
+      "id": "rule/delegation",
+      "kind": "rule",
+      "path": ".claude/rules/delegation.md",
+      "compensates": "委譲先の役割・モデル・ツールの選び方と統合の検証を本体が決めない不足",
+      "keywords": [],
+      "issue": null
+    },
+    {
+      "id": "rule/external-services",
+      "kind": "rule",
+      "path": ".claude/rules/external-services.md",
+      "compensates": null,
+      "keywords": [],
+      "issue": null
+    },
+    {
+      "id": "rule/git-identity",
+      "kind": "rule",
+      "path": ".claude/rules/git-identity.md",
+      "compensates": null,
+      "keywords": [],
+      "issue": null
+    },
+    {
+      "id": "rule/github-auth",
+      "kind": "rule",
+      "path": ".claude/rules/github-auth.md",
+      "compensates": null,
+      "keywords": [],
+      "issue": null
+    },
+    {
+      "id": "rule/harness-audit",
+      "kind": "rule",
+      "path": ".claude/rules/harness-audit.md",
+      "compensates": null,
+      "keywords": [],
+      "issue": "#710"
+    },
+    {
+      "id": "rule/issue-operations",
+      "kind": "rule",
+      "path": ".claude/rules/issue-operations.md",
+      "compensates": null,
+      "keywords": [],
+      "issue": null
+    },
+    {
+      "id": "rule/packages-layer",
+      "kind": "rule",
+      "path": ".claude/rules/packages-layer.md",
+      "compensates": null,
+      "keywords": [],
+      "issue": null
+    },
+    {
+      "id": "rule/review-gate",
+      "kind": "rule",
+      "path": ".claude/rules/review-gate.md",
+      "compensates": "変更を別のモデルに独立してレビューさせ、通るまで push させない仕組みを本体が持たない不足",
+      "keywords": [],
+      "issue": null
+    }
+  ]
+}

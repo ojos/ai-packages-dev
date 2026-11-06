@@ -48,6 +48,14 @@
 | `docs/records/DEVHOST_RUNNER_SCALING_AND_DEVCONTAINER_RUNNER.md` | 履歴・記録 | devhost の自前のランナーへのオートスケーリング・キューイングの追加と、devcontainer のランナーへの転用（認証情報を使った第二意見）を検討し、見送った判断の記録。 |
 | `docs/records/INTAKE_AUTO_SUGGEST_LOOP_RECORD.md` | 履歴・記録 | `@intake` の自動提案経路追加と、intake をループコーディング入口として機械判定ゲート化した判断根拠と実施記録。 |
 
+### ルーティン（`docs/routines/`）
+
+claude.ai のルーティンに貼る依頼文と、その登録の手順。
+
+| ファイル | 種別 | 概要 |
+|---|---|---|
+| `docs/routines/harness-audit.md` | 運用手順 | 毎週のハーネスの棚卸し（本体の更新で削れる自前の仕組みの洗い出し）の依頼文と登録の手順。追跡 issue は #711。 |
+
 ### 計画（`plans/`）
 
 これから着手する作業の仕様・計画は docs/plans/ に置く。進捗の正本は issue / PR。実装完了後は `docs/records/` へ移動または archive 化する。
