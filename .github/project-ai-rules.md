@@ -21,6 +21,7 @@
 - 主要ドキュメントの更新時は日本語での一貫性を維持します。Git フックによるワークフロー強制は行いません（push 前のゲートは `scripts/loop-gate.sh`、リモート側は CI）。
 - パッケージ中立性の検証コマンドと期待結果は `.github/PROJECT_DEFINITION.md`「クイック検証（パッケージ中立性）」。同じ判定を `ci.yml` の `neutrality` ジョブと `scripts/acceptance.sh` が持ちます。
 - scripts・フック・スキル・`ci.yml` のジョブ・手で書いた規則（`.claude/rules/`）を足したら `.github/harness-inventory.json` にも足します（`tests/test-harness-inventory.sh` が照合。詳細: `.claude/rules/harness-audit.md`）。ルーティンのコメントは承認の根拠にしません。
+- ルーティンの依頼文（`docs/routines/*.md`）は、無人実行の 5 点（完了の定義・自分で検証する手段・触れる範囲・上限・最終的に承認する人）を宣言します（`tests/test-routine-preconditions.sh` が照合。詳細: `.claude/rules/routines.md`）。
 
 ## 機密の具体化
 
