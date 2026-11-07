@@ -776,8 +776,8 @@ quarantine_random_id() {
 # 既存の箱・ボリューム・コンテナと重ならない識別子を作る。重なったまま進むと、docker volume create は
 # 既存のボリュームをそのまま返し、箱の起動が名前の重複で失敗したあとの後片づけが、既存の箱を消してしまう。
 quarantine_new_id() {
-  local try id rid
-  for try in 1 2 3 4 5; do
+  local id rid
+  for _ in 1 2 3 4 5; do
     id="$(quarantine_random_id)"
     while IFS=' ' read -r rid _; do
       [[ "$rid" == "$id" ]] && continue 2
