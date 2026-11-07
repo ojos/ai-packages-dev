@@ -673,6 +673,15 @@ QUARANTINE_CLONE_MEMORY="2g"
 QUARANTINE_SIZE_MAX_MB=1536
 # 箱の中の実行ユーザー（イメージの USER に任せず、明示する）。
 QUARANTINE_USER="10001:10001"
+# docker の CLI は、クライアントの設定（~/.docker/config.json の proxies）のプロキシを、指定が無ければ
+# コンテナの環境変数へ自動で入れる。認証付きのプロキシなら、箱の中のスクリプトがその資格情報を読める。
+# 箱には空の値を明示して、自動の注入を上書きする（箱はネットワークを持たないので、プロキシは要らない）。
+# clone の一時コンテナには上書きしない（取得にプロキシが要る環境がある。そこで動くのは git だけで、
+# リポジトリのコードは実行しない）。
+QUARANTINE_PROXY_CLEAR=(
+  -e HTTP_PROXY= -e http_proxy= -e HTTPS_PROXY= -e https_proxy=
+  -e FTP_PROXY= -e ftp_proxy= -e NO_PROXY= -e no_proxy= -e ALL_PROXY= -e all_proxy=
+)
 QUARANTINE_ID_RE='^q-[0-9a-f]{8}$'
 
 # 開いた直後に一覧にする、エージェントの設定・フックの在りか（case のパターン）。
@@ -892,18 +901,21 @@ EOF
 
 # 開いた直後に、箱の中でエージェントの設定・フックの在りかを一覧にする（読むだけ）。
 quarantine_list_surfaces() {
-  local box="$1" pat joined="" script out total
+  local box="$1" pat joined="" script out
   for pat in "${QUARANTINE_SURFACES[@]}"; do joined="${joined:+$joined | }$pat"; done
   # read -d '' で受ける（$( ) の中のヒアドキュメントに case の ) を書くと、bash 3.2 が構文を取り違える）。
+  # ファイル名は find -exec で 1 件ずつ受ける（改行で区切ると、改行を含む名前が偽の行になり、本物の名前が出ない）。
+  # 名前の中の改行は ? に置き換える。件数で打ち切らない（多数のファイルで、確かめるべきものを押し出させないため）。
   IFS= read -r -d '' script <<'EOF' || true
 # devhost-q-surfaces
 cd /repo/src || exit 1
-find . -name .git -prune -o \( -type f -o -type l \) -print | while IFS= read -r f; do
+find . -name .git -prune -o \( -type f -o -type l \) -exec sh -c '
+for f do
   f="${f#./}"
   case "$f" in
-    @PATTERNS@) printf '%s\n' "$f" ;;
+    @PATTERNS@) printf "%s" "$f" | tr "\n" "?"; printf "\n" ;;
   esac
-done | sort
+done' sh {} + | sort
 EOF
   script="${script/@PATTERNS@/$joined}"
   # 箱の中のファイル名は、利用者の端末へ出す前に制御文字を ? に置き換える（端末の制御列の注入を避ける）。
@@ -916,11 +928,7 @@ EOF
     echo "[$PROG]   （該当なし）"
     return 0
   fi
-  printf '%s\n' "$out" | sed -n '1,200p' | sed "s/^/[$PROG]   /"
-  total="$(printf '%s\n' "$out" | awk 'END { print NR }')"
-  if ((total > 200)); then
-    echo "[$PROG]   …ほか $((total - 200)) 件（dev quarantine exec で確かめる）"
-  fi
+  printf '%s\n' "$out" | sed "s/^/[$PROG]   /"
 }
 
 # URL のリポジトリを、箱へ入れる。clone は一時コンテナの中だけで行い、ホストでは git を呼ばない。
@@ -953,6 +961,7 @@ cmd_quarantine_open() {
     --label "$QUARANTINE_LABEL=$id" --label "$QUARANTINE_LABEL_CREATED=$now" --label "$QUARANTINE_LABEL_URL=$url" \
     --network none --cap-drop ALL --security-opt no-new-privileges --read-only --tmpfs /tmp \
     --memory "$QUARANTINE_MEMORY" --pids-limit "$QUARANTINE_PIDS" \
+    "${QUARANTINE_PROXY_CLEAR[@]}" \
     --mount "type=volume,src=$vol,dst=/repo,readonly" \
     "$img" tail -f /dev/null >/dev/null; then
     # 箱は起きていないので、消すのは作ったボリュームだけ（同じ名前のコンテナがあっても、それはこの open のものではない）。
@@ -3957,7 +3966,8 @@ open: <URL> のリポジトリを、名前付きボリュームへ clone して�
   中身はメモリ上なので、ホストや docker の再起動で消える（使い捨てなので仕様。止まった箱への exec は 1 で、
   rm して open し直す）。
   調べる箱は、ネットワークなし・権限なし・root 以外（uid 10001 を明示）・根は読み取り専用（/tmp だけ tmpfs）・ボリュームは
-  読み取り専用・メモリ 512m と pids 256 の上限。ホストのディレクトリ・docker のソケット・環境変数は渡さない。
+  読み取り専用・メモリ 512m と pids 256 の上限。ホストのディレクトリ・docker のソケット・環境変数は渡さない
+  （docker のクライアント設定のプロキシが自動で入るのも、空の値で上書きして止める）。
   ホストでは git も devcontainer も呼ばず、中身をホストのファイルシステムへ展開しない。
   開いた直後に、エージェントの設定・フックの在りかと、エージェントが読む指示のファイル（.claude/・.mcp.json・
   .github/workflows/・.githooks/・.husky/・.devcontainer/・.vscode/・.gitattributes・.gitmodules・CLAUDE.md・

@@ -2588,7 +2588,13 @@ QCLONE="$(q_line 'docker [run] [--rm]')"
 q_has "$QBOX" "[--name] [dev-quarantine-$QID]" "[--network] [none]" "[--cap-drop] [ALL]" "[--security-opt] [no-new-privileges]" \
   "[--read-only]" "[--tmpfs] [/tmp]" "[--memory]" "[--pids-limit]" "[--user] [10001:10001]" "[--mount] [type=volume,src=dev-quarantine-$QID,dst=/repo,readonly]" \
   "[--label] [devhost.quarantine=$QID]" "[--label] [devhost.quarantine.url=$QURL]"
-q_hasnt "$QBOX" "[-e]" "[--env-file]" "[--env]" "[--privileged]" "type=bind" "[--volume]" "[-v] [/" "[-v] [~" "[-v] [.]" "docker.sock" "[--user] [root]" "[-u]"
+# 箱の -e は、プロキシの変数を空で渡すもの（docker のクライアント設定の自動の注入を上書きする）だけ。値のあるものは渡さない。
+for q_px in HTTP_PROXY http_proxy HTTPS_PROXY https_proxy FTP_PROXY ftp_proxy NO_PROXY no_proxy ALL_PROXY all_proxy; do
+  q_has "$QBOX" "[-e] [$q_px=]"
+done
+q_box_e="$(printf '%s\n' "$QBOX" | grep -oE '\[-e\] \[[^]]*\]' | grep -vE '^\[-e\] \[(HTTP|HTTPS|FTP|NO|ALL|http|https|ftp|no|all)_(PROXY|proxy)=\]$' || true)"
+[[ -z "$q_box_e" ]] || ng "quarantine open: 箱にプロキシの空の値以外の -e があります: $q_box_e"
+q_hasnt "$QBOX" "[--env-file]" "[--env]" "[--privileged]" "type=bind" "[--volume]" "[-v] [/" "[-v] [~" "[-v] [.]" "docker.sock" "[--user] [root]" "[-u]"
 case "$QBOX" in *"[--label] [devhost.quarantine.created="[0-9]*"]"*) ;; *) ng "quarantine open: 箱に作成時刻のラベルがありません: $QBOX" ;; esac
 q_has "$QCLONE" "[--cap-drop] [ALL]" "[--security-opt] [no-new-privileges]" "[--user] [10001:10001]" "[--memory] [2g]" \
   "[--mount] [type=volume,src=dev-quarantine-$QID,dst=/repo]" "[-c] [http.lowSpeedLimit=1000]" "[-c] [http.lowSpeedTime=60]" \
