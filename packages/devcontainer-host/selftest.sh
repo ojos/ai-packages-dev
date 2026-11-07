@@ -229,6 +229,137 @@ log_call docker "$@"
 touch_state
 sub="${1:-}"
 shift || true
+# 検疫（dev quarantine）の呼び出し。名前に quarantine を含むものを、専用の状態（$FAKE_STATE/q-boxes と q-volumes）で扱う。
+# 想定外の形は黙って通さずに落とす。
+case "$sub $*" in
+  *quarantine* | *"${FAKE_QUARANTINE_IMAGE:-@none@}"*)
+    QB="$FAKE_STATE/q-boxes" QV="$FAKE_STATE/q-volumes"
+    : >>"$QB"
+    : >>"$QV"
+    qfail() { echo "fake docker: この試験が想定していない検疫の呼び出しです: $sub $*" >&2; exit 2; }
+    case "$sub" in
+      inspect)
+        # 箱が動いているか。q-boxes にあれば true、q-stopped にあれば false、どちらでもなければ無い箱（1）。
+        [[ $# -eq 3 && "$1" == "--format" && "$2" == '{{.State.Running}}' ]] || qfail
+        if grep -qxF "$3" "$QB"; then echo true; exit 0; fi
+        if [[ -f "$FAKE_STATE/q-stopped" ]] && grep -qxF "$3" "$FAKE_STATE/q-stopped"; then echo false; exit 0; fi
+        echo "Error: No such object: $3" >&2
+        exit 1
+        ;;
+      container)
+        # 識別子の重なりの確かめ（docker container inspect <名前>）。q-boxes にあれば在る。
+        [[ $# -eq 2 && "$1" == "inspect" && "$2" == dev-quarantine-q-* ]] || qfail
+        grep -qxF "$2" "$QB" || { echo "Error: No such container: $2" >&2; exit 1; }
+        echo "[]"
+        ;;
+      ps)
+        [[ $# -eq 4 && "$1" == "--filter" && "$2" == "label=devhost.quarantine" && "$3" == "--format" && "$4" == '{{.Label "devhost.quarantine"}}' ]] || qfail
+        [[ "${FAKE_Q_PS_FAIL:-0}" != "1" ]] || { echo "Cannot connect to the Docker daemon" >&2; exit 1; }
+        sed -n 's/^dev-quarantine-\(q-[0-9a-f]*\)$/\1/p' "$QB"
+        ;;
+      image)
+        [[ $# -eq 2 && "$1" == "inspect" ]] || qfail
+        [[ "${FAKE_IMAGE_MISSING:-0}" != "1" ]] || { echo "Error: No such image: $2" >&2; exit 1; }
+        ;;
+      build)
+        [[ $# -eq 3 && "$1" == "-t" && "$3" == "-" ]] || qfail
+        cat >"$FAKE_STATE/q-build-stdin"
+        ;;
+      volume)
+        case "${1:-}" in
+          create)
+            shift
+            q_id="" q_created="" q_url="" q_name="" q_opts=""
+            while [[ $# -gt 0 ]]; do
+              case "$1" in
+                --driver) q_opts="$q_opts driver=$2"; shift 2 ;;
+                --opt) q_opts="$q_opts $2"; shift 2 ;;
+                --label)
+                  case "$2" in
+                    devhost.quarantine=*) q_id="${2#*=}" ;;
+                    devhost.quarantine.created=*) q_created="${2#*=}" ;;
+                    devhost.quarantine.url=*) q_url="${2#*=}" ;;
+                    *) qfail ;;
+                  esac
+                  shift 2
+                  ;;
+                -*) qfail ;;
+                *) q_name="$1"; shift ;;
+              esac
+            done
+            [[ -n "$q_id" && -n "$q_created" && -n "$q_url" && "$q_name" == "dev-quarantine-$q_id" ]] || qfail
+            printf '%s %s %s\n' "$q_id" "$q_created" "$q_url" >>"$QV"
+            printf '%s\n' "$q_opts" >"$FAKE_STATE/q-volume-opts"
+            echo "$q_name"
+            ;;
+          inspect)
+            # 識別子の重なりの確かめ（docker volume inspect <名前>）。q-volumes にあれば在る。
+            [[ $# -eq 2 && "$2" == dev-quarantine-q-* ]] || qfail
+            grep -q "^${2#dev-quarantine-} " "$QV" || { echo "Error: no such volume: $2" >&2; exit 1; }
+            echo "[]"
+            ;;
+          ls)
+            [[ $# -eq 5 && "$2" == "--filter" && "$3" == "label=devhost.quarantine" && "$4" == "--format" ]] || qfail
+            [[ "$5" == '{{.Label "devhost.quarantine"}} {{.Label "devhost.quarantine.created"}} {{.Label "devhost.quarantine.url"}}' ]] || qfail
+            [[ "${FAKE_Q_LS_FAIL:-0}" != "1" ]] || { echo "Cannot connect to the Docker daemon" >&2; exit 1; }
+            cat "$QV"
+            ;;
+          rm)
+            [[ $# -eq 2 && "$2" == dev-quarantine-q-* ]] || qfail
+            [[ "${FAKE_Q_VOLRM_FAIL:-}" != "$2" ]] || { echo "Error: volume is in use" >&2; exit 1; }
+            grep -v "^${2#dev-quarantine-} " "$QV" >"$QV.new" || true
+            mv "$QV.new" "$QV"
+            echo "$2"
+            ;;
+          *) qfail ;;
+        esac
+        ;;
+      rm)
+        [[ $# -eq 2 && "$1" == "-f" && ( "$2" == dev-quarantine-q-* || "$2" == dev-quarantine-clone-q-* ) ]] || qfail
+        grep -qxF "$2" "$QB" || { echo "Error: No such container: $2" >&2; exit 1; }
+        grep -vxF "$2" "$QB" >"$QB.new" || true
+        mv "$QB.new" "$QB"
+        echo "$2"
+        ;;
+      run)
+        if [[ "$1" == "--rm" ]]; then
+          # clone 専用の一時コンテナ。FAKE_Q_CLONE_FAIL=1 で失敗する。
+          # FAKE_Q_STOP_DURING_CLONE=1 で、clone のあいだに箱が止められたことにする。
+          if [[ "${FAKE_Q_STOP_DURING_CLONE:-0}" == "1" ]]; then
+            cat "$QB" >>"$FAKE_STATE/q-stopped"
+            : >"$QB"
+          fi
+          [[ "${FAKE_Q_CLONE_FAIL:-0}" != "1" ]] || { printf 'remote: \033]52;c;ZXZpbA==\007\033[2Kfake\n' >&2; echo "fatal: unable to access 'https://example.invalid/x.git/': Could not resolve host" >&2; exit 128; }
+          exit 0
+        fi
+        [[ "$1" == "-d" && "$2" == "--name" ]] || qfail
+        [[ "${FAKE_Q_VOL_VANISH:-0}" != "1" ]] || : >"$QV"
+        [[ "${FAKE_Q_BOX_FAIL:-0}" != "1" ]] || { echo "docker: Error response from daemon: cannot start" >&2; exit 125; }
+        # FAKE_Q_BOX_START_FAIL=1 で、コンテナを作ったあとに起動だけが失敗する（止まったコンテナが残る）。
+        [[ "${FAKE_Q_BOX_START_FAIL:-0}" != "1" ]] || { echo "$3" >>"$QB"; echo "docker: Error response from daemon: OCI runtime create failed" >&2; exit 125; }
+        echo "$3" >>"$QB"
+        echo "0123456789abcdef"
+        ;;
+      exec)
+        # 偽の箱。-w /repo/src <箱> <コマンド...>。一覧を出す sh -c（目印 devhost-q-surfaces）には FAKE_Q_SURFACES を返す。
+        [[ "$1" == "-w" && "$2" == "/repo/src" ]] || qfail
+        grep -qxF "$3" "$QB" || { echo "Error response from daemon: No such container: $3" >&2; exit 1; }
+        if [[ "${4:-}" == "sh" && "${5:-}" == "-c" && "${6:-}" == *devhost-q-surfaces* ]]; then
+          [[ "${FAKE_Q_SURFACES_FAIL:-0}" != "1" ]] || exit 1
+          printf '%s\n' "${FAKE_Q_SURFACES-$(printf '.claude/settings.json\n.devcontainer/devcontainer.json')}"
+          # 本物は、受け取った sh -c の本文を箱の中で走らせる。目印の後ろに case の一覧が入っていることだけ確かめる。
+          [[ "$6" == *'.claude/*'* && "$6" == *'.devcontainer/*'* ]] || { echo "fake docker: 一覧の case に対象が入っていません" >&2; exit 2; }
+          exit 0
+        fi
+        shift 3
+        printf 'fake-exec:%s\n' "$*"
+        exit "${FAKE_Q_EXEC_CODE:-0}"
+        ;;
+      *) qfail ;;
+    esac
+    exit 0
+    ;;
+esac
 case "$sub" in
   ps)
     if [[ "${FAKE_DOCKER_FAIL:-}" == "ps" ]]; then
@@ -837,6 +968,23 @@ log_call sleep "$@"
 EOF
 chmod +x "$ROUTEBIN/sleep"
 
+# timeout（検疫の試験だけ RUN_PATH で PATH に載せる。ほかの試験の「timeout 無し」を崩さない）: -k <秒> <秒> <コマンド...> を記録して、そのコマンドを走らせる。FAKE_TIMEOUT_EXPIRE=1 は時間切れ（コマンドを走らせず 124）。
+mkdir -p "$WORK/qtbin"
+cat >"$WORK/qtbin/timeout" <<EOF
+#!$BASH_BIN
+set -euo pipefail
+. "$FAKEBIN/_log"
+EOF
+cat >>"$WORK/qtbin/timeout" <<'EOF'
+log_call timeout "$@"
+[[ "$1" == "-k" ]] || { echo "fake timeout: この試験が想定していない引数です: $*" >&2; exit 2; }
+shift 2
+shift
+[[ "${FAKE_TIMEOUT_EXPIRE:-0}" != "1" ]] || exit 124
+exec "$@"
+EOF
+chmod +x "$WORK/qtbin/timeout"
+
 chmod +x "$FAKEBIN/devcontainer" "$FAKEBIN/docker" "$FAKEBIN/tmux" "$FAKEBIN/systemctl" "$FAKEBIN/git" "$FAKEBIN/ps" "$FAKEBIN/journalctl" "$FAKEBIN/codex" "$FAKEBIN/curl" "$FAKEBIN/iptables" "$FAKEBIN/iptables-restore"
 for t in cut cksum mv jq tar gzip cp chmod cmp dirname date; do
   p="$(command -v "$t")" || { echo "[devhost-selftest] $t が見つかりません" >&2; exit 1; }
@@ -887,7 +1035,7 @@ run() {
   : >"$LOG"
   n=$((n + 1))
   CUR="$name"
-  env -i HOME="$WORK/home" PATH="$FAKEBIN:$TOOLBIN" \
+  env -i HOME="$WORK/home" PATH="${RUN_PATH:-$FAKEBIN:$TOOLBIN}" \
     DEV_PROJECTS_FILE="${T_CONF:-$CONF}" FAKE_LOG="$LOG" FAKE_STATE="$STATE" \
     DEV_PROC_ROOT="$WORK/proc" DEV_CGROUP_ROOT="$WORK/cg" DEV_SYS_ROOT="$WORK/sys" \
     ${envs[@]+"${envs[@]}"} \
@@ -2310,7 +2458,7 @@ n=$((n + 1))
 if ! readme_check "$README"; then ng "README が dev help と一致しません"; fi
 # dev が実際に受け付けるサブコマンドの確認: 一覧の各名前を引数なしで呼ぶと、使い方の誤り（2）で
 # 「使い方: dev <名前>」と返る（知らないサブコマンドなら一覧の usage が出る）。help だけは 0。
-for sub in ls up attach supervise rebuild doctor runner restart stop logs enable disable exec; do
+for sub in ls up attach supervise rebuild doctor runner restart stop logs enable disable exec quarantine; do
   if [[ "$sub" == "ls" ]]; then
     run 2 "$sub は引数を受け付けない（使い方の誤り）" -- -- "$sub" x
   else
@@ -2332,6 +2480,349 @@ if readme_check "$M" >/dev/null 2>&1; then ng "README からサブコマンド�
 if readme_check "$M" >/dev/null 2>&1; then ng "README へ dev に無いサブコマンドを足しても照合が通ります"; fi
 # 検査が元の README では通ること（変異のたびに通らなくなっただけ、を除く）。
 readme_check "$README" >/dev/null 2>&1 || ng "README の照合が、変異の後で通らなくなりました"
+
+# ── 6e'. quarantine（信頼できないリポジトリの検疫）───────────────────────────
+# 偽の docker で、open が箱へ渡す引数（ネットワークなし・権限なし・読み取り専用・ホストのマウントと -e が無い）、
+# https 以外の URL の拒否、ホストの git / devcontainer を呼ばず clone を docker run の中だけで行うこと、
+# clone 失敗でのボリュームの削除、期限切れの削除、ls / rm / exec、設定・フックの一覧を見る。
+QURL="https://example.invalid/o/r.git"
+RUN_PATH="$WORK/qtbin:$FAKEBIN:$TOOLBIN"
+QFMT='{{.Label "devhost.quarantine"}} {{.Label "devhost.quarantine.created"}} {{.Label "devhost.quarantine.url"}}'
+q_has() {
+  local line="$1" w
+  shift
+  [[ -n "$line" ]] || { ng "$CUR: 対象の docker の呼び出しが記録にありません"; return 0; }
+  for w in "$@"; do
+    [[ "$line" == *"$w"* ]] || ng "$CUR: 引数に $w がありません: $line"
+  done
+}
+q_hasnt() {
+  local line="$1" w
+  shift
+  for w in "$@"; do
+    [[ "$line" != *"$w"* ]] || ng "$CUR: 引数に $w があってはいけません: $line"
+  done
+}
+# 記録の中で、固定文字列を含む最初の行。
+q_line() { grep -F -- "$1" "$LOG" | sed -n 1p || true; }
+q_id_from_out() { sed -n 's/.*\(q-[0-9a-f]\{8\}\).*/\1/p' "$OUT" | sed -n 1p; }
+
+# 引数の検査: docker を 1 回も呼ばずに 2 で止まる。
+reset_state
+for u in "ssh://git@example.invalid/o/r.git" "git@example.invalid:o/r.git" "file:///tmp/x" "ext::sh -c id" "ext::sh%20-c%20id" \
+  "http://example.invalid/o/r.git" "git://example.invalid/o/r.git" "https://u:p@example.invalid/o/r.git" "https://example.invalid/o/r x" \
+  "https://example.invalid/o/r.git?token=x" "https://example.invalid/o/r.git#frag" " https://example.invalid/o/r" "-https://example.invalid" "https://" "https:///o/r" "https://example.invalid/o/r"$'\n'"x" \
+  "https://example.invalid/o/r"$'\x1b'"[0m" ""; do
+  run 2 "quarantine open: 拒否する URL ${u:0:40}" -- -- quarantine open "$u"
+  expect_no_calls
+done
+run 2 "quarantine open: URL が無い" -- -- quarantine open
+expect_no_calls
+run 2 "quarantine open: 引数が多い" -- -- quarantine open "$QURL" x
+expect_no_calls
+run 2 "quarantine: 知らないサブコマンド" -- -- quarantine bogus
+expect_err "知らない quarantine のサブコマンドです: bogus"
+expect_no_calls
+for t in 0 abc -1 1.5 1000000 " 2"; do
+  run 2 "quarantine ls: 不正な期限 [$t]" -- DEV_QUARANTINE_TTL="$t" -- quarantine ls
+  expect_err "DEV_QUARANTINE_TTL"
+  expect_no_calls
+done
+run 2 "quarantine open: 不正な期限は URL が正しくても docker を呼ばない" -- DEV_QUARANTINE_TTL=0 -- quarantine open "$QURL"
+expect_no_calls
+for bad_id in q-xyz q-0123456789 Q-01234567 q-0123456g q-0123456 ../etc q-01234567x; do
+  run 2 "quarantine exec: 不正な識別子 $bad_id" -- -- quarantine exec "$bad_id" -- ls
+  expect_err "識別子は q- と 16 進 8 桁"
+  expect_no_calls
+  run 2 "quarantine rm: 不正な識別子 $bad_id" -- -- quarantine rm "$bad_id"
+  expect_err "識別子は q- と 16 進 8 桁"
+  expect_no_calls
+done
+run 2 "quarantine exec: -- が無い" -- -- quarantine exec q-01234567 ls
+expect_no_calls
+run 2 "quarantine exec: コマンドが無い" -- -- quarantine exec q-01234567 --
+expect_no_calls
+run 2 "quarantine rm: 引数が無い" -- -- quarantine rm
+expect_no_calls
+run 2 "quarantine ls: 引数が多い" -- -- quarantine ls x
+expect_no_calls
+run 2 "quarantine build: 引数が多い" -- -- quarantine build x
+expect_no_calls
+
+# build: 埋め込みの Dockerfile を標準入力で渡す。イメージ名は DEV_QUARANTINE_IMAGE で差し替えられる。
+reset_state
+run 0 "quarantine build" -- -- quarantine build
+expect_calls \
+  "docker [volume] [ls] [--filter] [label=devhost.quarantine] [--format] [$QFMT]" \
+  "docker [build] [-t] [dev-quarantine:local] [-]"
+for w in "FROM alpine:3.20" "git" "ripgrep" "USER 10001:10001" "chown 10001:10001 /repo"; do
+  grep -qF -- "$w" "$STATE/q-build-stdin" || ng "quarantine build: Dockerfile に「$w」がありません"
+done
+rm -f "$STATE/q-build-stdin"
+run 0 "quarantine build: イメージ名の差し替え" -- DEV_QUARANTINE_IMAGE=my-q:1 FAKE_QUARANTINE_IMAGE=my-q:1 -- quarantine build
+expect_calls \
+  "docker [volume] [ls] [--filter] [label=devhost.quarantine] [--format] [$QFMT]" \
+  "docker [build] [-t] [my-q:1] [-]"
+grep -qF "FROM alpine:3.20" "$STATE/q-build-stdin" || ng "quarantine build: 差し替えた名前でも Dockerfile を標準入力で渡すはずです"
+run 1 "quarantine open: 差し替えたイメージが無い" -- DEV_QUARANTINE_IMAGE=my-q:1 FAKE_QUARANTINE_IMAGE=my-q:1 FAKE_IMAGE_MISSING=1 -- quarantine open "$QURL"
+expect_err "検疫のイメージがありません: my-q:1"
+grep -qF "docker [image] [inspect] [my-q:1]" "$LOG" || ng "quarantine open: 差し替えた名前を image inspect で確かめていません"
+run 0 "quarantine open: 差し替えたイメージで clone と箱を起こす" -- DEV_QUARANTINE_IMAGE=my-q:1 FAKE_QUARANTINE_IMAGE=my-q:1 -- quarantine open "$QURL"
+grep -qF "[my-q:1] [git]" "$LOG" || ng "quarantine open: clone が差し替えたイメージで走っていません"
+grep -qF "[my-q:1] [tail]" "$LOG" || ng "quarantine open: 箱が差し替えたイメージで起きていません"
+
+# open: イメージが無ければ build を案内して止まる（ボリュームも作らない）。
+reset_state
+run 1 "quarantine open: イメージが無い" -- FAKE_IMAGE_MISSING=1 -- quarantine open "$QURL"
+expect_err "dev quarantine build"
+if grep -qF "[volume] [create]" "$LOG"; then ng "quarantine open: イメージが無いのにボリュームを作っています"; fi
+
+# open: 成功。
+reset_state
+run 0 "quarantine open" -- -- quarantine open "$QURL"
+QID="$(q_id_from_out)"
+[[ "$QID" =~ ^q-[0-9a-f]{8}$ ]] || ng "quarantine open: 識別子が出力にありません: $QID"
+expect_out_line "dev quarantine exec $QID -- "
+expect_out_line "dev quarantine rm $QID"
+# 箱を clone より先に起こす（tmpfs のボリュームは、使うコンテナが無くなると中身が消えるため）。
+q_box_line="$(grep -n -F '[-d] [--name]' "$LOG" | sed -n 1p | cut -d: -f1)"
+q_clone_line="$(grep -n -F '[dev-quarantine-clone-' "$LOG" | sed -n 1p | cut -d: -f1)"
+[[ -n "$q_box_line" && -n "$q_clone_line" && "$q_box_line" -lt "$q_clone_line" ]] || ng "quarantine open: 箱を clone より先に起こしていません（箱 ${q_box_line:-なし} 行目・clone ${q_clone_line:-なし} 行目）"
+expect_out_line '\.claude/settings\.json'
+expect_out_line '\.devcontainer/devcontainer\.json'
+QBOX="$(q_line '[-d] [--name]')"
+QCLONE="$(q_line 'docker [run] [--rm]')"
+q_has "$QBOX" "[--name] [dev-quarantine-$QID]" "[--network] [none]" "[--cap-drop] [ALL]" "[--security-opt] [no-new-privileges]" \
+  "[--read-only]" "[--tmpfs] [/tmp]" "[--memory]" "[--pids-limit]" "[--user] [10001:10001]" "[--mount] [type=volume,src=dev-quarantine-$QID,dst=/repo,readonly]" \
+  "[--label] [devhost.quarantine=$QID]" "[--label] [devhost.quarantine.url=$QURL]"
+# 箱の -e は、プロキシの変数を空で渡すもの（docker のクライアント設定の自動の注入を上書きする）だけ。値のあるものは渡さない。
+for q_px in HTTP_PROXY http_proxy HTTPS_PROXY https_proxy FTP_PROXY ftp_proxy NO_PROXY no_proxy ALL_PROXY all_proxy; do
+  q_has "$QBOX" "[-e] [$q_px=]"
+done
+q_box_e="$(printf '%s\n' "$QBOX" | grep -oE '\[-e\] \[[^]]*\]' | grep -vE '^\[-e\] \[(HTTP|HTTPS|FTP|NO|ALL|http|https|ftp|no|all)_(PROXY|proxy)=\]$' || true)"
+[[ -z "$q_box_e" ]] || ng "quarantine open: 箱にプロキシの空の値以外の -e があります: $q_box_e"
+q_hasnt "$QBOX" "[--env-file]" "[--env]" "[--privileged]" "type=bind" "[--volume]" "[-v] [/" "[-v] [~" "[-v] [.]" "docker.sock" "[--user] [root]" "[-u]"
+case "$QBOX" in *"[--label] [devhost.quarantine.created="[0-9]*"]"*) ;; *) ng "quarantine open: 箱に作成時刻のラベルがありません: $QBOX" ;; esac
+q_has "$QCLONE" "[--cap-drop] [ALL]" "[--security-opt] [no-new-privileges]" "[--user] [10001:10001]" "[--memory] [2g]" \
+  "[--mount] [type=volume,src=dev-quarantine-$QID,dst=/repo]" "[-c] [http.lowSpeedLimit=1000]" "[-c] [http.lowSpeedTime=60]" \
+  "[-e] [GIT_LFS_SKIP_SMUDGE=1]" "[-e] [GIT_TERMINAL_PROMPT=0]" "[git] [-c] [core.hooksPath=/dev/null]" \
+  "[-c] [protocol.file.allow=never]" "[-c] [protocol.ext.allow=never]" "[clone] [--no-recurse-submodules] [--] [$QURL] [/repo/src]"
+q_hasnt "$QCLONE" "[--network]" "[--env-file]" "[--privileged]" "[-v] [/" "[-v] [~" "docker.sock"
+tmp_e="${QCLONE//\[-e\]/}"
+[[ $(((${#QCLONE} - ${#tmp_e}) / 4)) -eq 2 ]] || ng "quarantine open: clone の環境変数は GIT_LFS_SKIP_SMUDGE と GIT_TERMINAL_PROMPT だけのはずです: $QCLONE"
+# ボリュームは clone より前に作る（箱と clone の順序は上で確かめる）。
+if [[ "$(grep -nF '[volume] [create]' "$LOG" | sed -n 's/^\([0-9]*\):.*/\1/p' | sed -n 1p)" -ge "$(grep -nF 'docker [run] [--rm]' "$LOG" | sed -n 's/^\([0-9]*\):.*/\1/p' | sed -n 1p)" ]]; then ng "quarantine open: ボリュームを clone より後に作っています"; fi
+# ホストの git も devcontainer も呼ばない（clone は docker run の中だけ）。
+if grep -qE '^(git|devcontainer|tmux) ' "$LOG"; then ng "quarantine open: ホストの git / devcontainer / tmux を呼んでいます"; grep -E '^(git|devcontainer|tmux) ' "$LOG" >&2; fi
+if grep -E '^[a-z-]+ \[' "$LOG" | grep -vE '^(docker \[(volume|image|run|exec|rm|inspect|ps|container)\]|timeout \[-k\])' >/dev/null; then ng "quarantine open: 想定外の呼び出しがあります"; fi
+grep -qF "$QID $(sed -n 's/^[^ ]* \([0-9]*\) .*/\1/p' "$STATE/q-volumes" | sed -n 1p) $QURL" "$STATE/q-volumes" || ng "quarantine open: ボリュームの記録がありません"
+grep -qxF "dev-quarantine-$QID" "$STATE/q-boxes" || ng "quarantine open: 箱が起きていません"
+
+# open: 設定・フックが無いときと、一覧を出せないとき。制御文字は端末へ出さない。
+reset_state
+run 0 "quarantine open: 一覧が空" -- FAKE_Q_SURFACES= -- quarantine open "$QURL"
+expect_out_line '該当なし'
+run 0 "quarantine open: 一覧を出せなくても箱は開く" -- FAKE_Q_SURFACES_FAIL=1 -- quarantine open "$QURL"
+expect_err "一覧を出せませんでした"
+expect_out_line "dev quarantine rm q-[0-9a-f]{8}"
+run 0 "quarantine open: 一覧の制御文字" -- FAKE_Q_SURFACES=$'.claude/a\x1b[31mb' -- quarantine open "$QURL"
+if grep -q $'\x1b' "$OUT"; then ng "quarantine open: ファイル名の制御文字がそのまま出ています"; fi
+expect_out_line '\.claude/a\?\[31mb'
+
+# open: clone に失敗したら、先に起こした箱とボリュームを消す。
+reset_state
+run 1 "quarantine open: clone の失敗" -- FAKE_Q_CLONE_FAIL=1 -- quarantine open "$QURL"
+expect_err "取得に失敗しました"
+# サーバの「remote:」の出力の制御文字は、端末へ出す前に ? へ置き換える。
+if grep -q $'\x1b' "$ERR"; then ng "quarantine open: clone の出力の制御文字がそのまま出ています"; fi
+expect_err 'remote: ?]52;c;ZXZpbA==??[2Kfake'
+[[ ! -s "$STATE/q-volumes" ]] || ng "quarantine open: clone に失敗したのにボリュームが残っています"
+grep -qE 'docker \[rm\] \[-f\] \[dev-quarantine-q-[0-9a-f]{8}\]' "$LOG" || ng "quarantine open: clone に失敗したのに箱を消していません"
+grep -qF 'docker [volume] [rm] [dev-quarantine-q-' "$LOG" || ng "quarantine open: clone の失敗でボリュームを消していません"
+run 1 "quarantine open: 箱を起こせない" -- FAKE_Q_BOX_FAIL=1 -- quarantine open "$QURL"
+[[ ! -s "$STATE/q-volumes" ]] || ng "quarantine open: 箱を起こせなかったのにボリュームが残っています"
+# 作成のあとに起動だけが失敗したら、止まったコンテナとボリュームの両方を消す。
+reset_state
+run 1 "quarantine open: 箱の起動だけが失敗する" -- FAKE_Q_BOX_START_FAIL=1 -- quarantine open "$QURL"
+expect_err "調べる箱を起こせませんでした"
+[[ ! -s "$STATE/q-boxes" ]] || ng "quarantine open: 起動に失敗した箱（止まったコンテナ）が残っています"
+[[ ! -s "$STATE/q-volumes" ]] || ng "quarantine open: 起動に失敗したのにボリュームが残っています"
+# clone のあいだに箱が止められたら、成功と報告せず、箱とボリュームを消して 1。
+reset_state
+run 1 "quarantine open: clone のあいだに箱が止まる" -- FAKE_Q_STOP_DURING_CLONE=1 -- quarantine open "$QURL"
+expect_err "取得のあいだに箱が止まりました"
+if grep -F '箱を開きました' "$OUT" >/dev/null; then ng "quarantine open: 箱が止まったのに、開いたと報告しています"; fi
+[[ ! -s "$STATE/q-volumes" ]] || ng "quarantine open: 箱が止まったのにボリュームが残っています"
+
+
+# 引数の検査（大きさ・clone の時間）: docker を呼ばずに 2。
+for t in 0 abc 0g 2g 1537m 1.5g 1000000g -1m; do
+  run 2 "quarantine open: 不正な大きさ [$t]" -- DEV_QUARANTINE_SIZE="$t" -- quarantine open "$QURL"
+  expect_err "DEV_QUARANTINE_SIZE"
+  expect_no_calls
+done
+for t in 0 abc -1 1.5 1000000; do
+  run 2 "quarantine open: 不正な clone の時間 [$t]" -- DEV_QUARANTINE_CLONE_TIMEOUT="$t" -- quarantine open "$QURL"
+  expect_err "DEV_QUARANTINE_CLONE_TIMEOUT"
+  expect_no_calls
+done
+
+# ボリュームは tmpfs で、大きさを限る。clone の時間は timeout で限る。
+reset_state
+run 0 "quarantine open: tmpfs のボリューム" -- -- quarantine open "$QURL"
+QID="$(q_id_from_out)"
+QOPTS="$(cat "$STATE/q-volume-opts")"
+[[ "$QOPTS" == *"driver=local"* && "$QOPTS" == *"type=tmpfs"* && "$QOPTS" == *"device=tmpfs"* && "$QOPTS" == *"o=size=1g,uid=10001,gid=10001,mode=0700"* ]] || ng "quarantine open: ボリュームが tmpfs の指定になっていません: $QOPTS"
+grep -qF "docker [volume] [create] [--driver] [local] [--opt] [type=tmpfs] [--opt] [device=tmpfs] [--opt] [o=size=1g,uid=10001,gid=10001,mode=0700]" "$LOG" || ng "quarantine open: volume create の引数が違います"
+grep -qF "timeout [-k] [10] [600] [docker] [run] [--rm] [--name] [dev-quarantine-clone-$QID]" "$LOG" || ng "quarantine open: clone が timeout 600 秒の下で走っていません"
+run 0 "quarantine open: 大きさと時間の差し替え" -- DEV_QUARANTINE_SIZE=1536m DEV_QUARANTINE_CLONE_TIMEOUT=30 -- quarantine open "$QURL"
+grep -qF "o=size=1536m,uid=10001" "$LOG" || ng "quarantine open: DEV_QUARANTINE_SIZE が volume create に渡っていません"
+grep -qF "timeout [-k] [10] [30] [docker] [run]" "$LOG" || ng "quarantine open: DEV_QUARANTINE_CLONE_TIMEOUT が timeout に渡っていません"
+run 0 "quarantine open: 大きさ m の指定" -- DEV_QUARANTINE_SIZE=512m -- quarantine open "$QURL"
+grep -qF "o=size=512m,uid=10001" "$LOG" || ng "quarantine open: 512m が volume create に渡っていません"
+
+# 時間切れ: clone のコンテナを rm -f し、先に起こした箱とボリュームを消す。
+reset_state
+run 1 "quarantine open: clone の時間切れ" -- FAKE_TIMEOUT_EXPIRE=1 -- quarantine open "$QURL"
+expect_err "秒を超えたので止めました"
+grep -qE 'docker \[rm\] \[-f\] \[dev-quarantine-clone-q-[0-9a-f]{8}\]' "$LOG" || ng "quarantine open: 時間切れのあとに clone のコンテナを rm -f していません"
+grep -qF 'docker [volume] [rm] [dev-quarantine-q-' "$LOG" || ng "quarantine open: 時間切れのあとにボリュームを消していません"
+[[ ! -s "$STATE/q-volumes" ]] || ng "quarantine open: 時間切れのあとにボリュームが残っています"
+grep -qE 'docker \[rm\] \[-f\] \[dev-quarantine-q-[0-9a-f]{8}\]' "$LOG" || ng "quarantine open: 時間切れのあとに箱を消していません"
+run 1 "quarantine open: clone の失敗でも clone のコンテナを rm -f する" -- FAKE_Q_CLONE_FAIL=1 -- quarantine open "$QURL"
+grep -qE 'docker \[rm\] \[-f\] \[dev-quarantine-clone-q-[0-9a-f]{8}\]' "$LOG" || ng "quarantine open: 失敗のあとに clone のコンテナを rm -f していません"
+
+# clone のあとにボリュームが消えた（空のボリュームを勝手に作られる）: 箱とボリュームを消して 1。
+reset_state
+run 1 "quarantine open: ボリュームのラベルが消えている" -- FAKE_Q_VOL_VANISH=1 -- quarantine open "$QURL"
+expect_err "途中で消えました"
+grep -qE 'docker \[rm\] \[-f\] \[dev-quarantine-q-[0-9a-f]{8}\]' "$LOG" || ng "quarantine open: ラベルが消えたのに箱を消していません"
+[[ ! -s "$STATE/q-boxes" ]] || ng "quarantine open: ラベルが消えたのに箱が残っています"
+
+# 期限・ls・exec・rm。
+NOW="$(date +%s)"
+q_seed() {
+  reset_state
+  printf 'q-aaaaaaaa 1 https://old.invalid/x.git\nq-bbbbbbbb %s https://new.invalid/y.git\nq-cccccccc %s https://mid.invalid/z.git\n' \
+    "$((NOW - 3725))" "$((NOW - 7300))" >"$STATE/q-volumes"
+  printf 'dev-quarantine-q-aaaaaaaa\ndev-quarantine-q-bbbbbbbb\ndev-quarantine-q-cccccccc\n' >"$STATE/q-boxes"
+}
+q_seed
+run 0 "quarantine ls: 期限を超えた箱を消して、残りを並べる" -- -- quarantine ls
+expect_out_line '期限（24 時間）を超えた箱を消しました: q-aaaaaaaa'
+expect_out_line '^q-bbbbbbbb  1h02m  動いている  https://new\.invalid/y\.git$'
+expect_out_line '^q-cccccccc  2h01m  動いている  https://mid\.invalid/z\.git$'
+if grep -qF 'q-aaaaaaaa  ' "$OUT"; then ng "quarantine ls: 期限を超えた箱が並んでいます"; fi
+grep -qF 'docker [rm] [-f] [dev-quarantine-q-aaaaaaaa]' "$LOG" || ng "quarantine ls: 期限を超えた箱を消していません"
+grep -qF 'docker [volume] [rm] [dev-quarantine-q-aaaaaaaa]' "$LOG" || ng "quarantine ls: 期限を超えたボリュームを消していません"
+if grep -E '\[(rm|volume)\].*q-bbbbbbbb\]' "$LOG" >/dev/null; then ng "quarantine ls: 期限内の箱を消しています"; fi
+run 0 "quarantine ls: 期限を短くする（DEV_QUARANTINE_TTL=2）" -- DEV_QUARANTINE_TTL=2 -- quarantine ls
+expect_out_line '期限（2 時間）を超えた箱を消しました: q-cccccccc'
+expect_out_line '^q-bbbbbbbb  1h02m  動いている  '
+q_seed
+: >"$STATE/q-volumes"
+run 0 "quarantine ls: 箱が無い" -- -- quarantine ls
+expect_out_line '検疫の箱はありません'
+
+# 識別子の重なり: 乱数が既存の箱と同じ識別子を出し続けたら、既存の箱に触れずに 1 で止まる。
+printf 'bbbbbbbbbbbbbbbb' >"$WORK/q-rand-b"
+printf 'dddddddddddddddd' >"$WORK/q-rand-d"
+q_seed
+run 1 "quarantine open: 識別子が既存の箱（ボリューム）と重なる" -- DEV_QUARANTINE_RANDOM="$WORK/q-rand-b" -- quarantine open "$QURL"
+expect_err "重ならない識別子を作れませんでした"
+if grep -F '[volume] [create]' "$LOG" >/dev/null; then ng "quarantine open: 識別子が重なったのにボリュームを作っています"; fi
+grep -q '^q-bbbbbbbb ' "$STATE/q-volumes" || ng "quarantine open: 識別子が重なった既存のボリュームを消しています"
+grep -qxF 'dev-quarantine-q-bbbbbbbb' "$STATE/q-boxes" || ng "quarantine open: 識別子が重なった既存の箱を消しています"
+q_seed
+grep -v '^q-bbbbbbbb ' "$STATE/q-volumes" >"$STATE/q-volumes.new" || true
+mv "$STATE/q-volumes.new" "$STATE/q-volumes"
+run 1 "quarantine open: 識別子が既存のコンテナだけと重なる" -- DEV_QUARANTINE_RANDOM="$WORK/q-rand-b" -- quarantine open "$QURL"
+expect_err "重ならない識別子を作れませんでした"
+grep -qxF 'dev-quarantine-q-bbbbbbbb' "$STATE/q-boxes" || ng "quarantine open: 識別子が重なった既存のコンテナを消しています"
+q_seed
+run 0 "quarantine open: 重ならない識別子" -- DEV_QUARANTINE_RANDOM="$WORK/q-rand-d" -- quarantine open "$QURL"
+expect_out_line '箱を開きました: q-dddddddd'
+
+# ls: docker ps を読めなければ、止まっていると取り違えず「不明」と出す。
+q_seed
+run 0 "quarantine ls: docker ps の失敗" -- FAKE_Q_PS_FAIL=1 -- quarantine ls
+expect_out_line '^q-bbbbbbbb  1h02m  不明  https://new\.invalid/y\.git$'
+if grep -F '止まっている' "$OUT" >/dev/null; then ng "quarantine ls: docker ps を読めないのに「止まっている」と出しています"; fi
+q_seed
+run 0 "quarantine build: 冒頭で期限を超えた箱を消す" -- -- quarantine build
+expect_out_line '期限（24 時間）を超えた箱を消しました: q-aaaaaaaa'
+q_seed
+run 0 "quarantine exec: 冒頭で期限を超えた箱を消す" -- -- quarantine exec q-bbbbbbbb -- ls
+expect_out_line '期限（24 時間）を超えた箱を消しました: q-aaaaaaaa'
+q_seed
+run 1 "quarantine ls: 一覧を読めなければ 1" -- FAKE_Q_LS_FAIL=1 -- quarantine ls
+expect_err "検疫の箱の一覧を読めませんでした"
+q_seed
+run 0 "quarantine ls: 消せない期限切れは警告だけ" -- FAKE_Q_VOLRM_FAIL=dev-quarantine-q-aaaaaaaa -- quarantine ls
+expect_err "期限を超えた箱を消せませんでした: q-aaaaaaaa"
+
+q_seed
+run 0 "quarantine exec: 箱の中で実行し、出力を返す" -- -- quarantine exec q-bbbbbbbb -- rg "foo bar" /repo/src
+expect_out_line '^fake-exec:rg foo bar /repo/src$'
+grep -qF 'docker [exec] [-w] [/repo/src] [dev-quarantine-q-bbbbbbbb] [rg] [foo bar] [/repo/src]' "$LOG" || ng "quarantine exec: 箱の中の実行の引数が違います"
+run 7 "quarantine exec: 箱の中のコマンドの終了コードをそのまま返す" -- FAKE_Q_EXEC_CODE=7 -- quarantine exec q-bbbbbbbb -- false
+run 0 "quarantine exec: コマンドは制限しない（-で始まるものも渡す）" -- -- quarantine exec q-bbbbbbbb -- sh -c "id"
+expect_out_line '^fake-exec:sh -c id$'
+run 1 "quarantine exec: 無い箱" -- -- quarantine exec q-dddddddd -- ls
+expect_err "検疫の箱がありません"
+if grep -qF '[exec]' "$LOG"; then ng "quarantine exec: 無い箱に exec しています"; fi
+
+q_seed
+run 0 "quarantine rm <id>" -- -- quarantine rm q-bbbbbbbb
+grep -qF 'docker [rm] [-f] [dev-quarantine-q-bbbbbbbb]' "$LOG" || ng "quarantine rm: 箱を消していません"
+grep -qF 'docker [volume] [rm] [dev-quarantine-q-bbbbbbbb]' "$LOG" || ng "quarantine rm: ボリュームを消していません"
+if grep -qF 'q-bbbbbbbb' "$STATE/q-volumes"; then ng "quarantine rm: 記録が残っています"; fi
+grep -qF 'q-cccccccc' "$STATE/q-volumes" || ng "quarantine rm: 別の箱まで消しています"
+run 1 "quarantine rm: 無い箱" -- -- quarantine rm q-bbbbbbbb
+expect_err "検疫の箱がありません"
+q_seed
+run 1 "quarantine rm: ボリュームを消せない" -- FAKE_Q_VOLRM_FAIL=dev-quarantine-q-bbbbbbbb -- quarantine rm q-bbbbbbbb
+expect_err "消せませんでした: q-bbbbbbbb"
+q_seed
+run 0 "quarantine rm --all" -- -- quarantine rm --all
+expect_out_line '消しました: q-bbbbbbbb'
+expect_out_line '消しました: q-cccccccc'
+[[ ! -s "$STATE/q-volumes" ]] || ng "quarantine rm --all: 記録が残っています"
+[[ ! -s "$STATE/q-boxes" ]] || ng "quarantine rm --all: 箱が残っています"
+run 0 "quarantine rm --all: 箱が無い" -- -- quarantine rm --all
+expect_out_line '検疫の箱はありません'
+
+
+# 止まった箱（ホストか dockerd の再起動のあと）: exec は 1、ls は「止まっている」、rm は消せる。
+q_seed
+grep -vxF "dev-quarantine-q-bbbbbbbb" "$STATE/q-boxes" >"$STATE/q-boxes.new" || true
+mv "$STATE/q-boxes.new" "$STATE/q-boxes"
+echo "dev-quarantine-q-bbbbbbbb" >"$STATE/q-stopped"
+run 1 "quarantine exec: 止まった箱" -- -- quarantine exec q-bbbbbbbb -- ls
+expect_err "箱が止まっています"
+expect_err "dev quarantine rm q-bbbbbbbb"
+if grep -qF '[exec]' "$LOG"; then ng "quarantine exec: 止まった箱に exec しています"; fi
+run 0 "quarantine ls: 止まった箱の状態" -- -- quarantine ls
+expect_out_line '^q-bbbbbbbb  1h02m  止まっている  '
+expect_out_line '^q-cccccccc  2h01m  動いている  '
+run 0 "quarantine rm: 止まった箱も消せる" -- -- quarantine rm q-bbbbbbbb
+expect_out_line '消しました: q-bbbbbbbb'
+
+# 直前の期限切れの削除で消えた識別子の rm は、成功として終わる。
+q_seed
+run 0 "quarantine rm: 期限切れで消えたばかりの識別子" -- -- quarantine rm q-aaaaaaaa
+expect_out_line '消しました（期限切れ）: q-aaaaaaaa'
+run 1 "quarantine rm: 期限切れでも無い箱は 1" -- -- quarantine rm q-dddddddd
+
+# help と usage に出る。
+run 0 "help quarantine" -- -- help quarantine
+expect_out_line 'dev quarantine open <URL>'
+expect_out_line '読んだ本文の中の注入|本文の中の注入'
+run 0 "help（引数なし）に quarantine がある" -- -- help
+expect_out_line '^  dev quarantine open <URL>$'
+run 2 "引数なしの usage に quarantine がある" -- --
+expect_err "dev quarantine rm <識別子>|--all"
+unset RUN_PATH
 
 # ── 6f. runner（自前のランナー）──────────────────────────────────────────────
 # 偽の docker / curl で、登録用トークンの取得・--ephemeral かつ --rm のコンテナ・PAT を出さないこと・

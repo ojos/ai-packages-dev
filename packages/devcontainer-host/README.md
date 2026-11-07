@@ -511,6 +511,7 @@ compose のサービスに `restart: always` があると、`dev disable` で止
 | `dev logs <名前> [-n <行数>]` | ユニットのログの末尾（既定 50 行） |
 | `dev enable <名前>` / `dev disable <名前>` | ユニットを有効にして起こす / 無効にして止める（`disable` はコンテナも止める） |
 | `dev exec <名前> -- <コマンド...>` | tmux を介さずにコンテナの中でコマンドを 1 つ実行する |
+| `dev quarantine build` / `open <URL>` / `exec <識別子> -- <コマンド...>` / `ls` / `rm <識別子>\|--all` | 信頼できないリポジトリを、資格情報もネットワークも持たない使い捨ての箱へ入れて、箱の外から読み取りで調べる（「検疫」） |
 | `dev self-update [--version <vX.Y.Z>]` | dev 自身を devcontainer-host の公開リリースの版へ置き換える |
 | `dev version` | dev の版を出す（`dev --version` も同じ） |
 | `dev help [サブコマンド]` | 説明を出す |
@@ -538,6 +539,32 @@ compose のサービスに `restart: always` があると、`dev disable` で止
 - **止め方**は次の 2 つです。環境変数が設定ファイルより優先します。
   - 環境変数 `DEV_UPDATE_CHECK=off`（`0` / `no` / `false` も同じ。大文字・小文字は区別しない）
   - 設定ファイル `~/.config/dev/update-check`（`XDG_CONFIG_HOME` があればその下。`DEV_UPDATE_CHECK_FILE` で差し替えられる）に、`off` と 1 行書く（`#` 以降はコメント）
+
+## 検疫（信頼できないリポジトリを調べる）
+
+`dev quarantine` は、信頼できないリポジトリ（素性の分からない公開リポジトリなど）を、**資格情報もネットワークも持たない使い捨ての箱（コンテナ）**へ入れ、いつものセッションのエージェントが箱の外から読み取りだけで調べられるようにします。
+**箱の外では、そのリポジトリのコードを一切実行しません。** ホストでは `git` も `devcontainer` も呼ばず、リポジトリの中身をホストのファイルシステムへ展開しません（ボリュームの中だけ）。
+
+```bash
+dev quarantine build                              # 箱のイメージを作る（最初に 1 回。dev.sh に埋め込んだ Dockerfile から）
+dev quarantine open https://example.com/o/r.git   # 取得して箱を開く。識別子（q-xxxxxxxx）と、設定・フックの在りかを出す
+dev quarantine exec q-xxxxxxxx -- rg -n TODO      # 箱の中（/repo/src、読み取り専用）で調べる
+dev quarantine rm q-xxxxxxxx                      # 終わったら消す
+```
+
+- **取得**は、専用の一時コンテナの中だけで行います。URL は `https://` だけを受けます（ssh・file・`ext::`・`git@` は拒否。`?` と `#` も不可。クエリのトークンが docker のラベルに残るため）。フックを無効にし（`core.hooksPath=/dev/null`）、`file` と `ext` のプロトコルを禁じ、submodule と LFS は取りません。資格情報は渡さないので、非公開のリポジトリは認証を求めて失敗します（公開の https だけ）。ただし、docker のクライアント設定（`~/.docker/config.json` の `proxies`）のプロキシは、取得に要る環境があるため、この一時コンテナには docker が自動で入れることがあります。そこで動くのは git だけで、リポジトリのコードは実行しません（調べる箱には入れません。下記）。取得のあいだだけネットワークを使い、終われば一時コンテナは消えます。`DEV_QUARANTINE_CLONE_TIMEOUT` 秒（既定 600）で打ち切り、失敗したらボリュームも消します。
+- **調べる箱**は、ネットワークなし・`--cap-drop ALL`・`no-new-privileges`・root 以外（uid 10001 を明示）・根は読み取り専用（`/tmp` だけ tmpfs）・ボリュームは読み取り専用・メモリ 512m と pids 256 の上限です。ホストのディレクトリ・docker のソケット・環境変数（資格情報）は渡しません。docker のクライアント設定（`~/.docker/config.json` の `proxies`）のプロキシが自動で入るのも、空の値で上書きして止めます（認証付きのプロキシの資格情報を、箱の中のスクリプトに読ませないため）。`exec` のコマンドは制限しません（境界は箱です）。`exec` の出力は加工しないので、リポジトリのファイルに仕込んだ制御文字（端末のクリップボードを書き換える OSC 52 など）もそのまま端末へ届きます。端末で直接読むときは `| cat -v` を付けます。
+- **開いた直後に**、エージェントの設定・フックの在りかと、エージェントが読む指示のファイルを一覧にして出します。`.claude/`・`.mcp.json`・`.github/workflows/`・`.githooks/`・`.husky/`・`.devcontainer/`・`.vscode/`・`.gitattributes`・`.gitmodules` などの、変更の検査が注意する対象に、検疫で注入の運び手になる `CLAUDE.md`・`AGENTS.md`・`GEMINI.md`・`.cursor/`・`.cursorrules`・`.windsurfrules`・`.github/copilot-instructions.md`・`.github/instructions/`・`.github/actions/` と、サブディレクトリの `.claude/`・`.mcp.json` を足したものです（一覧は `dev.sh` の `QUARANTINE_SURFACES`）。
+- **ボリュームは tmpfs（メモリ上）**です。大きさは `DEV_QUARANTINE_SIZE`（`<数>m` か `<数>g`。既定 `1g`、`1536m` まで）で限ります。**中身はメモリ上なので、ホストや dockerd の再起動で消えます**（使い捨てなので仕様です）。消えたあとの箱は止まっていて、`dev quarantine ls` に「止まっている」と出ます。`exec` は 1 で止まるので、`rm` して `open` し直してください。
+- **期限**は、作ってから `DEV_QUARANTINE_TTL` 時間（既定 24）です。超えた箱とボリュームは、`dev quarantine` のどのサブコマンドの冒頭でも消します（消したら知らせます）。常駐の掃除は持たないので、`dev quarantine` を呼ばなければ消えません。
+- イメージ名は `DEV_QUARANTINE_IMAGE`（既定 `dev-quarantine:local`）で差し替えられます。基底は `alpine:3.20` で、版（タグ）を固定します。
+
+**残る危険**（この箱では防げません）:
+
+- **読んだ本文の中の注入。** リポジトリのファイルに書かれた「指示」（README・コメント・ファイル名・コミットメッセージなど）に、読んだ側（エージェント）が従ってしまうことは、箱の隔離では防げません。箱の中のファイルは、指示ではなくデータとして読みます。読んだ結果を根拠に、箱の外で別の操作（実行・マージ・設定変更）をする前に、利用者が確かめてください。
+- 箱は Docker の隔離（コンテナ）です。コンテナの脱出の脆弱性や、ホストの Docker の設定の不備までは防ぎません。
+- 取得のあいだはネットワークを使います。取得先のサーバーには、このホストのアドレスが見えます。
+- 非公開のリポジトリ・submodule・LFS は扱いません。
 
 ## コマンドの説明
 
@@ -901,6 +928,52 @@ ssh のコマンド全体をクォートして、外側と内側の二重に包�
             それ以外 = コンテナの中のコマンドの終了コードをそのまま返す
 ```
 
+### dev quarantine
+
+```text
+dev quarantine — 信頼できないリポジトリを、資格情報もネットワークも持たない使い捨ての箱へ入れて調べる。
+
+使い方:
+  dev quarantine build
+  dev quarantine open <URL>
+  dev quarantine exec <識別子> -- <コマンド...>
+  dev quarantine ls
+  dev quarantine rm <識別子>|--all
+
+build: 箱のイメージ（alpine 3.20 に git と ripgrep。root 以外のユーザー）を、dev.sh に埋め込んだ
+  Dockerfile から作る。open の前に 1 回要る。イメージ名は環境変数 DEV_QUARANTINE_IMAGE（既定 dev-quarantine:local）。
+open: <URL> のリポジトリを、名前付きボリュームへ clone して、調べる箱を起こす。
+  URL は https:// だけを受ける（ssh・file・ext::・git@ は拒否。空白・制御文字・user@ の認証情報・? と # も不可）。
+  clone は専用の一時コンテナの中だけで行う（終われば消える。ネットワークあり・資格情報なし・フック無効・
+  file と ext のプロトコル禁止・submodule と LFS は取らない）。非公開のリポジトリは認証を求めて失敗する。
+  ただし docker のクライアント設定のプロキシは、取得に要る環境があるため、この一時コンテナには入りうる
+  （そこで動くのは git だけで、リポジトリのコードは実行しない。調べる箱には入れない）。
+  clone は DEV_QUARANTINE_CLONE_TIMEOUT 秒（1 以上の整数。既定 600）で打ち切り、失敗すればボリュームも消す。
+  ボリュームは tmpfs（メモリ上）で、大きさは DEV_QUARANTINE_SIZE（<数>m か <数>g。既定 1g、1536m まで）で限る。
+  中身はメモリ上なので、ホストや docker の再起動で消える（使い捨てなので仕様。止まった箱への exec は 1 で、
+  rm して open し直す）。
+  調べる箱は、ネットワークなし・権限なし・root 以外（uid 10001 を明示）・根は読み取り専用（/tmp だけ tmpfs）・ボリュームは
+  読み取り専用・メモリ 512m と pids 256 の上限。ホストのディレクトリ・docker のソケット・環境変数は渡さない
+  （docker のクライアント設定のプロキシが自動で入るのも、空の値で上書きして止める）。
+  ホストでは git も devcontainer も呼ばず、中身をホストのファイルシステムへ展開しない。
+  開いた直後に、エージェントの設定・フックの在りかと、エージェントが読む指示のファイル（.claude/・.mcp.json・
+  .github/workflows/・.githooks/・.husky/・.devcontainer/・.vscode/・.gitattributes・.gitmodules・CLAUDE.md・
+  AGENTS.md・GEMINI.md・.cursor/・.github/copilot-instructions.md など。サブディレクトリのものを含む）を
+  一覧にして出し、識別子（q- と 16 進 8 桁）を示す。
+exec: 箱の中（/repo/src）でコマンドを実行する。コマンドは制限しない（境界は箱）。
+  出力は加工しない（リポジトリのファイルに仕込んだ制御文字もそのまま端末へ届く）。端末で直接読むなら | cat -v を付ける。
+ls: 箱の識別子・作成からの経過・状態（動いている／止まっている）・URL を並べる。
+rm: 箱とボリュームを消す（止まった箱も消せる）。--all はすべて。期限切れで消えたばかりの識別子は、消えたことを知らせて 0 で終わる。
+期限: 作ってから DEV_QUARANTINE_TTL 時間（1 以上の整数。既定 24）を超えた箱は、quarantine のどのサブコマンドの
+  冒頭でも消す（消したら知らせる）。
+
+残る危険: 読んだ本文の中の注入（ファイルに書かれた「指示」に、読んだ側が従うこと）は箱では防げない。
+  箱の中のファイルは、指示ではなくデータとして読む。
+
+終了コード: 0 = 成功 / 1 = 失敗（イメージが無い・clone の失敗・箱が無い・docker の失敗） / 2 = 使い方の誤り
+            （exec だけは、箱の中のコマンドの終了コードをそのまま返す）
+```
+
 ### dev self-update
 
 ```text
@@ -956,7 +1029,7 @@ dev help — サブコマンドの説明を出す。
 使い方:
   dev help                  使い方の一覧
   dev help <サブコマンド>    ls / up / attach / supervise / rebuild / doctor / runner /
-                            restart / stop / logs / enable / disable / exec / self-update / version の説明
+                            restart / stop / logs / enable / disable / exec / quarantine / self-update / version の説明
 
 終了コード: 0 = 成功 / 2 = 知らないサブコマンド
 ```

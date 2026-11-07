@@ -22,6 +22,7 @@
 #   dev enable <名前>           ユニットを有効にして起こす（起動時から保つ）
 #   dev disable <名前>          ユニットを無効にして止め、コンテナも止める（再起動の後も止めたまま）
 #   dev exec <名前> -- <コマンド...>  tmux を介さずにコンテナの中でコマンドを 1 つ実行する
+#   dev quarantine build|open <URL>|exec <識別子> -- <コマンド...>|ls|rm <識別子>|--all  信頼できないリポジトリを、資格情報もネットワークも持たない使い捨ての箱で調べる
 #   dev self-update [--version <vX.Y.Z>]  dev 自身を devcontainer-host の公開リリースの版へ置き換える
 #   dev version                 dev の版を出す（`dev --version` も同じ）
 #   dev help [サブコマンド]      サブコマンドごとの説明（正本はこのファイルの help_* 関数）
@@ -97,6 +98,11 @@ usage() {
   dev enable <名前>
   dev disable <名前>
   dev exec <名前> -- <コマンド...>
+  dev quarantine build
+  dev quarantine open <URL>
+  dev quarantine exec <識別子> -- <コマンド...>
+  dev quarantine ls
+  dev quarantine rm <識別子>|--all
   dev self-update [--version <vX.Y.Z>]
   dev version
   dev help [サブコマンド]
@@ -636,6 +642,453 @@ cmd_exec() {
     die "$name のコンテナが動いていません。dev up $name で起こしてから実行し直してください（ユニットを有効にしていれば、30 秒ほどで戻ります）。"
   fi
   dc_exec "$@"
+}
+
+# ── quarantine（信頼できないリポジトリの検疫）─────────────────────────────────
+# 信頼できないリポジトリを、資格情報もネットワークも持たない使い捨ての箱（コンテナ）へ入れ、
+# 箱の外から読み取りだけで調べる。**箱の外では、そのリポジトリのコードを一切実行しない**
+# （ホストでは git も devcontainer も呼ばず、中身をホストのファイルシステムへ展開しない。
+# clone もボリュームの中へ、clone 専用の一時コンテナで行う）。
+#
+# - 箱 `dev-quarantine-<識別子>` とボリューム `dev-quarantine-<識別子>`。識別子は q- + 8 桁の 16 進。
+# - 記録の正本は、ボリュームのラベル（devhost.quarantine=<識別子> と作成時刻 .created=<epoch 秒> と
+#   取得元 .url=<URL>）。箱（コンテナ）にも同じラベルを付ける。
+# - 期限（DEV_QUARANTINE_TTL 時間。既定 24）を超えた箱は、quarantine のどのサブコマンドの冒頭でも消す。
+# - ボリュームは tmpfs（メモリ上。DEV_QUARANTINE_SIZE で大きさを限る。既定 1g）。clone が書けるディスクの量を
+#   限るため。**中身はメモリ上なので、ホストや dockerd の再起動で消える**（使い捨てなので仕様）。ボリュームの
+#   定義（ラベル）は残るので、箱が止まっていれば find が知らせる。tmpfs のページは書いた側の cgroup に
+#   数えられるため、clone のコンテナのメモリ上限は大きさの上限に見合う値（QUARANTINE_CLONE_MEMORY）にする。
+# - clone は時間も限る（DEV_QUARANTINE_CLONE_TIMEOUT 秒。既定 600）。
+# - 残る危険: 読んだ本文の中の注入（リポジトリのファイルに書かれた「指示」を、読んだ側が従ってしまうこと）は、
+#   箱では防げない。境界は箱（コンテナ）で、読む側の判断ではない。README の「検疫」。
+QUARANTINE_LABEL="devhost.quarantine"
+QUARANTINE_LABEL_CREATED="devhost.quarantine.created"
+QUARANTINE_LABEL_URL="devhost.quarantine.url"
+# 箱のメモリと pids の上限。clone の一時コンテナの pids も同じ値。
+QUARANTINE_MEMORY="512m"
+QUARANTINE_PIDS="256"
+# clone の一時コンテナのメモリ上限。tmpfs のボリュームへ書いたページが数えられる分（大きさの上限 1536m まで）と
+# git 自身の分を足した固定値。大きさ（DEV_QUARANTINE_SIZE）は 1536m までしか受けない。
+QUARANTINE_CLONE_MEMORY="2g"
+QUARANTINE_SIZE_MAX_MB=1536
+# 箱の中の実行ユーザー（イメージの USER に任せず、明示する）。
+QUARANTINE_USER="10001:10001"
+# docker の CLI は、クライアントの設定（~/.docker/config.json の proxies）のプロキシを、指定が無ければ
+# コンテナの環境変数へ自動で入れる。認証付きのプロキシなら、箱の中のスクリプトがその資格情報を読める。
+# 箱には空の値を明示して、自動の注入を上書きする（箱はネットワークを持たないので、プロキシは要らない）。
+# clone の一時コンテナには上書きしない（取得にプロキシが要る環境がある。そこで動くのは git だけで、
+# リポジトリのコードは実行しない）。
+QUARANTINE_PROXY_CLEAR=(
+  -e HTTP_PROXY= -e http_proxy= -e HTTPS_PROXY= -e https_proxy=
+  -e FTP_PROXY= -e ftp_proxy= -e NO_PROXY= -e no_proxy= -e ALL_PROXY= -e all_proxy=
+)
+QUARANTINE_ID_RE='^q-[0-9a-f]{8}$'
+
+# 開いた直後に一覧にする、エージェントの設定・フックの在りか（case のパターン）。
+# scripts/loop-gate.sh の「レビューする範囲の変更ファイルのうち、エージェントの設定・フックに当たるもの」の一覧を
+# すべて含み、さらに、検疫で注入の運び手になるもの（エージェントが読む指示のファイル。CLAUDE.md・AGENTS.md・
+# GEMINI.md・各種エディタ／ツールの規則・コピロットの指示・ローカルのアクション、サブディレクトリの .claude/
+# と .mcp.json）を足したもの。2 箇所になるため、tests/test-quarantine-surfaces.sh が「含む」ことを照合する
+# （目印の行で囲んだ内側の、シングルクォートで囲んだ行だけが一覧）。
+# >>> quarantine-surfaces
+QUARANTINE_SURFACES=(
+  '.claude/*'
+  '.mcp.json'
+  '.github/workflows/*'
+  '.githooks/*'
+  '.husky/*'
+  '.git-config-allow'
+  '.gitattributes'
+  '*/.gitattributes'
+  '.gitmodules'
+  '.devcontainer/*'
+  '.vscode/*'
+  'scripts/confirm-merge-hook.sh'
+  'scripts/session-coord-hook.sh'
+  'scripts/check-git-config.sh'
+  'CLAUDE.md'
+  '*/CLAUDE.md'
+  'CLAUDE.local.md'
+  'AGENTS.md'
+  '*/AGENTS.md'
+  'GEMINI.md'
+  '*/GEMINI.md'
+  '.cursorrules'
+  '.cursor/*'
+  '.windsurfrules'
+  '.github/copilot-instructions.md'
+  '.github/instructions/*'
+  '.github/actions/*'
+  '*/.claude/*'
+  '*/.mcp.json'
+)
+# <<< quarantine-surfaces
+
+quarantine_image() { printf '%s\n' "${DEV_QUARANTINE_IMAGE:-dev-quarantine:local}"; }
+
+# 期限の時間。1 以上の整数だけ（0 や不正な値は、箱が作った直後に消える・消えないの取り違えになるため止める）。
+quarantine_ttl() {
+  local v="${DEV_QUARANTINE_TTL:-24}"
+  [[ "$v" =~ ^[1-9][0-9]{0,5}$ ]] || usage_error "DEV_QUARANTINE_TTL は 1 以上の整数（時間）です: $v"
+  printf '%s\n' "$v"
+}
+
+# clone の時間（秒）。1 以上の整数だけ（GNU の timeout 0 は無制限になる）。
+quarantine_clone_timeout() {
+  local v="${DEV_QUARANTINE_CLONE_TIMEOUT:-600}"
+  [[ "$v" =~ ^[1-9][0-9]{0,5}$ ]] || usage_error "DEV_QUARANTINE_CLONE_TIMEOUT は 1 以上の整数（秒）です: $v"
+  printf '%s\n' "$v"
+}
+
+# ボリューム（tmpfs）の大きさ。<数>m または <数>g。clone のメモリ上限に収まる 1536m までを受ける。
+quarantine_size() {
+  local v="${DEV_QUARANTINE_SIZE:-1g}" mb
+  [[ "$v" =~ ^[1-9][0-9]{0,5}[mg]$ ]] || usage_error "DEV_QUARANTINE_SIZE は <数>m か <数>g の形です（例 1g）: $v"
+  mb="${v%[mg]}"
+  if [[ "$v" == *g ]]; then mb=$((mb * 1024)); fi
+  ((mb <= QUARANTINE_SIZE_MAX_MB)) || usage_error "DEV_QUARANTINE_SIZE は ${QUARANTINE_SIZE_MAX_MB}m（1.5g）までです（clone のメモリ上限に収めるため）: $v"
+  printf '%s\n' "$v"
+}
+
+quarantine_check_id() {
+  [[ "$1" =~ $QUARANTINE_ID_RE ]] || usage_error "識別子は q- と 16 進 8 桁の形です（dev quarantine ls で確かめる）: $1"
+}
+
+# 取得元の URL。https:// だけを受ける（ssh・file・ext::・git@ などは、取得の段階でコードや手元のファイルへ
+# 届き得る）。空白・制御文字、認証情報（ラベルとして docker に残る）、? と #（クエリのトークンが
+# ラベルに残る）を含むものも受けない。
+quarantine_check_url() {
+  local url="$1" rest
+  case "$url" in
+    https://?*) ;;
+    *) usage_error "URL は https:// で始まるものだけを受けます（ssh・file・ext::・git@ などは拒否）: $url" ;;
+  esac
+  if [[ "$url" =~ [[:space:][:cntrl:]] ]]; then
+    usage_error "URL に空白や制御文字は使えません"
+  fi
+  [[ "$url" != *[?#]* ]] || usage_error "URL に ? と # は使えません（クエリのトークンが docker のラベルに残るため）"
+  [[ ${#url} -le 2048 ]] || usage_error "URL が長すぎます（2048 文字まで）"
+  rest="${url#https://}"
+  rest="${rest%%/*}"
+  [[ -n "$rest" && "$rest" != *@* ]] || usage_error "URL のホストが空か、認証情報（user@）を含んでいます（資格情報は渡しません）: $url"
+}
+
+# 識別子 q-xxxxxxxx を作る（乱数の元から 16 進 8 桁。元は自己試験だけが DEV_QUARANTINE_RANDOM で差し替える）。
+quarantine_random_id() {
+  local s=""
+  while [[ ${#s} -lt 8 ]]; do
+    s="$s$(head -c 2048 "${DEV_QUARANTINE_RANDOM:-/dev/urandom}" | LC_ALL=C tr -dc 'a-f0-9')"
+  done
+  printf 'q-%s\n' "${s:0:8}"
+}
+
+# 既存の箱・ボリューム・コンテナと重ならない識別子を作る。重なったまま進むと、docker volume create は
+# 既存のボリュームをそのまま返し、箱の起動が名前の重複で失敗したあとの後片づけが、既存の箱を消してしまう。
+quarantine_new_id() {
+  local id rid
+  for _ in 1 2 3 4 5; do
+    id="$(quarantine_random_id)"
+    while IFS=' ' read -r rid _; do
+      [[ "$rid" == "$id" ]] && continue 2
+    done <<<"$Q_RECORDS"
+    docker volume inspect "dev-quarantine-$id" >/dev/null 2>&1 && continue
+    docker container inspect "dev-quarantine-$id" >/dev/null 2>&1 && continue
+    printf '%s\n' "$id"
+    return 0
+  done
+  die "既存の箱と重ならない識別子を作れませんでした（5 回）。dev quarantine ls で確かめてください"
+}
+
+# 箱の記録を「識別子 作成時刻 URL」で 1 行ずつ出す（ボリュームのラベルが正本）。
+quarantine_records() {
+  docker volume ls --filter "label=$QUARANTINE_LABEL" --format '{{.Label "devhost.quarantine"}} {{.Label "devhost.quarantine.created"}} {{.Label "devhost.quarantine.url"}}'
+}
+
+# 箱とボリュームを消す。箱が無くても通す（作りかけの残りを消せるように）。ボリュームを消せなければ 1。
+quarantine_remove() {
+  docker rm -f "dev-quarantine-$1" >/dev/null 2>&1 || true
+  docker volume rm "dev-quarantine-$1" >/dev/null || return 1
+}
+
+# 期限を超えた箱を消す。消せなかったものは警告だけ出して続ける（別の操作を止めない）。
+# 結果はグローバル変数に残し、find / ls / rm が使う（記録を二重に読まない）。
+#   Q_EXPIRED: 今回の呼び出しで期限切れとして消した識別子（空白区切り）
+#   Q_RECORDS: 残った記録（「識別子 作成時刻 URL」を 1 行ずつ）
+Q_EXPIRED=""
+Q_RECORDS=""
+quarantine_expire() {
+  local ttl now recs id created url nl=$'\n'
+  ttl="$(quarantine_ttl)"
+  now="$(date +%s)"
+  recs="$(quarantine_records)" || die "検疫の箱の一覧を読めませんでした（docker が動いていますか）"
+  Q_EXPIRED=""
+  Q_RECORDS=""
+  while IFS=' ' read -r id created url; do
+    [[ "$id" =~ $QUARANTINE_ID_RE && "$created" =~ ^[0-9]{1,12}$ ]] || continue
+    if ((now - created > ttl * 3600)); then
+      if quarantine_remove "$id"; then
+        Q_EXPIRED="${Q_EXPIRED:+$Q_EXPIRED }$id"
+        continue
+      fi
+      echo "[$PROG] 期限を超えた箱を消せませんでした: $id（dev quarantine rm $id で消す）" >&2
+    fi
+    Q_RECORDS="${Q_RECORDS:+$Q_RECORDS$nl}$id $created $url"
+  done <<<"$recs"
+  if [[ -n "$Q_EXPIRED" ]]; then
+    echo "[$PROG] 期限（${ttl} 時間）を超えた箱を消しました: $Q_EXPIRED"
+  fi
+}
+
+# どのサブコマンドも、引数の検査のあとにこれを呼ぶ（検査の誤りで docker を呼ばないため）。
+quarantine_begin() {
+  quarantine_ttl >/dev/null
+  need docker "Docker Engine を入れてください。"
+  quarantine_expire
+}
+
+# 識別子の記録があることを確かめる（無ければ 1 で止まる）。止まった箱も消せるよう、動いているかは見ない。
+quarantine_find_record() {
+  local id created url
+  while IFS=' ' read -r id created url; do
+    if [[ "$id" == "$1" ]]; then return 0; fi
+  done <<<"$Q_RECORDS"
+  die "検疫の箱がありません（期限で消えたかもしれません）: $1（dev quarantine ls）"
+}
+
+# 識別子の箱が、記録にあって、動いていることを確かめる（そうでなければ 1 で止まる）。
+# 止まっているのは、ホストか dockerd の再起動のあと（ボリュームは tmpfs なので中身も消えている）。
+quarantine_find() {
+  local running
+  quarantine_find_record "$1"
+  running="$(docker inspect --format '{{.State.Running}}' "dev-quarantine-$1" 2>/dev/null)" || running=""
+  [[ "$running" == "true" ]] || die "箱が止まっています（ホストか docker の再起動で中身も消えています）: $1。dev quarantine rm $1 して、dev quarantine open し直してください"
+}
+
+cmd_quarantine() {
+  local sub="${1:-}"
+  [[ $# -ge 1 ]] || usage_error "使い方: dev quarantine build | open <URL> | exec <識別子> -- <コマンド...> | ls | rm <識別子>|--all"
+  shift
+  case "$sub" in
+    build) cmd_quarantine_build "$@" ;;
+    open) cmd_quarantine_open "$@" ;;
+    exec) cmd_quarantine_exec "$@" ;;
+    ls) cmd_quarantine_ls "$@" ;;
+    rm) cmd_quarantine_rm "$@" ;;
+    *) usage_error "知らない quarantine のサブコマンドです: $sub（build / open / exec / ls / rm）" ;;
+  esac
+}
+
+# 箱のイメージを作る。Dockerfile はここに埋め込む（別ファイルにしない。install.sh・self-update・リリース資産の
+# 配線を要らなくするため）。ビルドの文脈は作らない（標準入力で渡す）。基底は版を固定する。
+# 非 root のユーザーが持つ /repo を作るのは、空の名前付きボリュームが初回のマウントでイメージの中身と所有者を
+# 写すため（非 root の clone がボリュームへ書ける）。
+cmd_quarantine_build() {
+  [[ $# -eq 0 ]] || usage_error "使い方: dev quarantine build"
+  quarantine_begin
+  local img
+  img="$(quarantine_image)"
+  echo "[$PROG] 検疫のイメージを作ります: $img"
+  docker build -t "$img" - <<'EOF' || die "検疫のイメージを作れませんでした: $img"
+FROM alpine:3.20
+RUN apk add --no-cache git ripgrep \
+ && adduser -D -H -u 10001 -h /tmp quarantine \
+ && mkdir /repo \
+ && chown 10001:10001 /repo
+ENV HOME=/tmp
+USER 10001:10001
+EOF
+}
+
+# 開いた直後に、箱の中でエージェントの設定・フックの在りかを一覧にする（読むだけ）。
+quarantine_list_surfaces() {
+  local box="$1" pat joined="" script out
+  for pat in "${QUARANTINE_SURFACES[@]}"; do joined="${joined:+$joined | }$pat"; done
+  # read -d '' で受ける（$( ) の中のヒアドキュメントに case の ) を書くと、bash 3.2 が構文を取り違える）。
+  # ファイル名は find -exec で 1 件ずつ受ける（改行で区切ると、改行を含む名前が偽の行になり、本物の名前が出ない）。
+  # 名前の中の改行は ? に置き換える。件数で打ち切らない（多数のファイルで、確かめるべきものを押し出させないため）。
+  # 名前に / を足した形でも照合する（.claude などのディレクトリをシンボリックリンクにすると、find はリンクを
+  # たどらず、リンク自体の名前は .claude/* に一致しない。リンクの .claude そのものを一覧に出す）。
+  IFS= read -r -d '' script <<'EOF' || true
+# devhost-q-surfaces
+cd /repo/src || exit 1
+find . -name .git -prune -o \( -type f -o -type l \) -exec sh -c '
+for f do
+  f="${f#./}"
+  for g in "$f" "$f/"; do
+    case "$g" in
+      @PATTERNS@) printf "%s" "$f" | tr "\n" "?"; printf "\n"; break ;;
+    esac
+  done
+done' sh {} + | sort
+EOF
+  script="${script/@PATTERNS@/$joined}"
+  # 箱の中のファイル名は、利用者の端末へ出す前に制御文字を ? に置き換える（端末の制御列の注入を避ける）。
+  if ! out="$(docker exec -w /repo/src "$box" sh -c "$script" 2>/dev/null | tr -c '[:print:]\n' '?')"; then
+    echo "[$PROG] 設定・フックの一覧を出せませんでした。dev quarantine exec で確かめてください。" >&2
+    return 0
+  fi
+  echo "[$PROG] エージェントの設定・フックの在りか（読むだけ。実行しない）:"
+  if [[ -z "$out" ]]; then
+    echo "[$PROG]   （該当なし）"
+    return 0
+  fi
+  printf '%s\n' "$out" | sed "s/^/[$PROG]   /"
+}
+
+# URL のリポジトリを、箱へ入れる。clone は一時コンテナの中だけで行い、ホストでは git を呼ばない。
+cmd_quarantine_open() {
+  [[ $# -eq 1 ]] || usage_error "使い方: dev quarantine open <URL>"
+  local url="$1" img id vol box now size secs rc=0 recs rid found=0
+  quarantine_check_url "$url"
+  size="$(quarantine_size)"
+  secs="$(quarantine_clone_timeout)"
+  quarantine_begin
+  need timeout "coreutils の timeout を入れてください（clone の時間を限るため）。"
+  img="$(quarantine_image)"
+  docker image inspect "$img" >/dev/null 2>&1 || die "検疫のイメージがありません: $img（dev quarantine build で作ってください）"
+  id="$(quarantine_new_id)"
+  vol="dev-quarantine-$id"
+  box="dev-quarantine-$id"
+  now="$(date +%s)"
+  # ボリュームは tmpfs（メモリ上）で、大きさを限る。uid / gid は箱のユーザー。
+  docker volume create --driver local --opt type=tmpfs --opt device=tmpfs \
+    --opt "o=size=$size,uid=${QUARANTINE_USER%%:*},gid=${QUARANTINE_USER##*:},mode=0700" \
+    --label "$QUARANTINE_LABEL=$id" --label "$QUARANTINE_LABEL_CREATED=$now" \
+    --label "$QUARANTINE_LABEL_URL=$url" "$vol" >/dev/null || die "ボリュームを作れませんでした: $vol"
+  # 調べる箱。ネットワークなし・権限なし・根は読み取り専用・ボリュームは読み取り専用。ホストのディレクトリ・
+  # docker のソケット・環境変数は渡さない。
+  # **箱を clone より先に起こす。** tmpfs のボリュームは、使うコンテナが 1 つも無くなった時点で外され、中身が消える
+  # （実測）。clone の一時コンテナが終わってから箱を起こすと、箱には空のボリュームが付く。箱がボリュームを
+  # 保っているあいだに clone すれば、clone の書いた中身が箱から見える。
+  if ! docker run -d --name "$box" \
+    --user "$QUARANTINE_USER" \
+    --label "$QUARANTINE_LABEL=$id" --label "$QUARANTINE_LABEL_CREATED=$now" --label "$QUARANTINE_LABEL_URL=$url" \
+    --network none --cap-drop ALL --security-opt no-new-privileges --read-only --tmpfs /tmp \
+    --memory "$QUARANTINE_MEMORY" --pids-limit "$QUARANTINE_PIDS" \
+    "${QUARANTINE_PROXY_CLEAR[@]}" \
+    --mount "type=volume,src=$vol,dst=/repo,readonly" \
+    "$img" tail -f /dev/null >/dev/null; then
+    # 作成のあとに起動だけが失敗すると、止まったコンテナが残り、ボリュームを使い続ける。識別子は既存の箱・
+    # コンテナと重ならないもの（quarantine_new_id）なので、同じ名前のコンテナはこの open が作ったもの。両方を消す。
+    quarantine_remove "$id" || echo "[$PROG] 作りかけを消せませんでした: $vol（dev quarantine rm $id）" >&2
+    die "調べる箱を起こせませんでした: $box"
+  fi
+  echo "[$PROG] 取得します（このあいだだけネットワークあり。資格情報は渡さない（docker の設定のプロキシは除く）。コードは実行しない。${secs} 秒まで）: $url"
+  # 資格情報は渡さない（非公開のリポジトリは認証を求めて失敗する）。フック・file / ext プロトコル・submodule・LFS を止める。
+  # docker のクライアント設定のプロキシは上書きしない（QUARANTINE_PROXY_CLEAR の注記）。
+  # 時間は timeout で限る（遅い応答は git 自身も low speed で打ち切る）。
+  # git はサーバの「remote:」の出力を制御文字ごと写すので、端末へ出す前に ? へ置き換える（制御列の注入を避ける）。
+  # 終了コードは pipefail で docker（timeout）のものが残る（tr は 0 で終わる）。
+  timeout -k 10 "$secs" docker run --rm --name "dev-quarantine-clone-$id" \
+    --user "$QUARANTINE_USER" \
+    --cap-drop ALL --security-opt no-new-privileges --read-only --tmpfs /tmp \
+    --memory "$QUARANTINE_CLONE_MEMORY" --pids-limit "$QUARANTINE_PIDS" \
+    --mount "type=volume,src=$vol,dst=/repo" \
+    -e GIT_LFS_SKIP_SMUDGE=1 -e GIT_TERMINAL_PROMPT=0 \
+    "$img" \
+    git -c core.hooksPath=/dev/null -c protocol.file.allow=never -c protocol.ext.allow=never \
+    -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=60 \
+    clone --no-recurse-submodules -- "$url" /repo/src 2>&1 | tr -c '[:print:]\n' '?' >&2 || rc=$?
+  if [[ "$rc" -ne 0 ]]; then
+    # 時間切れでは docker のクライアントだけが止まり、コンテナが残りうる。
+    docker rm -f "dev-quarantine-clone-$id" >/dev/null 2>&1 || true
+    quarantine_remove "$id" || echo "[$PROG] ボリュームを消せませんでした: $vol（dev quarantine rm $id）" >&2
+    if [[ "$rc" -eq 124 || "$rc" -eq 137 ]]; then
+      die "取得が ${secs} 秒を超えたので止めました: $url（DEV_QUARANTINE_CLONE_TIMEOUT で変えられる）"
+    fi
+    die "取得に失敗しました: $url（非公開のリポジトリは扱えません。公開の https だけ）"
+  fi
+  # 箱を起こす前にボリュームが消されていると、--mount は空のボリュームを黙って作る。ラベルが残っているかで見分ける。
+  recs="$(quarantine_records)" || recs=""
+  while IFS=' ' read -r rid _ _; do
+    if [[ "$rid" == "$id" ]]; then found=1; fi
+  done <<<"$recs"
+  if [[ "$found" -ne 1 ]]; then
+    quarantine_remove "$id" || echo "[$PROG] 箱とボリュームを消せませんでした: $id（dev quarantine rm $id）" >&2
+    die "取得したボリュームが途中で消えました（空のボリュームになったため、箱を消しました）。もう一度 dev quarantine open してください"
+  fi
+  # clone のあいだに箱が止められると、clone の一時コンテナが終わった時点で tmpfs の中身が消える。
+  # 成功と報告する前に、箱がまだ動いていることを確かめる。
+  if [[ "$(docker inspect --format '{{.State.Running}}' "$box" 2>/dev/null || true)" != "true" ]]; then
+    quarantine_remove "$id" || echo "[$PROG] 箱とボリュームを消せませんでした: $id（dev quarantine rm $id）" >&2
+    die "取得のあいだに箱が止まりました（中身は残りません）。もう一度 dev quarantine open してください"
+  fi
+  echo "[$PROG] 箱を開きました: $id（$url）"
+  quarantine_list_surfaces "$box"
+  echo "[$PROG] 調べる: dev quarantine exec $id -- <コマンド...>（作業ディレクトリは /repo/src。読み取り専用）"
+  echo "[$PROG] 消す: dev quarantine rm $id（期限 $(quarantine_ttl) 時間で自動でも消える。ホストや docker の再起動でも中身は消える）"
+}
+
+# 箱の中でコマンドを実行する。コマンドは制限しない（境界は箱）。終了コードをそのまま返す。
+cmd_quarantine_exec() {
+  [[ $# -ge 1 ]] || usage_error "使い方: dev quarantine exec <識別子> -- <コマンド...>"
+  local id="$1"
+  shift
+  quarantine_check_id "$id"
+  [[ $# -ge 2 && "$1" == "--" ]] || usage_error "使い方: dev quarantine exec <識別子> -- <コマンド...>（-- の後ろにコマンドが要ります）"
+  shift
+  quarantine_begin
+  quarantine_find "$id"
+  local -a tty_opts=()
+  if [[ -t 0 ]]; then
+    tty_opts=(-i)
+    if [[ -t 1 ]]; then tty_opts=(-i -t); fi
+  fi
+  docker exec ${tty_opts[@]+"${tty_opts[@]}"} -w /repo/src "dev-quarantine-$id" "$@"
+}
+
+cmd_quarantine_ls() {
+  [[ $# -eq 0 ]] || usage_error "使い方: dev quarantine ls"
+  quarantine_begin
+  local ps_rows id created url now age found=0 state
+  # 動いている箱の識別子（ラベルで引く）。読めなければ、止まっていると取り違えないよう状態を「不明」にする。
+  local ps_ok=1
+  ps_rows="$(docker ps --filter "label=$QUARANTINE_LABEL" --format '{{.Label "devhost.quarantine"}}')" || { ps_rows=""; ps_ok=0; }
+  now="$(date +%s)"
+  while IFS=' ' read -r id created url; do
+    [[ "$id" =~ $QUARANTINE_ID_RE && "$created" =~ ^[0-9]{1,12}$ ]] || continue
+    age=$((now - created))
+    if ((age < 0)); then age=0; fi
+    if [[ "$found" -eq 0 ]]; then printf '識別子  経過  状態  URL\n'; found=1; fi
+    state="止まっている"
+    [[ "$ps_ok" -eq 1 ]] || state="不明"
+    case $'\n'"$ps_rows"$'\n' in *$'\n'"$id"$'\n'*) state="動いている" ;; esac
+    # URL は docker のラベルから読むので、制御文字を ? に置き換えて出す。
+    printf '%s  %dh%02dm  %s  %s\n' "$id" $((age / 3600)) $((age % 3600 / 60)) "$state" "${url//[^[:print:]]/?}"
+  done <<<"$Q_RECORDS"
+  if [[ "$found" -eq 0 ]]; then echo "[$PROG] 検疫の箱はありません。"; fi
+}
+
+cmd_quarantine_rm() {
+  [[ $# -eq 1 ]] || usage_error "使い方: dev quarantine rm <識別子>|--all"
+  local target="$1" id created url n=0 failed=0 e
+  if [[ "$target" != "--all" ]]; then quarantine_check_id "$target"; fi
+  quarantine_begin
+  if [[ "$target" != "--all" ]]; then
+    # 直前の期限切れの削除で消えたものは、消えているのが望む結果なので、成功として終わる。
+    for e in $Q_EXPIRED; do
+      if [[ "$e" == "$target" ]]; then
+        echo "[$PROG] 消しました（期限切れ）: $target"
+        return 0
+      fi
+    done
+    quarantine_find_record "$target"
+    quarantine_remove "$target" || die "消せませんでした: $target"
+    echo "[$PROG] 消しました: $target"
+    return 0
+  fi
+  while IFS=' ' read -r id created url; do
+    [[ "$id" =~ $QUARANTINE_ID_RE ]] || continue
+    if quarantine_remove "$id"; then
+      echo "[$PROG] 消しました: $id"
+      n=$((n + 1))
+    else
+      echo "[$PROG] 消せませんでした: $id" >&2
+      failed=1
+    fi
+  done <<<"$Q_RECORDS"
+  if [[ "$n" -eq 0 && "$failed" -eq 0 && -z "$Q_EXPIRED" ]]; then echo "[$PROG] 検疫の箱はありません。"; fi
+  [[ "$failed" -eq 0 ]] || return 1
 }
 
 # ── runner（GitHub Actions の自前のランナー）──────────────────────────────────
@@ -3503,6 +3956,52 @@ ssh のコマンド全体をクォートして、外側と内側の二重に包�
 EOF
 }
 
+help_quarantine() {
+  cat <<'EOF'
+dev quarantine — 信頼できないリポジトリを、資格情報もネットワークも持たない使い捨ての箱へ入れて調べる。
+
+使い方:
+  dev quarantine build
+  dev quarantine open <URL>
+  dev quarantine exec <識別子> -- <コマンド...>
+  dev quarantine ls
+  dev quarantine rm <識別子>|--all
+
+build: 箱のイメージ（alpine 3.20 に git と ripgrep。root 以外のユーザー）を、dev.sh に埋め込んだ
+  Dockerfile から作る。open の前に 1 回要る。イメージ名は環境変数 DEV_QUARANTINE_IMAGE（既定 dev-quarantine:local）。
+open: <URL> のリポジトリを、名前付きボリュームへ clone して、調べる箱を起こす。
+  URL は https:// だけを受ける（ssh・file・ext::・git@ は拒否。空白・制御文字・user@ の認証情報・? と # も不可）。
+  clone は専用の一時コンテナの中だけで行う（終われば消える。ネットワークあり・資格情報なし・フック無効・
+  file と ext のプロトコル禁止・submodule と LFS は取らない）。非公開のリポジトリは認証を求めて失敗する。
+  ただし docker のクライアント設定のプロキシは、取得に要る環境があるため、この一時コンテナには入りうる
+  （そこで動くのは git だけで、リポジトリのコードは実行しない。調べる箱には入れない）。
+  clone は DEV_QUARANTINE_CLONE_TIMEOUT 秒（1 以上の整数。既定 600）で打ち切り、失敗すればボリュームも消す。
+  ボリュームは tmpfs（メモリ上）で、大きさは DEV_QUARANTINE_SIZE（<数>m か <数>g。既定 1g、1536m まで）で限る。
+  中身はメモリ上なので、ホストや docker の再起動で消える（使い捨てなので仕様。止まった箱への exec は 1 で、
+  rm して open し直す）。
+  調べる箱は、ネットワークなし・権限なし・root 以外（uid 10001 を明示）・根は読み取り専用（/tmp だけ tmpfs）・ボリュームは
+  読み取り専用・メモリ 512m と pids 256 の上限。ホストのディレクトリ・docker のソケット・環境変数は渡さない
+  （docker のクライアント設定のプロキシが自動で入るのも、空の値で上書きして止める）。
+  ホストでは git も devcontainer も呼ばず、中身をホストのファイルシステムへ展開しない。
+  開いた直後に、エージェントの設定・フックの在りかと、エージェントが読む指示のファイル（.claude/・.mcp.json・
+  .github/workflows/・.githooks/・.husky/・.devcontainer/・.vscode/・.gitattributes・.gitmodules・CLAUDE.md・
+  AGENTS.md・GEMINI.md・.cursor/・.github/copilot-instructions.md など。サブディレクトリのものを含む）を
+  一覧にして出し、識別子（q- と 16 進 8 桁）を示す。
+exec: 箱の中（/repo/src）でコマンドを実行する。コマンドは制限しない（境界は箱）。
+  出力は加工しない（リポジトリのファイルに仕込んだ制御文字もそのまま端末へ届く）。端末で直接読むなら | cat -v を付ける。
+ls: 箱の識別子・作成からの経過・状態（動いている／止まっている）・URL を並べる。
+rm: 箱とボリュームを消す（止まった箱も消せる）。--all はすべて。期限切れで消えたばかりの識別子は、消えたことを知らせて 0 で終わる。
+期限: 作ってから DEV_QUARANTINE_TTL 時間（1 以上の整数。既定 24）を超えた箱は、quarantine のどのサブコマンドの
+  冒頭でも消す（消したら知らせる）。
+
+残る危険: 読んだ本文の中の注入（ファイルに書かれた「指示」に、読んだ側が従うこと）は箱では防げない。
+  箱の中のファイルは、指示ではなくデータとして読む。
+
+終了コード: 0 = 成功 / 1 = 失敗（イメージが無い・clone の失敗・箱が無い・docker の失敗） / 2 = 使い方の誤り
+            （exec だけは、箱の中のコマンドの終了コードをそのまま返す）
+EOF
+}
+
 help_self-update() {
   cat <<'EOF'
 dev self-update — dev 自身を、devcontainer-host の公開リリースの版へ置き換える。
@@ -3557,7 +4056,7 @@ dev help — サブコマンドの説明を出す。
 使い方:
   dev help                  使い方の一覧
   dev help <サブコマンド>    ls / up / attach / supervise / rebuild / doctor / runner /
-                            restart / stop / logs / enable / disable / exec / self-update / version の説明
+                            restart / stop / logs / enable / disable / exec / quarantine / self-update / version の説明
 
 終了コード: 0 = 成功 / 2 = 知らないサブコマンド
 EOF
@@ -3602,6 +4101,7 @@ main() {
     enable) cmd_enable "$@" ;;
     disable) cmd_disable "$@" ;;
     exec) cmd_exec "$@" ;;
+    quarantine) cmd_quarantine "$@" ;;
     self-update) cmd_self_update "$@" ;;
     version | --version) cmd_version "$@" ;;
     help) cmd_help "$@" ;;
