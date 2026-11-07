@@ -549,6 +549,14 @@
       "compensates": "変更を別のモデルに独立してレビューさせ、通るまで push させない仕組みを本体が持たない不足",
       "keywords": [],
       "issue": null
+    },
+    {
+      "id": "rule/routines",
+      "kind": "rule",
+      "path": ".claude/rules/routines.md",
+      "compensates": "無人で動かす前に完了の定義・検証の手段・範囲・上限・承認する人を揃えさせる仕組みを本体が持たない不足",
+      "keywords": [],
+      "issue": "#713"
     }
   ]
 }
