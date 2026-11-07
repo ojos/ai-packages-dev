@@ -552,7 +552,7 @@ dev quarantine exec q-xxxxxxxx -- rg -n TODO      # 箱の中（/repo/src、読�
 dev quarantine rm q-xxxxxxxx                      # 終わったら消す
 ```
 
-- **取得**は、専用の一時コンテナの中だけで行います。URL は `https://` だけを受けます（ssh・file・`ext::`・`git@` は拒否。`?` と `#` も不可。クエリのトークンが docker のラベルに残るため）。フックを無効にし（`core.hooksPath=/dev/null`）、`file` と `ext` のプロトコルを禁じ、submodule と LFS は取りません。資格情報は渡さないので、非公開のリポジトリは認証を求めて失敗します（公開の https だけ）。取得のあいだだけネットワークを使い、終われば一時コンテナは消えます。`DEV_QUARANTINE_CLONE_TIMEOUT` 秒（既定 600）で打ち切り、失敗したらボリュームも消します。
+- **取得**は、専用の一時コンテナの中だけで行います。URL は `https://` だけを受けます（ssh・file・`ext::`・`git@` は拒否。`?` と `#` も不可。クエリのトークンが docker のラベルに残るため）。フックを無効にし（`core.hooksPath=/dev/null`）、`file` と `ext` のプロトコルを禁じ、submodule と LFS は取りません。資格情報は渡さないので、非公開のリポジトリは認証を求めて失敗します（公開の https だけ）。ただし、docker のクライアント設定（`~/.docker/config.json` の `proxies`）のプロキシは、取得に要る環境があるため、この一時コンテナには docker が自動で入れることがあります。そこで動くのは git だけで、リポジトリのコードは実行しません（調べる箱には入れません。下記）。取得のあいだだけネットワークを使い、終われば一時コンテナは消えます。`DEV_QUARANTINE_CLONE_TIMEOUT` 秒（既定 600）で打ち切り、失敗したらボリュームも消します。
 - **調べる箱**は、ネットワークなし・`--cap-drop ALL`・`no-new-privileges`・root 以外（uid 10001 を明示）・根は読み取り専用（`/tmp` だけ tmpfs）・ボリュームは読み取り専用・メモリ 512m と pids 256 の上限です。ホストのディレクトリ・docker のソケット・環境変数（資格情報）は渡しません。docker のクライアント設定（`~/.docker/config.json` の `proxies`）のプロキシが自動で入るのも、空の値で上書きして止めます（認証付きのプロキシの資格情報を、箱の中のスクリプトに読ませないため）。`exec` のコマンドは制限しません（境界は箱です）。
 - **開いた直後に**、エージェントの設定・フックの在りかと、エージェントが読む指示のファイルを一覧にして出します。`.claude/`・`.mcp.json`・`.github/workflows/`・`.githooks/`・`.husky/`・`.devcontainer/`・`.vscode/`・`.gitattributes`・`.gitmodules` などの、変更の検査が注意する対象に、検疫で注入の運び手になる `CLAUDE.md`・`AGENTS.md`・`GEMINI.md`・`.cursor/`・`.cursorrules`・`.windsurfrules`・`.github/copilot-instructions.md`・`.github/instructions/`・`.github/actions/` と、サブディレクトリの `.claude/`・`.mcp.json` を足したものです（一覧は `dev.sh` の `QUARANTINE_SURFACES`）。
 - **ボリュームは tmpfs（メモリ上）**です。大きさは `DEV_QUARANTINE_SIZE`（`<数>m` か `<数>g`。既定 `1g`、`1536m` まで）で限ります。**中身はメモリ上なので、ホストや dockerd の再起動で消えます**（使い捨てなので仕様です）。消えたあとの箱は止まっていて、`dev quarantine ls` に「止まっている」と出ます。`exec` は 1 で止まるので、`rm` して `open` し直してください。
@@ -946,6 +946,8 @@ open: <URL> のリポジトリを、名前付きボリュームへ clone して�
   URL は https:// だけを受ける（ssh・file・ext::・git@ は拒否。空白・制御文字・user@ の認証情報・? と # も不可）。
   clone は専用の一時コンテナの中だけで行う（終われば消える。ネットワークあり・資格情報なし・フック無効・
   file と ext のプロトコル禁止・submodule と LFS は取らない）。非公開のリポジトリは認証を求めて失敗する。
+  ただし docker のクライアント設定のプロキシは、取得に要る環境があるため、この一時コンテナには入りうる
+  （そこで動くのは git だけで、リポジトリのコードは実行しない。調べる箱には入れない）。
   clone は DEV_QUARANTINE_CLONE_TIMEOUT 秒（1 以上の整数。既定 600）で打ち切り、失敗すればボリュームも消す。
   ボリュームは tmpfs（メモリ上）で、大きさは DEV_QUARANTINE_SIZE（<数>m か <数>g。既定 1g、1536m まで）で限る。
   中身はメモリ上なので、ホストや docker の再起動で消える（使い捨てなので仕様。止まった箱への exec は 1 で、
