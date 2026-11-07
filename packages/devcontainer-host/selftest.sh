@@ -246,8 +246,15 @@ case "$sub $*" in
         echo "Error: No such object: $3" >&2
         exit 1
         ;;
+      container)
+        # 識別子の重なりの確かめ（docker container inspect <名前>）。q-boxes にあれば在る。
+        [[ $# -eq 2 && "$1" == "inspect" && "$2" == dev-quarantine-q-* ]] || qfail
+        grep -qxF "$2" "$QB" || { echo "Error: No such container: $2" >&2; exit 1; }
+        echo "[]"
+        ;;
       ps)
         [[ $# -eq 4 && "$1" == "--filter" && "$2" == "label=devhost.quarantine" && "$3" == "--format" && "$4" == '{{.Label "devhost.quarantine"}}' ]] || qfail
+        [[ "${FAKE_Q_PS_FAIL:-0}" != "1" ]] || { echo "Cannot connect to the Docker daemon" >&2; exit 1; }
         sed -n 's/^dev-quarantine-\(q-[0-9a-f]*\)$/\1/p' "$QB"
         ;;
       image)
@@ -284,6 +291,12 @@ case "$sub $*" in
             printf '%s %s %s\n' "$q_id" "$q_created" "$q_url" >>"$QV"
             printf '%s\n' "$q_opts" >"$FAKE_STATE/q-volume-opts"
             echo "$q_name"
+            ;;
+          inspect)
+            # 識別子の重なりの確かめ（docker volume inspect <名前>）。q-volumes にあれば在る。
+            [[ $# -eq 2 && "$2" == dev-quarantine-q-* ]] || qfail
+            grep -q "^${2#dev-quarantine-} " "$QV" || { echo "Error: no such volume: $2" >&2; exit 1; }
+            echo "[]"
             ;;
           ls)
             [[ $# -eq 5 && "$2" == "--filter" && "$3" == "label=devhost.quarantine" && "$4" == "--format" ]] || qfail
@@ -2588,7 +2601,7 @@ tmp_e="${QCLONE//\[-e\]/}"
 if [[ "$(grep -nF '[volume] [create]' "$LOG" | sed -n 's/^\([0-9]*\):.*/\1/p' | sed -n 1p)" -ge "$(grep -nF 'docker [run] [--rm]' "$LOG" | sed -n 's/^\([0-9]*\):.*/\1/p' | sed -n 1p)" ]]; then ng "quarantine open: ボリュームを clone より後に作っています"; fi
 # ホストの git も devcontainer も呼ばない（clone は docker run の中だけ）。
 if grep -qE '^(git|devcontainer|tmux) ' "$LOG"; then ng "quarantine open: ホストの git / devcontainer / tmux を呼んでいます"; grep -E '^(git|devcontainer|tmux) ' "$LOG" >&2; fi
-if grep -E '^[a-z-]+ \[' "$LOG" | grep -vE '^(docker \[(volume|image|run|exec|rm|inspect|ps)\]|timeout \[-k\])' >/dev/null; then ng "quarantine open: 想定外の呼び出しがあります"; fi
+if grep -E '^[a-z-]+ \[' "$LOG" | grep -vE '^(docker \[(volume|image|run|exec|rm|inspect|ps|container)\]|timeout \[-k\])' >/dev/null; then ng "quarantine open: 想定外の呼び出しがあります"; fi
 grep -qF "$QID $(sed -n 's/^[^ ]* \([0-9]*\) .*/\1/p' "$STATE/q-volumes" | sed -n 1p) $QURL" "$STATE/q-volumes" || ng "quarantine open: ボリュームの記録がありません"
 grep -qxF "dev-quarantine-$QID" "$STATE/q-boxes" || ng "quarantine open: 箱が起きていません"
 
@@ -2615,6 +2628,8 @@ grep -qE 'docker \[rm\] \[-f\] \[dev-quarantine-q-[0-9a-f]{8}\]' "$LOG" || ng "q
 grep -qF 'docker [volume] [rm] [dev-quarantine-q-' "$LOG" || ng "quarantine open: clone の失敗でボリュームを消していません"
 run 1 "quarantine open: 箱を起こせない" -- FAKE_Q_BOX_FAIL=1 -- quarantine open "$QURL"
 [[ ! -s "$STATE/q-volumes" ]] || ng "quarantine open: 箱を起こせなかったのにボリュームが残っています"
+# 箱が起きていないので、同じ名前のコンテナ（この open のものではない）を rm -f しない。
+if grep -F 'docker [rm] [-f] [dev-quarantine-q-' "$LOG" >/dev/null; then ng "quarantine open: 箱を起こせなかったのに、同じ名前のコンテナを rm -f しています"; fi
 
 
 # 引数の検査（大きさ・clone の時間）: docker を呼ばずに 2。
@@ -2685,6 +2700,31 @@ q_seed
 : >"$STATE/q-volumes"
 run 0 "quarantine ls: 箱が無い" -- -- quarantine ls
 expect_out_line '検疫の箱はありません'
+
+# 識別子の重なり: 乱数が既存の箱と同じ識別子を出し続けたら、既存の箱に触れずに 1 で止まる。
+printf 'bbbbbbbbbbbbbbbb' >"$WORK/q-rand-b"
+printf 'dddddddddddddddd' >"$WORK/q-rand-d"
+q_seed
+run 1 "quarantine open: 識別子が既存の箱（ボリューム）と重なる" -- DEV_QUARANTINE_RANDOM="$WORK/q-rand-b" -- quarantine open "$QURL"
+expect_err "重ならない識別子を作れませんでした"
+if grep -F '[volume] [create]' "$LOG" >/dev/null; then ng "quarantine open: 識別子が重なったのにボリュームを作っています"; fi
+grep -q '^q-bbbbbbbb ' "$STATE/q-volumes" || ng "quarantine open: 識別子が重なった既存のボリュームを消しています"
+grep -qxF 'dev-quarantine-q-bbbbbbbb' "$STATE/q-boxes" || ng "quarantine open: 識別子が重なった既存の箱を消しています"
+q_seed
+grep -v '^q-bbbbbbbb ' "$STATE/q-volumes" >"$STATE/q-volumes.new" || true
+mv "$STATE/q-volumes.new" "$STATE/q-volumes"
+run 1 "quarantine open: 識別子が既存のコンテナだけと重なる" -- DEV_QUARANTINE_RANDOM="$WORK/q-rand-b" -- quarantine open "$QURL"
+expect_err "重ならない識別子を作れませんでした"
+grep -qxF 'dev-quarantine-q-bbbbbbbb' "$STATE/q-boxes" || ng "quarantine open: 識別子が重なった既存のコンテナを消しています"
+q_seed
+run 0 "quarantine open: 重ならない識別子" -- DEV_QUARANTINE_RANDOM="$WORK/q-rand-d" -- quarantine open "$QURL"
+expect_out_line '箱を開きました: q-dddddddd'
+
+# ls: docker ps を読めなければ、止まっていると取り違えず「不明」と出す。
+q_seed
+run 0 "quarantine ls: docker ps の失敗" -- FAKE_Q_PS_FAIL=1 -- quarantine ls
+expect_out_line '^q-bbbbbbbb  1h02m  不明  https://new\.invalid/y\.git$'
+if grep -F '止まっている' "$OUT" >/dev/null; then ng "quarantine ls: docker ps を読めないのに「止まっている」と出しています"; fi
 q_seed
 run 0 "quarantine build: 冒頭で期限を超えた箱を消す" -- -- quarantine build
 expect_out_line '期限（24 時間）を超えた箱を消しました: q-aaaaaaaa'

@@ -764,13 +764,30 @@ quarantine_check_url() {
   [[ -n "$rest" && "$rest" != *@* ]] || usage_error "URL のホストが空か、認証情報（user@）を含んでいます（資格情報は渡しません）: $url"
 }
 
-# 識別子 q-xxxxxxxx を作る（/dev/urandom から 16 進 8 桁）。
-quarantine_new_id() {
+# 識別子 q-xxxxxxxx を作る（乱数の元から 16 進 8 桁。元は自己試験だけが DEV_QUARANTINE_RANDOM で差し替える）。
+quarantine_random_id() {
   local s=""
   while [[ ${#s} -lt 8 ]]; do
-    s="$s$(head -c 2048 /dev/urandom | LC_ALL=C tr -dc 'a-f0-9')"
+    s="$s$(head -c 2048 "${DEV_QUARANTINE_RANDOM:-/dev/urandom}" | LC_ALL=C tr -dc 'a-f0-9')"
   done
   printf 'q-%s\n' "${s:0:8}"
+}
+
+# 既存の箱・ボリューム・コンテナと重ならない識別子を作る。重なったまま進むと、docker volume create は
+# 既存のボリュームをそのまま返し、箱の起動が名前の重複で失敗したあとの後片づけが、既存の箱を消してしまう。
+quarantine_new_id() {
+  local try id rid
+  for try in 1 2 3 4 5; do
+    id="$(quarantine_random_id)"
+    while IFS=' ' read -r rid _; do
+      [[ "$rid" == "$id" ]] && continue 2
+    done <<<"$Q_RECORDS"
+    docker volume inspect "dev-quarantine-$id" >/dev/null 2>&1 && continue
+    docker container inspect "dev-quarantine-$id" >/dev/null 2>&1 && continue
+    printf '%s\n' "$id"
+    return 0
+  done
+  die "既存の箱と重ならない識別子を作れませんでした（5 回）。dev quarantine ls で確かめてください"
 }
 
 # 箱の記録を「識別子 作成時刻 URL」で 1 行ずつ出す（ボリュームのラベルが正本）。
@@ -938,7 +955,8 @@ cmd_quarantine_open() {
     --memory "$QUARANTINE_MEMORY" --pids-limit "$QUARANTINE_PIDS" \
     --mount "type=volume,src=$vol,dst=/repo,readonly" \
     "$img" tail -f /dev/null >/dev/null; then
-    quarantine_remove "$id" || echo "[$PROG] 作りかけを消せませんでした: $vol（dev quarantine rm $id）" >&2
+    # 箱は起きていないので、消すのは作ったボリュームだけ（同じ名前のコンテナがあっても、それはこの open のものではない）。
+    docker volume rm "$vol" >/dev/null || echo "[$PROG] 作りかけを消せませんでした: $vol（dev quarantine rm $id）" >&2
     die "調べる箱を起こせませんでした: $box"
   fi
   echo "[$PROG] 取得します（このあいだだけネットワークあり。資格情報は渡さない。コードは実行しない。${secs} 秒まで）: $url"
@@ -1002,8 +1020,9 @@ cmd_quarantine_ls() {
   [[ $# -eq 0 ]] || usage_error "使い方: dev quarantine ls"
   quarantine_begin
   local ps_rows id created url now age found=0 state
-  # 動いている箱の識別子（ラベルで引く）。無い箱は止まっている扱い。
-  ps_rows="$(docker ps --filter "label=$QUARANTINE_LABEL" --format '{{.Label "devhost.quarantine"}}')" || ps_rows=""
+  # 動いている箱の識別子（ラベルで引く）。読めなければ、止まっていると取り違えないよう状態を「不明」にする。
+  local ps_ok=1
+  ps_rows="$(docker ps --filter "label=$QUARANTINE_LABEL" --format '{{.Label "devhost.quarantine"}}')" || { ps_rows=""; ps_ok=0; }
   now="$(date +%s)"
   while IFS=' ' read -r id created url; do
     [[ "$id" =~ $QUARANTINE_ID_RE && "$created" =~ ^[0-9]{1,12}$ ]] || continue
@@ -1011,6 +1030,7 @@ cmd_quarantine_ls() {
     if ((age < 0)); then age=0; fi
     if [[ "$found" -eq 0 ]]; then printf '識別子  経過  状態  URL\n'; found=1; fi
     state="止まっている"
+    [[ "$ps_ok" -eq 1 ]] || state="不明"
     case $'\n'"$ps_rows"$'\n' in *$'\n'"$id"$'\n'*) state="動いている" ;; esac
     # URL は docker のラベルから読むので、制御文字を ? に置き換えて出す。
     printf '%s  %dh%02dm  %s  %s\n' "$id" $((age / 3600)) $((age % 3600 / 60)) "$state" "${url//[^[:print:]]/?}"
