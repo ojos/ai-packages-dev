@@ -553,7 +553,7 @@ dev quarantine rm q-xxxxxxxx                      # 終わったら消す
 ```
 
 - **取得**は、専用の一時コンテナの中だけで行います。URL は `https://` だけを受けます（ssh・file・`ext::`・`git@` は拒否。`?` と `#` も不可。クエリのトークンが docker のラベルに残るため）。フックを無効にし（`core.hooksPath=/dev/null`）、`file` と `ext` のプロトコルを禁じ、submodule と LFS は取りません。資格情報は渡さないので、非公開のリポジトリは認証を求めて失敗します（公開の https だけ）。ただし、docker のクライアント設定（`~/.docker/config.json` の `proxies`）のプロキシは、取得に要る環境があるため、この一時コンテナには docker が自動で入れることがあります。そこで動くのは git だけで、リポジトリのコードは実行しません（調べる箱には入れません。下記）。取得のあいだだけネットワークを使い、終われば一時コンテナは消えます。`DEV_QUARANTINE_CLONE_TIMEOUT` 秒（既定 600）で打ち切り、失敗したらボリュームも消します。
-- **調べる箱**は、ネットワークなし・`--cap-drop ALL`・`no-new-privileges`・root 以外（uid 10001 を明示）・根は読み取り専用（`/tmp` だけ tmpfs）・ボリュームは読み取り専用・メモリ 512m と pids 256 の上限です。ホストのディレクトリ・docker のソケット・環境変数（資格情報）は渡しません。docker のクライアント設定（`~/.docker/config.json` の `proxies`）のプロキシが自動で入るのも、空の値で上書きして止めます（認証付きのプロキシの資格情報を、箱の中のスクリプトに読ませないため）。`exec` のコマンドは制限しません（境界は箱です）。
+- **調べる箱**は、ネットワークなし・`--cap-drop ALL`・`no-new-privileges`・root 以外（uid 10001 を明示）・根は読み取り専用（`/tmp` だけ tmpfs）・ボリュームは読み取り専用・メモリ 512m と pids 256 の上限です。ホストのディレクトリ・docker のソケット・環境変数（資格情報）は渡しません。docker のクライアント設定（`~/.docker/config.json` の `proxies`）のプロキシが自動で入るのも、空の値で上書きして止めます（認証付きのプロキシの資格情報を、箱の中のスクリプトに読ませないため）。`exec` のコマンドは制限しません（境界は箱です）。`exec` の出力は加工しないので、リポジトリのファイルに仕込んだ制御文字（端末のクリップボードを書き換える OSC 52 など）もそのまま端末へ届きます。端末で直接読むときは `| cat -v` を付けます。
 - **開いた直後に**、エージェントの設定・フックの在りかと、エージェントが読む指示のファイルを一覧にして出します。`.claude/`・`.mcp.json`・`.github/workflows/`・`.githooks/`・`.husky/`・`.devcontainer/`・`.vscode/`・`.gitattributes`・`.gitmodules` などの、変更の検査が注意する対象に、検疫で注入の運び手になる `CLAUDE.md`・`AGENTS.md`・`GEMINI.md`・`.cursor/`・`.cursorrules`・`.windsurfrules`・`.github/copilot-instructions.md`・`.github/instructions/`・`.github/actions/` と、サブディレクトリの `.claude/`・`.mcp.json` を足したものです（一覧は `dev.sh` の `QUARANTINE_SURFACES`）。
 - **ボリュームは tmpfs（メモリ上）**です。大きさは `DEV_QUARANTINE_SIZE`（`<数>m` か `<数>g`。既定 `1g`、`1536m` まで）で限ります。**中身はメモリ上なので、ホストや dockerd の再起動で消えます**（使い捨てなので仕様です）。消えたあとの箱は止まっていて、`dev quarantine ls` に「止まっている」と出ます。`exec` は 1 で止まるので、`rm` して `open` し直してください。
 - **期限**は、作ってから `DEV_QUARANTINE_TTL` 時間（既定 24）です。超えた箱とボリュームは、`dev quarantine` のどのサブコマンドの冒頭でも消します（消したら知らせます）。常駐の掃除は持たないので、`dev quarantine` を呼ばなければ消えません。
@@ -961,6 +961,7 @@ open: <URL> のリポジトリを、名前付きボリュームへ clone して�
   AGENTS.md・GEMINI.md・.cursor/・.github/copilot-instructions.md など。サブディレクトリのものを含む）を
   一覧にして出し、識別子（q- と 16 進 8 桁）を示す。
 exec: 箱の中（/repo/src）でコマンドを実行する。コマンドは制限しない（境界は箱）。
+  出力は加工しない（リポジトリのファイルに仕込んだ制御文字もそのまま端末へ届く）。端末で直接読むなら | cat -v を付ける。
 ls: 箱の識別子・作成からの経過・状態（動いている／止まっている）・URL を並べる。
 rm: 箱とボリュームを消す（止まった箱も消せる）。--all はすべて。期限切れで消えたばかりの識別子は、消えたことを知らせて 0 で終わる。
 期限: 作ってから DEV_QUARANTINE_TTL 時間（1 以上の整数。既定 24）を超えた箱は、quarantine のどのサブコマンドの

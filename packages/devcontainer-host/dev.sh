@@ -968,8 +968,9 @@ cmd_quarantine_open() {
     "${QUARANTINE_PROXY_CLEAR[@]}" \
     --mount "type=volume,src=$vol,dst=/repo,readonly" \
     "$img" tail -f /dev/null >/dev/null; then
-    # 箱は起きていないので、消すのは作ったボリュームだけ（同じ名前のコンテナがあっても、それはこの open のものではない）。
-    docker volume rm "$vol" >/dev/null || echo "[$PROG] 作りかけを消せませんでした: $vol（dev quarantine rm $id）" >&2
+    # 作成のあとに起動だけが失敗すると、止まったコンテナが残り、ボリュームを使い続ける。識別子は既存の箱・
+    # コンテナと重ならないもの（quarantine_new_id）なので、同じ名前のコンテナはこの open が作ったもの。両方を消す。
+    quarantine_remove "$id" || echo "[$PROG] 作りかけを消せませんでした: $vol（dev quarantine rm $id）" >&2
     die "調べる箱を起こせませんでした: $box"
   fi
   echo "[$PROG] 取得します（このあいだだけネットワークあり。資格情報は渡さない（docker の設定のプロキシは除く）。コードは実行しない。${secs} 秒まで）: $url"
@@ -1005,6 +1006,12 @@ cmd_quarantine_open() {
   if [[ "$found" -ne 1 ]]; then
     quarantine_remove "$id" || echo "[$PROG] 箱とボリュームを消せませんでした: $id（dev quarantine rm $id）" >&2
     die "取得したボリュームが途中で消えました（空のボリュームになったため、箱を消しました）。もう一度 dev quarantine open してください"
+  fi
+  # clone のあいだに箱が止められると、clone の一時コンテナが終わった時点で tmpfs の中身が消える。
+  # 成功と報告する前に、箱がまだ動いていることを確かめる。
+  if [[ "$(docker inspect --format '{{.State.Running}}' "$box" 2>/dev/null || true)" != "true" ]]; then
+    quarantine_remove "$id" || echo "[$PROG] 箱とボリュームを消せませんでした: $id（dev quarantine rm $id）" >&2
+    die "取得のあいだに箱が止まりました（中身は残りません）。もう一度 dev quarantine open してください"
   fi
   echo "[$PROG] 箱を開きました: $id（$url）"
   quarantine_list_surfaces "$box"
@@ -3981,6 +3988,7 @@ open: <URL> のリポジトリを、名前付きボリュームへ clone して�
   AGENTS.md・GEMINI.md・.cursor/・.github/copilot-instructions.md など。サブディレクトリのものを含む）を
   一覧にして出し、識別子（q- と 16 進 8 桁）を示す。
 exec: 箱の中（/repo/src）でコマンドを実行する。コマンドは制限しない（境界は箱）。
+  出力は加工しない（リポジトリのファイルに仕込んだ制御文字もそのまま端末へ届く）。端末で直接読むなら | cat -v を付ける。
 ls: 箱の識別子・作成からの経過・状態（動いている／止まっている）・URL を並べる。
 rm: 箱とボリュームを消す（止まった箱も消せる）。--all はすべて。期限切れで消えたばかりの識別子は、消えたことを知らせて 0 で終わる。
 期限: 作ってから DEV_QUARANTINE_TTL 時間（1 以上の整数。既定 24）を超えた箱は、quarantine のどのサブコマンドの

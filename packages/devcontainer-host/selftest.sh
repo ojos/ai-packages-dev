@@ -324,12 +324,19 @@ case "$sub $*" in
       run)
         if [[ "$1" == "--rm" ]]; then
           # clone 専用の一時コンテナ。FAKE_Q_CLONE_FAIL=1 で失敗する。
+          # FAKE_Q_STOP_DURING_CLONE=1 で、clone のあいだに箱が止められたことにする。
+          if [[ "${FAKE_Q_STOP_DURING_CLONE:-0}" == "1" ]]; then
+            cat "$QB" >>"$FAKE_STATE/q-stopped"
+            : >"$QB"
+          fi
           [[ "${FAKE_Q_CLONE_FAIL:-0}" != "1" ]] || { printf 'remote: \033]52;c;ZXZpbA==\007\033[2Kfake\n' >&2; echo "fatal: unable to access 'https://example.invalid/x.git/': Could not resolve host" >&2; exit 128; }
           exit 0
         fi
         [[ "$1" == "-d" && "$2" == "--name" ]] || qfail
         [[ "${FAKE_Q_VOL_VANISH:-0}" != "1" ]] || : >"$QV"
         [[ "${FAKE_Q_BOX_FAIL:-0}" != "1" ]] || { echo "docker: Error response from daemon: cannot start" >&2; exit 125; }
+        # FAKE_Q_BOX_START_FAIL=1 で、コンテナを作ったあとに起動だけが失敗する（止まったコンテナが残る）。
+        [[ "${FAKE_Q_BOX_START_FAIL:-0}" != "1" ]] || { echo "$3" >>"$QB"; echo "docker: Error response from daemon: OCI runtime create failed" >&2; exit 125; }
         echo "$3" >>"$QB"
         echo "0123456789abcdef"
         ;;
@@ -2634,8 +2641,18 @@ grep -qE 'docker \[rm\] \[-f\] \[dev-quarantine-q-[0-9a-f]{8}\]' "$LOG" || ng "q
 grep -qF 'docker [volume] [rm] [dev-quarantine-q-' "$LOG" || ng "quarantine open: clone の失敗でボリュームを消していません"
 run 1 "quarantine open: 箱を起こせない" -- FAKE_Q_BOX_FAIL=1 -- quarantine open "$QURL"
 [[ ! -s "$STATE/q-volumes" ]] || ng "quarantine open: 箱を起こせなかったのにボリュームが残っています"
-# 箱が起きていないので、同じ名前のコンテナ（この open のものではない）を rm -f しない。
-if grep -F 'docker [rm] [-f] [dev-quarantine-q-' "$LOG" >/dev/null; then ng "quarantine open: 箱を起こせなかったのに、同じ名前のコンテナを rm -f しています"; fi
+# 作成のあとに起動だけが失敗したら、止まったコンテナとボリュームの両方を消す。
+reset_state
+run 1 "quarantine open: 箱の起動だけが失敗する" -- FAKE_Q_BOX_START_FAIL=1 -- quarantine open "$QURL"
+expect_err "調べる箱を起こせませんでした"
+[[ ! -s "$STATE/q-boxes" ]] || ng "quarantine open: 起動に失敗した箱（止まったコンテナ）が残っています"
+[[ ! -s "$STATE/q-volumes" ]] || ng "quarantine open: 起動に失敗したのにボリュームが残っています"
+# clone のあいだに箱が止められたら、成功と報告せず、箱とボリュームを消して 1。
+reset_state
+run 1 "quarantine open: clone のあいだに箱が止まる" -- FAKE_Q_STOP_DURING_CLONE=1 -- quarantine open "$QURL"
+expect_err "取得のあいだに箱が止まりました"
+if grep -F '箱を開きました' "$OUT" >/dev/null; then ng "quarantine open: 箱が止まったのに、開いたと報告しています"; fi
+[[ ! -s "$STATE/q-volumes" ]] || ng "quarantine open: 箱が止まったのにボリュームが残っています"
 
 
 # 引数の検査（大きさ・clone の時間）: docker を呼ばずに 2。
