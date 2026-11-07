@@ -6,6 +6,20 @@ devhost（SSH で届く外部の機械で devcontainer を保つ道具。コマ�
 >
 > 同じ理由で、issue 参照は `ojos/ai-packages-dev#NNN` の形で書いてください。裸の `#NNN` は GitHub のオートリンクが**配布先リポジトリの issue** として解決するため、配布後は存在しない issue や無関係な issue を指します。
 
+## 未リリース
+
+### Summary
+- **`dev quarantine` を足した。信頼できないリポジトリを、資格情報もネットワークも持たない使い捨ての箱で調べる**（ojos/ai-packages-dev#715）。箱の外では、そのリポジトリのコードを一切実行しない（ホストでは `git` も `devcontainer` も呼ばず、中身をホストのファイルシステムへ展開しない）。
+  - `dev quarantine build` で箱のイメージ（`alpine:3.20` に git と ripgrep。root 以外）を作り（`dev.sh` に埋め込んだ Dockerfile から。`DEV_QUARANTINE_IMAGE` で差し替え）、`dev quarantine open <URL>` で取得して箱を開く。`dev quarantine exec <識別子> -- <コマンド...>` で箱の中を調べ、`dev quarantine ls` / `dev quarantine rm <識別子>|--all` で一覧・削除する。
+  - URL は `https://` だけを受ける（ssh・file・`ext::`・`git@`・認証情報つきは拒否）。取得は専用の一時コンテナの中だけで行い（フック無効・`file` / `ext` プロトコル禁止・submodule と LFS は取らない・資格情報なし）、終われば消える。非公開のリポジトリは扱えない。
+  - 調べる箱は、ネットワークなし・`--cap-drop ALL`・`no-new-privileges`・root 以外・根は読み取り専用・ボリュームは読み取り専用・メモリ 512m と pids 256 の上限。ホストのディレクトリ・docker のソケット・環境変数は渡さない。
+  - 開いた直後に、エージェントの設定・フックの在りかと、エージェントが読む指示のファイル（`.claude/`・`.mcp.json`・`.github/workflows/`・`.githooks/`・`.husky/`・`.devcontainer/`・`.vscode/`・`CLAUDE.md`・`AGENTS.md`・`GEMINI.md`・`.cursor/`・`.github/copilot-instructions.md` など。サブディレクトリを含む）を一覧にして出す。
+  - ボリュームは tmpfs（メモリ上）で、大きさを `DEV_QUARANTINE_SIZE`（既定 1g、1536m まで）で限る。clone は `DEV_QUARANTINE_CLONE_TIMEOUT` 秒（既定 600）で打ち切る。**中身はメモリ上なので、ホストや dockerd の再起動で消える**（使い捨てなので仕様。止まった箱は `ls` に出て、`exec` は 1 で止まる。`rm` して `open` し直す）。
+  - URL の `?` と `#` は受けない（クエリのトークンが docker のラベルに残るため）。
+  - 作ってから `DEV_QUARANTINE_TTL` 時間（既定 24）を超えた箱は、`dev quarantine` のどのサブコマンドの冒頭でも消す。
+  - **残る危険**: 読んだ本文の中の注入（ファイルに書かれた指示に、読んだ側が従うこと）は箱では防げない。README の「検疫」。
+- 手で行う移行の作業は無い（`dev self-update` か `install.sh` で追従する。Dockerfile は `dev.sh` に埋め込んであり、`install.sh` の配線は増えない）。
+
 ## v0.7.0
 
 ### Summary
