@@ -23,6 +23,7 @@
 #   dev disable <名前>          ユニットを無効にして止め、コンテナも止める（再起動の後も止めたまま）
 #   dev exec <名前> -- <コマンド...>  tmux を介さずにコンテナの中でコマンドを 1 つ実行する
 #   dev quarantine build|open <URL>|exec <識別子> -- <コマンド...>|ls|rm <識別子>|--all  信頼できないリポジトリを、資格情報もネットワークも持たない使い捨ての箱で調べる
+#   dev observe start|stop|status|report [--since <日数>]  Claude Code の安全の事象をホスト側へ貯め、許可・フック・規範の改訂の候補を出す
 #   dev self-update [--version <vX.Y.Z>]  dev 自身を devcontainer-host の公開リリースの版へ置き換える
 #   dev version                 dev の版を出す（`dev --version` も同じ）
 #   dev help [サブコマンド]      サブコマンドごとの説明（正本はこのファイルの help_* 関数）
@@ -103,6 +104,10 @@ usage() {
   dev quarantine exec <識別子> -- <コマンド...>
   dev quarantine ls
   dev quarantine rm <識別子>|--all
+  dev observe start
+  dev observe stop
+  dev observe status
+  dev observe report [--since <日数>]
   dev self-update [--version <vX.Y.Z>]
   dev version
   dev help [サブコマンド]
@@ -226,7 +231,8 @@ is_running() {
 dc_exec() {
   # devcontainer exec は最初の「オプションでない語」より後をそのままコマンドへ渡す
   # （CLI 0.89.0 の halt-at-non-option）。したがって CLI のオプションは必ずコマンドの前に置く。
-  devcontainer exec --workspace-folder "${P_PATHS[$IDX]}" "$@"
+  # DC_EXTRA は observe_use が埋める --remote-env（受け口が動いていなければ空）。
+  devcontainer exec --workspace-folder "${P_PATHS[$IDX]}" ${DC_EXTRA[@]+"${DC_EXTRA[@]}"} "$@"
 }
 
 # ── サブコマンド ──────────────────────────────────────────────────────────────
@@ -277,7 +283,9 @@ cmd_attach() {
   fi
   maybe_offer_update || true
   local rc=0
-  dc_exec tmux new-session -A -s "${P_TMUX[$IDX]}" || rc=$?
+  observe_use "$1"
+  observe_tmux_pre "$1"
+  dc_exec tmux ${OBSERVE_TMUX_PRE[@]+"${OBSERVE_TMUX_PRE[@]}"} new-session -A -s "${P_TMUX[$IDX]}" || rc=$?
   if [[ "$rc" -ne 0 ]]; then
     # 入れない（exec が通らない）ときの手がかりを出す。コンテナが running でも入れないことがある
     # （プロセス数の上限に達したときなど。dev ls の CONTAINER では見分けられない）。
@@ -641,6 +649,7 @@ cmd_exec() {
     # attach と同じく、自分では起こさない（ユニットが起こし直している最中に 2 本目の up を重ねないため）。
     die "$name のコンテナが動いていません。dev up $name で起こしてから実行し直してください（ユニットを有効にしていれば、30 秒ほどで戻ります）。"
   fi
+  observe_use "$name"
   dc_exec "$@"
 }
 
@@ -1089,6 +1098,614 @@ cmd_quarantine_rm() {
   done <<<"$Q_RECORDS"
   if [[ "$n" -eq 0 && "$failed" -eq 0 && -z "$Q_EXPIRED" ]]; then echo "[$PROG] 検疫の箱はありません。"; fi
   [[ "$failed" -eq 0 ]] || return 1
+}
+
+# ── observe（Claude Code の安全の事象を、ホスト側へ貯める）──────────────────────
+# devcontainer の Claude Code が OpenTelemetry で出す claude_code.safety_event と claude_code.tool_decision を、
+# ホスト側の常駐の受け口（コンテナ dev-observe）で受け、devcontainer にマウントされない場所へ JSONL で貯める。
+# report が集計して、許可・フック・規範の改訂の候補を文で出す。**候補は提案だけで、承認の根拠にしない。**
+#
+# - 送らせ方: 受け口が動いているときだけ、dev attach / dev exec が devcontainer exec に --remote-env で
+#   OTEL_* を渡す（起動するときの環境変数。リポジトリの .claude/settings.json の OTEL_* は Claude Code が無視する）。
+#   dev attach は、同じ exec の中で tmux のサーバにも set-environment -g で同じ値を入れる（以後に作るウィンドウ・ペイン用）。
+# - 受け口は、python3 の標準ライブラリだけで書いた最小のもの（下の observe_receiver_script）。http/json の
+#   POST /v1/logs だけを受け、対象の事象の決めた属性だけを残す。コマンドの本文やプロンプトは受け取らない
+#   （OTEL_LOG_TOOL_DETAILS・OTEL_LOG_USER_PROMPTS を有効にしない）。
+# - 待ち受けるのは docker の bridge のゲートウェイの IP だけ（LAN には出さない）。同じホストのどのコンテナからでも
+#   送れるので、偽の記録が混ざりうる。report は候補を出すだけにする。
+# - 置き場所: <dir>/endpoint（受け口の送り先。動いている印）と <dir>/data/（記録。受け口にだけマウントする）。
+#   <dir> は DEV_OBSERVE_DIR（既定 ${XDG_STATE_HOME:-~/.local/state}/dev/observe）。登録したプロジェクトの
+#   パスの下（devcontainer にマウントされる場所）なら、start は拒否する。
+# - 期限（DEV_OBSERVE_RETENTION 日。既定 30）を超えた日の記録は、start と report のときに消す。
+OBSERVE_NAME="dev-observe"
+OBSERVE_LABEL="devhost.observe"
+OBSERVE_MEMORY="128m"
+OBSERVE_PIDS="64"
+# 受け口のコンテナの中で待ち受けるポート（OTLP/HTTP の慣例の番号）。
+OBSERVE_PORT_IN=4318
+
+observe_dir() { printf '%s\n' "${DEV_OBSERVE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/dev/observe}"; }
+observe_image() { printf '%s\n' "${DEV_OBSERVE_IMAGE:-python:3.12-alpine3.20}"; }
+
+# ホスト側で待ち受けるポート。1024〜65535 の整数。
+observe_port() {
+  local v="${DEV_OBSERVE_PORT:-4318}"
+  if [[ ! "$v" =~ ^[1-9][0-9]{3,4}$ ]] || ((v < 1024 || v > 65535)); then
+    usage_error "DEV_OBSERVE_PORT は 1024〜65535 の整数です: $v"
+  fi
+  printf '%s\n' "$v"
+}
+
+# 記録を残す日数。1 以上の整数。
+observe_retention() {
+  local v="${DEV_OBSERVE_RETENTION:-30}"
+  [[ "$v" =~ ^[1-9][0-9]{0,4}$ ]] || usage_error "DEV_OBSERVE_RETENTION は 1 以上の整数（日）です: $v"
+  printf '%s\n' "$v"
+}
+
+# 候補にする回数の下限。1 以上の整数。
+observe_threshold() {
+  local v="${DEV_OBSERVE_THRESHOLD:-3}"
+  [[ "$v" =~ ^[1-9][0-9]{0,5}$ ]] || usage_error "DEV_OBSERVE_THRESHOLD は 1 以上の整数（回）です: $v"
+  printf '%s\n' "$v"
+}
+
+# 待ち受ける IP。DEV_OBSERVE_ADDR があればそれ（IPv4。0.0.0.0 は LAN に出るので受けない）、無ければ
+# docker の bridge のゲートウェイ（devcontainer から届き、LAN には出ない）。
+observe_addr() {
+  local v="${DEV_OBSERVE_ADDR:-}" gw
+  if [[ -z "$v" ]]; then
+    gw="$(docker network inspect bridge --format '{{range .IPAM.Config}}{{.Gateway}} {{end}}')" ||
+      die "docker の bridge のネットワークを読めませんでした（docker が動いていますか。DEV_OBSERVE_ADDR で IP を渡せる）"
+    for v in $gw; do
+      [[ "$v" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] && break
+      v=""
+    done
+    [[ -n "$v" ]] || die "docker の bridge のゲートウェイ（IPv4）が分かりませんでした（DEV_OBSERVE_ADDR で IP を渡せる）"
+  fi
+  [[ "$v" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || usage_error "DEV_OBSERVE_ADDR は IPv4 のアドレスです: $v"
+  [[ "$v" != "0.0.0.0" ]] || usage_error "DEV_OBSERVE_ADDR に 0.0.0.0 は使えません（LAN に出るため）"
+  printf '%s\n' "$v"
+}
+
+# 置き場所の実体のパスを確かめてから作り、実体のパスを出す。登録したプロジェクトのパスの下（devcontainer に
+# マウントされる場所）なら、何も作らずに止める。実体のパス（シンボリックリンクを解いたもの）同士で比べる。
+# まだ無い部分は、いちばん近い既存の祖先を解いて、その後ろに足す。
+observe_prepare_dir() {
+  local dir="$1" real p preal i d rest=""
+  [[ "$dir" == /* ]] || usage_error "DEV_OBSERVE_DIR は絶対パスで書きます: $dir"
+  [[ "/$dir/" != */../* && "/$dir/" != */./* ]] || usage_error "DEV_OBSERVE_DIR に . と .. は使えません: $dir"
+  while [[ "$dir" == */ && "$dir" != / ]]; do dir="${dir%/}"; done
+  d="$dir"
+  while [[ ! -d "$d" ]]; do
+    rest="/${d##*/}$rest"
+    d="${d%/*}"
+    [[ -n "$d" ]] || d=/
+  done
+  real="$(cd "$d" && pwd -P)" || die "置き場所を読めませんでした: $d"
+  real="${real%/}$rest"
+  load_projects
+  for ((i = 0; i < ${#P_PATHS[@]}; i++)); do
+    p="${P_PATHS[$i]}"
+    preal="$p"
+    if [[ -d "$p" ]]; then preal="$(cd "$p" && pwd -P)" || preal="$p"; fi
+    if [[ "$real" == "$preal" || "$real" == "$preal"/* || "$preal" == / ]]; then
+      usage_error "置き場所がプロジェクト ${P_NAMES[$i]} のパスの下にあります（devcontainer から書き換えられるため）: $real。DEV_OBSERVE_DIR で別の場所を指定してください"
+    fi
+  done
+  # 権限（700）は、ここで作ったディレクトリにだけ付ける（利用者が指定した既存のディレクトリの権限は変えない）。
+  if [[ ! -d "$real" ]]; then
+    mkdir -p "$real" || die "置き場所を作れませんでした: $real"
+    chmod 700 "$real" || die "置き場所の権限を変えられませんでした: $real"
+  fi
+  if [[ ! -d "$real/data" ]]; then
+    mkdir "$real/data" || die "置き場所を作れませんでした: $real/data"
+    chmod 700 "$real/data" || die "置き場所の権限を変えられませんでした: $real/data"
+  fi
+  printf '%s\n' "$real"
+}
+
+# 受け口が動いていれば、送り先（http://<IP>:<ポート>）を OBSERVE_ENDPOINT に入れて 0。そうでなければ 1。
+# 印のファイル（<dir>/endpoint）が無ければ docker を呼ばない（使っていない機械の attach / exec を変えないため）。
+OBSERVE_ENDPOINT=""
+observe_running() {
+  local f ep running
+  OBSERVE_ENDPOINT=""
+  f="$(observe_dir)/endpoint"
+  [[ -f "$f" ]] || return 1
+  ep="$(sed -n 1p "$f")"
+  [[ "$ep" =~ ^http://[0-9]{1,3}(\.[0-9]{1,3}){3}:[0-9]{4,5}$ ]] || return 1
+  command -v docker >/dev/null 2>&1 || return 1
+  running="$(docker inspect --format '{{.State.Running}}' "$OBSERVE_NAME" 2>/dev/null)" || return 1
+  [[ "$running" == "true" ]] || return 1
+  OBSERVE_ENDPOINT="$ep"
+}
+
+# devcontainer の Claude Code へ渡す環境変数（キー=値 を 1 行ずつ）。$1 はプロジェクトの名前。
+# ログ（事象）だけを送る（metrics と traces は、Claude Code は指定が無ければ送らないので、何も渡さない）。
+# 本文を出す設定（OTEL_LOG_*）は渡さない。これらは attach / exec で起こすすべてのプロセスの環境に入るので、
+# 渡す値は最小にする（OpenTelemetry を使う別のアプリのログの送り先も変わる。README の「観測」）。
+observe_env_pairs() {
+  printf '%s\n' \
+    "CLAUDE_CODE_ENABLE_TELEMETRY=1" \
+    "OTEL_LOGS_EXPORTER=otlp" \
+    "OTEL_EXPORTER_OTLP_LOGS_PROTOCOL=http/json" \
+    "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT=$OBSERVE_ENDPOINT/v1/logs" \
+    "OTEL_RESOURCE_ATTRIBUTES=dev.project=$1"
+}
+
+# dc_exec が devcontainer exec のコマンドの前に足すオプション。observe_use が埋める。
+DC_EXTRA=()
+
+# 受け口が動いていれば、devcontainer exec に --remote-env を足す。$1 はプロジェクトの名前。
+# 動いていなければ何もしない（0 を返す）。
+observe_use() {
+  local kv
+  DC_EXTRA=()
+  observe_running || return 0
+  while IFS= read -r kv; do
+    DC_EXTRA+=(--remote-env "$kv")
+  done < <(observe_env_pairs "$1")
+}
+
+# attach の tmux の引数の前に足す、サーバの環境へ同じ値を入れるコマンドの並び（OBSERVE_TMUX_PRE）。
+# tmux は、既に動いているサーバでは、新しいセッション・ウィンドウ・ペインにもサーバが持つ環境を使うので、
+# --remote-env だけでは届かない。start-server（サーバが無ければ作る）; set-environment -g K V; ...; と並べ、
+# 後ろに new-session を続けて 1 回の exec で済ませる。受け口が動いていなければ空。$1 はプロジェクトの名前。
+OBSERVE_TMUX_PRE=()
+observe_tmux_pre() {
+  local kv
+  OBSERVE_TMUX_PRE=()
+  [[ -n "$OBSERVE_ENDPOINT" ]] || return 0
+  OBSERVE_TMUX_PRE=(start-server ";")
+  while IFS= read -r kv; do
+    OBSERVE_TMUX_PRE+=(set-environment -g "${kv%%=*}" "${kv#*=}" ";")
+  done < <(observe_env_pairs "$1")
+}
+
+# 受け口のスクリプト（python3 の標準ライブラリだけ）。コンテナの中で python3 -I -c に渡す。
+# selftest が目印の行の内側を取り出して、手元の python3 で単体試験する。
+# >>> observe-receiver
+observe_receiver_script() {
+  cat <<'PY'
+# devhost-observe-receiver
+import http.server, json, os, re, sys, threading, time
+
+DIR = os.environ.get("OBSERVE_DIR", "/data")
+MAX_BODY = int(os.environ.get("OBSERVE_MAX_BODY", "1048576"))
+MAX_TOTAL = int(os.environ.get("OBSERVE_MAX_TOTAL", "67108864"))
+BIND = os.environ.get("OBSERVE_BIND", "0.0.0.0")
+PORT = int(os.environ.get("OBSERVE_PORT", "4318"))
+EVENTS = ("safety_event", "tool_decision")
+# 残す属性。これ以外（tool_parameters・tool_input・prompt など）は、届いても捨てる。
+KEEP = ("category", "decision", "decision_source", "source", "reason_code", "reason_type",
+        "rule_source", "grant_scope", "circuit_breaker", "hook_event", "tool_class", "tool_name",
+        "tool_source", "permission_mode", "sandbox_violation_count", "sandbox_enabled",
+        "classifier_verdict", "session.id", "event.timestamp")
+RESOURCE_KEEP = (("dev.project", "project"), ("service.version", "version"))
+UNSAFE = re.compile(r"[^\x20-\x7e]")
+# 書き込み（合計の確かめ・追記・上限で書けなかった件数）を 1 本ずつにする（ThreadingHTTPServer の同時の要求）。
+LOCK = threading.Lock()
+
+
+def text(v):
+    """値を、表示できる ASCII だけの 200 文字までの文字列にする（制御文字は ? に置き換える）。"""
+    return UNSAFE.sub("?", str(v))[:200]
+
+
+def value(v):
+    """OTLP の AnyValue から、文字列・整数・小数・真偽の値を取り出す（それ以外は None）。"""
+    if not isinstance(v, dict):
+        return None
+    for k in ("stringValue", "intValue", "doubleValue"):
+        if k in v:
+            return v[k]
+    if "boolValue" in v:
+        return "true" if v["boolValue"] is True else "false"
+    return None
+
+
+def attrs(lst):
+    """OTLP の属性の並び（key と value）を辞書にする。形の違う要素は飛ばす。"""
+    out = {}
+    if isinstance(lst, list):
+        for a in lst:
+            if isinstance(a, dict) and isinstance(a.get("key"), str):
+                x = value(a.get("value"))
+                if x is not None:
+                    out[a["key"]] = x
+    return out
+
+
+def items(d, key):
+    """d[key] が並びなら、その中の辞書だけを返す（形が違えば空）。"""
+    v = d.get(key) if isinstance(d, dict) else None
+    return [x for x in v if isinstance(x, dict)] if isinstance(v, list) else []
+
+
+def records(doc):
+    """OTLP のログの本文から、対象の事象を、決めた属性だけを残した辞書として 1 件ずつ出す。"""
+    now = int(time.time())
+    for rl in items(doc, "resourceLogs"):
+        res = attrs((rl.get("resource") or {}).get("attributes") if isinstance(rl.get("resource"), dict) else None)
+        for sl in items(rl, "scopeLogs"):
+            for lr in items(sl, "logRecords"):
+                a = attrs(lr.get("attributes"))
+                name = str(a.get("event.name", ""))
+                if name.startswith("claude_code."):
+                    name = name[len("claude_code."):]
+                if name not in EVENTS:
+                    continue
+                rec = {"t": now, "event": name}
+                for src, dst in RESOURCE_KEEP:
+                    if src in res:
+                        rec[dst] = text(res[src])
+                for k in KEEP:
+                    if k in a:
+                        rec[k] = text(a[k])
+                yield rec
+
+
+def total():
+    """置き場所の記録（events-*.jsonl）の大きさの合計（バイト）。"""
+    n = 0
+    for e in os.scandir(DIR):
+        if e.name.startswith("events-") and e.name.endswith(".jsonl") and e.is_file(follow_symlinks=False):
+            n += e.stat().st_size
+    return n
+
+
+def drop(n):
+    """上限で書けなかった件数に n を足す（呼び出し側が LOCK を持つ）。"""
+    p = os.path.join(DIR, "dropped")
+    try:
+        with open(p) as f:
+            cur = int(f.read().strip() or "0")
+    except (OSError, ValueError):
+        cur = 0
+    tmp = p + ".tmp"
+    with open(tmp, "w") as f:
+        f.write("%d\n" % (cur + n))
+    os.replace(tmp, p)
+
+
+def write(recs):
+    """記録を今日（UTC）のファイルへ追記する。合計の上限を超えるなら書かずに数える。"""
+    data = "".join(json.dumps(r, ensure_ascii=True, sort_keys=True) + "\n" for r in recs).encode()
+    with LOCK:
+        if total() + len(data) > MAX_TOTAL:
+            drop(len(recs))
+            return
+        path = os.path.join(DIR, time.strftime("events-%Y%m%d.jsonl", time.gmtime()))
+        fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, "ab") as f:
+            f.write(data)
+
+
+class Handler(http.server.BaseHTTPRequestHandler):
+    """POST /v1/logs（http/json）だけを受ける。要求ごとの記録（アクセスログ）は出さない。"""
+    timeout = 10
+    server_version = "devhost-observe"
+    sys_version = ""
+
+    def log_message(self, *args):
+        pass
+
+    def reply(self, code):
+        """空の JSON（{}）で応える。"""
+        body = b"{}"
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self):
+        self.reply(405)
+
+    def do_POST(self):
+        if self.path != "/v1/logs":
+            return self.reply(404)
+        if "json" not in (self.headers.get("Content-Type") or ""):
+            return self.reply(415)
+        if (self.headers.get("Content-Encoding") or "identity") != "identity":
+            return self.reply(415)
+        try:
+            n = int(self.headers.get("Content-Length", ""))
+        except ValueError:
+            self.close_connection = True
+            return self.reply(411)
+        if n < 0 or n > MAX_BODY:
+            self.close_connection = True
+            return self.reply(413 if n > MAX_BODY else 400)
+        try:
+            doc = json.loads(self.rfile.read(n))
+        except (ValueError, UnicodeDecodeError, RecursionError):
+            return self.reply(400)
+        recs = list(records(doc)) if isinstance(doc, dict) else []
+        if recs:
+            try:
+                write(recs)
+            except OSError as e:
+                print("devhost-observe: 記録を書けませんでした: %s" % e, file=sys.stderr, flush=True)
+                return self.reply(500)
+        self.reply(200)
+
+
+os.umask(0o077)
+server = http.server.ThreadingHTTPServer((BIND, PORT), Handler)
+server.daemon_threads = True
+print("devhost-observe listening %s:%d" % (BIND, server.server_address[1]), flush=True)
+server.serve_forever()
+PY
+}
+# <<< observe-receiver
+
+# ホスト側で、期限切れの記録を消すことと、集計（report）をするスクリプト（python3 の標準ライブラリだけ）。
+# 使い方: prune <data の dir> <日数> / report <data の dir> <日数> <回数の下限>
+# >>> observe-tool
+observe_tool_script() {
+  cat <<'PY'
+# devhost-observe-tool
+import json, os, re, sys, time
+from collections import Counter
+
+UNSAFE = re.compile(r"[^\x20-\x7e]")
+
+
+def clean(v):
+    """値を、表示できる ASCII だけの 200 文字までの文字列にする。"""
+    return UNSAFE.sub("?", str(v))[:200]
+
+
+def files(d):
+    """置き場所の日ごとの記録を（日付, パス）の昇順で返す。"""
+    out = []
+    for e in os.scandir(d):
+        m = re.fullmatch(r"events-(\d{8})\.jsonl", e.name)
+        if m and e.is_file(follow_symlinks=False):
+            out.append((m.group(1), e.path))
+    return sorted(out)
+
+
+def cutoff(days):
+    """今日（UTC）から days 日前の日付（YYYYMMDD）。"""
+    return time.strftime("%Y%m%d", time.gmtime(time.time() - days * 86400))
+
+
+def prune(d, days):
+    """期限より前の日の記録を消し、消した数を出す。"""
+    c = cutoff(days)
+    n = 0
+    for day, p in files(d):
+        if day < c:
+            os.unlink(p)
+            n += 1
+    print(n)
+
+
+def load(d, days):
+    """直近 days 日の記録と、読めなかった行の数を返す。"""
+    c = cutoff(days)
+    since = time.time() - days * 86400
+    recs, bad = [], 0
+    for day, p in files(d):
+        if day < c:
+            continue
+        with open(p, encoding="ascii", errors="replace") as f:
+            for line in f:
+                try:
+                    r = json.loads(line)
+                except ValueError:
+                    bad += 1
+                    continue
+                if not isinstance(r, dict) or not isinstance(r.get("t"), int):
+                    bad += 1
+                    continue
+                if r["t"] >= since:
+                    recs.append({k: clean(v) for k, v in r.items()})
+    return recs, bad
+
+
+def dropped(d):
+    """上限で書けなかった件数（記録が無ければ 0）。"""
+    try:
+        with open(os.path.join(d, "dropped")) as f:
+            return int(f.read().strip() or "0")
+    except (OSError, ValueError):
+        return 0
+
+
+def g(r, k):
+    """記録の値（無ければ -）。"""
+    return r.get(k) or "-"
+
+
+def table(title, keys, rows, limit=40):
+    """keys の組ごとの件数を、多い順に limit 行まで出す。"""
+    print("")
+    print("## " + title)
+    c = Counter(tuple(g(r, k) for k in keys) for r in rows)
+    if not c:
+        print("（なし）")
+        return
+    print("件数  " + "  ".join(keys))
+    for vals, n in c.most_common(limit):
+        print("%4d  %s" % (n, "  ".join(vals)))
+    if len(c) > limit:
+        print("ほか %d 種類" % (len(c) - limit))
+
+
+def candidates(se, td, th):
+    """回数の下限 th 以上くり返したものを、改訂の候補の文にして返す。"""
+    out = []
+    c = Counter((g(r, "project"), g(r, "tool_name")) for r in td
+                if r.get("decision") == "accept" and r.get("source") == "user_temporary")
+    for (p, t), n in sorted(c.items()):
+        if n >= th:
+            out.append("許可の追加の候補: %s で %s が、確認に応じて %d 回許可された（その場限り）。許可の規則に足すかを判断する" % (p, t, n))
+    c = Counter((g(r, "project"), g(r, "category"), g(r, "hook_event"), g(r, "reason_code")) for r in se
+                if r.get("category") in ("hook", "hook_review"))
+    for (p, cat, h, rc), n in sorted(c.items()):
+        if n >= th:
+            out.append("フックの見直しの候補: %s で %s（hook_event=%s, reason_code=%s）の差し戻しが %d 回。フックの文言か、規範で先に避けられないかを判断する" % (p, cat, h, rc, n))
+    c = Counter((g(r, "project"), g(r, "category"), r.get("circuit_breaker") or g(r, "reason_code")) for r in se
+                if r.get("category") in ("safety_check", "static_analysis"))
+    for (p, cat, why), n in sorted(c.items()):
+        if n >= th:
+            out.append("手順の見直しの候補: %s で %s（%s）の拒否が %d 回。手順（規範）で先に避けられないかを判断する" % (p, cat, why, n))
+    c = Counter((g(r, "project"), g(r, "tool_name")) for r in se
+                if r.get("category") in ("sandbox_network", "sandbox_other"))
+    for (p, t), n in sorted(c.items()):
+        if n >= th:
+            out.append("許可するドメインの見直しの候補: %s で %s の sandbox のネットワークの拒否が %d 回。許可するドメインを見直すかを判断する" % (p, t, n))
+    return out
+
+
+def report(d, days, th):
+    """集計と改訂の候補を出す。"""
+    recs, bad = load(d, days)
+    se = [r for r in recs if r.get("event") == "safety_event"]
+    td = [r for r in recs if r.get("event") == "tool_decision"]
+    print("観測の記録（直近 %d 日）: safety_event %d 件 / tool_decision %d 件 / 読めなかった行 %d / 上限で書けなかった %d 件"
+          % (days, len(se), len(td), bad, dropped(d)))
+    table("safety_event", ("project", "category", "decision", "reason_code", "rule_source", "hook_event", "tool_name"), se)
+    table("tool_decision", ("project", "tool_name", "decision", "source"), td)
+    print("")
+    print("## 改訂の候補（%d 回以上）" % th)
+    cs = candidates(se, td, th)
+    for line in cs:
+        print("- " + line)
+    if not cs:
+        print("（なし）")
+    print("")
+    print("候補は提案です。承認の根拠にしません。同じホストのコンテナなら誰でも記録を送れるので、偽の記録が混ざりえます。")
+
+
+if sys.argv[1] == "prune":
+    prune(sys.argv[2], int(sys.argv[3]))
+elif sys.argv[1] == "report":
+    report(sys.argv[2], int(sys.argv[3]), int(sys.argv[4]))
+else:
+    sys.exit("unknown mode")
+PY
+}
+# <<< observe-tool
+
+# 期限を超えた日の記録を消す。$1 は data の dir、$2 は日数。消した数を知らせる。
+observe_prune() {
+  local n
+  n="$(python3 -I -c "$(observe_tool_script)" prune "$1" "$2")" || die "期限切れの記録を消せませんでした: $1"
+  if [[ "$n" != "0" ]]; then echo "[$PROG] 期限（$2 日）を超えた記録を消しました: $n 日分"; fi
+}
+
+cmd_observe() {
+  local sub="${1:-}"
+  [[ $# -ge 1 ]] || usage_error "使い方: dev observe start | stop | status | report [--since <日数>]"
+  shift
+  case "$sub" in
+    start) cmd_observe_start "$@" ;;
+    stop) cmd_observe_stop "$@" ;;
+    status) cmd_observe_status "$@" ;;
+    report) cmd_observe_report "$@" ;;
+    *) usage_error "知らない observe のサブコマンドです: $sub（start / stop / status / report）" ;;
+  esac
+}
+
+# 受け口を起こす（動いていれば作り直す）。
+cmd_observe_start() {
+  [[ $# -eq 0 ]] || usage_error "使い方: dev observe start"
+  local dir real port addr img uid gid keep
+  port="$(observe_port)"
+  keep="$(observe_retention)"
+  need docker "Docker Engine を入れてください。"
+  need python3 "python3 を入れてください（期限切れの記録の掃除と report に使う）。"
+  uid="$(id -u)" gid="$(id -g)"
+  [[ "$uid" != "0" ]] || die "root では起こしません（受け口を root でない利用者で動かすため）。ふだんの利用者で実行してください"
+  # アドレスの誤りは、置き場所を作る前に止める（使い方の誤りで、ディレクトリを残さないため）。
+  addr="$(observe_addr)"
+  dir="$(observe_dir)"
+  real="$(observe_prepare_dir "$dir")"
+  img="$(observe_image)"
+  observe_prune "$real/data" "$keep"
+  rm -f "$real/endpoint"
+  docker rm -f "$OBSERVE_NAME" >/dev/null 2>&1 || true
+  # 受け口: root でない利用者（記録をホストの利用者が消せるよう、ホストの uid / gid）・根は読み取り専用・権限なし・
+  # メモリと pids の上限。マウントは記録の置き場所（data）だけ。環境変数は渡さない（docker の設定のプロキシも空で上書き）。
+  if ! docker run -d --name "$OBSERVE_NAME" --label "$OBSERVE_LABEL=1" --restart unless-stopped \
+    --user "$uid:$gid" --read-only --cap-drop ALL --security-opt no-new-privileges \
+    --memory "$OBSERVE_MEMORY" --pids-limit "$OBSERVE_PIDS" \
+    "${QUARANTINE_PROXY_CLEAR[@]}" \
+    -p "$addr:$port:$OBSERVE_PORT_IN" \
+    --mount "type=bind,src=$real/data,dst=/data" \
+    "$img" python3 -I -c "$(observe_receiver_script)" >/dev/null; then
+    docker rm -f "$OBSERVE_NAME" >/dev/null 2>&1 || true
+    die "受け口を起こせませんでした（イメージ $img・ポート $addr:$port を確かめてください）"
+  fi
+  printf 'http://%s:%s\n' "$addr" "$port" >"$real/endpoint"
+  echo "[$PROG] 受け口を起こしました: http://$addr:$port（記録: $real/data）"
+  echo "[$PROG] これから dev attach / dev exec で入ったセッションの Claude Code が送ります（VS Code など dev を通さない入り方は送りません）。"
+  echo "[$PROG] 集計: dev observe report"
+}
+
+cmd_observe_stop() {
+  [[ $# -eq 0 ]] || usage_error "使い方: dev observe stop"
+  local dir
+  need docker "Docker Engine を入れてください。"
+  dir="$(observe_dir)"
+  rm -f "$dir/endpoint"
+  docker rm -f "$OBSERVE_NAME" >/dev/null 2>&1 || true
+  echo "[$PROG] 受け口を止めました（記録は残します: $dir/data）。"
+  echo "[$PROG] 動いている tmux のサーバには送り先の設定が残ります（送り先が無いので、送られません）。"
+}
+
+cmd_observe_status() {
+  [[ $# -eq 0 ]] || usage_error "使い方: dev observe status"
+  local dir n=0 bytes=0 f drop=0
+  dir="$(observe_dir)"
+  if observe_running; then
+    echo "受け口: 動いている（$OBSERVE_ENDPOINT）"
+  else
+    echo "受け口: 動いていない（dev observe start で起こす）"
+  fi
+  echo "置き場所: $dir/data"
+  if [[ -d "$dir/data" ]]; then
+    for f in "$dir/data"/events-*.jsonl; do
+      [[ -f "$f" ]] || continue
+      n=$((n + 1))
+      bytes=$((bytes + $(wc -c <"$f")))
+    done
+    if [[ -f "$dir/data/dropped" ]]; then drop="$(sed -n '1p' "$dir/data/dropped" | tr -cd '0-9')"; fi
+  fi
+  echo "記録: ${n} 日分・${bytes} バイト（上限で書けなかった ${drop:-0} 件）"
+}
+
+cmd_observe_report() {
+  local days="" since=0 th dir keep
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --since)
+        [[ $# -ge 2 ]] || usage_error "使い方: dev observe report [--since <日数>]"
+        days="$2" since=1
+        shift 2
+        ;;
+      *) usage_error "使い方: dev observe report [--since <日数>]" ;;
+    esac
+  done
+  keep="$(observe_retention)"
+  if [[ "$since" -eq 1 ]]; then
+    [[ "$days" =~ ^[1-9][0-9]{0,4}$ ]] || usage_error "--since は 1 以上の整数（日）です: $days"
+    # report は先に期限切れの記録を消すので、期限より長い期間は数えられない（黙って短くしない）。
+    ((days <= keep)) || usage_error "--since は期限（DEV_OBSERVE_RETENTION=$keep 日）までです: $days"
+  else
+    days="$keep"
+  fi
+  th="$(observe_threshold)"
+  need python3 "python3 を入れてください（report に使う）。"
+  dir="$(observe_dir)"
+  [[ -d "$dir/data" ]] || die "記録がありません: $dir/data（dev observe start で受け口を起こしてください）"
+  observe_prune "$dir/data" "$keep"
+  python3 -I -c "$(observe_tool_script)" report "$dir/data" "$days" "$th" || die "集計に失敗しました: $dir/data"
 }
 
 # ── runner（GitHub Actions の自前のランナー）──────────────────────────────────
@@ -4002,6 +4619,47 @@ rm: 箱とボリュームを消す（止まった箱も消せる）。--all は�
 EOF
 }
 
+help_observe() {
+  cat <<'EOF'
+dev observe — devcontainer の Claude Code が出す安全の事象を、ホスト側へ貯めて、改訂の候補を出す。
+
+使い方:
+  dev observe start
+  dev observe stop
+  dev observe status
+  dev observe report [--since <日数>]
+
+start: ホスト側に受け口（コンテナ dev-observe。python3 の標準ライブラリだけで書いた最小のもの）を常駐させる
+  （--restart unless-stopped。動いていれば作り直す）。待ち受けるのは docker の bridge のゲートウェイの IP だけで、
+  LAN には出さない（DEV_OBSERVE_ADDR で IPv4 を、DEV_OBSERVE_PORT でポート（既定 4318）を変えられる）。
+  受け口は、ホストの利用者の uid / gid・根は読み取り専用・権限なし・メモリ 128m と pids 64 の上限で動く
+  （root では起こさない）。マウントは記録の置き場所だけ。イメージは DEV_OBSERVE_IMAGE（既定 python:3.12-alpine3.20）。
+  受け取るのは http/json の POST /v1/logs だけで、safety_event と tool_decision の決めた属性（category・decision・
+  reason_code・rule_source・hook_event・tool_name など）だけを残す。コマンドの本文やプロンプトは貯めない。
+  1 回の本文は 1MiB まで（超えたら 413）、記録の合計は 64MiB まで（超えたら書かずに数える）。
+  置き場所は DEV_OBSERVE_DIR（既定 ~/.local/state/dev/observe）の data/。devcontainer にはマウントしない。
+  登録したプロジェクトのパスの下にあれば、拒否して止まる（devcontainer から書き換えられるため）。
+送らせ方: 受け口が動いているあいだ、dev attach と dev exec は devcontainer exec に --remote-env で
+  CLAUDE_CODE_ENABLE_TELEMETRY・OTEL_LOGS_EXPORTER・送り先・OTEL_RESOURCE_ATTRIBUTES（dev.project=<名前>）を渡す
+  （ログだけ。metrics と traces の設定は渡さない）。dev attach は、同じ exec の中で tmux のサーバにも同じ値を入れる。
+  送るのは、そのあとに起こした Claude Code（2.1.307 以降。古い版は tool_decision だけ）だけ。
+  VS Code など dev を通さない入り方のセッションは送らない。
+  これらの値は、attach / exec で起こすすべてのプロセスの環境に入る（OpenTelemetry を使う別のアプリのログの
+  送り先も変わる。対象の事象以外は受け口が捨てる）。そうしたアプリを動かすプロジェクトでは start しない。
+stop: 受け口を消す（記録は残す）。動いている tmux のサーバに入れた値は残る（送り先が無いので送られない）。
+status: 受け口が動いているか、送り先、記録の日数・大きさ・上限で書けなかった件数を出す。
+report: 直近 <日数>（既定は DEV_OBSERVE_RETENTION。それより長くはできない）の記録を、category・decision・reason_code などごとに数え、
+  DEV_OBSERVE_THRESHOLD 回（既定 3）以上のものを改訂の候補として出す（許可の追加・フックの見直し・
+  手順の見直し・許可するドメインの見直し）。ホストの python3 を使う。
+期限: DEV_OBSERVE_RETENTION 日（既定 30）を超えた日の記録は、start と report のときに消す。
+
+候補は提案だけで、承認の根拠にしない。受け口には同じホストのどのコンテナからでも送れるので、
+  偽の記録が混ざりうる。許可・フック・規範を変えるかは、人が判断する。
+
+終了コード: 0 = 成功 / 1 = 失敗（docker・python3 が無い・受け口を起こせない・記録が無い） / 2 = 使い方か設定の誤り
+EOF
+}
+
 help_self-update() {
   cat <<'EOF'
 dev self-update — dev 自身を、devcontainer-host の公開リリースの版へ置き換える。
@@ -4102,6 +4760,7 @@ main() {
     disable) cmd_disable "$@" ;;
     exec) cmd_exec "$@" ;;
     quarantine) cmd_quarantine "$@" ;;
+    observe) cmd_observe "$@" ;;
     self-update) cmd_self_update "$@" ;;
     version | --version) cmd_version "$@" ;;
     help) cmd_help "$@" ;;

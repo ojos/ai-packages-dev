@@ -512,6 +512,7 @@ compose のサービスに `restart: always` があると、`dev disable` で止
 | `dev enable <名前>` / `dev disable <名前>` | ユニットを有効にして起こす / 無効にして止める（`disable` はコンテナも止める） |
 | `dev exec <名前> -- <コマンド...>` | tmux を介さずにコンテナの中でコマンドを 1 つ実行する |
 | `dev quarantine build` / `open <URL>` / `exec <識別子> -- <コマンド...>` / `ls` / `rm <識別子>\|--all` | 信頼できないリポジトリを、資格情報もネットワークも持たない使い捨ての箱へ入れて、箱の外から読み取りで調べる（「検疫」） |
+| `dev observe start` / `stop` / `status` / `report [--since <日数>]` | devcontainer の Claude Code が出す安全の事象（`safety_event`）をホスト側へ貯め、許可・フック・規範の改訂の候補を出す（「観測」） |
 | `dev self-update [--version <vX.Y.Z>]` | dev 自身を devcontainer-host の公開リリースの版へ置き換える |
 | `dev version` | dev の版を出す（`dev --version` も同じ） |
 | `dev help [サブコマンド]` | 説明を出す |
@@ -565,6 +566,37 @@ dev quarantine rm q-xxxxxxxx                      # 終わったら消す
 - 箱は Docker の隔離（コンテナ）です。コンテナの脱出の脆弱性や、ホストの Docker の設定の不備までは防ぎません。
 - 取得のあいだはネットワークを使います。取得先のサーバーには、このホストのアドレスが見えます。
 - 非公開のリポジトリ・submodule・LFS は扱いません。
+
+## 観測（安全の事象から改訂の候補を出す）
+
+`dev observe` は、devcontainer の Claude Code が OpenTelemetry で出す `claude_code.safety_event`（拒否・確認・フックでの差し戻し・sandbox のネットワークの拒否のたびに出る事象）と `claude_code.tool_decision` を、**エージェントが書き換えられないホスト側**へ貯め、許可・フック・規範の改訂の候補を出します。
+**候補は提案だけです。承認の根拠にしません。** 許可・フック・規範を変えるかは、人が判断します。
+
+```bash
+dev observe start            # ホスト側に受け口を常駐させる（最初に 1 回。再起動の後も docker が起こし直す）
+dev attach <名前>             # ここから入ったセッションの Claude Code が送る
+dev observe report           # 集計と改訂の候補を出す（--since <日数> で期間を絞る）
+dev observe stop             # 受け口を消す（記録は残す）
+```
+
+- **受け口**は、`dev.sh` に埋め込んだ最小のもの（python3 の標準ライブラリだけ）で、コンテナ `dev-observe` として動きます。待ち受けるのは docker の bridge のゲートウェイの IP（多くの機械で `172.17.0.1`）だけで、LAN には出しません。ホストの利用者の uid / gid・根は読み取り専用・`--cap-drop ALL`・`no-new-privileges`・メモリと pids の上限で動き、マウントは記録の置き場所だけです。
+- **貯めるもの**は、`safety_event` と `tool_decision` の決めた属性（`category`・`decision`・`reason_code`・`rule_source`・`hook_event`・`tool_name`・`permission_mode` など）と、プロジェクトの名前・Claude Code の版だけです。コマンドの本文やプロンプトは送らせず（`OTEL_LOG_TOOL_DETAILS`・`OTEL_LOG_USER_PROMPTS` を有効にしない）、届いても捨てます。1 回の本文は 1MiB まで、記録の合計は 64MiB までで、超えた分は書かずに数えます（`dev observe status`）。
+- **置き場所**は `DEV_OBSERVE_DIR`（既定 `~/.local/state/dev/observe`）の `data/` で、日ごとの JSONL です。devcontainer にはマウントしません。登録したプロジェクトのパスの下を指定すると、`start` は拒否します（devcontainer から書き換えられるため）。`DEV_OBSERVE_RETENTION` 日（既定 30）を超えた日の記録は、`start` と `report` のときに消します。
+- **送らせ方**は、起動するときの環境変数です。受け口が動いているあいだ、`dev attach` と `dev exec` が `devcontainer exec` に `--remote-env` で `OTEL_*` を渡します。Claude Code は、リポジトリの `.claude/settings.json` に書いた `OTEL_*` を無視するので、リポジトリの側からは送り先を変えられません。`dev attach` は、同じ exec の中で tmux のサーバにも同じ値を入れます（以後に作るウィンドウ・ペインの Claude Code が送ります。動いている Claude Code は送りません）。渡すのはログの設定だけで、metrics と traces の設定は渡しません。
+- **送らないもの**: VS Code など `dev` を通さない入り方のセッション。Claude Code 2.1.307 より古い版は `safety_event` を出さないので、`tool_decision` だけが貯まります。
+- **改訂の候補**は、`DEV_OBSERVE_THRESHOLD` 回（既定 3）以上くり返したものです。
+  - 確認に応じてその場限りで許可された同じ道具 → 許可の追加の候補
+  - フックの差し戻し → フックの文言か、規範で先に避けられないかの見直しの候補
+  - 組み込みの安全確認・静的解析の拒否 → 手順（規範）の見直しの候補
+  - sandbox のネットワークの拒否 → 許可するドメインの見直しの候補
+
+**残る危険**:
+
+- 受け口には、同じホストのどのコンテナからでも送れます。**偽の記録が混ざりえます**（候補を出すだけにしている理由です）。
+- **Docker Desktop では、既定のままでは起こせません。** bridge のゲートウェイの IP（`172.17.0.1`）がホストに無いため、ポートを公開できません（実測。`can't assign requested address`）。devhost は Linux の機械（Docker Engine）を前提にしています。
+- Claude Code 2.1.316 の `-p`（非対話）の実行では、拒否の規則に当てても `safety_event` が出ず、`tool_decision` だけが届きました（実測）。`-p` で集まるのは、主に `tool_decision`（`decision` と `source`）です。
+- **`OTEL_*` は、`dev attach` / `dev exec` で起こすすべてのプロセスの環境に入ります。** OpenTelemetry を環境変数で設定する別のアプリを動かすと、そのアプリのログの送り先とリソースの属性も変わります（対象の事象以外は受け口が捨てます）。そうしたアプリを動かすプロジェクトでは `dev observe start` を使わないでください。`dev observe stop` の後も、動いている tmux のサーバに入れた値は、サーバが終わるまで残ります。
+- コンテナの中のエージェントは、自分のセッションの送信を止められます（tmux の環境を消す、プロセスを止めるなど）。届かなかった事象は貯まりません。貯まった記録はホスト側にあるので、書き換えられません。
 
 ## コマンドの説明
 
@@ -972,6 +1004,47 @@ rm: 箱とボリュームを消す（止まった箱も消せる）。--all は�
 
 終了コード: 0 = 成功 / 1 = 失敗（イメージが無い・clone の失敗・箱が無い・docker の失敗） / 2 = 使い方の誤り
             （exec だけは、箱の中のコマンドの終了コードをそのまま返す）
+```
+
+### dev observe
+
+```text
+dev observe — devcontainer の Claude Code が出す安全の事象を、ホスト側へ貯めて、改訂の候補を出す。
+
+使い方:
+  dev observe start
+  dev observe stop
+  dev observe status
+  dev observe report [--since <日数>]
+
+start: ホスト側に受け口（コンテナ dev-observe。python3 の標準ライブラリだけで書いた最小のもの）を常駐させる
+  （--restart unless-stopped。動いていれば作り直す）。待ち受けるのは docker の bridge のゲートウェイの IP だけで、
+  LAN には出さない（DEV_OBSERVE_ADDR で IPv4 を、DEV_OBSERVE_PORT でポート（既定 4318）を変えられる）。
+  受け口は、ホストの利用者の uid / gid・根は読み取り専用・権限なし・メモリ 128m と pids 64 の上限で動く
+  （root では起こさない）。マウントは記録の置き場所だけ。イメージは DEV_OBSERVE_IMAGE（既定 python:3.12-alpine3.20）。
+  受け取るのは http/json の POST /v1/logs だけで、safety_event と tool_decision の決めた属性（category・decision・
+  reason_code・rule_source・hook_event・tool_name など）だけを残す。コマンドの本文やプロンプトは貯めない。
+  1 回の本文は 1MiB まで（超えたら 413）、記録の合計は 64MiB まで（超えたら書かずに数える）。
+  置き場所は DEV_OBSERVE_DIR（既定 ~/.local/state/dev/observe）の data/。devcontainer にはマウントしない。
+  登録したプロジェクトのパスの下にあれば、拒否して止まる（devcontainer から書き換えられるため）。
+送らせ方: 受け口が動いているあいだ、dev attach と dev exec は devcontainer exec に --remote-env で
+  CLAUDE_CODE_ENABLE_TELEMETRY・OTEL_LOGS_EXPORTER・送り先・OTEL_RESOURCE_ATTRIBUTES（dev.project=<名前>）を渡す
+  （ログだけ。metrics と traces の設定は渡さない）。dev attach は、同じ exec の中で tmux のサーバにも同じ値を入れる。
+  送るのは、そのあとに起こした Claude Code（2.1.307 以降。古い版は tool_decision だけ）だけ。
+  VS Code など dev を通さない入り方のセッションは送らない。
+  これらの値は、attach / exec で起こすすべてのプロセスの環境に入る（OpenTelemetry を使う別のアプリのログの
+  送り先も変わる。対象の事象以外は受け口が捨てる）。そうしたアプリを動かすプロジェクトでは start しない。
+stop: 受け口を消す（記録は残す）。動いている tmux のサーバに入れた値は残る（送り先が無いので送られない）。
+status: 受け口が動いているか、送り先、記録の日数・大きさ・上限で書けなかった件数を出す。
+report: 直近 <日数>（既定は DEV_OBSERVE_RETENTION。それより長くはできない）の記録を、category・decision・reason_code などごとに数え、
+  DEV_OBSERVE_THRESHOLD 回（既定 3）以上のものを改訂の候補として出す（許可の追加・フックの見直し・
+  手順の見直し・許可するドメインの見直し）。ホストの python3 を使う。
+期限: DEV_OBSERVE_RETENTION 日（既定 30）を超えた日の記録は、start と report のときに消す。
+
+候補は提案だけで、承認の根拠にしない。受け口には同じホストのどのコンテナからでも送れるので、
+  偽の記録が混ざりうる。許可・フック・規範を変えるかは、人が判断する。
+
+終了コード: 0 = 成功 / 1 = 失敗（docker・python3 が無い・受け口を起こせない・記録が無い） / 2 = 使い方か設定の誤り
 ```
 
 ### dev self-update
