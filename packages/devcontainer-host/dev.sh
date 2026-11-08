@@ -1150,22 +1150,44 @@ observe_threshold() {
   printf '%s\n' "$v"
 }
 
-# 待ち受ける IP。DEV_OBSERVE_ADDR があればそれ（IPv4。0.0.0.0 は LAN に出るので受けない）、無ければ
-# docker の bridge のゲートウェイ（devcontainer から届き、LAN には出ない）。
+# 待ち受ける IP。既定は docker の bridge のゲートウェイ（devcontainer から届き、LAN には出ない）。
+# DEV_OBSERVE_ADDR は、docker のどれかのネットワークのゲートウェイ（IPv4）だけを受ける（LAN 側のアドレスや
+# 0.0.0.0 に公開しないため）。
 observe_addr() {
-  local v="${DEV_OBSERVE_ADDR:-}" gw
-  if [[ -z "$v" ]]; then
-    gw="$(docker network inspect bridge --format '{{range .IPAM.Config}}{{.Gateway}} {{end}}')" ||
-      die "docker の bridge のネットワークを読めませんでした（docker が動いていますか。DEV_OBSERVE_ADDR で IP を渡せる）"
-    for v in $gw; do
-      [[ "$v" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] && break
-      v=""
+  local v="${DEV_OBSERVE_ADDR:-}" gw g ids
+  if [[ -n "$v" ]]; then
+    [[ "$v" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || usage_error "DEV_OBSERVE_ADDR は IPv4 のアドレスです: $v"
+    [[ "$v" != "0.0.0.0" ]] || usage_error "DEV_OBSERVE_ADDR に 0.0.0.0 は使えません（LAN に出るため）"
+    ids="$(docker network ls -q)" || die "docker のネットワークの一覧を読めませんでした（docker が動いていますか）"
+    # shellcheck disable=SC2086 # ネットワークの ID の並びを、1 つずつの引数として渡す
+    gw="$(docker network inspect --format '{{range .IPAM.Config}}{{.Gateway}} {{end}}' $ids)" ||
+      die "docker のネットワークを読めませんでした（docker が動いていますか）"
+    for g in $gw; do
+      if [[ "$g" == "$v" ]]; then
+        printf '%s\n' "$v"
+        return 0
+      fi
     done
-    [[ -n "$v" ]] || die "docker の bridge のゲートウェイ（IPv4）が分かりませんでした（DEV_OBSERVE_ADDR で IP を渡せる）"
+    usage_error "DEV_OBSERVE_ADDR は docker のネットワークのゲートウェイの IP だけです（LAN に出さないため）: $v"
   fi
-  [[ "$v" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || usage_error "DEV_OBSERVE_ADDR は IPv4 のアドレスです: $v"
-  [[ "$v" != "0.0.0.0" ]] || usage_error "DEV_OBSERVE_ADDR に 0.0.0.0 は使えません（LAN に出るため）"
-  printf '%s\n' "$v"
+  gw="$(docker network inspect --format '{{range .IPAM.Config}}{{.Gateway}} {{end}}' bridge)" ||
+    die "docker の bridge のネットワークを読めませんでした（docker が動いていますか。DEV_OBSERVE_ADDR で別のネットワークのゲートウェイを渡せる）"
+  for v in $gw; do
+    if [[ "$v" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]]; then
+      printf '%s\n' "$v"
+      return 0
+    fi
+  done
+  die "docker の bridge のゲートウェイ（IPv4）が分かりませんでした（DEV_OBSERVE_ADDR で別のネットワークのゲートウェイを渡せる）"
+}
+
+# 受け口のコンテナ（dev-observe）を消す。同じ名前でも dev observe のラベルを持たないコンテナは消さずに止まる。
+# 無ければ何もしない。
+observe_remove() {
+  local lab
+  lab="$(docker inspect --format '{{index .Config.Labels "devhost.observe"}}' "$OBSERVE_NAME" 2>/dev/null)" || return 0
+  [[ "$lab" == "1" ]] || die "同じ名前の別のコンテナ（$OBSERVE_NAME）があります。dev observe のものではないので消しません"
+  docker rm -f "$OBSERVE_NAME" >/dev/null 2>&1 || true
 }
 
 # 置き場所の実体のパスを確かめてから作り、実体のパスを出す。登録したプロジェクトのパスの下（devcontainer に
@@ -1198,6 +1220,8 @@ observe_prepare_dir() {
     mkdir -p "$real" || die "置き場所を作れませんでした: $real"
     chmod 700 "$real" || die "置き場所の権限を変えられませんでした: $real"
   fi
+  # data がシンボリックリンクなら止める（リンク先がプロジェクトの下でも、受け口がそこへ書いてしまうため）。
+  [[ ! -L "$real/data" ]] || usage_error "置き場所の data がシンボリックリンクです（リンク先へ書いてしまうため受けません）: $real/data"
   if [[ ! -d "$real/data" ]]; then
     mkdir "$real/data" || die "置き場所を作れませんでした: $real/data"
     chmod 700 "$real/data" || die "置き場所の権限を変えられませんでした: $real/data"
@@ -1554,11 +1578,15 @@ def candidates(se, td, th):
     for (p, cat, why), n in sorted(c.items()):
         if n >= th:
             out.append("手順の見直しの候補: %s で %s（%s）の拒否が %d 回。手順（規範）で先に避けられないかを判断する" % (p, cat, why, n))
-    c = Counter((g(r, "project"), g(r, "tool_name")) for r in se
-                if r.get("category") in ("sandbox_network", "sandbox_other"))
+    c = Counter((g(r, "project"), g(r, "tool_name")) for r in se if r.get("category") == "sandbox_network")
     for (p, t), n in sorted(c.items()):
         if n >= th:
             out.append("許可するドメインの見直しの候補: %s で %s の sandbox のネットワークの拒否が %d 回。許可するドメインを見直すかを判断する" % (p, t, n))
+    # sandbox_other は、拒否した宛先が名前でも IP でもないもの（ドメインの許可では扱えない）。
+    c = Counter((g(r, "project"), g(r, "tool_name")) for r in se if r.get("category") == "sandbox_other")
+    for (p, t), n in sorted(c.items()):
+        if n >= th:
+            out.append("sandbox の設定の見直しの候補: %s で %s の sandbox の拒否（宛先が名前でも IP でもないもの）が %d 回。sandbox の設定か手順を見直すかを判断する" % (p, t, n))
     return out
 
 
@@ -1629,7 +1657,7 @@ cmd_observe_start() {
   img="$(observe_image)"
   observe_prune "$real/data" "$keep"
   rm -f "$real/endpoint"
-  docker rm -f "$OBSERVE_NAME" >/dev/null 2>&1 || true
+  observe_remove
   # 受け口: root でない利用者（記録をホストの利用者が消せるよう、ホストの uid / gid）・根は読み取り専用・権限なし・
   # メモリと pids の上限。マウントは記録の置き場所（data）だけ。環境変数は渡さない（docker の設定のプロキシも空で上書き）。
   if ! docker run -d --name "$OBSERVE_NAME" --label "$OBSERVE_LABEL=1" --restart unless-stopped \
@@ -1639,8 +1667,17 @@ cmd_observe_start() {
     -p "$addr:$port:$OBSERVE_PORT_IN" \
     --mount "type=bind,src=$real/data,dst=/data" \
     "$img" python3 -I -c "$(observe_receiver_script)" >/dev/null; then
-    docker rm -f "$OBSERVE_NAME" >/dev/null 2>&1 || true
+    observe_remove
     die "受け口を起こせませんでした（イメージ $img・ポート $addr:$port を確かめてください）"
+  fi
+  # docker run -d は起こした時点で返るので、受け口がすぐ終わる（スクリプトの失敗など）ことを見逃さないよう、
+  # 1 秒おいて動いていることを確かめてから、送り先の印を書く。
+  sleep 1
+  if [[ "$(docker inspect --format '{{.State.Running}}' "$OBSERVE_NAME" 2>/dev/null || true)" != "true" ]]; then
+    echo "[$PROG] 受け口がすぐ止まりました。docker logs $OBSERVE_NAME の末尾:" >&2
+    docker logs --tail 20 "$OBSERVE_NAME" 2>&1 | tr -c '[:print:]\n' '?' >&2 || true
+    observe_remove
+    die "受け口を起こせませんでした（すぐ止まりました）"
   fi
   printf 'http://%s:%s\n' "$addr" "$port" >"$real/endpoint"
   echo "[$PROG] 受け口を起こしました: http://$addr:$port（記録: $real/data）"
@@ -1654,7 +1691,7 @@ cmd_observe_stop() {
   need docker "Docker Engine を入れてください。"
   dir="$(observe_dir)"
   rm -f "$dir/endpoint"
-  docker rm -f "$OBSERVE_NAME" >/dev/null 2>&1 || true
+  observe_remove
   echo "[$PROG] 受け口を止めました（記録は残します: $dir/data）。"
   echo "[$PROG] 動いている tmux のサーバには送り先の設定が残ります（送り先が無いので、送られません）。"
 }
@@ -4631,14 +4668,17 @@ dev observe — devcontainer の Claude Code が出す安全の事象を、ホ�
 
 start: ホスト側に受け口（コンテナ dev-observe。python3 の標準ライブラリだけで書いた最小のもの）を常駐させる
   （--restart unless-stopped。動いていれば作り直す）。待ち受けるのは docker の bridge のゲートウェイの IP だけで、
-  LAN には出さない（DEV_OBSERVE_ADDR で IPv4 を、DEV_OBSERVE_PORT でポート（既定 4318）を変えられる）。
+  LAN には出さない（DEV_OBSERVE_ADDR で別の docker のネットワークのゲートウェイの IP を、DEV_OBSERVE_PORT で
+  ポート（既定 4318）を変えられる。docker のゲートウェイでない IP は受けない）。起こした受け口がすぐ止まれば失敗にする。
+  同じ名前（dev-observe）で dev observe のラベルを持たないコンテナがあれば、消さずに止まる。
   受け口は、ホストの利用者の uid / gid・根は読み取り専用・権限なし・メモリ 128m と pids 64 の上限で動く
   （root では起こさない）。マウントは記録の置き場所だけ。イメージは DEV_OBSERVE_IMAGE（既定 python:3.12-alpine3.20）。
   受け取るのは http/json の POST /v1/logs だけで、safety_event と tool_decision の決めた属性（category・decision・
   reason_code・rule_source・hook_event・tool_name など）だけを残す。コマンドの本文やプロンプトは貯めない。
   1 回の本文は 1MiB まで（超えたら 413）、記録の合計は 64MiB まで（超えたら書かずに数える）。
   置き場所は DEV_OBSERVE_DIR（既定 ~/.local/state/dev/observe）の data/。devcontainer にはマウントしない。
-  登録したプロジェクトのパスの下にあれば、拒否して止まる（devcontainer から書き換えられるため）。
+  登録したプロジェクトのパスの下にあれば、拒否して止まる（devcontainer から書き換えられるため）。data が
+  シンボリックリンクでも拒否する。
 送らせ方: 受け口が動いているあいだ、dev attach と dev exec は devcontainer exec に --remote-env で
   CLAUDE_CODE_ENABLE_TELEMETRY・OTEL_LOGS_EXPORTER・送り先・OTEL_RESOURCE_ATTRIBUTES（dev.project=<名前>）を渡す
   （ログだけ。metrics と traces の設定は渡さない）。dev attach は、同じ exec の中で tmux のサーバにも同じ値を入れる。
@@ -4650,7 +4690,7 @@ stop: 受け口を消す（記録は残す）。動いている tmux のサー�
 status: 受け口が動いているか、送り先、記録の日数・大きさ・上限で書けなかった件数を出す。
 report: 直近 <日数>（既定は DEV_OBSERVE_RETENTION。それより長くはできない）の記録を、category・decision・reason_code などごとに数え、
   DEV_OBSERVE_THRESHOLD 回（既定 3）以上のものを改訂の候補として出す（許可の追加・フックの見直し・
-  手順の見直し・許可するドメインの見直し）。ホストの python3 を使う。
+  手順の見直し・許可するドメインの見直し・sandbox の設定の見直し）。ホストの python3 を使う。
 期限: DEV_OBSERVE_RETENTION 日（既定 30）を超えた日の記録は、start と report のときに消す。
 
 候補は提案だけで、承認の根拠にしない。受け口には同じホストのどのコンテナからでも送れるので、

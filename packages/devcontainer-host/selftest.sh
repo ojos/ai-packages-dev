@@ -239,19 +239,37 @@ sub="${1:-}"
 shift || true
 # 観測（dev observe）の呼び出し。受け口 dev-observe と、bridge のゲートウェイの読み取りだけを受ける。
 # 受け口が動いているかは $FAKE_STATE/obs-running（中身が true / false）。起こしたときの引数は $FAKE_STATE/obs-run へ 1 行 1 つで書く。
+# ネットワークは 2 つ（bridge と dev-runner0）。bridge のゲートウェイは FAKE_OBS_GW、dev-runner0 は 10.9.8.7。
+# FAKE_OBS_FOREIGN=1 は、dev observe のラベルを持たない同じ名前のコンテナがある。FAKE_OBS_EXITS=1 は、起こした受け口がすぐ終わる。
 case "$sub $*" in
-  *dev-observe* | "network inspect bridge "*)
+  *dev-observe* | "network ls -q" | "network inspect --format {{range .IPAM.Config}}{{.Gateway}} {{end}} "*)
     ofail() { echo "fake docker: この試験が想定していない観測の呼び出しです: $sub" >&2; exit 2; }
     case "$sub" in
       network)
-        [[ $# -eq 4 && "$1" == "inspect" && "$2" == "bridge" && "$3" == "--format" && "$4" == '{{range .IPAM.Config}}{{.Gateway}} {{end}}' ]] || ofail
         [[ "${FAKE_OBS_NET_FAIL:-0}" != "1" ]] || { echo "Error response from daemon: network bridge not found" >&2; exit 1; }
-        printf '%s\n' "${FAKE_OBS_GW-fd00::1 172.17.0.1 }"
+        if [[ "$1" == "ls" ]]; then printf 'bridge\ndev-runner0\n'; exit 0; fi
+        shift 3
+        [[ $# -ge 1 ]] || ofail
+        for net in "$@"; do
+          case "$net" in
+            bridge) printf '%s\n' "${FAKE_OBS_GW-fd00::1 172.17.0.1 }" ;;
+            dev-runner0) printf '10.9.8.7 \n' ;;
+            *) echo "Error response from daemon: network $net not found" >&2; exit 1 ;;
+          esac
+        done
         ;;
       inspect)
-        [[ $# -eq 3 && "$1" == "--format" && "$2" == '{{.State.Running}}' && "$3" == "dev-observe" ]] || ofail
-        [[ -f "$FAKE_STATE/obs-running" ]] || { echo "Error: No such object: dev-observe" >&2; exit 1; }
-        cat "$FAKE_STATE/obs-running"
+        [[ $# -eq 3 && "$1" == "--format" && "$3" == "dev-observe" ]] || ofail
+        if [[ ! -f "$FAKE_STATE/obs-running" && "${FAKE_OBS_FOREIGN:-0}" != "1" ]]; then echo "Error: No such object: dev-observe" >&2; exit 1; fi
+        case "$2" in
+          '{{.State.Running}}') if [[ -f "$FAKE_STATE/obs-running" ]]; then cat "$FAKE_STATE/obs-running"; else echo true; fi ;;
+          '{{index .Config.Labels "devhost.observe"}}') if [[ -f "$FAKE_STATE/obs-running" ]]; then echo 1; else echo; fi ;;
+          *) ofail ;;
+        esac
+        ;;
+      logs)
+        [[ $# -eq 3 && "$1" == "--tail" && "$3" == "dev-observe" ]] || ofail
+        printf 'Traceback \033]52;c;ZXZpbA==\007(most recent call last)\n'
         ;;
       rm)
         [[ $# -eq 2 && "$1" == "-f" && "$2" == "dev-observe" ]] || ofail
@@ -261,7 +279,7 @@ case "$sub $*" in
         [[ "$1" == "-d" && "$2" == "--name" && "$3" == "dev-observe" ]] || ofail
         printf '%s\n' "$@" >"$FAKE_STATE/obs-run"
         [[ "${FAKE_OBS_RUN_FAIL:-0}" != "1" ]] || { echo "docker: Error response from daemon: port is already allocated" >&2; exit 125; }
-        echo true >"$FAKE_STATE/obs-running"
+        if [[ "${FAKE_OBS_EXITS:-0}" == "1" ]]; then echo false >"$FAKE_STATE/obs-running"; else echo true >"$FAKE_STATE/obs-running"; fi
         echo "0123456789abcdef"
         ;;
       *) ofail ;;
@@ -3003,10 +3021,32 @@ obs_e="$(awk 'p { print; p = 0 } $0 == "-e" { p = 1 }' "$STATE/obs-run" | grep -
 [[ -z "$obs_e" ]] || ng "$CUR: プロキシの空の値以外の -e があります: $obs_e"
 grep -qF "devhost-observe-receiver" "$STATE/obs-run" || ng "$CUR: 受け口のスクリプトを渡していません"
 # 待ち受ける IP は、bridge の IPv4 のゲートウェイ（IPv6 は飛ばす）か DEV_OBSERVE_ADDR。
-run 0 "observe start: DEV_OBSERVE_ADDR とポート" -- "${OBS_ENV[@]}" DEV_OBSERVE_ADDR=10.9.8.7 DEV_OBSERVE_PORT=14318 -- observe start
+run 0 "observe start: DEV_OBSERVE_ADDR（別のネットワークのゲートウェイ）とポート" -- "${OBS_ENV[@]}" DEV_OBSERVE_ADDR=10.9.8.7 DEV_OBSERVE_PORT=14318 -- observe start
 grep -qxF "10.9.8.7:14318:4318" "$STATE/obs-run" || ng "$CUR: 待ち受ける IP とポートが違います"
-expect_log_lacks "docker [network]"
+expect_log_has "docker [network] [ls] [-q]"
 [[ "$(cat "$OBS/endpoint")" == "http://10.9.8.7:14318" ]] || ng "$CUR: 送り先の印が違います"
+rm -f "$STATE/obs-run"
+run 2 "observe start: DEV_OBSERVE_ADDR が docker のゲートウェイでない（LAN 側のアドレス）" -- "${OBS_ENV[@]}" DEV_OBSERVE_ADDR=192.168.1.10 -- observe start
+expect_err "docker のネットワークのゲートウェイの IP だけです"
+if [[ -f "$STATE/obs-run" ]]; then ng "$CUR: 受け口を起こしています"; fi
+rm -f "$STATE/obs-running" "$STATE/obs-run"
+run 1 "observe start: 同じ名前の別のコンテナは消さない" -- "${OBS_ENV[@]}" FAKE_OBS_FOREIGN=1 -- observe start
+expect_err "dev observe のものではないので消しません"
+expect_log_lacks "docker [rm]"
+if [[ -f "$STATE/obs-run" ]]; then ng "$CUR: 受け口を起こしています"; fi
+run 1 "observe stop: 同じ名前の別のコンテナは消さない" -- "${OBS_ENV[@]}" FAKE_OBS_FOREIGN=1 -- observe stop
+expect_log_lacks "docker [rm]"
+run 1 "observe start: 受け口がすぐ止まれば失敗にする" -- "${OBS_ENV[@]}" FAKE_OBS_EXITS=1 -- observe start
+expect_err "すぐ止まりました"
+[[ ! -e "$OBS/endpoint" ]] || ng "$CUR: 送り先の印が残っています"
+expect_log_has "docker [rm] [-f] [dev-observe]"
+if grep -q $'\x1b' "$ERR"; then ng "$CUR: ログの制御文字がそのまま出ています"; fi
+rm -f "$STATE/obs-running" "$STATE/obs-run"
+mkdir -p "$WORK/obs-link"
+ln -s "$A" "$WORK/obs-link/data"
+run 2 "observe start: data がシンボリックリンク" -- DEV_OBSERVE_DIR="$WORK/obs-link" -- observe start
+expect_err "data がシンボリックリンクです"
+if [[ -f "$STATE/obs-run" ]]; then ng "$CUR: 受け口を起こしています"; fi
 run 1 "observe start: bridge が読めない" -- "${OBS_ENV[@]}" FAKE_OBS_NET_FAIL=1 -- observe start
 expect_err "DEV_OBSERVE_ADDR"
 run 1 "observe start: IPv4 のゲートウェイが無い" -- "${OBS_ENV[@]}" FAKE_OBS_GW="fd00::1" -- observe start
@@ -3062,7 +3102,9 @@ cp "$WORK/endpoint.bak" "$OBS/endpoint"
 
 # ── stop: 印を消し、以後の attach は今までと同じ呼び出しになる ──
 run 0 "observe stop" -- "${OBS_ENV[@]}" -- observe stop
-expect_calls "docker [rm] [-f] [dev-observe]"
+expect_calls \
+  "docker [inspect] [--format] [{{index .Config.Labels \"devhost.observe\"}}] [dev-observe]" \
+  "docker [rm] [-f] [dev-observe]"
 [[ ! -e "$OBS/endpoint" ]] || ng "$CUR: 送り先の印が残っています"
 [[ -e "$OBS/data/events-$today.jsonl" ]] || ng "$CUR: 記録まで消しています"
 run 0 "attach: 受け口を止めたあとは今までどおり" -- "${OBS_ENV[@]}" -- attach alpha
@@ -3092,6 +3134,9 @@ old_s=$((now_s - 10 * 86400))
   for _ in 1 2 3; do
     printf '{"t": %s, "event": "safety_event", "project": "alpha", "category": "sandbox_network", "decision": "accept", "tool_name": "Bash", "sandbox_violation_count": "2"}\n' "$now_s"
   done
+  for _ in 1 2 3; do
+    printf '{"t": %s, "event": "safety_event", "project": "alpha", "category": "sandbox_other", "decision": "accept", "tool_name": "Bash", "sandbox_violation_count": "1"}\n' "$now_s"
+  done
   printf '{"t": %s, "event": "safety_event", "project": "alpha", "category": "permission_rule", "decision": "reject", "reason_code": "rule:projectSettings\\u001b[31m"}\n' "$now_s"
   # 10 日前の記録（--since 5 では数えない）
   for _ in 1 2 3; do
@@ -3104,19 +3149,20 @@ run 0 "observe status: 上限で書けなかった件数" -- "${OBS_ENV[@]}" -- 
 expect_out_line "上限で書けなかった 7 件"
 run 0 "observe report" -- "${OBS_ENV[@]}" -- observe report
 expect_no_calls
-expect_out_line "^観測の記録（直近 30 日）: safety_event 14 件 / tool_decision 5 件 / 読めなかった行 1 / 上限で書けなかった 7 件"
+expect_out_line "^観測の記録（直近 30 日）: safety_event 17 件 / tool_decision 5 件 / 読めなかった行 1 / 上限で書けなかった 7 件"
 expect_out_line "^- 許可の追加の候補: alpha で Bash が、確認に応じて 3 回許可された"
 expect_out_line "^- フックの見直しの候補: beta で hook（hook_event=pre_tool_use, reason_code=hook:PreToolUse）の差し戻しが 4 回"
 expect_out_line "^- 手順の見直しの候補: alpha で safety_check（outsideReadsBlocked）の拒否が 3 回"
 expect_out_line "^- 手順の見直しの候補: alpha で static_analysis（bashMiss:too-complex）の拒否が 3 回"
 expect_out_line "^- 許可するドメインの見直しの候補: alpha で Bash の sandbox のネットワークの拒否が 3 回"
+expect_out_line "^- sandbox の設定の見直しの候補: alpha で Bash の sandbox の拒否（宛先が名前でも IP でもないもの）が 3 回"
 expect_out_line "承認の根拠にしません"
 if grep -qF "Edit が" "$OUT"; then ng "$CUR: 回数の下限に届かない道具を候補に出しています"; fi
 if grep -qF "Write が" "$OUT"; then ng "$CUR: 確認を経ていない許可を候補に出しています"; fi
 if grep -q $'\x1b' "$OUT"; then ng "$CUR: 記録の制御文字がそのまま出ています"; fi
-[[ "$(grep -c '^- ' "$OUT")" == "5" ]] || { ng "$CUR: 候補の数が 5 ではありません"; sed 's/^/    stdout: /' "$OUT" >&2; }
+[[ "$(grep -c '^- ' "$OUT")" == "6" ]] || { ng "$CUR: 候補の数が 6 ではありません"; sed 's/^/    stdout: /' "$OUT" >&2; }
 run 0 "observe report --since 5（10 日前の記録を数えない）" -- "${OBS_ENV[@]}" -- observe report --since 5
-expect_out_line "safety_event 11 件"
+expect_out_line "safety_event 14 件"
 if grep -qF "static_analysis（" "$OUT"; then ng "$CUR: 期間の外の記録を候補に出しています"; fi
 run 0 "observe report: 回数の下限を 4 にする" -- "${OBS_ENV[@]}" DEV_OBSERVE_THRESHOLD=4 -- observe report
 [[ "$(grep -c '^- ' "$OUT")" == "1" ]] || ng "$CUR: 下限 4 で候補が 1 つ（フック）になりません"
