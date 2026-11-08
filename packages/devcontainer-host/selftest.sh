@@ -263,6 +263,8 @@ case "$sub $*" in
         if [[ ! -f "$FAKE_STATE/obs-running" && "${FAKE_OBS_FOREIGN:-0}" != "1" ]]; then echo "Error: No such object: dev-observe" >&2; exit 1; fi
         case "$2" in
           '{{.State.Running}}') if [[ -f "$FAKE_STATE/obs-running" ]]; then cat "$FAKE_STATE/obs-running"; else echo true; fi ;;
+          '{{.State.Running}} {{index .Config.Labels "devhost.observe"}}')
+            if [[ -f "$FAKE_STATE/obs-running" ]]; then echo "$(cat "$FAKE_STATE/obs-running") 1"; else echo "true "; fi ;;
           '{{index .Config.Labels "devhost.observe"}}') if [[ -f "$FAKE_STATE/obs-running" ]]; then echo 1; else echo; fi ;;
           *) ofail ;;
         esac
@@ -273,6 +275,7 @@ case "$sub $*" in
         ;;
       rm)
         [[ $# -eq 2 && "$1" == "-f" && "$2" == "dev-observe" ]] || ofail
+        [[ "${FAKE_OBS_RM_FAIL:-0}" != "1" ]] || { echo "Error response from daemon: cannot remove container" >&2; exit 1; }
         rm -f "$FAKE_STATE/obs-running"
         ;;
       run)
@@ -2967,6 +2970,13 @@ run 2 "observe start: シンボリックリンク越しにプロジェクトの�
 expect_err "置き場所がプロジェクト alpha のパスの下にあります"
 if [[ -f "$STATE/obs-run" ]]; then ng "$CUR: 受け口を起こしています"; fi
 rm -rf "$A/.obs" "$A/obs" "$B/data" "$B/endpoint" "$WORK/alpha-link"
+mkdir -p "$WORK/real-parent"
+ln -s "$WORK/real-parent" "$WORK/link-parent"
+printf 'gamma %s/link-parent/gamma\n' "$WORK" >"$WORK/conf/obs-gamma"
+T_CONF="$WORK/conf/obs-gamma" run 2 "observe start: まだ無いプロジェクトのパスの祖先がシンボリックリンク" -- DEV_OBSERVE_DIR="$WORK/real-parent/gamma/obs" -- observe start
+expect_err "置き場所がプロジェクト gamma のパスの下にあります"
+[[ ! -e "$WORK/real-parent/gamma" ]] || ng "$CUR: プロジェクトの場所にディレクトリを作っています"
+if [[ -f "$STATE/obs-run" ]]; then ng "$CUR: 受け口を起こしています"; fi
 
 # ── 既にあるディレクトリの権限は変えない（作ったものだけ 700）──
 mkdir -p "$WORK/shared"
@@ -3087,10 +3097,14 @@ rm -f "$STATE/remote-env"
 run 0 "attach: 受け口が止まっていれば渡さない" -- "${OBS_ENV[@]}" -- attach alpha
 expect_calls \
   "docker [ps] [-a] [--filter] [label=devcontainer.local_folder=$A] [--format] [{{.ID}} {{.State}}]" \
-  "docker [inspect] [--format] [{{.State.Running}}] [dev-observe]" \
+  "docker [inspect] [--format] [{{.State.Running}} {{index .Config.Labels \"devhost.observe\"}}] [dev-observe]" \
   "devcontainer [exec] [--workspace-folder] [$A] [tmux] [new-session] [-A] [-s] [main]" \
   "tmux [new-session] [-A] [-s] [main]"
 [[ ! -s "$STATE/remote-env" ]] || ng "$CUR: --remote-env を渡しています"
+rm -f "$STATE/obs-running" "$STATE/remote-env"
+run 0 "attach: 同じ名前の別のコンテナ（ラベルなし）が動いていても渡さない" -- "${OBS_ENV[@]}" FAKE_OBS_FOREIGN=1 -- attach alpha
+[[ ! -s "$STATE/remote-env" ]] || ng "$CUR: --remote-env を渡しています"
+expect_log_lacks "start-server"
 echo true >"$STATE/obs-running"
 # 印が壊れていれば渡さない（docker も呼ばない）。
 cp "$OBS/endpoint" "$WORK/endpoint.bak"
@@ -3101,6 +3115,9 @@ expect_log_lacks "dev-observe"
 cp "$WORK/endpoint.bak" "$OBS/endpoint"
 
 # ── stop: 印を消し、以後の attach は今までと同じ呼び出しになる ──
+run 1 "observe stop: 受け口を消せなければ失敗にする" -- "${OBS_ENV[@]}" FAKE_OBS_RM_FAIL=1 -- observe stop
+expect_err "受け口（dev-observe）を消せませんでした"
+cp "$WORK/endpoint.bak" "$OBS/endpoint"
 run 0 "observe stop" -- "${OBS_ENV[@]}" -- observe stop
 expect_calls \
   "docker [inspect] [--format] [{{index .Config.Labels \"devhost.observe\"}}] [dev-observe]" \

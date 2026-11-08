@@ -1187,30 +1187,34 @@ observe_remove() {
   local lab
   lab="$(docker inspect --format '{{index .Config.Labels "devhost.observe"}}' "$OBSERVE_NAME" 2>/dev/null)" || return 0
   [[ "$lab" == "1" ]] || die "同じ名前の別のコンテナ（$OBSERVE_NAME）があります。dev observe のものではないので消しません"
-  docker rm -f "$OBSERVE_NAME" >/dev/null 2>&1 || true
+  docker rm -f "$OBSERVE_NAME" >/dev/null || die "受け口（$OBSERVE_NAME）を消せませんでした（docker rm -f $OBSERVE_NAME で確かめてください）"
 }
 
 # 置き場所の実体のパスを確かめてから作り、実体のパスを出す。登録したプロジェクトのパスの下（devcontainer に
-# マウントされる場所）なら、何も作らずに止める。実体のパス（シンボリックリンクを解いたもの）同士で比べる。
-# まだ無い部分は、いちばん近い既存の祖先を解いて、その後ろに足す。
-observe_prepare_dir() {
-  local dir="$1" real p preal i d rest=""
-  [[ "$dir" == /* ]] || usage_error "DEV_OBSERVE_DIR は絶対パスで書きます: $dir"
-  [[ "/$dir/" != */../* && "/$dir/" != */./* ]] || usage_error "DEV_OBSERVE_DIR に . と .. は使えません: $dir"
-  while [[ "$dir" == */ && "$dir" != / ]]; do dir="${dir%/}"; done
-  d="$dir"
+# マウントされる場所）なら、何も作らずに止める。実体のパス（observe_realpath）同士で比べる。
+# 絶対パスの実体（シンボリックリンクを解いたもの）を出す。まだ無い部分は、いちばん近い既存の祖先を解いて、
+# その後ろに足す（まだ作っていないパスでも、祖先のシンボリックリンクを見逃さないため）。
+observe_realpath() {
+  local d="$1" rest="" r
+  while [[ "$d" == */ && "$d" != / ]]; do d="${d%/}"; done
   while [[ ! -d "$d" ]]; do
     rest="/${d##*/}$rest"
     d="${d%/*}"
     [[ -n "$d" ]] || d=/
   done
-  real="$(cd "$d" && pwd -P)" || die "置き場所を読めませんでした: $d"
-  real="${real%/}$rest"
+  r="$(cd "$d" && pwd -P)" || return 1
+  printf '%s\n' "${r%/}$rest"
+}
+
+observe_prepare_dir() {
+  local dir="$1" real p preal i
+  [[ "$dir" == /* ]] || usage_error "DEV_OBSERVE_DIR は絶対パスで書きます: $dir"
+  [[ "/$dir/" != */../* && "/$dir/" != */./* ]] || usage_error "DEV_OBSERVE_DIR に . と .. は使えません: $dir"
+  real="$(observe_realpath "$dir")" || die "置き場所を読めませんでした: $dir"
   load_projects
   for ((i = 0; i < ${#P_PATHS[@]}; i++)); do
     p="${P_PATHS[$i]}"
-    preal="$p"
-    if [[ -d "$p" ]]; then preal="$(cd "$p" && pwd -P)" || preal="$p"; fi
+    preal="$(observe_realpath "$p")" || preal="$p"
     if [[ "$real" == "$preal" || "$real" == "$preal"/* || "$preal" == / ]]; then
       usage_error "置き場所がプロジェクト ${P_NAMES[$i]} のパスの下にあります（devcontainer から書き換えられるため）: $real。DEV_OBSERVE_DIR で別の場所を指定してください"
     fi
@@ -1240,8 +1244,9 @@ observe_running() {
   ep="$(sed -n 1p "$f")"
   [[ "$ep" =~ ^http://[0-9]{1,3}(\.[0-9]{1,3}){3}:[0-9]{4,5}$ ]] || return 1
   command -v docker >/dev/null 2>&1 || return 1
-  running="$(docker inspect --format '{{.State.Running}}' "$OBSERVE_NAME" 2>/dev/null)" || return 1
-  [[ "$running" == "true" ]] || return 1
+  # 同じ名前の別のコンテナ（dev observe のラベルが無い）は、受け口とみなさない。
+  running="$(docker inspect --format '{{.State.Running}} {{index .Config.Labels "devhost.observe"}}' "$OBSERVE_NAME" 2>/dev/null)" || return 1
+  [[ "$running" == "true 1" ]] || return 1
   OBSERVE_ENDPOINT="$ep"
 }
 
