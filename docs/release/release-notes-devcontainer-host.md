@@ -18,6 +18,12 @@ devhost（SSH で届く外部の機械で devcontainer を保つ道具。コマ�
   - URL の `?` と `#` は受けない（クエリのトークンが docker のラベルに残るため）。
   - 作ってから `DEV_QUARANTINE_TTL` 時間（既定 24）を超えた箱は、`dev quarantine` のどのサブコマンドの冒頭でも消す。
   - **残る危険**: 読んだ本文の中の注入（ファイルに書かれた指示に、読んだ側が従うこと）は箱では防げない。README の「検疫」。
+- **`dev observe` を足した。devcontainer の Claude Code が出す安全の事象を、ホスト側へ貯めて、許可・フック・規範の改訂の候補を出す**（ojos/ai-packages-dev#717）。
+  - `dev observe start` で、ホスト側に受け口（コンテナ `dev-observe`。`dev.sh` に埋め込んだ python3 の標準ライブラリだけのもの。イメージは `python:3.12-alpine3.20`、`DEV_OBSERVE_IMAGE` で差し替え）を常駐させる。待ち受けるのは docker の bridge のゲートウェイの IP だけで、LAN には出さない。ホストの利用者の uid / gid・根は読み取り専用・権限なし・メモリと pids の上限で動き、マウントは記録の置き場所だけ。
+  - 受け口が動いているあいだ、`dev attach` と `dev exec` が `devcontainer exec` に `--remote-env` で `OTEL_*` を渡す（起動するときの環境変数なので、リポジトリの側からは変えられない）。`dev attach` は、動いている tmux のサーバにも同じ値を入れる。VS Code など `dev` を通さない入り方は送らない。受け口を使わない機械の `attach` / `exec` の動きは変わらない。
+  - 貯めるのは `claude_code.safety_event` と `claude_code.tool_decision` の決めた属性だけ（コマンドの本文やプロンプトは貯めない。本文を出す `OTEL_LOG_*` は、コンテナに既にあっても空の値で上書きする）。置き場所は `DEV_OBSERVE_DIR`（既定 `~/.local/state/dev/observe`）で、登録したプロジェクトのパスと重なれば拒否する（`data` がシンボリックリンクでも拒否する）。待ち受ける IP は docker のネットワークのゲートウェイだけを受ける。1 回の本文は 1MiB、合計は 64MiB まで。`DEV_OBSERVE_RETENTION` 日（既定 30）を超えた記録は消す。
+  - `dev observe report [--since <日数>]` が集計し、`DEV_OBSERVE_THRESHOLD` 回（既定 3）以上くり返したものを改訂の候補として出す（許可の追加・フックの見直し・手順の見直し・許可するドメインの見直し・sandbox の設定の見直し）。**候補は提案だけで、承認の根拠にしない**（同じホストのコンテナなら誰でも記録を送れる）。`dev observe stop` / `status` も足した。
+  - `dev observe report` と期限切れの掃除は、ホストの python3（標準ライブラリがそろったもの）を使う。Docker Desktop では、既定のままでは受け口を起こせない（bridge のゲートウェイの IP がホストに無い）。
 - 手で行う移行の作業は無い（`dev self-update` か `install.sh` で追従する。Dockerfile は `dev.sh` に埋め込んであり、`install.sh` の配線は増えない）。
 
 ## v0.7.0

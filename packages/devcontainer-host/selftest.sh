@@ -90,10 +90,16 @@ TOOLBIN="$WORK/toolbin"
 mkdir -p "$FAKEBIN" "$TOOLBIN" "$WORK/home"
 
 # dev.sh と偽物が使う道具だけを置く。本物の docker などが入った環境でも PATH から見えない。
-for t in sed tail head cat rm mkdir grep tr env awk sleep mktemp stat flock tee; do  # bsd-ok: mktemp は呼び出しではなく、偽の PATH へ写す道具の名前の一覧
+for t in sed tail head cat rm mkdir grep tr env awk sleep mktemp stat flock tee wc; do  # bsd-ok: mktemp は呼び出しではなく、偽の PATH へ写す道具の名前の一覧
   p="$(command -v "$t")" || { echo "[devhost-selftest] $t が見つかりません" >&2; exit 1; }
   ln -s "$p" "$TOOLBIN/$t"
 done
+
+# python3 は、シンボリックリンクから起こすと標準ライブラリの場所を取り違える（リンクの置き場所から探す）ので、
+# 本物を絶対パスで呼ぶラッパーを置く。dev observe の掃除と report、受け口の単体試験に要る（無ければ落とす）。
+PY3="$(command -v python3)" || { echo "[devhost-selftest] python3 が見つかりません（dev observe の試験に要ります）" >&2; exit 1; }
+printf '#!/bin/sh\nexec "%s" "$@"\n' "$PY3" >"$TOOLBIN/python3"
+chmod +x "$TOOLBIN/python3"
 
 # ── 偽物 ──────────────────────────────────────────────────────────────────────
 # 記録の書式: 道具の名前に続けて、引数を 1 つずつ [ ] で囲む（空白を含む引数を取り違えない）。
@@ -130,6 +136,8 @@ while [[ $# -gt 0 && "$1" == --* ]]; do
   case "$1" in
     --workspace-folder) wf="$2"; shift 2 ;;
     --remove-existing-container) remove=1; shift ;;
+    # dev observe の送り先。本物は exec するコマンドの環境に足す。偽物は記録して、コマンドの環境へ入れる。
+    --remote-env) printf '%s\n' "$2" >>"$FAKE_STATE/remote-env"; export "${2?}"; shift 2 ;;
     *) echo "fake devcontainer: この試験が想定していないオプションです: $1" >&2; exit 2 ;;
   esac
 done
@@ -229,6 +237,59 @@ log_call docker "$@"
 touch_state
 sub="${1:-}"
 shift || true
+# 観測（dev observe）の呼び出し。受け口 dev-observe と、bridge のゲートウェイの読み取りだけを受ける。
+# 受け口が動いているかは $FAKE_STATE/obs-running（中身が true / false）。起こしたときの引数は $FAKE_STATE/obs-run へ 1 行 1 つで書く。
+# ネットワークは 2 つ（bridge と dev-runner0）。bridge のゲートウェイは FAKE_OBS_GW、dev-runner0 は 10.9.8.7。
+# FAKE_OBS_FOREIGN=1 は、dev observe のラベルを持たない同じ名前のコンテナがある。FAKE_OBS_EXITS=1 は、起こした受け口がすぐ終わる。
+case "$sub $*" in
+  *dev-observe* | "network ls -q" | "network inspect --format {{range .IPAM.Config}}{{.Gateway}} {{end}} "*)
+    ofail() { echo "fake docker: この試験が想定していない観測の呼び出しです: $sub" >&2; exit 2; }
+    case "$sub" in
+      network)
+        [[ "${FAKE_OBS_NET_FAIL:-0}" != "1" ]] || { echo "Error response from daemon: network bridge not found" >&2; exit 1; }
+        if [[ "$1" == "ls" ]]; then printf 'bridge\ndev-runner0\n'; exit 0; fi
+        shift 3
+        [[ $# -ge 1 ]] || ofail
+        for net in "$@"; do
+          case "$net" in
+            bridge) printf '%s\n' "${FAKE_OBS_GW-fd00::1 172.17.0.1 }" ;;
+            dev-runner0) printf '10.9.8.7 \n' ;;
+            *) echo "Error response from daemon: network $net not found" >&2; exit 1 ;;
+          esac
+        done
+        ;;
+      inspect)
+        [[ $# -eq 3 && "$1" == "--format" && "$3" == "dev-observe" ]] || ofail
+        if [[ ! -f "$FAKE_STATE/obs-running" && "${FAKE_OBS_FOREIGN:-0}" != "1" ]]; then echo "Error: No such object: dev-observe" >&2; exit 1; fi
+        case "$2" in
+          '{{.State.Running}}') if [[ -f "$FAKE_STATE/obs-running" ]]; then cat "$FAKE_STATE/obs-running"; else echo true; fi ;;
+          '{{.State.Running}} {{index .Config.Labels "devhost.observe"}}')
+            if [[ -f "$FAKE_STATE/obs-running" ]]; then echo "$(cat "$FAKE_STATE/obs-running") 1"; else echo "true "; fi ;;
+          '{{index .Config.Labels "devhost.observe"}}') if [[ -f "$FAKE_STATE/obs-running" ]]; then echo 1; else echo; fi ;;
+          *) ofail ;;
+        esac
+        ;;
+      logs)
+        [[ $# -eq 3 && "$1" == "--tail" && "$3" == "dev-observe" ]] || ofail
+        printf 'Traceback \033]52;c;ZXZpbA==\007(most recent call last)\n'
+        ;;
+      rm)
+        [[ $# -eq 2 && "$1" == "-f" && "$2" == "dev-observe" ]] || ofail
+        [[ "${FAKE_OBS_RM_FAIL:-0}" != "1" ]] || { echo "Error response from daemon: cannot remove container" >&2; exit 1; }
+        rm -f "$FAKE_STATE/obs-running"
+        ;;
+      run)
+        [[ "$1" == "-d" && "$2" == "--name" && "$3" == "dev-observe" ]] || ofail
+        printf '%s\n' "$@" >"$FAKE_STATE/obs-run"
+        [[ "${FAKE_OBS_RUN_FAIL:-0}" != "1" ]] || { echo "docker: Error response from daemon: port is already allocated" >&2; exit 125; }
+        if [[ "${FAKE_OBS_EXITS:-0}" == "1" ]]; then echo false >"$FAKE_STATE/obs-running"; else echo true >"$FAKE_STATE/obs-running"; fi
+        echo "0123456789abcdef"
+        ;;
+      *) ofail ;;
+    esac
+    exit 0
+    ;;
+esac
 # 検疫（dev quarantine）の呼び出し。名前に quarantine を含むものを、専用の状態（$FAKE_STATE/q-boxes と q-volumes）で扱う。
 # 想定外の形は黙って通さずに落とす。
 case "$sub $*" in
@@ -557,6 +618,17 @@ cat >"$FAKE_STATE/restore-in"
 exit 0
 EOF
 
+# id: 受け口を動かす uid / gid（FAKE_UID / FAKE_GID。既定 1000）。dev observe start だけが呼ぶ。
+cat >"$FAKEBIN/id" <<'EOF'
+#!/bin/sh
+case "$1" in
+  -u) echo "${FAKE_UID:-1000}" ;;
+  -g) echo "${FAKE_GID:-1000}" ;;
+  *) echo "fake id: 想定外の呼び出し: $*" >&2; exit 2 ;;
+esac
+EOF
+chmod +x "$FAKEBIN/id"
+
 cat >"$FAKEBIN/tmux" <<EOF
 #!$BASH_BIN
 set -euo pipefail
@@ -573,6 +645,20 @@ case "${1:-}" in
     exit 1
     ;;
   new-session) exit "${FAKE_TMUX_EXIT:-0}" ;;
+  start-server)
+    # dev observe の送り先を tmux のサーバへ入れる並び: start-server ; set-environment -g K V ; ... ; new-session -A -s <名前>。
+    # set-environment の値は $FAKE_STATE/tmux-env へ書く。最後は new-session でなければ落とす。
+    shift
+    [[ "${1:-}" == ";" ]] || { echo "fake tmux: start-server の後に ; がありません: $*" >&2; exit 2; }
+    shift
+    while [[ "${1:-}" == "set-environment" ]]; do
+      [[ "${2:-}" == "-g" && $# -ge 5 && "$5" == ";" ]] || { echo "fake tmux: 想定外の set-environment: $*" >&2; exit 2; }
+      printf '%s=%s\n' "$3" "$4" >>"$FAKE_STATE/tmux-env"
+      shift 5
+    done
+    [[ "${1:-}" == "new-session" && "${2:-}" == "-A" && "${3:-}" == "-s" && $# -eq 4 ]] || { echo "fake tmux: 並びの最後が new-session ではありません: $*" >&2; exit 2; }
+    exit "${FAKE_TMUX_EXIT:-0}"
+    ;;
   *) echo "fake tmux: この試験が想定していない呼び出しです: $*" >&2; exit 2 ;;
 esac
 EOF
@@ -2458,7 +2544,7 @@ n=$((n + 1))
 if ! readme_check "$README"; then ng "README が dev help と一致しません"; fi
 # dev が実際に受け付けるサブコマンドの確認: 一覧の各名前を引数なしで呼ぶと、使い方の誤り（2）で
 # 「使い方: dev <名前>」と返る（知らないサブコマンドなら一覧の usage が出る）。help だけは 0。
-for sub in ls up attach supervise rebuild doctor runner restart stop logs enable disable exec quarantine; do
+for sub in ls up attach supervise rebuild doctor runner restart stop logs enable disable exec quarantine observe; do
   if [[ "$sub" == "ls" ]]; then
     run 2 "$sub は引数を受け付けない（使い方の誤り）" -- -- "$sub" x
   else
@@ -2823,6 +2909,434 @@ expect_out_line '^  dev quarantine open <URL>$'
 run 2 "引数なしの usage に quarantine がある" -- --
 expect_err "dev quarantine rm <識別子>|--all"
 unset RUN_PATH
+
+# ── 6e''. observe（Claude Code の安全の事象をホスト側へ貯める）──────────────────
+# 偽の docker で、受け口を起こす引数（待ち受ける IP・読み取り専用・権限・利用者・マウント・再起動の方針）、
+# 置き場所がプロジェクトの下なら拒否すること、受け口が動いているときだけ attach / exec が --remote-env を渡すこと、
+# 期限切れの記録の削除、report の候補を見る。受け口のスクリプトは、手元の python3 で単体試験する。
+OBS="$WORK/obs"
+OBS_ENV=(DEV_OBSERVE_DIR="$OBS")
+
+# ── 使い方と設定の誤りは docker を呼ばずに 2 ──
+reset_state
+run 2 "observe: 知らないサブコマンド" -- -- observe bogus
+expect_err "知らない observe のサブコマンドです: bogus"
+expect_no_calls
+run 2 "observe start: 引数が多い" -- "${OBS_ENV[@]}" -- observe start x
+expect_no_calls
+run 2 "observe stop: 引数が多い" -- "${OBS_ENV[@]}" -- observe stop x
+expect_no_calls
+run 2 "observe status: 引数が多い" -- "${OBS_ENV[@]}" -- observe status x
+expect_no_calls
+for bad_since in 0 -1 x 01 ""; do
+  run 2 "observe report: 不正な --since [$bad_since]" -- "${OBS_ENV[@]}" -- observe report --since "$bad_since"
+  expect_no_calls
+done
+run 2 "observe report: --since の値が無い" -- "${OBS_ENV[@]}" -- observe report --since
+run 2 "observe report: 知らない引数" -- "${OBS_ENV[@]}" -- observe report --all
+run 2 "observe report: --since は期限まで" -- "${OBS_ENV[@]}" DEV_OBSERVE_RETENTION=10 -- observe report --since 11
+expect_err "期限（DEV_OBSERVE_RETENTION=10 日）まで"
+expect_no_calls
+for v in 0 80 1023 65536 x 04318; do
+  run 2 "observe start: 不正なポート [$v]" -- "${OBS_ENV[@]}" DEV_OBSERVE_PORT="$v" -- observe start
+  expect_err "DEV_OBSERVE_PORT"
+  expect_no_calls
+done
+for v in 0 x 07; do
+  run 2 "observe start: 不正な期限 [$v]" -- "${OBS_ENV[@]}" DEV_OBSERVE_RETENTION="$v" -- observe start
+  expect_err "DEV_OBSERVE_RETENTION"
+  expect_no_calls
+  run 2 "observe report: 不正な回数 [$v]" -- "${OBS_ENV[@]}" DEV_OBSERVE_THRESHOLD="$v" -- observe report
+  expect_err "DEV_OBSERVE_THRESHOLD"
+done
+run 2 "observe start: 0.0.0.0 は受けない（LAN に出るため）" -- "${OBS_ENV[@]}" DEV_OBSERVE_ADDR=0.0.0.0 -- observe start
+expect_err "0.0.0.0"
+if [[ -f "$STATE/obs-run" ]]; then ng "$CUR: 受け口を起こしています"; fi
+[[ ! -e "$OBS" ]] || ng "$CUR: 使い方の誤りなのに置き場所を作っています"
+run 2 "observe start: IPv4 でないアドレス" -- "${OBS_ENV[@]}" DEV_OBSERVE_ADDR=example.invalid -- observe start
+if [[ -f "$STATE/obs-run" ]]; then ng "$CUR: 受け口を起こしています"; fi
+run 1 "observe start: root では起こさない" -- "${OBS_ENV[@]}" FAKE_UID=0 -- observe start
+expect_err "root では起こしません"
+if [[ -f "$STATE/obs-run" ]]; then ng "$CUR: 受け口を起こしています"; fi
+
+# ── 置き場所がプロジェクトの下なら拒否する（devcontainer から書き換えられるため）──
+run 2 "observe start: 置き場所がプロジェクトの下" -- DEV_OBSERVE_DIR="$A/.obs" -- observe start
+expect_err "置き場所がプロジェクト alpha のパスと重なっています"
+if [[ -f "$STATE/obs-run" ]]; then ng "$CUR: 受け口を起こしています"; fi
+run 2 "observe start: 置き場所がプロジェクトそのもの" -- DEV_OBSERVE_DIR="$B" -- observe start
+expect_err "置き場所がプロジェクト beta のパスと重なっています"
+ln -s "$A" "$WORK/alpha-link"
+run 2 "observe start: シンボリックリンク越しにプロジェクトの下" -- DEV_OBSERVE_DIR="$WORK/alpha-link/obs" -- observe start
+expect_err "置き場所がプロジェクト alpha のパスと重なっています"
+if [[ -f "$STATE/obs-run" ]]; then ng "$CUR: 受け口を起こしています"; fi
+rm -rf "$A/.obs" "$A/obs" "$B/data" "$B/endpoint" "$WORK/alpha-link"
+mkdir -p "$WORK/obs-h/data/proj"
+printf 'delta %s/obs-h/data\nepsilon %s/obs-h/data/proj\n' "$WORK" "$WORK" >"$WORK/conf/obs-h"
+T_CONF="$WORK/conf/obs-h" run 2 "observe start: プロジェクトが置き場所の data そのもの" -- DEV_OBSERVE_DIR="$WORK/obs-h" -- observe start
+expect_err "置き場所がプロジェクト delta のパスと重なっています"
+if [[ -f "$STATE/obs-run" ]]; then ng "$CUR: 受け口を起こしています"; fi
+printf 'epsilon %s/obs-h/data/proj\n' "$WORK" >"$WORK/conf/obs-h"
+T_CONF="$WORK/conf/obs-h" run 2 "observe start: プロジェクトが置き場所の下" -- DEV_OBSERVE_DIR="$WORK/obs-h" -- observe start
+expect_err "置き場所がプロジェクト epsilon のパスと重なっています"
+if [[ -f "$STATE/obs-run" ]]; then ng "$CUR: 受け口を起こしています"; fi
+mkdir -p "$WORK/real-parent"
+ln -s "$WORK/real-parent" "$WORK/link-parent"
+printf 'gamma %s/link-parent/gamma\n' "$WORK" >"$WORK/conf/obs-gamma"
+T_CONF="$WORK/conf/obs-gamma" run 2 "observe start: まだ無いプロジェクトのパスの祖先がシンボリックリンク" -- DEV_OBSERVE_DIR="$WORK/real-parent/gamma/obs" -- observe start
+expect_err "置き場所がプロジェクト gamma のパスと重なっています"
+[[ ! -e "$WORK/real-parent/gamma" ]] || ng "$CUR: プロジェクトの場所にディレクトリを作っています"
+if [[ -f "$STATE/obs-run" ]]; then ng "$CUR: 受け口を起こしています"; fi
+
+# ── 既にあるディレクトリの権限は変えない（作ったものだけ 700）──
+mkdir -p "$WORK/shared"
+chmod 755 "$WORK/shared"
+run 0 "observe start: 既にあるディレクトリの権限は変えない" -- DEV_OBSERVE_DIR="$WORK/shared" -- observe start
+[[ "$(stat -c %a "$WORK/shared" 2>/dev/null || stat -f %Lp "$WORK/shared")" == "755" ]] || ng "$CUR: 既にあるディレクトリの権限を変えています"
+[[ "$(stat -c %a "$WORK/shared/data" 2>/dev/null || stat -f %Lp "$WORK/shared/data")" == "700" ]] || ng "$CUR: 作った data の権限が 700 ではありません"
+rm -f "$STATE/obs-run" "$STATE/obs-running"
+run 0 "observe start: 新しく作った置き場所は 700" -- DEV_OBSERVE_DIR="$WORK/obs-fresh" -- observe start
+[[ "$(stat -c %a "$WORK/obs-fresh" 2>/dev/null || stat -f %Lp "$WORK/obs-fresh")" == "700" ]] || ng "$CUR: 置き場所の権限が 700 ではありません"
+[[ "$(stat -c %a "$WORK/obs-fresh/data" 2>/dev/null || stat -f %Lp "$WORK/obs-fresh/data")" == "700" ]] || ng "$CUR: data の権限が 700 ではありません"
+rm -f "$STATE/obs-run" "$STATE/obs-running"
+
+# ── 起こす ──
+mkdir -p "$OBS/data"
+old_day="$(date -u -d '@0' +%Y%m%d 2>/dev/null || echo 19700101)"
+today="$(date -u +%Y%m%d)"
+echo '{"t": 1, "event": "safety_event"}' >"$OBS/data/events-$old_day.jsonl"
+: >"$OBS/data/events-$today.jsonl"
+run 0 "observe start" -- "${OBS_ENV[@]}" -- observe start
+OBS_REAL="$(cd "$OBS" && pwd -P)"
+expect_out_line "受け口を起こしました: http://172.17.0.1:4318"
+expect_out_line "期限（30 日）を超えた記録を消しました: 1 日分"
+[[ ! -e "$OBS/data/events-$old_day.jsonl" ]] || ng "$CUR: 期限を過ぎた記録が残っています"
+[[ -e "$OBS/data/events-$today.jsonl" ]] || ng "$CUR: 今日の記録まで消しています"
+[[ "$(cat "$OBS/endpoint" 2>/dev/null)" == "http://172.17.0.1:4318" ]] || ng "$CUR: 送り先の印がありません"
+obs_run="$(tr '\n' '\034' <"$STATE/obs-run")"
+obs_has() {
+  local w
+  for w in "$@"; do
+    case "$obs_run" in *$'\034'"$w"$'\034'*) ;; *) ng "$CUR: 受け口の引数に「$w」がありません" ;; esac
+  done
+}
+obs_pair() {
+  case "$obs_run" in *$'\034'"$1"$'\034'"$2"$'\034'*) ;; *) ng "$CUR: 受け口の引数に「$1 $2」がありません" ;; esac
+}
+obs_has "--read-only" "--cap-drop" "ALL" "--security-opt" "no-new-privileges" "python:3.12-alpine3.20" "python3" "-I" "-c"
+obs_pair --restart unless-stopped
+obs_pair --user 1000:1000
+obs_pair --memory 128m
+obs_pair --pids-limit 64
+obs_pair -p 172.17.0.1:4318:4318
+obs_pair --mount "type=bind,src=$OBS_REAL/data,dst=/data"
+obs_pair --label devhost.observe=1
+# マウントは記録の置き場所だけ。-v・docker のソケット・ホストのネットワーク・特権は無い。-e はプロキシの空の値だけ。
+[[ "$(grep -cxF -- "--mount" "$STATE/obs-run")" == "1" ]] || ng "$CUR: マウントが 1 つではありません"
+for w in "-v" "--volume" "--privileged" "--env-file" "--network" "--net" "--pid" "--ipc"; do
+  if grep -qxF -- "$w" "$STATE/obs-run"; then ng "$CUR: 受け口の引数に「$w」があります"; fi
+done
+if grep -qF "docker.sock" "$STATE/obs-run"; then ng "$CUR: docker のソケットを渡しています"; fi
+obs_e="$(awk 'p { print; p = 0 } $0 == "-e" { p = 1 }' "$STATE/obs-run" | grep -vE '^(HTTP_PROXY|http_proxy|HTTPS_PROXY|https_proxy|FTP_PROXY|ftp_proxy|NO_PROXY|no_proxy|ALL_PROXY|all_proxy)=$' || true)"
+[[ -z "$obs_e" ]] || ng "$CUR: プロキシの空の値以外の -e があります: $obs_e"
+grep -qF "devhost-observe-receiver" "$STATE/obs-run" || ng "$CUR: 受け口のスクリプトを渡していません"
+# 待ち受ける IP は、bridge の IPv4 のゲートウェイ（IPv6 は飛ばす）か DEV_OBSERVE_ADDR。
+run 0 "observe start: DEV_OBSERVE_ADDR（別のネットワークのゲートウェイ）とポート" -- "${OBS_ENV[@]}" DEV_OBSERVE_ADDR=10.9.8.7 DEV_OBSERVE_PORT=14318 -- observe start
+grep -qxF "10.9.8.7:14318:4318" "$STATE/obs-run" || ng "$CUR: 待ち受ける IP とポートが違います"
+expect_log_has "docker [network] [ls] [-q]"
+[[ "$(cat "$OBS/endpoint")" == "http://10.9.8.7:14318" ]] || ng "$CUR: 送り先の印が違います"
+rm -f "$STATE/obs-run"
+run 2 "observe start: DEV_OBSERVE_ADDR が docker のゲートウェイでない（LAN 側のアドレス）" -- "${OBS_ENV[@]}" DEV_OBSERVE_ADDR=192.168.1.10 -- observe start
+expect_err "docker のネットワークのゲートウェイの IP だけです"
+if [[ -f "$STATE/obs-run" ]]; then ng "$CUR: 受け口を起こしています"; fi
+rm -f "$STATE/obs-running" "$STATE/obs-run"
+run 1 "observe start: 同じ名前の別のコンテナは消さない" -- "${OBS_ENV[@]}" FAKE_OBS_FOREIGN=1 -- observe start
+expect_err "dev observe のものではないので消しません"
+expect_log_lacks "docker [rm]"
+if [[ -f "$STATE/obs-run" ]]; then ng "$CUR: 受け口を起こしています"; fi
+run 1 "observe stop: 同じ名前の別のコンテナは消さない" -- "${OBS_ENV[@]}" FAKE_OBS_FOREIGN=1 -- observe stop
+expect_log_lacks "docker [rm]"
+run 1 "observe start: 受け口がすぐ止まれば失敗にする" -- "${OBS_ENV[@]}" FAKE_OBS_EXITS=1 -- observe start
+expect_err "すぐ止まりました"
+[[ ! -e "$OBS/endpoint" ]] || ng "$CUR: 送り先の印が残っています"
+expect_log_has "docker [rm] [-f] [dev-observe]"
+if grep -q $'\x1b' "$ERR"; then ng "$CUR: ログの制御文字がそのまま出ています"; fi
+rm -f "$STATE/obs-running" "$STATE/obs-run"
+mkdir -p "$WORK/obs-link"
+ln -s "$A" "$WORK/obs-link/data"
+run 2 "observe start: data がシンボリックリンク" -- DEV_OBSERVE_DIR="$WORK/obs-link" -- observe start
+expect_err "data がシンボリックリンクです"
+if [[ -f "$STATE/obs-run" ]]; then ng "$CUR: 受け口を起こしています"; fi
+run 1 "observe start: bridge が読めない" -- "${OBS_ENV[@]}" FAKE_OBS_NET_FAIL=1 -- observe start
+expect_err "DEV_OBSERVE_ADDR"
+run 1 "observe start: IPv4 のゲートウェイが無い" -- "${OBS_ENV[@]}" FAKE_OBS_GW="fd00::1" -- observe start
+run 1 "observe start: 起こせない" -- "${OBS_ENV[@]}" FAKE_OBS_RUN_FAIL=1 -- observe start
+expect_err "受け口を起こせませんでした"
+[[ ! -e "$OBS/endpoint" ]] || ng "$CUR: 起こせなかったのに送り先の印が残っています"
+run 0 "observe start（起こし直す）" -- "${OBS_ENV[@]}" -- observe start
+run 0 "observe status: 動いている" -- "${OBS_ENV[@]}" -- observe status
+expect_out_line "^受け口: 動いている（http://172.17.0.1:4318）"
+
+# ── 送らせ方: 受け口が動いているときだけ attach / exec が --remote-env を渡す ──
+run 0 "up alpha（observe の仕込み）" -- -- up alpha
+rm -f "$STATE/remote-env" "$STATE/tmux-env"
+run 0 "attach: 受け口が動いていれば --remote-env を渡す" -- "${OBS_ENV[@]}" -- attach alpha
+OBS_PAIRS="CLAUDE_CODE_ENABLE_TELEMETRY=1
+OTEL_LOGS_EXPORTER=otlp
+OTEL_METRICS_EXPORTER=none
+OTEL_EXPORTER_OTLP_LOGS_PROTOCOL=http/json
+OTEL_EXPORTER_OTLP_LOGS_ENDPOINT=http://172.17.0.1:4318/v1/logs
+OTEL_RESOURCE_ATTRIBUTES=dev.project=alpha
+OTEL_LOG_USER_PROMPTS=
+OTEL_LOG_ASSISTANT_RESPONSES=
+OTEL_LOG_TOOL_DETAILS=
+OTEL_LOG_TOOL_CONTENT=
+OTEL_LOG_RAW_API_BODIES="
+# exec は 1 回だけ（start-server ; set-environment ... ; new-session の並び）。
+[[ "$(grep -c '^devcontainer \[exec\]' "$LOG")" == "1" ]] || ng "$CUR: devcontainer exec が 1 回ではありません"
+[[ "$(cat "$STATE/remote-env")" == "$OBS_PAIRS" ]] || { ng "$CUR: --remote-env の値が違います"; sed 's/^/    /' "$STATE/remote-env" >&2; }
+[[ "$(cat "$STATE/tmux-env")" == "$OBS_PAIRS" ]] || { ng "$CUR: tmux のサーバへ入れた値が違います"; sed 's/^/    /' "$STATE/tmux-env" >&2; }
+expect_log_has "tmux [start-server] [;] [set-environment] [-g] [CLAUDE_CODE_ENABLE_TELEMETRY] [1] [;]"
+expect_log_has "[;] [new-session] [-A] [-s] [main]"
+if grep -qF "$OBS" "$STATE/remote-env"; then ng "$CUR: 渡す値に記録の置き場所が含まれています"; fi
+if grep -E '^OTEL_LOG_[A-Z_]+=.' "$STATE/remote-env"; then ng "$CUR: 本文を出す設定（OTEL_LOG_*）を空でない値で渡しています"; fi
+grep -qF "devcontainer [exec] [--workspace-folder] [$A] [--remote-env] [CLAUDE_CODE_ENABLE_TELEMETRY=1]" "$LOG" || ng "$CUR: --remote-env がコマンドの前にありません"
+run 1 "attach: 受け口が動いていても、tmux の終了コードで 1 と文面" -- "${OBS_ENV[@]}" FAKE_TMUX_EXIT=7 -- attach alpha
+expect_err "終了コード 7"
+rm -f "$STATE/remote-env"
+run 0 "exec: 受け口が動いていれば --remote-env を渡す" -- "${OBS_ENV[@]}" -- exec alpha -- codex login
+[[ "$(cat "$STATE/remote-env")" == "$OBS_PAIRS" ]] || { ng "$CUR: --remote-env の値が違います"; sed 's/^/    /' "$STATE/remote-env" >&2; }
+expect_log_has "codex [login]"
+# 印はあるが受け口が止まっている → 渡さない（docker に状態を 1 回だけ聞く）。
+echo false >"$STATE/obs-running"
+rm -f "$STATE/remote-env"
+run 0 "attach: 受け口が止まっていれば渡さない" -- "${OBS_ENV[@]}" -- attach alpha
+expect_calls \
+  "docker [ps] [-a] [--filter] [label=devcontainer.local_folder=$A] [--format] [{{.ID}} {{.State}}]" \
+  "docker [inspect] [--format] [{{.State.Running}} {{index .Config.Labels \"devhost.observe\"}}] [dev-observe]" \
+  "devcontainer [exec] [--workspace-folder] [$A] [tmux] [new-session] [-A] [-s] [main]" \
+  "tmux [new-session] [-A] [-s] [main]"
+[[ ! -s "$STATE/remote-env" ]] || ng "$CUR: --remote-env を渡しています"
+rm -f "$STATE/obs-running" "$STATE/remote-env"
+run 0 "attach: 同じ名前の別のコンテナ（ラベルなし）が動いていても渡さない" -- "${OBS_ENV[@]}" FAKE_OBS_FOREIGN=1 -- attach alpha
+[[ ! -s "$STATE/remote-env" ]] || ng "$CUR: --remote-env を渡しています"
+expect_log_lacks "start-server"
+echo true >"$STATE/obs-running"
+# 印が壊れていれば渡さない（docker も呼ばない）。
+cp "$OBS/endpoint" "$WORK/endpoint.bak"
+echo 'http://evil.invalid:4318' >"$OBS/endpoint"
+run 0 "attach: 送り先の印が壊れていれば渡さない" -- "${OBS_ENV[@]}" -- attach alpha
+expect_log_lacks "dev-observe"
+[[ ! -s "$STATE/remote-env" ]] || ng "$CUR: --remote-env を渡しています"
+cp "$WORK/endpoint.bak" "$OBS/endpoint"
+
+# ── stop: 印を消し、以後の attach は今までと同じ呼び出しになる ──
+run 1 "observe stop: 受け口を消せなければ失敗にする" -- "${OBS_ENV[@]}" FAKE_OBS_RM_FAIL=1 -- observe stop
+expect_err "受け口（dev-observe）を消せませんでした"
+cp "$WORK/endpoint.bak" "$OBS/endpoint"
+run 0 "observe stop" -- "${OBS_ENV[@]}" -- observe stop
+expect_calls \
+  "docker [inspect] [--format] [{{index .Config.Labels \"devhost.observe\"}}] [dev-observe]" \
+  "docker [rm] [-f] [dev-observe]"
+[[ ! -e "$OBS/endpoint" ]] || ng "$CUR: 送り先の印が残っています"
+[[ -e "$OBS/data/events-$today.jsonl" ]] || ng "$CUR: 記録まで消しています"
+run 0 "attach: 受け口を止めたあとは今までどおり" -- "${OBS_ENV[@]}" -- attach alpha
+expect_calls \
+  "docker [ps] [-a] [--filter] [label=devcontainer.local_folder=$A] [--format] [{{.ID}} {{.State}}]" \
+  "devcontainer [exec] [--workspace-folder] [$A] [tmux] [new-session] [-A] [-s] [main]" \
+  "tmux [new-session] [-A] [-s] [main]"
+run 0 "observe status: 動いていない" -- "${OBS_ENV[@]}" -- observe status
+expect_out_line "^受け口: 動いていない"
+expect_no_calls
+
+# ── report: 用意した JSONL から、決めた候補と数が出る ──
+now_s="$(date +%s)"
+old_s=$((now_s - 10 * 86400))
+{
+  for _ in 1 2 3; do
+    printf '{"t": %s, "event": "tool_decision", "project": "alpha", "tool_name": "Bash", "decision": "accept", "source": "user_temporary"}\n' "$now_s"
+  done
+  printf '{"t": %s, "event": "tool_decision", "project": "alpha", "tool_name": "Edit", "decision": "accept", "source": "user_temporary"}\n' "$now_s"
+  printf '{"t": %s, "event": "tool_decision", "project": "alpha", "tool_name": "Write", "decision": "accept", "source": "config"}\n' "$now_s"
+  for _ in 1 2 3 4; do
+    printf '{"t": %s, "event": "safety_event", "project": "beta", "category": "hook", "decision": "reject", "hook_event": "pre_tool_use", "reason_code": "hook:PreToolUse", "tool_name": "Bash"}\n' "$now_s"
+  done
+  for _ in 1 2 3; do
+    printf '{"t": %s, "event": "safety_event", "project": "alpha", "category": "safety_check", "decision": "reject", "circuit_breaker": "outsideReadsBlocked", "tool_name": "Read"}\n' "$now_s"
+  done
+  for _ in 1 2 3; do
+    printf '{"t": %s, "event": "safety_event", "project": "alpha", "category": "sandbox_network", "decision": "accept", "tool_name": "Bash", "sandbox_violation_count": "2"}\n' "$now_s"
+  done
+  for _ in 1 2 3; do
+    printf '{"t": %s, "event": "safety_event", "project": "alpha", "category": "sandbox_other", "decision": "accept", "tool_name": "Bash", "sandbox_violation_count": "1"}\n' "$now_s"
+  done
+  printf '{"t": %s, "event": "safety_event", "project": "alpha", "category": "permission_rule", "decision": "reject", "reason_code": "rule:projectSettings\\u001b[31m"}\n' "$now_s"
+  # 10 日前の記録（--since 5 では数えない）
+  for _ in 1 2 3; do
+    printf '{"t": %s, "event": "safety_event", "project": "alpha", "category": "static_analysis", "decision": "reject", "reason_code": "bashMiss:too-complex"}\n' "$old_s"
+  done
+  echo 'not json'
+} >"$OBS/data/events-$today.jsonl"
+echo 7 >"$OBS/data/dropped"
+run 0 "observe status: 上限で書けなかった件数" -- "${OBS_ENV[@]}" -- observe status
+expect_out_line "上限で書けなかった 7 件"
+run 0 "observe report" -- "${OBS_ENV[@]}" -- observe report
+expect_no_calls
+expect_out_line "^観測の記録（直近 30 日）: safety_event 17 件 / tool_decision 5 件 / 読めなかった行 1 / 上限で書けなかった 7 件"
+expect_out_line "^- 許可の追加の候補: alpha で Bash が、確認に応じて 3 回許可された"
+expect_out_line "^- フックの見直しの候補: beta で hook（hook_event=pre_tool_use, reason_code=hook:PreToolUse）の差し戻しが 4 回"
+expect_out_line "^- 手順の見直しの候補: alpha で safety_check（outsideReadsBlocked）の拒否が 3 回"
+expect_out_line "^- 手順の見直しの候補: alpha で static_analysis（bashMiss:too-complex）の拒否が 3 回"
+expect_out_line "^- 許可するドメインの見直しの候補: alpha で Bash の sandbox のネットワークの拒否が 3 回"
+expect_out_line "^- sandbox の設定の見直しの候補: alpha で Bash の sandbox の拒否（宛先が名前でも IP でもないもの）が 3 回"
+expect_out_line "承認の根拠にしません"
+if grep -qF "Edit が" "$OUT"; then ng "$CUR: 回数の下限に届かない道具を候補に出しています"; fi
+if grep -qF "Write が" "$OUT"; then ng "$CUR: 確認を経ていない許可を候補に出しています"; fi
+if grep -q $'\x1b' "$OUT"; then ng "$CUR: 記録の制御文字がそのまま出ています"; fi
+[[ "$(grep -c '^- ' "$OUT")" == "6" ]] || { ng "$CUR: 候補の数が 6 ではありません"; sed 's/^/    stdout: /' "$OUT" >&2; }
+run 0 "observe report --since 5（10 日前の記録を数えない）" -- "${OBS_ENV[@]}" -- observe report --since 5
+expect_out_line "safety_event 14 件"
+if grep -qF "static_analysis（" "$OUT"; then ng "$CUR: 期間の外の記録を候補に出しています"; fi
+run 0 "observe report: 回数の下限を 4 にする" -- "${OBS_ENV[@]}" DEV_OBSERVE_THRESHOLD=4 -- observe report
+[[ "$(grep -c '^- ' "$OUT")" == "1" ]] || ng "$CUR: 下限 4 で候補が 1 つ（フック）になりません"
+echo '{"t": 1, "event": "safety_event"}' >"$OBS/data/events-$old_day.jsonl"
+run 0 "observe report: 期限を過ぎた記録を消す" -- "${OBS_ENV[@]}" -- observe report
+[[ ! -e "$OBS/data/events-$old_day.jsonl" ]] || ng "$CUR: 期限を過ぎた記録が残っています"
+run 1 "observe report: 記録が無い" -- DEV_OBSERVE_DIR="$WORK/obs-none" -- observe report
+expect_err "記録がありません"
+run 1 "observe report: python3 が無い" -- "${OBS_ENV[@]}" PATH="$FAKEBIN" -- observe report
+expect_err "python3 を入れてください"
+
+# ── 受け口のスクリプトの単体試験（手元の python3。無ければ落とす）──
+command -v python3 >/dev/null 2>&1 || ng "受け口の単体試験: python3 がありません（飛ばさずに落とします）"
+RECV="$WORK/receiver.py"
+sed -n '/^# >>> observe-receiver$/,/^# <<< observe-receiver$/p' "$DEV" | sed -n "/^  cat <<'PY'$/,/^PY$/p" | sed '1d;$d' >"$RECV"
+grep -qF "devhost-observe-receiver" "$RECV" || ng "受け口の単体試験: dev.sh から受け口のスクリプトを取り出せません"
+RDATA="$WORK/recv-data"
+mkdir -p "$RDATA"
+cat >"$WORK/recv-test.py" <<'PYTEST'
+import json, os, subprocess, sys, urllib.request, urllib.error
+
+recv, data = sys.argv[1], sys.argv[2]
+env = dict(os.environ, OBSERVE_DIR=data, OBSERVE_BIND="127.0.0.1", OBSERVE_PORT="0",
+           OBSERVE_MAX_BODY="300000", OBSERVE_MAX_TOTAL="1500")
+proc = subprocess.Popen([sys.executable, "-I", recv], env=env, stdout=subprocess.PIPE, text=True)
+fails = []
+try:
+    first = proc.stdout.readline()
+    port = int(first.rsplit(":", 1)[1])
+    base = "http://127.0.0.1:%d" % port
+
+    def post(path, body, ctype="application/json", method="POST"):
+        req = urllib.request.Request(base + path, data=body, method=method, headers={"Content-Type": ctype})
+        try:
+            with urllib.request.urlopen(req, timeout=5) as r:
+                return r.status
+        except urllib.error.HTTPError as e:
+            return e.code
+
+    def kv(k, v):
+        return {"key": k, "value": {"stringValue": v}}
+
+    def doc(*events):
+        return json.dumps({"resourceLogs": [{"resource": {"attributes": [kv("dev.project", "alpha"), kv("service.version", "2.1.316"), kv("host.name", "secret-host")]},
+                                             "scopeLogs": [{"logRecords": [{"attributes": a} for a in events]}]}]}).encode()
+
+    se = [kv("event.name", "safety_event"), kv("category", "hook"), kv("decision", "reject"),
+          kv("reason_code", "hook:PreToolUse\x1b[31m"), kv("tool_name", "Bash"),
+          kv("tool_parameters", "{\"command\": \"cat ~/.ssh/id_rsa\"}"), kv("prompt", "secret prompt"),
+          {"key": "sandbox_enabled", "value": {"boolValue": True}}]
+    td = [kv("event.name", "claude_code.tool_decision"), kv("decision", "accept"), kv("source", "user_temporary"), kv("tool_name", "Bash")]
+    other = [kv("event.name", "user_prompt"), kv("prompt", "secret prompt")]
+    api = [kv("event.name", "api_request"), kv("model", "x")]
+
+    def lines():
+        out = []
+        for n in sorted(os.listdir(data)):
+            if n.startswith("events-"):
+                with open(os.path.join(data, n)) as f:
+                    out += [json.loads(x) for x in f]
+        return out
+
+    st = post("/v1/logs", doc(se, td, other, api))
+    if st != 200:
+        fails.append("対象の事象の POST が 200 ではない: %d" % st)
+    got = lines()
+    if [r.get("event") for r in got] != ["safety_event", "tool_decision"]:
+        fails.append("対象の事象だけを残していない: %r" % got)
+    else:
+        r = got[0]
+        for k in ("tool_parameters", "prompt", "host.name"):
+            if k in r:
+                fails.append("決めた属性以外を残している: %s" % k)
+        if r.get("project") != "alpha" or r.get("version") != "2.1.316":
+            fails.append("プロジェクトと版を残していない: %r" % r)
+        if "\x1b" in json.dumps(r, ensure_ascii=False) or r.get("reason_code") != "hook:PreToolUse?[31m":
+            fails.append("制御文字を置き換えていない: %r" % r.get("reason_code"))
+        if r.get("sandbox_enabled") != "true" or not isinstance(r.get("t"), int):
+            fails.append("bool の値か受け取った時刻が違う: %r" % r)
+        if "secret" in json.dumps(got):
+            fails.append("本文（secret）を貯めている")
+    if os.stat(os.path.join(data, sorted(os.listdir(data))[0])).st_mode & 0o077:
+        fails.append("記録のファイルが他の利用者に読める")
+    n0 = len(lines())
+    # 本文を送る前に、宣言した大きさ（Content-Length）だけで 413 を返す（大きな本文を送り切らずに確かめる）。
+    import http.client
+    c = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+    c.putrequest("POST", "/v1/logs")
+    c.putheader("Content-Type", "application/json")
+    c.putheader("Content-Length", "400000")
+    c.endheaders()
+    st = c.getresponse().status
+    c.close()
+    if st != 413:
+        fails.append("大きすぎる本文が 413 ではない: %d" % st)
+    for path, body, ctype, method, want in (("/v1/traces", b"{}", "application/json", "POST", 404),
+                                            ("/v1/logs", b"{}", "text/plain", "POST", 415),
+                                            ("/v1/logs", b"{not json", "application/json", "POST", 400),
+                                            ("/v1/logs", None, "application/json", "GET", 405)):
+        st = post(path, body, ctype, method)
+        if st != want:
+            fails.append("%s %s (%s) が %d ではない: %d" % (method, path, ctype, want, st))
+    if len(lines()) != n0:
+        fails.append("拒否した本文を書いている")
+    # 深い入れ子の JSON: 読めるかどうかは python の版で変わる（RecursionError になる版は 400、読める版は 200）。
+    # どちらでも応答を返し、そのあとも受け口が動き続けること（例外で接続が切れたり、止まったりしないこと）を見る。
+    st = post("/v1/logs", b"[" * 100000 + b"]" * 100000)
+    if st not in (200, 400):
+        fails.append("深い入れ子の JSON に 200 か 400 で応えない: %d" % st)
+    st = post("/v1/logs", b"{}")
+    if st != 200 or proc.poll() is not None:
+        fails.append("深い入れ子の JSON のあと、受け口が応えない: %d" % st)
+    # 合計の上限（1500 バイト）を超えたら書かずに数える。同時に送っても超えない（書き込みはロックで 1 本ずつ）。
+    import threading
+    ts = [threading.Thread(target=post, args=("/v1/logs", doc(se))) for _ in range(10)]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join()
+    total = sum(os.path.getsize(os.path.join(data, n)) for n in os.listdir(data) if n.startswith("events-"))
+    if total > 1500:
+        fails.append("合計の上限を超えて書いている: %d" % total)
+    try:
+        with open(os.path.join(data, "dropped")) as f:
+            dropped = int(f.read())
+    except OSError:
+        dropped = 0
+    if dropped < 1:
+        fails.append("上限を超えた件数を数えていない")
+finally:
+    proc.terminate()
+    proc.wait(timeout=5)
+for f in fails:
+    print(f)
+sys.exit(1 if fails else 0)
+PYTEST
+CUR="受け口の単体試験"
+n=$((n + 1))
+if ! recv_out="$(python3 -I "$WORK/recv-test.py" "$RECV" "$RDATA" 2>&1)"; then
+  ng "受け口の単体試験が落ちました"
+  printf '%s\n' "$recv_out" | sed 's/^/    /' >&2
+fi
 
 # ── 6f. runner（自前のランナー）──────────────────────────────────────────────
 # 偽の docker / curl で、登録用トークンの取得・--ephemeral かつ --rm のコンテナ・PAT を出さないこと・
@@ -3493,7 +4007,9 @@ mkdir -p "$WORK/fakevars"
 # flock だけを外した道具の置き場（flock が無い機械の動き）
 mkdir -p "$WORK/toolbin-noflock"
 for tool in "$TOOLBIN"/*; do
-  [[ "${tool##*/}" == "flock" ]] || ln -s "$(readlink "$tool")" "$WORK/toolbin-noflock/${tool##*/}"
+  # python3 はリンクではなくラッパー（上の「python3 は、シンボリックリンクから」）なので写す。
+  if [[ "${tool##*/}" == "flock" ]]; then continue; fi
+  if [[ -L "$tool" ]]; then ln -s "$(readlink "$tool")" "$WORK/toolbin-noflock/${tool##*/}"; else cp -p "$tool" "$WORK/toolbin-noflock/"; fi
 done
 
 RT_VARS="" RT_KEEP=0 RT_CACHE=""
