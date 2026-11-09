@@ -3293,13 +3293,20 @@ try:
     for path, body, ctype, method, want in (("/v1/traces", b"{}", "application/json", "POST", 404),
                                             ("/v1/logs", b"{}", "text/plain", "POST", 415),
                                             ("/v1/logs", b"{not json", "application/json", "POST", 400),
-                                            ("/v1/logs", b"[" * 100000 + b"]" * 100000, "application/json", "POST", 400),
                                             ("/v1/logs", None, "application/json", "GET", 405)):
         st = post(path, body, ctype, method)
         if st != want:
             fails.append("%s %s (%s) が %d ではない: %d" % (method, path, ctype, want, st))
     if len(lines()) != n0:
         fails.append("拒否した本文を書いている")
+    # 深い入れ子の JSON: 読めるかどうかは python の版で変わる（RecursionError になる版は 400、読める版は 200）。
+    # どちらでも応答を返し、そのあとも受け口が動き続けること（例外で接続が切れたり、止まったりしないこと）を見る。
+    st = post("/v1/logs", b"[" * 100000 + b"]" * 100000)
+    if st not in (200, 400):
+        fails.append("深い入れ子の JSON に 200 か 400 で応えない: %d" % st)
+    st = post("/v1/logs", b"{}")
+    if st != 200 or proc.poll() is not None:
+        fails.append("深い入れ子の JSON のあと、受け口が応えない: %d" % st)
     # 合計の上限（1500 バイト）を超えたら書かずに数える。同時に送っても超えない（書き込みはロックで 1 本ずつ）。
     import threading
     ts = [threading.Thread(target=post, args=("/v1/logs", doc(se))) for _ in range(10)]

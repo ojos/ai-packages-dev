@@ -1109,13 +1109,13 @@ cmd_quarantine_rm() {
 #   OTEL_* を渡す（起動するときの環境変数。リポジトリの .claude/settings.json の OTEL_* は Claude Code が無視する）。
 #   dev attach は、同じ exec の中で tmux のサーバにも set-environment -g で同じ値を入れる（以後に作るウィンドウ・ペイン用）。
 # - 受け口は、python3 の標準ライブラリだけで書いた最小のもの（下の observe_receiver_script）。http/json の
-#   POST /v1/logs だけを受け、対象の事象の決めた属性だけを残す。コマンドの本文やプロンプトは受け取らない
-#   （OTEL_LOG_TOOL_DETAILS・OTEL_LOG_USER_PROMPTS を有効にしない）。
-# - 待ち受けるのは docker の bridge のゲートウェイの IP だけ（LAN には出さない）。同じホストのどのコンテナからでも
+#   POST /v1/logs だけを受け、対象の事象の決めた属性だけを残す。コマンドの本文やプロンプトは送らせない
+#   （本文を出す OTEL_LOG_* は、コンテナに既にあっても空の値で上書きする）。
+# - 待ち受けるのは docker のネットワークのゲートウェイの IP だけ（既定は bridge。LAN には出さない）。同じホストのどのコンテナからでも
 #   送れるので、偽の記録が混ざりうる。report は候補を出すだけにする。
 # - 置き場所: <dir>/endpoint（受け口の送り先。動いている印）と <dir>/data/（記録。受け口にだけマウントする）。
 #   <dir> は DEV_OBSERVE_DIR（既定 ${XDG_STATE_HOME:-~/.local/state}/dev/observe）。登録したプロジェクトの
-#   パスの下（devcontainer にマウントされる場所）なら、start は拒否する。
+#   パス（devcontainer にマウントされる場所）と重なれば（どちらかがもう一方の下にあれば）、start は拒否する。
 # - 期限（DEV_OBSERVE_RETENTION 日。既定 30）を超えた日の記録は、start と report のときに消す。
 OBSERVE_NAME="dev-observe"
 OBSERVE_LABEL="devhost.observe"
