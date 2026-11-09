@@ -1253,7 +1253,8 @@ observe_running() {
 }
 
 # devcontainer の Claude Code へ渡す環境変数（キー=値 を 1 行ずつ）。$1 はプロジェクトの名前。
-# ログ（事象）だけを送る（metrics と traces は、Claude Code は指定が無ければ送らないので、何も渡さない）。
+# ログ（事象）だけを送る。metrics は none にする（コンテナに既に metrics の設定があっても、Claude Code の metrics を
+# そこへ送らせないため。同じ環境で動く別のアプリの metrics も止まる）。traces は、Claude Code はベータの指定が無ければ送らない。
 # 本文を出す設定（OTEL_LOG_*）は、コンテナの環境に既にあっても空の値で上書きして止める（プロンプトやコマンドの
 # 本文を受け口へ送らせないため）。これらは attach / exec で起こすすべてのプロセスの環境に入るので、
 # 渡す値は最小にする（OpenTelemetry を使う別のアプリのログの送り先も変わる。README の「観測」）。
@@ -1261,6 +1262,7 @@ observe_env_pairs() {
   printf '%s\n' \
     "CLAUDE_CODE_ENABLE_TELEMETRY=1" \
     "OTEL_LOGS_EXPORTER=otlp" \
+    "OTEL_METRICS_EXPORTER=none" \
     "OTEL_EXPORTER_OTLP_LOGS_PROTOCOL=http/json" \
     "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT=$OBSERVE_ENDPOINT/v1/logs" \
     "OTEL_RESOURCE_ATTRIBUTES=dev.project=$1" \
@@ -4694,11 +4696,11 @@ start: ホスト側に受け口（コンテナ dev-observe。python3 の標準�
   書き換えられるため）。data がシンボリックリンクでも拒否する。
 送らせ方: 受け口が動いているあいだ、dev attach と dev exec は devcontainer exec に --remote-env で
   CLAUDE_CODE_ENABLE_TELEMETRY・OTEL_LOGS_EXPORTER・送り先・OTEL_RESOURCE_ATTRIBUTES（dev.project=<名前>）を渡す
-  （ログだけ。metrics と traces の設定は渡さない。本文を出す OTEL_LOG_* は、コンテナに既にあっても空の値で上書きする）。dev attach は、同じ exec の中で tmux のサーバにも同じ値を入れる。
+  （ログだけ。OTEL_METRICS_EXPORTER は none。本文を出す OTEL_LOG_* は、コンテナに既にあっても空の値で上書きする）。dev attach は、同じ exec の中で tmux のサーバにも同じ値を入れる。
   送るのは、そのあとに起こした Claude Code（2.1.307 以降。古い版は tool_decision だけ）だけ。
   VS Code など dev を通さない入り方のセッションは送らない。
   これらの値は、attach / exec で起こすすべてのプロセスの環境に入る（OpenTelemetry を使う別のアプリのログの
-  送り先も変わる。対象の事象以外は受け口が捨てる）。そうしたアプリを動かすプロジェクトでは start しない。
+  送り先も変わり、metrics は止まる。対象の事象以外は受け口が捨てる）。そうしたアプリを動かすプロジェクトでは start しない。
 stop: 受け口を消す（記録は残す）。動いている tmux のサーバに入れた値は残る（送り先が無いので送られない）。
 status: 受け口が動いているか、送り先、記録の日数・大きさ・上限で書けなかった件数を出す。
 report: 直近 <日数>（既定は DEV_OBSERVE_RETENTION。それより長くはできない）の記録を、category・decision・reason_code などごとに数え、

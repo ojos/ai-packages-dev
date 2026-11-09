@@ -3082,6 +3082,7 @@ rm -f "$STATE/remote-env" "$STATE/tmux-env"
 run 0 "attach: 受け口が動いていれば --remote-env を渡す" -- "${OBS_ENV[@]}" -- attach alpha
 OBS_PAIRS="CLAUDE_CODE_ENABLE_TELEMETRY=1
 OTEL_LOGS_EXPORTER=otlp
+OTEL_METRICS_EXPORTER=none
 OTEL_EXPORTER_OTLP_LOGS_PROTOCOL=http/json
 OTEL_EXPORTER_OTLP_LOGS_ENDPOINT=http://172.17.0.1:4318/v1/logs
 OTEL_RESOURCE_ATTRIBUTES=dev.project=alpha
