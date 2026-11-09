@@ -580,8 +580,8 @@ dev observe stop             # 受け口を消す（記録は残す）
 ```
 
 - **受け口**は、`dev.sh` に埋め込んだ最小のもの（python3 の標準ライブラリだけ）で、コンテナ `dev-observe` として動きます。待ち受けるのは docker の bridge のゲートウェイの IP（多くの機械で `172.17.0.1`）だけで、LAN には出しません（`DEV_OBSERVE_ADDR` で変えられるのは、docker のほかのネットワークのゲートウェイの IP だけです）。同じ名前で `dev observe` のラベルを持たないコンテナがあれば、消さずに止まります。ホストの利用者の uid / gid・根は読み取り専用・`--cap-drop ALL`・`no-new-privileges`・メモリと pids の上限で動き、マウントは記録の置き場所だけです。
-- **貯めるもの**は、`safety_event` と `tool_decision` の決めた属性（`category`・`decision`・`reason_code`・`rule_source`・`hook_event`・`tool_name`・`permission_mode` など）と、プロジェクトの名前・Claude Code の版だけです。コマンドの本文やプロンプトは送らせず（`OTEL_LOG_TOOL_DETAILS`・`OTEL_LOG_USER_PROMPTS` を有効にしない）、届いても捨てます。1 回の本文は 1MiB まで、記録の合計は 64MiB までで、超えた分は書かずに数えます（`dev observe status`）。
-- **置き場所**は `DEV_OBSERVE_DIR`（既定 `~/.local/state/dev/observe`）の `data/` で、日ごとの JSONL です。devcontainer にはマウントしません。登録したプロジェクトのパスの下を指定すると、`start` は拒否します（devcontainer から書き換えられるため）。`data` がシンボリックリンクでも拒否します。`DEV_OBSERVE_RETENTION` 日（既定 30）を超えた日の記録は、`start` と `report` のときに消します。
+- **貯めるもの**は、`safety_event` と `tool_decision` の決めた属性（`category`・`decision`・`reason_code`・`rule_source`・`hook_event`・`tool_name`・`permission_mode` など）と、プロジェクトの名前・Claude Code の版だけです。コマンドの本文やプロンプトは送らせず（`OTEL_LOG_USER_PROMPTS`・`OTEL_LOG_TOOL_DETAILS` などの `OTEL_LOG_*` は、コンテナに既にあっても空の値で上書きします）、届いても捨てます。1 回の本文は 1MiB まで、記録の合計は 64MiB までで、超えた分は書かずに数えます（`dev observe status`）。
+- **置き場所**は `DEV_OBSERVE_DIR`（既定 `~/.local/state/dev/observe`）の `data/` で、日ごとの JSONL です。devcontainer にはマウントしません。登録したプロジェクトのパスと重なる場所（どちらかがもう一方の下）を指定すると、`start` は拒否します（devcontainer から書き換えられるため）。`data` がシンボリックリンクでも拒否します。`DEV_OBSERVE_RETENTION` 日（既定 30）を超えた日の記録は、`start` と `report` のときに消します。
 - **送らせ方**は、起動するときの環境変数です。受け口が動いているあいだ、`dev attach` と `dev exec` が `devcontainer exec` に `--remote-env` で `OTEL_*` を渡します。Claude Code は、リポジトリの `.claude/settings.json` に書いた `OTEL_*` を無視するので、リポジトリの側からは送り先を変えられません。`dev attach` は、同じ exec の中で tmux のサーバにも同じ値を入れます（以後に作るウィンドウ・ペインの Claude Code が送ります。動いている Claude Code は送りません）。渡すのはログの設定だけで、metrics と traces の設定は渡しません。
 - **送らないもの**: VS Code など `dev` を通さない入り方のセッション。Claude Code 2.1.307 より古い版は `safety_event` を出さないので、`tool_decision` だけが貯まります。
 - **改訂の候補**は、`DEV_OBSERVE_THRESHOLD` 回（既定 3）以上くり返したものです。
@@ -1029,11 +1029,11 @@ start: ホスト側に受け口（コンテナ dev-observe。python3 の標準�
   reason_code・rule_source・hook_event・tool_name など）だけを残す。コマンドの本文やプロンプトは貯めない。
   1 回の本文は 1MiB まで（超えたら 413）、記録の合計は 64MiB まで（超えたら書かずに数える）。
   置き場所は DEV_OBSERVE_DIR（既定 ~/.local/state/dev/observe）の data/。devcontainer にはマウントしない。
-  登録したプロジェクトのパスの下にあれば、拒否して止まる（devcontainer から書き換えられるため）。data が
-  シンボリックリンクでも拒否する。
+  登録したプロジェクトのパスと重なれば（どちらかがもう一方の下にあれば）、拒否して止まる（devcontainer から
+  書き換えられるため）。data がシンボリックリンクでも拒否する。
 送らせ方: 受け口が動いているあいだ、dev attach と dev exec は devcontainer exec に --remote-env で
   CLAUDE_CODE_ENABLE_TELEMETRY・OTEL_LOGS_EXPORTER・送り先・OTEL_RESOURCE_ATTRIBUTES（dev.project=<名前>）を渡す
-  （ログだけ。metrics と traces の設定は渡さない）。dev attach は、同じ exec の中で tmux のサーバにも同じ値を入れる。
+  （ログだけ。metrics と traces の設定は渡さない。本文を出す OTEL_LOG_* は、コンテナに既にあっても空の値で上書きする）。dev attach は、同じ exec の中で tmux のサーバにも同じ値を入れる。
   送るのは、そのあとに起こした Claude Code（2.1.307 以降。古い版は tool_decision だけ）だけ。
   VS Code など dev を通さない入り方のセッションは送らない。
   これらの値は、attach / exec で起こすすべてのプロセスの環境に入る（OpenTelemetry を使う別のアプリのログの

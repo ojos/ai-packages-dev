@@ -1215,8 +1215,10 @@ observe_prepare_dir() {
   for ((i = 0; i < ${#P_PATHS[@]}; i++)); do
     p="${P_PATHS[$i]}"
     preal="$(observe_realpath "$p")" || preal="$p"
-    if [[ "$real" == "$preal" || "$real" == "$preal"/* || "$preal" == / ]]; then
-      usage_error "置き場所がプロジェクト ${P_NAMES[$i]} のパスの下にあります（devcontainer から書き換えられるため）: $real。DEV_OBSERVE_DIR で別の場所を指定してください"
+    # 置き場所がプロジェクトの下にあるときと、逆にプロジェクトが置き場所の下（data そのものを含む）にあるときの
+    # どちらも、devcontainer から記録を書き換えられる。
+    if [[ "$real" == "$preal" || "$real" == "$preal"/* || "$preal" == / || "$preal" == "$real"/* ]]; then
+      usage_error "置き場所がプロジェクト ${P_NAMES[$i]} のパスと重なっています（devcontainer から書き換えられるため）: $real。DEV_OBSERVE_DIR で別の場所を指定してください"
     fi
   done
   # 権限（700）は、ここで作ったディレクトリにだけ付ける（利用者が指定した既存のディレクトリの権限は変えない）。
@@ -1252,7 +1254,8 @@ observe_running() {
 
 # devcontainer の Claude Code へ渡す環境変数（キー=値 を 1 行ずつ）。$1 はプロジェクトの名前。
 # ログ（事象）だけを送る（metrics と traces は、Claude Code は指定が無ければ送らないので、何も渡さない）。
-# 本文を出す設定（OTEL_LOG_*）は渡さない。これらは attach / exec で起こすすべてのプロセスの環境に入るので、
+# 本文を出す設定（OTEL_LOG_*）は、コンテナの環境に既にあっても空の値で上書きして止める（プロンプトやコマンドの
+# 本文を受け口へ送らせないため）。これらは attach / exec で起こすすべてのプロセスの環境に入るので、
 # 渡す値は最小にする（OpenTelemetry を使う別のアプリのログの送り先も変わる。README の「観測」）。
 observe_env_pairs() {
   printf '%s\n' \
@@ -1260,7 +1263,12 @@ observe_env_pairs() {
     "OTEL_LOGS_EXPORTER=otlp" \
     "OTEL_EXPORTER_OTLP_LOGS_PROTOCOL=http/json" \
     "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT=$OBSERVE_ENDPOINT/v1/logs" \
-    "OTEL_RESOURCE_ATTRIBUTES=dev.project=$1"
+    "OTEL_RESOURCE_ATTRIBUTES=dev.project=$1" \
+    "OTEL_LOG_USER_PROMPTS=" \
+    "OTEL_LOG_ASSISTANT_RESPONSES=" \
+    "OTEL_LOG_TOOL_DETAILS=" \
+    "OTEL_LOG_TOOL_CONTENT=" \
+    "OTEL_LOG_RAW_API_BODIES="
 }
 
 # dc_exec が devcontainer exec のコマンドの前に足すオプション。observe_use が埋める。
@@ -4682,11 +4690,11 @@ start: ホスト側に受け口（コンテナ dev-observe。python3 の標準�
   reason_code・rule_source・hook_event・tool_name など）だけを残す。コマンドの本文やプロンプトは貯めない。
   1 回の本文は 1MiB まで（超えたら 413）、記録の合計は 64MiB まで（超えたら書かずに数える）。
   置き場所は DEV_OBSERVE_DIR（既定 ~/.local/state/dev/observe）の data/。devcontainer にはマウントしない。
-  登録したプロジェクトのパスの下にあれば、拒否して止まる（devcontainer から書き換えられるため）。data が
-  シンボリックリンクでも拒否する。
+  登録したプロジェクトのパスと重なれば（どちらかがもう一方の下にあれば）、拒否して止まる（devcontainer から
+  書き換えられるため）。data がシンボリックリンクでも拒否する。
 送らせ方: 受け口が動いているあいだ、dev attach と dev exec は devcontainer exec に --remote-env で
   CLAUDE_CODE_ENABLE_TELEMETRY・OTEL_LOGS_EXPORTER・送り先・OTEL_RESOURCE_ATTRIBUTES（dev.project=<名前>）を渡す
-  （ログだけ。metrics と traces の設定は渡さない）。dev attach は、同じ exec の中で tmux のサーバにも同じ値を入れる。
+  （ログだけ。metrics と traces の設定は渡さない。本文を出す OTEL_LOG_* は、コンテナに既にあっても空の値で上書きする）。dev attach は、同じ exec の中で tmux のサーバにも同じ値を入れる。
   送るのは、そのあとに起こした Claude Code（2.1.307 以降。古い版は tool_decision だけ）だけ。
   VS Code など dev を通さない入り方のセッションは送らない。
   これらの値は、attach / exec で起こすすべてのプロセスの環境に入る（OpenTelemetry を使う別のアプリのログの

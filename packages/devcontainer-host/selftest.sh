@@ -2961,20 +2961,29 @@ if [[ -f "$STATE/obs-run" ]]; then ng "$CUR: 受け口を起こしています";
 
 # ── 置き場所がプロジェクトの下なら拒否する（devcontainer から書き換えられるため）──
 run 2 "observe start: 置き場所がプロジェクトの下" -- DEV_OBSERVE_DIR="$A/.obs" -- observe start
-expect_err "置き場所がプロジェクト alpha のパスの下にあります"
+expect_err "置き場所がプロジェクト alpha のパスと重なっています"
 if [[ -f "$STATE/obs-run" ]]; then ng "$CUR: 受け口を起こしています"; fi
 run 2 "observe start: 置き場所がプロジェクトそのもの" -- DEV_OBSERVE_DIR="$B" -- observe start
-expect_err "置き場所がプロジェクト beta のパスの下にあります"
+expect_err "置き場所がプロジェクト beta のパスと重なっています"
 ln -s "$A" "$WORK/alpha-link"
 run 2 "observe start: シンボリックリンク越しにプロジェクトの下" -- DEV_OBSERVE_DIR="$WORK/alpha-link/obs" -- observe start
-expect_err "置き場所がプロジェクト alpha のパスの下にあります"
+expect_err "置き場所がプロジェクト alpha のパスと重なっています"
 if [[ -f "$STATE/obs-run" ]]; then ng "$CUR: 受け口を起こしています"; fi
 rm -rf "$A/.obs" "$A/obs" "$B/data" "$B/endpoint" "$WORK/alpha-link"
+mkdir -p "$WORK/obs-h/data/proj"
+printf 'delta %s/obs-h/data\nepsilon %s/obs-h/data/proj\n' "$WORK" "$WORK" >"$WORK/conf/obs-h"
+T_CONF="$WORK/conf/obs-h" run 2 "observe start: プロジェクトが置き場所の data そのもの" -- DEV_OBSERVE_DIR="$WORK/obs-h" -- observe start
+expect_err "置き場所がプロジェクト delta のパスと重なっています"
+if [[ -f "$STATE/obs-run" ]]; then ng "$CUR: 受け口を起こしています"; fi
+printf 'epsilon %s/obs-h/data/proj\n' "$WORK" >"$WORK/conf/obs-h"
+T_CONF="$WORK/conf/obs-h" run 2 "observe start: プロジェクトが置き場所の下" -- DEV_OBSERVE_DIR="$WORK/obs-h" -- observe start
+expect_err "置き場所がプロジェクト epsilon のパスと重なっています"
+if [[ -f "$STATE/obs-run" ]]; then ng "$CUR: 受け口を起こしています"; fi
 mkdir -p "$WORK/real-parent"
 ln -s "$WORK/real-parent" "$WORK/link-parent"
 printf 'gamma %s/link-parent/gamma\n' "$WORK" >"$WORK/conf/obs-gamma"
 T_CONF="$WORK/conf/obs-gamma" run 2 "observe start: まだ無いプロジェクトのパスの祖先がシンボリックリンク" -- DEV_OBSERVE_DIR="$WORK/real-parent/gamma/obs" -- observe start
-expect_err "置き場所がプロジェクト gamma のパスの下にあります"
+expect_err "置き場所がプロジェクト gamma のパスと重なっています"
 [[ ! -e "$WORK/real-parent/gamma" ]] || ng "$CUR: プロジェクトの場所にディレクトリを作っています"
 if [[ -f "$STATE/obs-run" ]]; then ng "$CUR: 受け口を起こしています"; fi
 
@@ -3075,7 +3084,12 @@ OBS_PAIRS="CLAUDE_CODE_ENABLE_TELEMETRY=1
 OTEL_LOGS_EXPORTER=otlp
 OTEL_EXPORTER_OTLP_LOGS_PROTOCOL=http/json
 OTEL_EXPORTER_OTLP_LOGS_ENDPOINT=http://172.17.0.1:4318/v1/logs
-OTEL_RESOURCE_ATTRIBUTES=dev.project=alpha"
+OTEL_RESOURCE_ATTRIBUTES=dev.project=alpha
+OTEL_LOG_USER_PROMPTS=
+OTEL_LOG_ASSISTANT_RESPONSES=
+OTEL_LOG_TOOL_DETAILS=
+OTEL_LOG_TOOL_CONTENT=
+OTEL_LOG_RAW_API_BODIES="
 # exec は 1 回だけ（start-server ; set-environment ... ; new-session の並び）。
 [[ "$(grep -c '^devcontainer \[exec\]' "$LOG")" == "1" ]] || ng "$CUR: devcontainer exec が 1 回ではありません"
 [[ "$(cat "$STATE/remote-env")" == "$OBS_PAIRS" ]] || { ng "$CUR: --remote-env の値が違います"; sed 's/^/    /' "$STATE/remote-env" >&2; }
@@ -3083,7 +3097,7 @@ OTEL_RESOURCE_ATTRIBUTES=dev.project=alpha"
 expect_log_has "tmux [start-server] [;] [set-environment] [-g] [CLAUDE_CODE_ENABLE_TELEMETRY] [1] [;]"
 expect_log_has "[;] [new-session] [-A] [-s] [main]"
 if grep -qF "$OBS" "$STATE/remote-env"; then ng "$CUR: 渡す値に記録の置き場所が含まれています"; fi
-if grep -q 'OTEL_LOG_' "$STATE/remote-env"; then ng "$CUR: 本文を出す設定（OTEL_LOG_*）を渡しています"; fi
+if grep -E '^OTEL_LOG_[A-Z_]+=.' "$STATE/remote-env"; then ng "$CUR: 本文を出す設定（OTEL_LOG_*）を空でない値で渡しています"; fi
 grep -qF "devcontainer [exec] [--workspace-folder] [$A] [--remote-env] [CLAUDE_CODE_ENABLE_TELEMETRY=1]" "$LOG" || ng "$CUR: --remote-env がコマンドの前にありません"
 run 1 "attach: 受け口が動いていても、tmux の終了コードで 1 と文面" -- "${OBS_ENV[@]}" FAKE_TMUX_EXIT=7 -- attach alpha
 expect_err "終了コード 7"
