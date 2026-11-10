@@ -304,6 +304,8 @@ fi
 printf '%s\n' "$*" > "$FAKE_BOOT_LOG"
 while [[ $# -gt 0 ]]; do case "$1" in --output-dir) out="$2"; shift 2 ;; *) shift ;; esac; done
 [[ -n "${FAKE_BOOT_NOWRITE:-}" ]] || echo changed > "$out/upgraded-marker"
+# 追従が書く .dcb-new など、名前を指定したファイルを書く場面を模擬する（ignore に一致するものを含む）。
+[[ -z "${FAKE_BOOT_WRITE:-}" ]] || echo new > "$out/$FAKE_BOOT_WRITE"
 exit "${FAKE_BOOT_RC:-0}"
 FB
 DL="https://github.com/ojos/devcontainer-bootstrap/releases/download/v0.99.0"
@@ -427,6 +429,40 @@ it "未追跡: 追従が何も書かずに失敗したら、未追跡ファイ�
 RU4B="$(new_workdir)/p"; mk_untracked_repo "$RU4B" "$TEST_TMP_ROOT/cun4b"
 o="$(yes_run "$RU4B" "$TEST_TMP_ROOT/cun4b" FAKE_PLAN="create @OUT@/x" FAKE_BOOT_RC=1 FAKE_BOOT_NOWRITE=1)"
 if [[ "$(git -C "$RU4B" symbolic-ref --short HEAD)" == main && -z "$(git -C "$RU4B" branch --list 'chore/*')" && "$o" != *misc/note.txt* ]]; then pass; else fail "出力: $o"; fi
+
+it "未追跡: 追従が ignore に一致する .dcb-new だけを書いて失敗したら、元のブランチへ戻らず、そのファイルを案内する（計画がある）"
+# .env.* に一致する .env.example.dcb-new のように、list_untracked（--exclude-standard）の一覧には出ないもの。
+# 見落とすと「何も書かれていない」と判断して元のブランチへ戻り、ファイルが案内なしに残る。
+RU4C="$(new_workdir)/p"; mk_untracked_repo "$RU4C" "$TEST_TMP_ROOT/cun4c"
+printf '.env.*\n' >> "$RU4C/.git/info/exclude"
+o="$(yes_run "$RU4C" "$TEST_TMP_ROOT/cun4c" FAKE_PLAN="keep (modified) @OUT@/.env.example -> @OUT@/.env.example.dcb-new" \
+  FAKE_BOOT_RC=1 FAKE_BOOT_NOWRITE=1 FAKE_BOOT_WRITE=.env.example.dcb-new)"
+if [[ "$(git -C "$RU4C" symbolic-ref --short HEAD)" == chore/* && "$o" == *途中で書かれた* && "$o" == *"rm --"*.env.example.dcb-new* \
+  && "$o" != *misc/note.txt* && -e "$RU4C/.env.example.dcb-new" ]]; then pass; else fail "ブランチ: $(git -C "$RU4C" symbolic-ref --short HEAD) 出力: $o"; fi
+
+it "未追跡: dry-run が読めず計画が無いときも、追従が ignore に一致する .dcb-new だけを書いて失敗したら、元のブランチへ戻らず案内する"
+# 計画が無いときは、ignore に一致する *.dcb-new の一覧を --upgrade の前後で比べる。dry-run が失敗しても進むのは、
+# 未追跡のファイルが無いときだけなので、misc/ を置かない。
+RU4D="$(new_workdir)/p"; make_repo "$RU4D"
+env PATH="$STUBBIN:$PATH" UPDATE_CHECK_CACHE_DIR="$TEST_TMP_ROOT/cun4d" UPDATE_CHECK_TODAY="$TODAY" FAKE_CURL_DIR="$FIX" "$BASH_BIN" "$RU4D/scripts/update-check.sh" notify >/dev/null 2>&1
+printf '*.dcb-new\n' >> "$RU4D/.git/info/exclude"
+o="$(yes_run "$RU4D" "$TEST_TMP_ROOT/cun4d" FAKE_DRY_RC=3 FAKE_BOOT_RC=1 FAKE_BOOT_NOWRITE=1 FAKE_BOOT_WRITE=x.dcb-new)"
+if [[ -s "$BOOT_LOG" && "$(git -C "$RU4D" symbolic-ref --short HEAD)" == chore/* && "$o" == *途中で書かれた* && "$o" == *"rm --"*x.dcb-new* ]]; then pass; else fail "ブランチ: $(git -C "$RU4D" symbolic-ref --short HEAD) 出力: $o"; fi
+
+it "未追跡: 計画に無い ignore に一致するファイルが前からあり、追従が何も書かずに失敗したら、従来どおり元のブランチへ戻り、そのファイルを案内しない"
+RU4E="$(new_workdir)/p"; mk_untracked_repo "$RU4E" "$TEST_TMP_ROOT/cun4e"
+printf '.env\n' >> "$RU4E/.git/info/exclude"; echo secret > "$RU4E/.env"
+o="$(yes_run "$RU4E" "$TEST_TMP_ROOT/cun4e" FAKE_PLAN="create @OUT@/x" FAKE_BOOT_RC=1 FAKE_BOOT_NOWRITE=1)"
+if [[ "$(git -C "$RU4E" symbolic-ref --short HEAD)" == main && -z "$(git -C "$RU4E" branch --list 'chore/*')" && "$o" != *.env* \
+  && "$(cat "$RU4E/.env")" == secret ]]; then pass; else fail "出力: $o"; fi
+
+it "未追跡: 計画が無く、ignore に一致する .dcb-new が前からあり、追従が何も書かずに失敗したら、元のブランチへ戻り、そのファイルを案内しない"
+RU4F="$(new_workdir)/p"; make_repo "$RU4F"
+env PATH="$STUBBIN:$PATH" UPDATE_CHECK_CACHE_DIR="$TEST_TMP_ROOT/cun4f" UPDATE_CHECK_TODAY="$TODAY" FAKE_CURL_DIR="$FIX" "$BASH_BIN" "$RU4F/scripts/update-check.sh" notify >/dev/null 2>&1
+printf '*.dcb-new\n' >> "$RU4F/.git/info/exclude"; echo old > "$RU4F/old.dcb-new"
+o="$(yes_run "$RU4F" "$TEST_TMP_ROOT/cun4f" FAKE_DRY_RC=3 FAKE_BOOT_RC=1 FAKE_BOOT_NOWRITE=1)"
+if [[ -s "$BOOT_LOG" && "$(git -C "$RU4F" symbolic-ref --short HEAD)" == main && -z "$(git -C "$RU4F" branch --list 'chore/*')" \
+  && "$o" != *old.dcb-new* && -e "$RU4F/old.dcb-new" ]]; then pass; else fail "出力: $o"; fi
 
 it "未追跡: dry-run が失敗したら、未追跡ファイルがあるだけで止まる"
 RU5="$(new_workdir)/p"; mk_untracked_repo "$RU5" "$TEST_TMP_ROOT/cun5"
