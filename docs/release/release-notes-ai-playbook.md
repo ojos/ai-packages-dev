@@ -6,7 +6,7 @@
 >
 > 同じ理由で、issue 参照は `ojos/ai-packages-dev#NNN` の形で書いてください。裸の `#NNN` は GitHub のオートリンクが**配布先リポジトリの issue** として解決するため、配布後は存在しない issue や無関係な issue を指します。
 
-## 未リリース
+## v0.14.0
 
 ### Summary
 - **第二意見（`templates/second-opinion-review.sh`）が、パッケージが配布したままのファイルへの指摘を判定に数えない**（ojos/ai-packages-dev#695）。DCB の追従で配布物の差分が入ると、配布先の第二意見が配布物そのものを指摘して、利用側の loop-gate を落としていた。差分は今までどおり全部渡し、codex / antigravity の JSON の判定で、指摘の `file` が「配布のままのファイル」を指すものを落とす件数から除く（出力には「配布物・判定外」として残す）。「配布のまま」とは、DCB の `.devcontainer/ORIGIN` に `hash:` の記録があり `owned:` が無く、中身の sha256 が記録と一致し、モードが変わらず、`hash:` の値が変更の前後で同じか、前後の両方に `version=` があってその値が違う（本当の追従）ものを指す。ORIGIN が無い構成では何も変わらない。gemini では判定は変わらない。条件と限界の正本は DCB の README（「第二意見: 配布のままのファイルへの指摘」）。
@@ -25,7 +25,7 @@
 - **`second-opinion-repro-schema.json` と `second-opinion-review.sh` は組で更新する。** スキーマが `scripts/` に無いと、再現の段階は「スキーマが見つかりません」と出して飛ばされる（判定は従来どおり）。導入手順は `cp .ai-playbook/templates/second-opinion-repro-schema.json scripts/`。
 - 再現の段階は codex のときに既定で有効になり、指摘ごとに codex を 1 回起こす（時間と費用が増える）。止めるには `.env` に `SECOND_OPINION_REPRO=off`。
 - 反証の段階は既定で有効で、gemini（CLI と `GEMINI_API_KEY`）か agy が見つかれば、再現しなかった指摘を反証させる。反証されると、多数決では指摘ありでもゲートが通る。従来の判定（再現しなかった指摘も落とす）のままにするには、`.env` に `SECOND_OPINION_REFUTE=off`。
-- 破壊的変更はない。
+- **判定が変わる（ゲートが通る向き）のは、上の反証の段階だけ。** 何もしなくても、gemini か agy が使える環境では既定で有効になる。それ以外の破壊的変更はない。
 
 ## v0.13.0
 
