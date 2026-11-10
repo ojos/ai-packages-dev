@@ -6,7 +6,7 @@ devhost（SSH で届く外部の機械で devcontainer を保つ道具。コマ�
 >
 > 同じ理由で、issue 参照は `ojos/ai-packages-dev#NNN` の形で書いてください。裸の `#NNN` は GitHub のオートリンクが**配布先リポジトリの issue** として解決するため、配布後は存在しない issue や無関係な issue を指します。
 
-## 未リリース
+## v0.8.0
 
 ### Summary
 - **`dev quarantine` を足した。信頼できないリポジトリを、資格情報もネットワークも持たない使い捨ての箱で調べる**（ojos/ai-packages-dev#715）。箱の外では、そのリポジトリのコードを一切実行しない（ホストでは `git` も `devcontainer` も呼ばず、中身をホストのファイルシステムへ展開しない）。
