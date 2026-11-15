@@ -13,7 +13,8 @@
 |---|---|
 | `scripts/second-opinion-review.sh` | 別ベンダーのモデルによる第二意見（クロスモデル二段ゲートの2段目）。`--engine` で実行 CLI（gemini / antigravity / codex）を選ぶ。 |
 | `scripts/second-opinion-repro-schema.json` | 第二意見の再現の段階（`--engine codex` のとき）で codex が返す回答の形。`second-opinion-review.sh` と対。正本は `.ai-playbook/templates/second-opinion-repro-schema.json`。 |
-| `scripts/harness-audit.sh` | 自前の実装の一覧（`.github/harness-inventory.json`）と本体（Claude Code）の変更履歴を突き合わせ、削れる候補と数を Markdown で出す。毎週のルーティン（`docs/routines/harness-audit.md`）が回す。 |
+| `scripts/harness-audit.sh` | 自前の実装の一覧（`.github/harness-inventory.json`）と本体（Claude Code）の変更履歴を突き合わせ、削れる候補と数を Markdown で出す。毎週の定期実行（`.github/workflows/harness-audit.yml`。手順は `docs/harness-audit.md`）が `harness-audit-post.sh` 経由で回す。 |
+| `scripts/harness-audit-post.sh` | ハーネスの棚卸しを回し、結果を追跡 issue #711 へ 1 件コメントする（前回の印を持つコメントを、書き込み権限を持つ人か Actions のものだけから選ぶ）。`.github/workflows/harness-audit.yml` が呼ぶ。 |
 | `scripts/fix-mount-owner.sh` | 永続 volume のマウント先を remoteUser 所有へ戻す（postCreate の先頭）。 |
 | `scripts/install-ai-tools.sh` | AI CLI ツール導入（claude / gemini / codex は npm で、版の下限より古ければ入れ替える。agy は配布元のマニフェストを取り SHA-512 を照合して置く）。あわせて agy のテレメトリを既定で無効化する。 |
 | `scripts/load-project-env.sh` | プロジェクト .env を source せず安全にパースして export（ホスト env を後勝ちで上書き）。 |

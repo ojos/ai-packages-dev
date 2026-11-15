@@ -50,11 +50,13 @@
 
 ### ルーティン（`docs/routines/`）
 
-claude.ai のルーティンに貼る依頼文と、その登録の手順。
+claude.ai のルーティンに貼る依頼文と、その登録の手順。今は収録なし（ハーネスの棚卸しは #724 で GitHub Actions の定期実行へ移り、手順書は `docs/harness-audit.md` に置く）。
+
+### 運用（`docs/`）
 
 | ファイル | 種別 | 概要 |
 |---|---|---|
-| `docs/routines/harness-audit.md` | 運用手順 | 毎週のハーネスの棚卸し（本体の更新で削れる自前の仕組みの洗い出し）の依頼文と登録の手順。追跡 issue は #711。 |
+| `docs/harness-audit.md` | 運用手順 | 毎週のハーネスの棚卸し（本体の更新で削れる自前の仕組みの洗い出し）の定期実行（`.github/workflows/harness-audit.yml`）の説明と、人が行う判断・手で回す・止まったときの戻し方。追跡 issue は #711。 |
 
 ### 計画（`plans/`）
 

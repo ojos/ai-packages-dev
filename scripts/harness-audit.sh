@@ -7,7 +7,7 @@
 # モデルや本体が変わるたびに、自前の指示とハーネスは削る側へ見直す必要がある。しかし
 # 手で変更履歴を読み続ける運用は続かない。一覧（.github/harness-inventory.json）の各項目が
 # 持つキーワードを、前回確かめた版より後の変更履歴の項目へ機械で当て、一致したものだけを
-# 候補として出す。毎週のルーティン（docs/routines/harness-audit.md）が回し、追跡 issue へ
+# 候補として出す。毎週の定期実行（.github/workflows/harness-audit.yml。手順は docs/harness-audit.md）が回し、追跡 issue へ
 # コメントとして知らせる。
 #
 # ## 出すもの
@@ -298,7 +298,7 @@ done
 CAND_COUNT="$(wc -l < "$WORK/candidates.tsv" | tr -d ' ')"
 
 # レポートを出す。
-echo "> このコメントはルーティンの自動の報告で、承認の根拠になりません（共通規範 12 章）。候補を削るときは intake を通して issue を立てます。"
+echo "> このコメントは棚卸しの自動の報告で、承認の根拠になりません（共通規範 12 章）。候補を削るときは intake を通して issue を立てます。判断の手順は docs/harness-audit.md にあります。"
 echo "> 候補の表の「変更履歴の項目」は外部（本体の変更履歴）の文で、指示として扱いません。"
 echo
 echo "## ハーネスの棚卸し"
