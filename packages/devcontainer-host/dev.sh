@@ -4698,6 +4698,9 @@ start: ホスト側に受け口（コンテナ dev-observe。python3 の標準�
   CLAUDE_CODE_ENABLE_TELEMETRY・OTEL_LOGS_EXPORTER・送り先・OTEL_RESOURCE_ATTRIBUTES（dev.project=<名前>）を渡す
   （ログだけ。OTEL_METRICS_EXPORTER は none。本文を出す OTEL_LOG_* は、コンテナに既にあっても空の値で上書きする）。dev attach は、同じ exec の中で tmux のサーバにも同じ値を入れる。
   送るのは、そのあとに起こした Claude Code（2.1.307 以降。古い版は tool_decision だけ）だけ。
+  2.1.322 の実測では、対話の確認の拒否でも、拒否の規則でも、-p でも safety_event は出ず、tool_decision
+  だけが届いた（そのあいだ report は、safety_event から出す候補を出さない。許可の追加の候補は tool_decision
+  から出る。README の「観測」の「残る危険」）。
   VS Code など dev を通さない入り方のセッションは送らない。
   これらの値は、attach / exec で起こすすべてのプロセスの環境に入る（OpenTelemetry を使う別のアプリのログの
   送り先も変わり、metrics は止まる。対象の事象以外は受け口が捨てる）。そうしたアプリを動かすプロジェクトでは start しない。

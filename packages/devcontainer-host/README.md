@@ -569,7 +569,7 @@ dev quarantine rm q-xxxxxxxx                      # 終わったら消す
 
 ## 観測（安全の事象から改訂の候補を出す）
 
-`dev observe` は、devcontainer の Claude Code が OpenTelemetry で出す `claude_code.safety_event`（拒否・確認・フックでの差し戻し・sandbox のネットワークの拒否のたびに出る事象）と `claude_code.tool_decision` を、**エージェントが書き換えられないホスト側**へ貯め、許可・フック・規範の改訂の候補を出します。
+`dev observe` は、devcontainer の Claude Code が OpenTelemetry で出す `claude_code.safety_event`（Claude Code のドキュメントでは、確認を求めたとき・拒否したとき・フックで差し戻したとき・sandbox のネットワークで拒否したときに出るとされる事象。実測で出なかった版は下の「残る危険」）と `claude_code.tool_decision` を、**エージェントが書き換えられないホスト側**へ貯め、許可・フック・規範の改訂の候補を出します。
 **候補は提案だけです。承認の根拠にしません。** 許可・フック・規範を変えるかは、人が判断します。
 
 ```bash
@@ -595,7 +595,9 @@ dev observe stop             # 受け口を消す（記録は残す）
 
 - 受け口には、同じホストのどのコンテナからでも送れます。**偽の記録が混ざりえます**（候補を出すだけにしている理由です）。
 - **Docker Desktop では、既定のままでは起こせません。** bridge のゲートウェイの IP（`172.17.0.1`）がホストに無いため、ポートを公開できません（実測。`can't assign requested address`）。devhost は Linux の機械（Docker Engine）を前提にしています。
-- Claude Code 2.1.316 の `-p`（非対話）の実行では、拒否の規則に当てても `safety_event` が出ず、`tool_decision` だけが届きました（実測）。`-p` で集まるのは、主に `tool_decision`（`decision` と `source`）です。
+- **Claude Code が `safety_event` を出さない版があります。** 2.1.316 の `-p`（非対話）の実行では、拒否の規則に当てても出ませんでした。2.1.322 では、対話のセッションで確認に No を選んでも（`tool_decision` の `reject` / `user_reject`）、拒否の規則で止めても（`reject` / `config`）、`-p` で `--disallowedTools` に当てても出ず、`tool_decision` だけが届きました（実測。3 つ目は `OTEL_LOGS_EXPORTER=console` で受け口を通さずに見ても出ていません）。確認を求めたとき・拒否したときに出るというドキュメントの説明とは合いません。
+  - こうした版のあいだ、`report` は `safety_event` から出す候補（フック・手順・許可するドメイン・sandbox の設定の見直し）を出しません。許可の追加の候補は `tool_decision`（確認に応じてその場限りで許可したもの）から出るので、出ます。拒否（`reject`）がどの出どころ（`user_reject`・`config` など）でくり返したかは、`report` の `tool_decision` の表で読めます。
+  - 版を上げたら、受け口が動いている状態で `dev attach` から入り、そのあとに作ったウィンドウで新しく起こした Claude Code で、確認に No を選ぶか拒否の規則に当てて、`dev observe report` の `safety_event` の件数が増えるかを確かめてください（VS Code から入ったセッションや、前から動いている Claude Code は送らないので、確かめになりません）。
 - **`OTEL_*` は、`dev attach` / `dev exec` で起こすすべてのプロセスの環境に入ります。** OpenTelemetry を環境変数で設定する別のアプリを動かすと、そのアプリのログの送り先とリソースの属性も変わり、metrics は止まります（対象の事象以外は受け口が捨てます）。そうしたアプリを動かすプロジェクトでは `dev observe start` を使わないでください。`dev observe stop` の後も、動いている tmux のサーバに入れた値は、サーバが終わるまで残ります。
 - コンテナの中のエージェントは、自分のセッションの送信を止められます（tmux の環境を消す、プロセスを止めるなど）。届かなかった事象は貯まりません。貯まった記録はホスト側にあるので、書き換えられません。
 
@@ -1035,6 +1037,9 @@ start: ホスト側に受け口（コンテナ dev-observe。python3 の標準�
   CLAUDE_CODE_ENABLE_TELEMETRY・OTEL_LOGS_EXPORTER・送り先・OTEL_RESOURCE_ATTRIBUTES（dev.project=<名前>）を渡す
   （ログだけ。OTEL_METRICS_EXPORTER は none。本文を出す OTEL_LOG_* は、コンテナに既にあっても空の値で上書きする）。dev attach は、同じ exec の中で tmux のサーバにも同じ値を入れる。
   送るのは、そのあとに起こした Claude Code（2.1.307 以降。古い版は tool_decision だけ）だけ。
+  2.1.322 の実測では、対話の確認の拒否でも、拒否の規則でも、-p でも safety_event は出ず、tool_decision
+  だけが届いた（そのあいだ report は、safety_event から出す候補を出さない。許可の追加の候補は tool_decision
+  から出る。README の「観測」の「残る危険」）。
   VS Code など dev を通さない入り方のセッションは送らない。
   これらの値は、attach / exec で起こすすべてのプロセスの環境に入る（OpenTelemetry を使う別のアプリのログの
   送り先も変わり、metrics は止まる。対象の事象以外は受け口が捨てる）。そうしたアプリを動かすプロジェクトでは start しない。
