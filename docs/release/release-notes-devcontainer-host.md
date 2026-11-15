@@ -9,7 +9,7 @@ devhost（SSH で届く外部の機械で devcontainer を保つ道具。コマ�
 ## 未リリース
 
 ### Summary
-- **`dev observe` の説明を実測に合わせた**（ojos/ai-packages-dev#723）。Claude Code 2.1.322 では、対話のセッションで確認に No を選んでも、拒否の規則で止めても、`-p` で `--disallowedTools` に当てても `safety_event` が出ず、`tool_decision` だけが届いた（`-p` の場合は、受け口を通さずに Claude Code の出力を直接見ても出ていない）。README の「観測」の「残る危険」にその版と条件を書き、`safety_event` の出る条件は Claude Code のドキュメントの説明として書き分けた。`dev help observe` にも同じ注意を足した。こうした版のあいだ、`report` は `safety_event` から出す候補（フック・手順・許可するドメイン・sandbox の設定の見直し）を出さない（許可の追加の候補は `tool_decision` から出る）。動作の変更は無い。
+- **`dev observe` の説明を実測に合わせた**（ojos/ai-packages-dev#723）。Claude Code 2.1.322 では、対話のセッションで確認に No を選んでも、拒否の規則で止めても、`-p` で `--disallowedTools` に当てても `safety_event` が出ず、`tool_decision` だけが届いた（`-p` の場合は、受け口を通さずに Claude Code の出力を直接見ても出ていない）。README の「観測」の「残る危険」にその版と条件を書き、`safety_event` の出る条件は Claude Code のドキュメントの説明として書き分けた。`dev help observe` にも同じ注意を足した。フックでの差し戻しや sandbox の拒否で出るかは確かめていない。`safety_event` が届かないあいだ、`report` は `safety_event` から出す候補（フック・手順・許可するドメイン・sandbox の設定の見直し）を出さない（許可の追加の候補は `tool_decision` から出る）。動作の変更は無い。
 
 ## v0.8.0
 
