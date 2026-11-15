@@ -13,9 +13,12 @@
 # ## すること
 #
 #   1. 追跡 issue のコメントから、前回の印を持つコメントを 1 件だけ選ぶ（select）。
-#      拾うのは、書き込み権限を持つ人（OWNER / MEMBER / COLLABORATOR）か、このリポジトリの
-#      Actions（github-actions[bot]）が書き、見出し「## ハーネスの棚卸し」と印を持つものの最後の 1 件。
-#      公開リポジトリで誰でもコメントを付けられるため、第三者の書いた印で起点を進めさせない。
+#      拾うのは、このリポジトリの Actions（github-actions[bot]。種別が Bot のもの）が書き、
+#      見出し「## ハーネスの棚卸し」と、版の形が正しい印を持つものの最後の 1 件だけ。
+#      公開リポジトリで誰でもコメントを付けられるうえ、author_association（OWNER / MEMBER /
+#      COLLABORATOR）は書き込み権限を表さない（読み取りだけの組織のメンバーも MEMBER になる）ため、
+#      人のコメントの印では起点を動かさない。形の崩れた印を選ぶと、棚卸しが直近の版だけに
+#      切り替わって間の版を飛ばすため、形の正しい印だけを見る。
 #   2. その本文を scripts/harness-audit.sh --since-from-comment に渡す。
 #   3. 結果を 1 件だけコメントする（compose）。冒頭に「自動の報告で、承認の根拠にならない」旨を置く
 #      （成功のときは harness-audit.sh の出力がその旨を持つ）。
@@ -46,9 +49,10 @@ set -uo pipefail
 
 TRACKING_ISSUE=711
 HEADING="## ハーネスの棚卸し"
-MARK_PREFIX="<!-- harness-audit: checked-version="
 # 印の形と、失敗のときの注意書きは scripts/harness-audit.sh と同じものを使う（一致は tests/test-harness-audit-post.sh が照合する）。
 MARK_RE='<!-- harness-audit: checked-version=[0-9][0-9A-Za-z.]* -->'
+# 選ぶときの印の形（jq の正規表現）。版は harness-audit.sh が読める形（数字と点）だけを認める。
+MARK_JQ_RE='<!-- harness-audit: checked-version=[0-9]+(\.[0-9]+)* -->'
 NOTICE='> このコメントは棚卸しの自動の報告で、承認の根拠になりません（共通規範 12 章）。候補を削るときは intake を通して issue を立てます。判断の手順は docs/harness-audit.md にあります。'
 # 標準エラーの理由は、この長さで切ってコメントへ載せる。
 ERR_MAX=2000
@@ -63,13 +67,12 @@ usage() {
 select_previous() {
   local f="$1"
   [[ -f "$f" ]] || { echo "harness-audit-post: コメントの一覧のファイルがありません: $f" >&2; return 1; }
-  jq -rs --arg h "$HEADING" --arg m "$MARK_PREFIX" '
+  jq -rs --arg h "$HEADING" --arg m "$MARK_JQ_RE" '
     [ .[] | if type == "array" then .[] else . end ]
     | [ .[] | select(
-          ( ((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR"))
-            or ((.user.login // "") == "github-actions[bot]" and (.user.type // "") == "Bot") )
+          (.user.login // "") == "github-actions[bot]" and (.user.type // "") == "Bot"
           and ((.body // "") | contains($h))
-          and ((.body // "") | contains($m)) ) ]
+          and ((.body // "") | test($m)) ) ]
     | last | .body // ""' "$f" || { echo "harness-audit-post: コメントの一覧を読めません: $f" >&2; return 1; }
 }
 

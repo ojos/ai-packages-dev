@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # scripts/harness-audit-post.sh と .github/workflows/harness-audit.yml の検査（#724）。
 #
-# - 前回の印の選び方: 書き込み権限を持つ人と、このリポジトリの Actions（github-actions[bot]）の
-#   コメントは拾い、第三者のコメントは拾わない
+# - 前回の印の選び方: このリポジトリの Actions（github-actions[bot]）の、形の正しい印だけを拾い、
+#   人のコメント（第三者・MEMBER・OWNER）や形の崩れた印は拾わない
 # - コメントの本文: 冒頭に承認の根拠にならない旨を置く。失敗のときは理由と前回の印を写す
 # - run の通し: 偽の gh で、前回の印を起点に回し、追跡 issue へ 1 件だけコメントする
 # - ワークフローの配線: schedule と workflow_dispatch を持ち、権限は contents: read と
@@ -41,55 +41,61 @@ comment() {
 
 {
   printf '['
-  comment owner User OWNER "$H
-<!-- harness-audit: checked-version=2.1.1 -->"
-  printf ','
   comment github-actions[bot] Bot NONE "$H
 <!-- harness-audit: checked-version=2.1.2 -->"
   printf ','
   comment stranger User NONE "$H
 <!-- harness-audit: checked-version=2.1.9 -->"
+  printf ','
+  comment member User MEMBER "$H
+<!-- harness-audit: checked-version=2.1.8 -->"
+  printf ','
+  comment owner User OWNER "$H
+<!-- harness-audit: checked-version=2.1.7 -->"
   printf ']'
 } > "$T/c1.json"
 
-it "このリポジトリの Actions のコメントを拾い、後に付いた第三者のコメントは拾わない"
+it "このリポジトリの Actions のコメントを拾い、後に付いた人のコメント（第三者・MEMBER・OWNER）は拾わない"
 got="$("$POST" select "$T/c1.json")"
 if [[ "$got" == *"checked-version=2.1.2"* ]]; then pass; else fail "got: $got"; fi
 
 {
   printf '['
-  comment owner User OWNER "$H
+  comment github-actions[bot] Bot NONE "$H
 <!-- harness-audit: checked-version=2.1.1 -->"
   printf ','
   comment github-actions[bot] User NONE "$H
 <!-- harness-audit: checked-version=2.1.8 -->"
-  printf ','
-  comment member User CONTRIBUTOR "$H
-<!-- harness-audit: checked-version=2.1.7 -->"
   printf ']'
 } > "$T/c2.json"
 
-it "名前だけ github-actions[bot] の利用者（type が Bot でない）や、書き込み権限の無い人は拾わない"
+it "名前だけ github-actions[bot] の利用者（種別が Bot でない）は拾わない"
 got="$("$POST" select "$T/c2.json")"
 if [[ "$got" == *"checked-version=2.1.1"* ]]; then pass; else fail "got: $got"; fi
 
 {
   printf '['
-  comment owner User OWNER "$H
+  comment github-actions[bot] Bot NONE "$H
 <!-- harness-audit: checked-version=2.1.3 -->"
   printf ','
-  comment owner User OWNER "見出しの無いコメント <!-- harness-audit: checked-version=2.1.6 -->"
+  comment github-actions[bot] Bot NONE "見出しの無いコメント <!-- harness-audit: checked-version=2.1.6 -->"
   printf ','
-  comment owner User OWNER "$H 印の無いコメント"
+  comment github-actions[bot] Bot NONE "$H 印の無いコメント"
+  printf ','
+  comment github-actions[bot] Bot NONE "$H
+<!-- harness-audit: checked-version=2.1.x -->"
   printf ']'
   # ページごとの配列が並ぶ形（gh api --paginate の出力）
   printf '['
-  comment collab User COLLABORATOR "$H
+  comment github-actions[bot] Bot NONE "$H
 <!-- harness-audit: checked-version=2.1.4 -->"
+  printf ','
+  comment github-actions[bot] Bot NONE "$H
+<!-- harness-audit: checked-version=v2 -->"
   printf ']'
 } > "$T/c3.json"
 
-it "見出しと印の両方を持つものだけを拾い、ページをまたいで最後の 1 件を選ぶ"
+it "見出しと形の正しい印の両方を持つものだけを拾い、ページをまたいで最後の 1 件を選ぶ（形の崩れた印は飛ばす）"
 got="$("$POST" select "$T/c3.json")"
 if [[ "$got" == *"checked-version=2.1.4"* && "$got" != *"2.1.3"* ]]; then pass; else fail "got: $got"; fi
 

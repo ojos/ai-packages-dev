@@ -8,13 +8,13 @@
 
 `.github/workflows/harness-audit.yml` が、毎週月曜 9:17（日本時間）に次を行う。
 
-1. 追跡 issue #711 のコメントから、前回の印（`<!-- harness-audit: checked-version=... -->`）を持つコメントを 1 件だけ選ぶ。拾うのは、書き込み権限を持つ人か、このリポジトリの Actions（`github-actions[bot]`）が書き、見出し `## ハーネスの棚卸し` を持つものの最後の 1 件。公開リポジトリで誰でもコメントを付けられるため、第三者の書いた印は拾わない。
+1. 追跡 issue #711 のコメントから、前回の印（`<!-- harness-audit: checked-version=... -->`）を持つコメントを 1 件だけ選ぶ。拾うのは、このリポジトリの Actions（`github-actions[bot]`）が書き、見出し `## ハーネスの棚卸し` と版の形が正しい印を持つものの最後の 1 件だけ。公開リポジトリで誰でもコメントを付けられるうえ、GitHub のコメントの書き手の区分（`OWNER` / `MEMBER` / `COLLABORATOR`）は書き込み権限を表さない（読み取りだけの組織のメンバーも `MEMBER` になる）ため、人のコメントの印では起点を動かさない。
 2. `bash scripts/harness-audit.sh --since-from-comment <前回の本文>` で、前回の版より後の本体の変更履歴と一覧（`.github/harness-inventory.json`）のキーワードを突き合わせる。
 3. 結果を #711 へコメントする（`scripts/harness-audit-post.sh`）。冒頭に「自動の報告で、承認の根拠にならない」旨を置く。突き合わせが失敗したときは、空の候補として通さず、理由と前回の印を写した失敗のコメントにして、実行も失敗で終える。
 
 Claude の認証も秘密の値も使わない。権限は、Actions が発行するトークンの `contents: read` と `issues: write` だけ。
 
-残る穴: 書き込み権限を持つ人がレポートを写したコメントを書くと、それを起点に取り違える。#711 にはレポートを写さない。
+起点を手で直したいときは、`bash scripts/harness-audit.sh --since <版>` を手元で回す（人のコメントに印を書いても、定期実行は読まない）。
 
 ## 人が行う判断
 
