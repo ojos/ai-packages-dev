@@ -48,11 +48,9 @@
 | `docs/records/DEVHOST_RUNNER_SCALING_AND_DEVCONTAINER_RUNNER.md` | 履歴・記録 | devhost の自前のランナーへのオートスケーリング・キューイングの追加と、devcontainer のランナーへの転用（認証情報を使った第二意見）を検討し、見送った判断の記録。 |
 | `docs/records/INTAKE_AUTO_SUGGEST_LOOP_RECORD.md` | 履歴・記録 | `@intake` の自動提案経路追加と、intake をループコーディング入口として機械判定ゲート化した判断根拠と実施記録。 |
 
-### ルーティン（`docs/routines/`）
-
-claude.ai のルーティンに貼る依頼文と、その登録の手順。今は収録なし（ハーネスの棚卸しは #724 で GitHub Actions の定期実行へ移り、手順書は `docs/harness-audit.md` に置く）。
-
 ### 運用（`docs/`）
+
+claude.ai のルーティンに貼る依頼文の置き場（docs/routines/）は、今は収録なし（ハーネスの棚卸しは #724 で GitHub Actions の定期実行へ移った）。依頼文を足すときは、その節を戻す。
 
 | ファイル | 種別 | 概要 |
 |---|---|---|
