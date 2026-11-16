@@ -53,6 +53,8 @@ HEADING="## ハーネスの棚卸し"
 MARK_RE='<!-- harness-audit: checked-version=[0-9][0-9A-Za-z.]* -->'
 # 選ぶときの印の形（jq の正規表現）。版は harness-audit.sh が読める形（数字と点）だけを認める。
 MARK_JQ_RE='<!-- harness-audit: checked-version=[0-9]+(\.[0-9]+)* -->'
+# 本文の中の印を、形を問わずに拾う形（MARK_RE と同じ）。最後の 1 つを取り出すのに使う。
+MARK_JQ_ANY='<!-- harness-audit: checked-version=[0-9][0-9A-Za-z.]* -->'
 NOTICE='> このコメントは棚卸しの自動の報告で、承認の根拠になりません（共通規範 12 章）。候補を削るときは intake を通して issue を立てます。判断の手順は docs/harness-audit.md にあります。'
 # 標準エラーの理由は、この長さで切ってコメントへ載せる。
 ERR_MAX=2000
@@ -67,12 +69,14 @@ usage() {
 select_previous() {
   local f="$1"
   [[ -f "$f" ]] || { echo "harness-audit-post: コメントの一覧のファイルがありません: $f" >&2; return 1; }
-  jq -rs --arg h "$HEADING" --arg m "$MARK_JQ_RE" '
+  # 印は、使う側（harness-audit.sh と compose）と同じく「本文の最後の印」を見て、その形が正しいかで決める。
+  # 本文のどこかに正しい印があるかで選ぶと、後ろの崩れた印が実際には使われ、間の版を飛ばすため。
+  jq -rs --arg h "$HEADING" --arg any "$MARK_JQ_ANY" --arg m "^${MARK_JQ_RE}$" '
     [ .[] | if type == "array" then .[] else . end ]
     | [ .[] | select(
           (.user.login // "") == "github-actions[bot]" and (.user.type // "") == "Bot"
           and ((.body // "") | contains($h))
-          and ((.body // "") | test($m)) ) ]
+          and (([(.body // "") | match($any; "g") | .string] | last // "") | test($m)) ) ]
     | last | .body // ""' "$f" || { echo "harness-audit-post: コメントの一覧を読めません: $f" >&2; return 1; }
 }
 

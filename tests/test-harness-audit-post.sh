@@ -92,10 +92,14 @@ if [[ "$got" == *"checked-version=2.1.1"* ]]; then pass; else fail "got: $got"; 
   printf ','
   comment github-actions[bot] Bot NONE "$H
 <!-- harness-audit: checked-version=v2 -->"
+  printf ','
+  comment github-actions[bot] Bot NONE "$H
+<!-- harness-audit: checked-version=2.1.5 -->
+<!-- harness-audit: checked-version=2.1.x -->"
   printf ']'
 } > "$T/c3.json"
 
-it "見出しと形の正しい印の両方を持つものだけを拾い、ページをまたいで最後の 1 件を選ぶ（形の崩れた印は飛ばす）"
+it "見出しと形の正しい印の両方を持つものだけを拾い、ページをまたいで最後の 1 件を選ぶ（最後の印の形が崩れたものは、前に正しい印があっても飛ばす）"
 got="$("$POST" select "$T/c3.json")"
 if [[ "$got" == *"checked-version=2.1.4"* && "$got" != *"2.1.3"* ]]; then pass; else fail "got: $got"; fi
 
