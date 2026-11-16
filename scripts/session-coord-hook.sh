@@ -853,6 +853,40 @@ EOF
   return 0
 }
 
+# パスのファイルの、存在する最も近い祖先のディレクトリを出す（相対のパスは cwd から読む）。
+# まだ無いファイル・ディレクトリでも、台帳を呼ぶ場所と、リポジトリの外かの判定に使える。
+# 結果は EXISTING_DIR に入れる（コマンド置換で受けると、ディレクトリ名の末尾の改行が削られ、別の
+# 場所を指すため。dirname の結果も、末尾に目印を付けて取り出す）。
+EXISTING_DIR=""
+existing_dir_of() { # パス
+  local d="$1"
+  [[ "$d" == /* ]] || d="${cwd:-$PWD}/$d"
+  d="$(dirname "$d"; printf .)"; d="${d%.}"; d="${d%$'\n'}"
+  while [[ ! -d "$d" ]]; do d="$(dirname "$d"; printf .)"; d="${d%.}"; d="${d%$'\n'}"; done
+  EXISTING_DIR="$d"
+}
+
+# ディレクトリが git の作業ツリーの外だと git が答えるか。外と確かに言えるとき（作業ツリーの外＝
+# .git の中・bare のリポジトリ、または「not a git repository」）だけ 0 を返す。それ以外の失敗
+# （所有者の確かめ・git が無いなど）は外と決めつけず、従来どおり台帳を呼んで、読めなければ警告を
+# 出させる。判定はファイルの場所だけで行うため、GIT_ で始まる環境変数（GIT_DIR・
+# GIT_CEILING_DIRECTORIES・GIT_TRACE など）はすべて外して git を呼び、標準出力（判定）と
+# 標準エラー（診断）を分けて受け取る。一時ファイルは使わない（作れない環境でも判定できるよう、
+# 失敗したときだけ、診断を受け取るためにもう一度呼ぶ）。
+outside_work_tree() { # ディレクトリ
+  local out err v
+  local -a unset_args=()
+  for v in $(compgen -e); do
+    case "$v" in GIT_*) unset_args+=(-u "$v") ;; esac
+  done
+  if out="$(env ${unset_args[@]+"${unset_args[@]}"} LC_ALL=C git -C "$1" rev-parse --is-inside-work-tree 2>/dev/null)"; then
+    [[ "$out" == "false" ]]
+  else
+    err="$(env ${unset_args[@]+"${unset_args[@]}"} LC_ALL=C git -C "$1" rev-parse --is-inside-work-tree 2>&1 >/dev/null)"
+    [[ "$err" == *"not a git repository"* ]]
+  fi
+}
+
 pre_edit() {
   local path dir
   path="$fpath"
@@ -862,6 +896,13 @@ pre_edit() {
     add_warn "$UNSAFE_WARN"
     return 0
   fi
+  # 台帳は、ファイルの存在する最も近い祖先のディレクトリから呼ぶ（まだ無いディレクトリから呼ぶと、
+  # セッションの cwd へ戻り、別のリポジトリの台帳を見てしまうため）。
+  existing_dir_of "$path"
+  dir="$EXISTING_DIR"
+  # 作業ツリーの外のファイル（/tmp・.git の中など）は、台帳が守る共有の文書ではない。台帳を呼ぶと置き場所が
+  # 決まらず、意味の無い警告が毎回出て、台帳が本当に壊れたときの警告と見分けられなくなる（#727）。
+  ! outside_work_tree "$dir" || return 0
   refresh_ledger "$dir"
   run_ledger "$dir" check doc "$path"
   if [[ "$LEDGER_VERDICT" == "LEDGER_WARN" ]]; then
