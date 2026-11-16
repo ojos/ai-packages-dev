@@ -709,6 +709,20 @@ else
   if [[ "$HRC" -eq 0 && "$(context)" == *"kind=doc"* && "$(sysmsg)" != *"読み書きできません"* && "$(sysmsg)" != *"共通ディレクトリ"* ]]; then pass; else fail "rc=$HRC out=$HOUT"; fi
   reset_ledger
 
+  it "(#727) 一時ファイルを作れない環境（TMPDIR が書けない）でも、外のファイルは警告を出さない"
+  TMPDIR="$outside/no-such-tmp" pre_edit s-b "$outside" "$outside/note.txt"
+  quiet_and_no_ledger_warn "TMPDIR"
+
+  it "(#727) cwd の名前の末尾が改行でも、末尾を削った別の場所（リポジトリ）で判定しない"
+  # 外の r（git のリポジトリ）と、名前の末尾が改行の r（ただのディレクトリ）を並べる。相対のパスは cwd から読む。
+  nl_parent="$outside/nl"
+  mkdir -p "$nl_parent/r" "$nl_parent/r"$'\n'
+  git -C "$nl_parent/r" init -q 2>/dev/null
+  ledger s-a "$nl_parent/r" claim doc f.txt >/dev/null
+  pre_edit s-b "$nl_parent/r"$'\n' "f.txt"
+  if [[ "$HRC" -eq 0 && "$(context)" != *"kind=doc"* && "$(sysmsg)" != *"kind=doc"* ]]; then pass; else fail "リポジトリ r の台帳で判定した: rc=$HRC out=$HOUT"; fi
+  rm -rf "$nl_parent"
+
   it "(#727) git がリポジトリの外と言い切れない失敗（所有者の確かめなど）は、外と決めつけず台帳を呼び、読めなければ警告する"
   # rev-parse --is-inside-work-tree だけを「not a git repository」以外で落とす偽の git。ほかの呼び出しは本物へ渡す。
   fakebin="$(new_workdir)/bin"
