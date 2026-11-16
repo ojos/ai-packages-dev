@@ -668,31 +668,63 @@ reset_ledger
 
 # リポジトリの外のファイルは、台帳が守る共有の文書ではない。台帳を呼ぶと置き場所が決まらず、
 # 「共通ディレクトリを解決できない」「台帳を読み書きできない」の警告が毎回出ていた（#727）。
-# 一時ディレクトリがどこかの作業ツリーの中にある環境でも「外」を作れるよう、GIT_CEILING_DIRECTORIES で
-# git の探索を外のディレクトリの親で止める（リポジトリのフィクスチャは別の作業ディレクトリにある）。
-outside_root="$(new_workdir)"
-outside="$outside_root/outside"
+# フックは GIT_ で始まる環境変数を外して判定するので、「外」は本当にどの作業ツリーの外でもない
+# 場所に作る。一時ディレクトリが作業ツリーの中にある環境では作れないので、外の検査は見送りと
+# 表示し、合格には数えない。
+outside="$(new_workdir)/outside"
 mkdir -p "$outside"
-outside_edit() { GIT_CEILING_DIRECTORIES="$outside_root" pre_edit "$@"; }
+pl_write() { # cwd パス
+  jq -n --arg cwd "$1" --arg p "$2" '{hook_event_name: "PreToolUse", tool_name: "Write", cwd: $cwd, tool_input: {file_path: $p, content: "x"}}'
+}
+quiet_and_no_ledger_warn() { # ラベル
+  if [[ "$HRC" -eq 0 && "$(decision)" == "none" && -z "$(context)" && -z "$(sysmsg)" ]]; then pass; else fail "$1: rc=$HRC out=$HOUT"; fi
+}
+if [[ "$(env -u GIT_DIR -u GIT_CEILING_DIRECTORIES git -C "$outside" rev-parse --is-inside-work-tree 2>/dev/null)" == "true" ]]; then
+  printf '  skip (#727) リポジトリの外の検査（一時ディレクトリ %s が作業ツリーの中にあるため、外を作れない）\n' "$outside"
+else
+  it "(#727) リポジトリの外の、存在するディレクトリのファイルの Edit は、台帳を呼ばず警告も出さない"
+  pre_edit s-b "$repo" "$outside/note.txt"
+  quiet_and_no_ledger_warn "Edit"
 
-it "(#727) リポジトリの外の、存在するディレクトリのファイルの Edit は、台帳を呼ばず警告も出さない"
-outside_edit s-b "$repo" "$outside/note.txt"
-if [[ "$HRC" -eq 0 && "$(decision)" == "none" && -z "$(context)" && -z "$(sysmsg)" ]]; then pass; else fail "rc=$HRC out=$HOUT"; fi
+  it "(#727) リポジトリの外のファイルの Write も、台帳を呼ばず警告も出さない"
+  hook_raw s-b "$(pl_write "$outside" "$outside/written.txt")"
+  quiet_and_no_ledger_warn "Write"
 
-# まだ無いディレクトリは、存在する最も近い祖先で判定する（祖先をたどる処理が止まり、外と判定すること）。
-it "(#727) リポジトリの外の、まだ無いディレクトリの下のファイルの Edit も、警告を出さない（cwd も外）"
-outside_edit s-b "$outside" "$outside/nodir/sub/note.md"
-if [[ "$HRC" -eq 0 && "$(decision)" == "none" && -z "$(context)" && -z "$(sysmsg)" ]]; then pass; else fail "rc=$HRC out=$HOUT"; fi
+  # まだ無いディレクトリは、存在する最も近い祖先で判定する（祖先をたどる処理が止まり、外と判定すること）。
+  it "(#727) リポジトリの外の、まだ無いディレクトリの下への Write も、警告を出さない（cwd も外）"
+  hook_raw s-b "$(pl_write "$outside" "$outside/nodir/sub/note.md")"
+  quiet_and_no_ledger_warn "まだ無いディレクトリへの Write"
 
-it "(#727) リポジトリの外のファイルの Write も、台帳を呼ばず警告も出さない"
-HOUT="$(jq -n --arg cwd "$outside" --arg p "$outside/written.txt" '{hook_event_name: "PreToolUse", tool_name: "Write", cwd: $cwd, tool_input: {file_path: $p, content: "x"}}' \
-  | GIT_CEILING_DIRECTORIES="$outside_root" SESSION_LEDGER_ID=s-b SESSION_LEDGER_PID="$PID_B" bash "$HOOK" 2>/dev/null)"
-HRC=$?
-if [[ "$HRC" -eq 0 && "$(decision)" == "none" && -z "$(context)" && -z "$(sysmsg)" ]]; then pass; else fail "rc=$HRC out=$HOUT"; fi
+  it "(#727) リポジトリの外の、まだ無いディレクトリの下のファイルの Edit も、警告を出さない"
+  pre_edit s-b "$outside" "$outside/nodir2/note.md"
+  quiet_and_no_ledger_warn "まだ無いディレクトリへの Edit"
 
-it "(#727) GIT_DIR が別のリポジトリを指していても、外のファイルは場所で判定して警告を出さない"
-GIT_DIR="$repo/.git" outside_edit s-b "$outside" "$outside/note.txt"
-if [[ "$HRC" -eq 0 && "$(decision)" == "none" && -z "$(context)" && -z "$(sysmsg)" ]]; then pass; else fail "rc=$HRC out=$HOUT"; fi
+  it "(#727) GIT_DIR が別のリポジトリを指していても、外のファイルは場所で判定して警告を出さない"
+  GIT_DIR="$repo/.git" pre_edit s-b "$outside" "$outside/note.txt"
+  quiet_and_no_ledger_warn "GIT_DIR"
+
+  it "(#727) セッションの cwd がリポジトリの外でも、リポジトリの中のまだ無いディレクトリの文書は、そのリポジトリの台帳で確かめる"
+  ledger s-a "$repo" claim doc newdir/sub/a.md >/dev/null
+  pre_edit s-b "$outside" "$repo/newdir/sub/a.md"
+  if [[ "$HRC" -eq 0 && "$(context)" == *"kind=doc"* && "$(sysmsg)" != *"読み書きできません"* && "$(sysmsg)" != *"共通ディレクトリ"* ]]; then pass; else fail "rc=$HRC out=$HOUT"; fi
+  reset_ledger
+
+  it "(#727) git がリポジトリの外と言い切れない失敗（所有者の確かめなど）は、外と決めつけず台帳を呼び、読めなければ警告する"
+  # rev-parse --is-inside-work-tree だけを「not a git repository」以外で落とす偽の git。ほかの呼び出しは本物へ渡す。
+  fakebin="$(new_workdir)/bin"
+  mkdir -p "$fakebin"
+  realgit="$(command -v git)"
+  cat > "$fakebin/git" <<EOF
+#!/usr/bin/env bash
+for a in "\$@"; do
+  if [[ "\$a" == "--is-inside-work-tree" ]]; then echo "fatal: detected dubious ownership in repository" >&2; exit 128; fi
+done
+exec "$realgit" "\$@"
+EOF
+  chmod +x "$fakebin/git"
+  PATH="$fakebin:$PATH" pre_edit s-b "$outside" "$outside/note.txt"
+  if [[ "$HRC" -eq 0 && "$(decision)" == "none" && -n "$(sysmsg)" ]]; then pass; else fail "警告が出ない（黙って通した）: rc=$HRC out=$HOUT"; fi
+fi
 
 it "(#727) .git の中のファイル（作業ツリーの外）は、他のセッションの登録があっても台帳で確かめない"
 ledger s-a "$repo" claim doc .git/info/exclude >/dev/null
@@ -705,26 +737,22 @@ ledger s-a "$repo" claim doc newdir/sub/a.md >/dev/null
 pre_edit s-b "$repo" "$repo/newdir/sub/a.md"
 if [[ "$HRC" -eq 0 && "$(context)" == *"kind=doc"* ]]; then pass; else fail "rc=$HRC out=$HOUT"; fi
 
-it "(#727) セッションの cwd がリポジトリの外でも、リポジトリの中のまだ無いディレクトリの文書は、そのリポジトリの台帳で確かめる"
-outside_edit s-b "$outside" "$repo/newdir/sub/a.md"
-if [[ "$HRC" -eq 0 && "$(context)" == *"kind=doc"* && "$(sysmsg)" != *"読み書きできません"* && "$(sysmsg)" != *"共通ディレクトリ"* ]]; then pass; else fail "rc=$HRC out=$HOUT"; fi
+it "(#727) git の診断出力（GIT_TRACE）があっても、リポジトリの中の文書を外と誤判定しない"
+GIT_TRACE=1 pre_edit s-b "$repo" "$repo/newdir/sub/a.md"
+if [[ "$HRC" -eq 0 && "$(context)" == *"kind=doc"* ]]; then pass; else fail "rc=$HRC out=$HOUT"; fi
+
 reset_ledger
 
-it "(#727) git がリポジトリの外と言い切れない失敗（所有者の確かめなど）は、外と決めつけず台帳を呼び、読めなければ警告する"
-# rev-parse --is-inside-work-tree だけを「not a git repository」以外で落とす偽の git。ほかの呼び出しは本物へ渡す。
-fakebin="$(new_workdir)/bin"
-mkdir -p "$fakebin"
-realgit="$(command -v git)"
-cat > "$fakebin/git" <<EOF
-#!/usr/bin/env bash
-for a in "\$@"; do
-  if [[ "\$a" == "--is-inside-work-tree" ]]; then echo "fatal: detected dubious ownership in repository" >&2; exit 128; fi
-done
-exec "$realgit" "\$@"
-EOF
-chmod +x "$fakebin/git"
-PATH="$fakebin:$PATH" outside_edit s-b "$outside" "$outside/note.txt"
-if [[ "$HRC" -eq 0 && "$(decision)" == "none" && -n "$(sysmsg)" ]]; then pass; else fail "警告が出ない（黙って通した）: rc=$HRC out=$HOUT"; fi
+it "(#727) GIT_CEILING_DIRECTORIES がリポジトリを指していても、リポジトリの中の文書を外と誤判定して黙って通さない"
+# git の探索は天井より上へ進まない。サブディレクトリから探すと、天井（リポジトリの根）の .git に届かない。
+# フックの判定は場所だけで行うので中と判定し、台帳を呼ぶ。台帳自身は同じ環境変数を引き継ぐため、
+# 置き場所を解決できずに警告するか、文書の警告を出す。どちらでも、黙って通さないことを確かめる。
+mkdir -p "$repo/ceilsub"
+ledger s-a "$repo" claim doc ceilsub/new/a.md >/dev/null
+GIT_CEILING_DIRECTORIES="$repo" pre_edit s-b "$repo" "$repo/ceilsub/new/a.md"
+if [[ "$HRC" -eq 0 && ( "$(context)" == *"kind=doc"* || -n "$(sysmsg)" ) ]]; then pass; else fail "黙って通した: rc=$HRC out=$HOUT"; fi
+rmdir "$repo/ceilsub"
+reset_ledger
 
 it "(#528) シンボリックリンクの先が末尾が改行のパスでも、解決した後の値を判定して登録しない"
 real_nl="$base_dir/real_nl"$'\n'

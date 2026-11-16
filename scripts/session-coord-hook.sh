@@ -866,13 +866,24 @@ existing_dir_of() { # パス
 # ディレクトリが git の作業ツリーの外だと git が答えるか。外と確かに言えるとき（作業ツリーの外＝
 # .git の中・bare のリポジトリ、または「not a git repository」）だけ 0 を返す。それ以外の失敗
 # （所有者の確かめ・git が無いなど）は外と決めつけず、従来どおり台帳を呼んで、読めなければ警告を
-# 出させる。判定はファイルの場所だけで行うため、GIT_DIR などの環境変数は外して git を呼ぶ。
+# 出させる。判定はファイルの場所だけで行うため、GIT_ で始まる環境変数（GIT_DIR・
+# GIT_CEILING_DIRECTORIES・GIT_TRACE など）はすべて外して git を呼び、標準出力（判定）と
+# 標準エラー（診断）を分けて受け取る。
 outside_work_tree() { # ディレクトリ
-  local out
-  if out="$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR LC_ALL=C git -C "$1" rev-parse --is-inside-work-tree 2>&1)"; then
-    [[ "$out" != "true" ]]
+  local out err errf rc v
+  local -a unset_args=()
+  for v in $(compgen -e); do
+    case "$v" in GIT_*) unset_args+=(-u "$v") ;; esac
+  done
+  errf="$(mktemp "${TMPDIR:-/tmp}/session-coord-git.XXXXXX" 2>/dev/null)" || return 1
+  out="$(env ${unset_args[@]+"${unset_args[@]}"} LC_ALL=C git -C "$1" rev-parse --is-inside-work-tree 2>"$errf")"
+  rc=$?
+  err="$(cat "$errf" 2>/dev/null)"
+  rm -f "$errf"
+  if [[ "$rc" -eq 0 ]]; then
+    [[ "$out" == "false" ]]
   else
-    [[ "$out" == *"not a git repository"* ]]
+    [[ "$err" == *"not a git repository"* ]]
   fi
 }
 
