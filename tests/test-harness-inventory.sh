@@ -16,7 +16,7 @@
 # 各項目の id と path の対応も見る（実在する別のファイルを指す項目を、集合の一致と実在の確認だけでは落とせないため）。
 #
 # あわせて、id の重複が無いこと・必須キーがあること・キーワードが汎用語でないこと、
-# ルーティンの依頼文（docs/routines/harness-audit.md）が突き合わせのスクリプトと
+# 棚卸しの手順書（docs/harness-audit.md）が突き合わせのスクリプトと
 # 追跡 issue を指していることを見る。
 #
 # 検査は「ルートを受け取る関数」にしてあり、末尾で壊したフィクスチャ（欠け 1 件・余り 1 件）へも
@@ -30,7 +30,7 @@ set -uo pipefail
 echo "test-harness-inventory"
 
 INV_REL=".github/harness-inventory.json"
-ROUTINE_REL="docs/routines/harness-audit.md"
+ROUTINE_REL="docs/harness-audit.md"
 FIX="$(mktemp -d "${TMPDIR:-/tmp}/test-harness-inventory.XXXXXX")"
 trap 'rm -rf "$FIX"' EXIT
 
@@ -194,16 +194,16 @@ check_keywords_specific() {
   fi
 }
 
-# 依頼文が突き合わせのスクリプトと追跡 issue を指している。
+# 手順書が突き合わせのスクリプトと追跡 issue を指している。
 check_routine_doc() {
   local root="$1" f="$1/$ROUTINE_REL"
   if [[ ! -f "$f" ]]; then
-    echo "依頼文が無い: $ROUTINE_REL"
+    echo "手順書が無い: $ROUTINE_REL"
     return 1
   fi
-  grep -q 'scripts/harness-audit\.sh' "$f" || { echo "依頼文が scripts/harness-audit.sh を参照していない"; return 1; }
+  grep -q 'scripts/harness-audit\.sh' "$f" || { echo "手順書が scripts/harness-audit.sh を参照していない"; return 1; }
   [[ -f "$root/scripts/harness-audit.sh" ]] || { echo "scripts/harness-audit.sh が実在しない"; return 1; }
-  grep -Eq '^追跡 issue: #[0-9]+' "$f" || { echo "依頼文に「追跡 issue: #N」の行が無い"; return 1; }
+  grep -Eq '^追跡 issue: #[0-9]+' "$f" || { echo "手順書に「追跡 issue: #N」の行が無い"; return 1; }
 }
 
 # 関数 $1 をルート $2 へ当て、落ちる（0 以外）ことを確かめる。
@@ -243,7 +243,7 @@ expect_ok check_id_path "$REPO_ROOT"
 it "キーワードが汎用語になっていない"
 expect_ok check_keywords_specific "$REPO_ROOT"
 
-it "ルーティンの依頼文が突き合わせのスクリプトと追跡 issue を指している"
+it "棚卸しの手順書が突き合わせのスクリプトと追跡 issue を指している"
 expect_ok check_routine_doc "$REPO_ROOT"
 
 # --- 壊したフィクスチャ ---
@@ -251,7 +251,7 @@ expect_ok check_routine_doc "$REPO_ROOT"
 # 小さな正しいルートを作って $1 に置く。
 make_fixture() {
   local d="$FIX/$1"
-  mkdir -p "$d/scripts" "$d/.claude/skills/s" "$d/.claude/rules" "$d/.github/workflows" "$d/docs/routines"
+  mkdir -p "$d/scripts" "$d/.claude/skills/s" "$d/.claude/rules" "$d/.github/workflows" "$d/docs"
   printf -- '---\npaths:\n  - "x"\n---\n\n# 手で書いた規則\n' > "$d/.claude/rules/r.md"
   printf '> 生成物: 正本から生成したもの\n' > "$d/.claude/rules/ai-playbook.md"
   : > "$d/scripts/a.sh"
@@ -349,12 +349,12 @@ D="$(make_fixture genericword)"
 jq '.items[3].keywords = ["hook"]' "$D/$INV_REL" > "$D/x.json" && cat "$D/x.json" > "$D/$INV_REL"
 expect_fail check_keywords_specific "$D"
 
-it "依頼文に追跡 issue の行が無いと落ちる"
+it "手順書に追跡 issue の行が無いと落ちる"
 D="$(make_fixture noissue)"
 printf 'scripts/harness-audit.sh を回す。\n' > "$D/$ROUTINE_REL"
 expect_fail check_routine_doc "$D"
 
-it "依頼文がスクリプトを参照していないと落ちる"
+it "手順書がスクリプトを参照していないと落ちる"
 D="$(make_fixture noref)"
 printf '追跡 issue: #1\n' > "$D/$ROUTINE_REL"
 expect_fail check_routine_doc "$D"

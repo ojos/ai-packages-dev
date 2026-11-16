@@ -136,6 +136,14 @@
       "issue": "#710"
     },
     {
+      "id": "scripts/harness-audit-post.sh",
+      "kind": "script",
+      "path": "scripts/harness-audit-post.sh",
+      "compensates": "クラウドのスケジュール済みタスクが、アカウントの GitHub 連携の外の組織のリポジトリを扱えない不足（棚卸しを Actions の定期実行で回す）",
+      "keywords": ["cloud scheduled task"],
+      "issue": "#724"
+    },
+    {
       "id": "scripts/install-ai-tools.sh",
       "kind": "script",
       "path": "scripts/install-ai-tools.sh",

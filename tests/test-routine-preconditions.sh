@@ -145,10 +145,13 @@ check_routine() {
 }
 
 # ルート $1 の docs/routines/*.md をすべて検査する。1 つも無ければ通す（対象が無い）。
+# 検査した件数を CHECKED に入れる（glob が空振りしていないことを、フィクスチャで確かめるため）。
 check_all() {
   local root="$1" rc=0 f
+  CHECKED=0
   for f in "$root/$ROUTINES_REL"/*.md; do
     [[ -f "$f" ]] || continue
+    CHECKED=$((CHECKED + 1))
     check_routine "$f" "$root" || rc=1
   done
   return "$rc"
@@ -157,8 +160,11 @@ check_all() {
 it "docs/routines/ の依頼文がすべて無人実行の 5 点を宣言し、照合できる点が合っている"
 if out="$(check_all "$REPO_ROOT" 2>&1)"; then pass; else fail "$out"; fi
 
-it "docs/routines/ に依頼文が 1 つ以上ある（検査が空振りしていない）"
-if ls "$REPO_ROOT/$ROUTINES_REL"/*.md >/dev/null 2>&1; then pass; else fail "依頼文が無い"; fi
+# 今は依頼文が 0 件（棚卸しは #724 で Actions の定期実行へ移った）。0 件の検査が空振りでないことは、
+# 下の「壊していないフィクスチャ」で、同じ check_all が依頼文を数えることで確かめる。
+# 検査する場所の取り違え（ROUTINES_REL の綴り・ディレクトリの改名）は、地図が宣言する場所との一致で確かめる。
+it "検査する場所（$ROUTINES_REL）が、地図が依頼文の場所として宣言するものと一致する"
+if grep -qF "\`$ROUTINES_REL/*.md\`" "$REPO_ROOT/.github/project-ai-rules.md"; then pass; else fail "地図（.github/project-ai-rules.md）に \`$ROUTINES_REL/*.md\` が無い"; fi
 
 # --- 壊したフィクスチャ ---
 
@@ -204,6 +210,10 @@ expect_fail() {
 it "フィクスチャ（正しい形）は通る（壊す前の基準）"
 D="$(make_fixture base)"
 if out="$(check_all "$D" 2>&1)"; then pass; else fail "$out"; fi
+
+it "検査は docs/routines/ の依頼文を実際に数えている（glob が空振りしていない）"
+check_all "$D" >/dev/null 2>&1
+assert_eq "$CHECKED" "1" "フィクスチャの依頼文の件数"
 
 it "5 点の欄が欠けると落ちる（最終的に承認する人）"
 D="$(make_fixture miss-approver)"

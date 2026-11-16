@@ -1,0 +1,38 @@
+name: harness-audit
+
+# ハーネスの棚卸し（#710 の 1 段目を #724 で Actions へ移したもの）。
+#
+# 週 1 回、自前の実装の一覧（.github/harness-inventory.json）と本体（Claude Code）の変更履歴を
+# 突き合わせ（scripts/harness-audit.sh）、結果を追跡 issue #711 へコメントする
+# （scripts/harness-audit-post.sh）。claude.ai のルーティンは、アカウントの GitHub 連携が
+# この組織につながらず使えなかった。突き合わせとコメントは curl・jq・gh だけで動くので、
+# Claude の認証も秘密の値も置かない。Claude が要る判断は、利用者が #711 を読むときに行う
+# （docs/harness-audit.md）。コメントは自動の報告で、承認の根拠にならない。
+#
+# - 権限は、コードを読む contents: read と、#711 へコメントする issues: write だけ。
+# - 毎時 0 分は Actions が混み、遅れたり飛ばされたりするので、半端な分にする（月曜 9:17 JST）。
+# - 公開リポジトリは、60 日間動きが無いと定期実行が自動で止まる。戻し方は docs/harness-audit.md。
+
+on:
+  schedule:
+    - cron: "17 0 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: harness-audit
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - name: Run harness audit and comment on the tracking issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/harness-audit-post.sh run
