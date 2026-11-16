@@ -11586,6 +11586,25 @@ EOF
   return 0
 }
 
+# パスのファイルの、存在する最も近い祖先のディレクトリを出す（相対のパスは cwd から読む）。
+# まだ無いファイル・ディレクトリでも、台帳を呼ぶ場所と、リポジトリの外かの判定に使える。
+existing_dir_of() { # パス
+  local d="$1"
+  [[ "$d" == /* ]] || d="${cwd:-$PWD}/$d"
+  d="$(dirname "$d")"
+  while [[ ! -d "$d" ]]; do d="$(dirname "$d")"; done
+  printf '%s' "$d"
+}
+
+# ディレクトリが、どの git リポジトリにも属さないと git が答えるか。属さないと確かに言えるとき
+# （「not a git repository」）だけ 0 を返す。それ以外の失敗（所有者の確かめ・git が無いなど）は
+# 外と決めつけず、従来どおり台帳を呼んで、読めなければ警告を出させる。.git の中も外とはしない。
+outside_any_repo() { # ディレクトリ
+  local err
+  err="$(LC_ALL=C git -C "$1" rev-parse --git-dir 2>&1 >/dev/null)" && return 1
+  [[ "$err" == *"not a git repository"* ]]
+}
+
 pre_edit() {
   local path dir
   path="$fpath"
@@ -11595,6 +11614,12 @@ pre_edit() {
     add_warn "$UNSAFE_WARN"
     return 0
   fi
+  # 台帳は、ファイルの存在する最も近い祖先のディレクトリから呼ぶ（まだ無いディレクトリから呼ぶと、
+  # セッションの cwd へ戻り、別のリポジトリの台帳を見てしまうため）。
+  dir="$(existing_dir_of "$path")"
+  # リポジトリの外のファイル（/tmp など）は、台帳が守る共有の文書ではない。台帳を呼ぶと置き場所が
+  # 決まらず、意味の無い警告が毎回出て、台帳が本当に壊れたときの警告と見分けられなくなる（#727）。
+  ! outside_any_repo "$dir" || return 0
   refresh_ledger "$dir"
   run_ledger "$dir" check doc "$path"
   if [[ "$LEDGER_VERDICT" == "LEDGER_WARN" ]]; then

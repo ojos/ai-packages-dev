@@ -666,6 +666,50 @@ pre_edit s-b "$repo" "$repo/docs/nl.md"
 if [[ "$(context)" == *"kind=doc"* ]]; then pass; else fail "対照: 安全なパスの警告が出ない: $HOUT"; fi
 reset_ledger
 
+# リポジトリの外のファイルは、台帳が守る共有の文書ではない。台帳を呼ぶと置き場所が決まらず、
+# 「共通ディレクトリを解決できない」「台帳を読み書きできない」の警告が毎回出ていた（#727）。
+# 一時ディレクトリがどこかの作業ツリーの中にある環境でも「外」を作れるよう、GIT_CEILING_DIRECTORIES で
+# git の探索を外のディレクトリの親で止める（リポジトリのフィクスチャは別の作業ディレクトリにある）。
+outside_root="$(new_workdir)"
+outside="$outside_root/outside"
+mkdir -p "$outside"
+outside_edit() { GIT_CEILING_DIRECTORIES="$outside_root" pre_edit "$@"; }
+
+it "(#727) リポジトリの外の、存在するディレクトリのファイルの Edit は、台帳を呼ばず警告も出さない"
+outside_edit s-b "$repo" "$outside/note.txt"
+if [[ "$HRC" -eq 0 && "$(decision)" == "none" && -z "$(context)" && -z "$(sysmsg)" ]]; then pass; else fail "rc=$HRC out=$HOUT"; fi
+
+# まだ無いディレクトリは、存在する最も近い祖先で判定する（祖先をたどる処理が止まり、外と判定すること）。
+it "(#727) リポジトリの外の、まだ無いディレクトリの下のファイルの Edit も、警告を出さない（cwd も外）"
+outside_edit s-b "$outside" "$outside/nodir/sub/note.md"
+if [[ "$HRC" -eq 0 && "$(decision)" == "none" && -z "$(context)" && -z "$(sysmsg)" ]]; then pass; else fail "rc=$HRC out=$HOUT"; fi
+
+it "(#727) リポジトリの中の、まだ無いディレクトリの下の文書も、他のセッションの登録があれば従来どおり警告する"
+ledger s-a "$repo" claim doc newdir/sub/a.md >/dev/null
+pre_edit s-b "$repo" "$repo/newdir/sub/a.md"
+if [[ "$HRC" -eq 0 && "$(context)" == *"kind=doc"* ]]; then pass; else fail "rc=$HRC out=$HOUT"; fi
+
+it "(#727) セッションの cwd がリポジトリの外でも、リポジトリの中のまだ無いディレクトリの文書は、そのリポジトリの台帳で確かめる"
+outside_edit s-b "$outside" "$repo/newdir/sub/a.md"
+if [[ "$HRC" -eq 0 && "$(context)" == *"kind=doc"* && "$(sysmsg)" != *"読み書きできません"* && "$(sysmsg)" != *"共通ディレクトリ"* ]]; then pass; else fail "rc=$HRC out=$HOUT"; fi
+reset_ledger
+
+it "(#727) git がリポジトリの外と言い切れない失敗（所有者の確かめなど）は、外と決めつけず台帳を呼び、読めなければ警告する"
+# rev-parse --git-dir だけを「not a git repository」以外で落とす偽の git。ほかの呼び出しは本物へ渡す。
+fakebin="$(new_workdir)/bin"
+mkdir -p "$fakebin"
+realgit="$(command -v git)"
+cat > "$fakebin/git" <<EOF
+#!/usr/bin/env bash
+for a in "\$@"; do
+  if [[ "\$a" == "--git-dir" ]]; then echo "fatal: detected dubious ownership in repository" >&2; exit 128; fi
+done
+exec "$realgit" "\$@"
+EOF
+chmod +x "$fakebin/git"
+PATH="$fakebin:$PATH" outside_edit s-b "$outside" "$outside/note.txt"
+if [[ "$HRC" -eq 0 && "$(decision)" == "none" && -n "$(sysmsg)" ]]; then pass; else fail "警告が出ない（黙って通した）: rc=$HRC out=$HOUT"; fi
+
 it "(#528) シンボリックリンクの先が末尾が改行のパスでも、解決した後の値を判定して登録しない"
 real_nl="$base_dir/real_nl"$'\n'
 mkdir -p "$real_nl"
