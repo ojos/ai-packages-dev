@@ -684,6 +684,22 @@ it "(#727) リポジトリの外の、まだ無いディレクトリの下のフ
 outside_edit s-b "$outside" "$outside/nodir/sub/note.md"
 if [[ "$HRC" -eq 0 && "$(decision)" == "none" && -z "$(context)" && -z "$(sysmsg)" ]]; then pass; else fail "rc=$HRC out=$HOUT"; fi
 
+it "(#727) リポジトリの外のファイルの Write も、台帳を呼ばず警告も出さない"
+HOUT="$(jq -n --arg cwd "$outside" --arg p "$outside/written.txt" '{hook_event_name: "PreToolUse", tool_name: "Write", cwd: $cwd, tool_input: {file_path: $p, content: "x"}}' \
+  | GIT_CEILING_DIRECTORIES="$outside_root" SESSION_LEDGER_ID=s-b SESSION_LEDGER_PID="$PID_B" bash "$HOOK" 2>/dev/null)"
+HRC=$?
+if [[ "$HRC" -eq 0 && "$(decision)" == "none" && -z "$(context)" && -z "$(sysmsg)" ]]; then pass; else fail "rc=$HRC out=$HOUT"; fi
+
+it "(#727) GIT_DIR が別のリポジトリを指していても、外のファイルは場所で判定して警告を出さない"
+GIT_DIR="$repo/.git" outside_edit s-b "$outside" "$outside/note.txt"
+if [[ "$HRC" -eq 0 && "$(decision)" == "none" && -z "$(context)" && -z "$(sysmsg)" ]]; then pass; else fail "rc=$HRC out=$HOUT"; fi
+
+it "(#727) .git の中のファイル（作業ツリーの外）は、他のセッションの登録があっても台帳で確かめない"
+ledger s-a "$repo" claim doc .git/info/exclude >/dev/null
+pre_edit s-b "$repo" "$repo/.git/info/exclude"
+if [[ "$HRC" -eq 0 && -z "$(context)" && -z "$(sysmsg)" ]]; then pass; else fail "rc=$HRC out=$HOUT"; fi
+reset_ledger
+
 it "(#727) リポジトリの中の、まだ無いディレクトリの下の文書も、他のセッションの登録があれば従来どおり警告する"
 ledger s-a "$repo" claim doc newdir/sub/a.md >/dev/null
 pre_edit s-b "$repo" "$repo/newdir/sub/a.md"
@@ -695,14 +711,14 @@ if [[ "$HRC" -eq 0 && "$(context)" == *"kind=doc"* && "$(sysmsg)" != *"読み書
 reset_ledger
 
 it "(#727) git がリポジトリの外と言い切れない失敗（所有者の確かめなど）は、外と決めつけず台帳を呼び、読めなければ警告する"
-# rev-parse --git-dir だけを「not a git repository」以外で落とす偽の git。ほかの呼び出しは本物へ渡す。
+# rev-parse --is-inside-work-tree だけを「not a git repository」以外で落とす偽の git。ほかの呼び出しは本物へ渡す。
 fakebin="$(new_workdir)/bin"
 mkdir -p "$fakebin"
 realgit="$(command -v git)"
 cat > "$fakebin/git" <<EOF
 #!/usr/bin/env bash
 for a in "\$@"; do
-  if [[ "\$a" == "--git-dir" ]]; then echo "fatal: detected dubious ownership in repository" >&2; exit 128; fi
+  if [[ "\$a" == "--is-inside-work-tree" ]]; then echo "fatal: detected dubious ownership in repository" >&2; exit 128; fi
 done
 exec "$realgit" "\$@"
 EOF

@@ -11596,13 +11596,17 @@ existing_dir_of() { # パス
   printf '%s' "$d"
 }
 
-# ディレクトリが、どの git リポジトリにも属さないと git が答えるか。属さないと確かに言えるとき
-# （「not a git repository」）だけ 0 を返す。それ以外の失敗（所有者の確かめ・git が無いなど）は
-# 外と決めつけず、従来どおり台帳を呼んで、読めなければ警告を出させる。.git の中も外とはしない。
-outside_any_repo() { # ディレクトリ
-  local err
-  err="$(LC_ALL=C git -C "$1" rev-parse --git-dir 2>&1 >/dev/null)" && return 1
-  [[ "$err" == *"not a git repository"* ]]
+# ディレクトリが git の作業ツリーの外だと git が答えるか。外と確かに言えるとき（作業ツリーの外＝
+# .git の中・bare のリポジトリ、または「not a git repository」）だけ 0 を返す。それ以外の失敗
+# （所有者の確かめ・git が無いなど）は外と決めつけず、従来どおり台帳を呼んで、読めなければ警告を
+# 出させる。判定はファイルの場所だけで行うため、GIT_DIR などの環境変数は外して git を呼ぶ。
+outside_work_tree() { # ディレクトリ
+  local out
+  if out="$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR LC_ALL=C git -C "$1" rev-parse --is-inside-work-tree 2>&1)"; then
+    [[ "$out" != "true" ]]
+  else
+    [[ "$out" == *"not a git repository"* ]]
+  fi
 }
 
 pre_edit() {
@@ -11617,9 +11621,9 @@ pre_edit() {
   # 台帳は、ファイルの存在する最も近い祖先のディレクトリから呼ぶ（まだ無いディレクトリから呼ぶと、
   # セッションの cwd へ戻り、別のリポジトリの台帳を見てしまうため）。
   dir="$(existing_dir_of "$path")"
-  # リポジトリの外のファイル（/tmp など）は、台帳が守る共有の文書ではない。台帳を呼ぶと置き場所が
+  # 作業ツリーの外のファイル（/tmp・.git の中など）は、台帳が守る共有の文書ではない。台帳を呼ぶと置き場所が
   # 決まらず、意味の無い警告が毎回出て、台帳が本当に壊れたときの警告と見分けられなくなる（#727）。
-  ! outside_any_repo "$dir" || return 0
+  ! outside_work_tree "$dir" || return 0
   refresh_ledger "$dir"
   run_ledger "$dir" check doc "$path"
   if [[ "$LEDGER_VERDICT" == "LEDGER_WARN" ]]; then
