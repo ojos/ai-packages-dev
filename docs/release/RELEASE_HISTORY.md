@@ -9,14 +9,16 @@
 
 | パッケージ | リポジトリ | 現行バージョン | 配布形態 |
 |---|---|---|---|
-| devcontainer-bootstrap | `ojos/devcontainer-bootstrap` | v0.25.0 | GitHub Release + 資産 5 点（配布スクリプト 2: `bootstrap.sh` / `doctor.sh`、生成物 3: `SHA256SUMS` / `RELEASE-MANIFEST.json` / `PACKAGE_ARCHIVE.tar.gz`） |
+| devcontainer-bootstrap | `ojos/devcontainer-bootstrap` | v0.25.1 | GitHub Release + 資産 5 点（配布スクリプト 2: `bootstrap.sh` / `doctor.sh`、生成物 3: `SHA256SUMS` / `RELEASE-MANIFEST.json` / `PACKAGE_ARCHIVE.tar.gz`） |
 | ai-playbook | `ojos/ai-playbook` | v0.14.0 | git タグのみ |
-| devcontainer-host | `ojos/devcontainer-host` | v0.8.0 | GitHub Release + 資産 14 点（個別 11: `dev.sh` / `dev-up@.service` / `dev-runner@.service` / `dev-route@.service` / `dev-route-sync@.service` / `dev-route-sync@.timer` / `runner.Dockerfile` / `install.sh` / `projects.example` / `runners.example` / `routes.example`、生成物 3: `SHA256SUMS` / `RELEASE-MANIFEST.json` / `PACKAGE_ARCHIVE.tar.gz`） |
+| devcontainer-host | `ojos/devcontainer-host` | v0.8.1 | GitHub Release + 資産 14 点（個別 11: `dev.sh` / `dev-up@.service` / `dev-runner@.service` / `dev-route@.service` / `dev-route-sync@.service` / `dev-route-sync@.timer` / `runner.Dockerfile` / `install.sh` / `projects.example` / `runners.example` / `routes.example`、生成物 3: `SHA256SUMS` / `RELEASE-MANIFEST.json` / `PACKAGE_ARCHIVE.tar.gz`） |
 
 ### 新世代の版更新
 
 | パッケージ | 版 | 公開日 | 要点 |
 |---|---|---|---|
+| devcontainer-bootstrap | v0.25.1 | 2026-11-17 | 修正のみ。生成する `scripts/update-check.sh` の upgrade が失敗したとき、追従が書いた ignore に一致するファイル（`.env.example.dcb-new` など）も「書かれたもの」として数え、作業用のブランチに留まって消す対象として案内する（#721）。セッション協調のフック `scripts/session-coord-hook.sh` が、git の作業ツリーの外のファイル（`/tmp` など）の Edit / Write では台帳を確かめずに黙って通す（#727。これまでは毎回 2 行の警告を出していた）。要求する ai-playbook は v0.14.0 のまま |
+| devcontainer-host | v0.8.1 | 2026-11-17 | 説明のみ（動作の変更なし）。`dev observe` の README と `dev help observe` に、Claude Code 2.1.322 では確認の拒否・拒否の規則・`-p` の `--disallowedTools` で `safety_event` が出ず `tool_decision` だけが届いた実測と、そのあいだ `report` が `safety_event` 由来の候補を出さないことを書いた（#723） |
 | devcontainer-bootstrap | v0.25.0 | 2026-11-10 | **生成する `scripts/loop-gate.sh` が、第二意見より前に保存した再現テストを再実行し、まだ再現すれば止める**（#693）。規範を配置する構成で `scripts/second-opinion-repro-schema.json` を配置し（#691）、codex を含む構成の `.env.example` に `SECOND_OPINION_REFUTE_ENGINE` の欄（#692）。**`check-git-config.sh` が `core.pager`・`pager.<コマンド>`・alias の `!` など、外部コマンドを実行する設定を広く検出する**（#694）。`--upgrade` は走りうる `*.sh` を rename で置き換え、実行中の `update-check.sh` を壊さない（#696）。`update-check` の upgrade は、追従と関係の無い未追跡ファイルでは止まらない（#704）。生成物が既定の重大度の shellcheck を通る（#697）、`check-doc-links.sh` の生成物判定のすり抜けを直した（#698）。**規範を配置する構成は ai-playbook v0.14.0 以降を要求する**（`--upgrade` に `--playbook-version v0.14.0` を足す。古い版のままでは書き込む前に止まる） |
 | ai-playbook | v0.14.0 | 2026-11-10 | **第二意見に、ゲート対象の指摘を codex のサンドボックスで再現させる段階**（#691。判定は変えない）、**再現しなかった指摘を別ベンダー（gemini / antigravity）に反証させ、すべて反証されたときだけ通す段階**（#692）、**再現したテストを保存して `--rerun-saved` で再実行する入口**（#693）。**配布のままのファイルへの指摘を判定に数えない**（#695）。`templates/second-opinion-repro-schema.json` を足した（雛形は 19 種）。**反証の段階は既定で有効で、gemini か agy が使える環境では、多数決で指摘ありでも反証されればゲートが通る**（従来の判定のままにするには `SECOND_OPINION_REFUTE=off`。再現の段階は `SECOND_OPINION_REPRO=off`） |
 | devcontainer-host | v0.8.0 | 2026-11-10 | **`dev quarantine`: 信頼できないリポジトリを、資格情報もネットワークも持たない使い捨ての箱で調べる**（#715。ホストでは git を呼ばない）。**`dev observe`: Claude Code の `safety_event` / `tool_decision` をホスト側の受け口へ貯め、許可・フック・規範の改訂の候補を出す**（#717。`dev attach` / `dev exec` が送り先を渡す。候補は承認の根拠にしない）。手で行う移行の作業は無い |
