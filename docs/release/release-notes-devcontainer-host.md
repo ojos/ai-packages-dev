@@ -6,10 +6,13 @@ devhost（SSH で届く外部の機械で devcontainer を保つ道具。コマ�
 >
 > 同じ理由で、issue 参照は `ojos/ai-packages-dev#NNN` の形で書いてください。裸の `#NNN` は GitHub のオートリンクが**配布先リポジトリの issue** として解決するため、配布後は存在しない issue や無関係な issue を指します。
 
-## 未リリース
+## v0.8.1
 
 ### Summary
 - **`dev observe` の説明を実測に合わせた**（ojos/ai-packages-dev#723）。Claude Code 2.1.322 では、対話のセッションで確認に No を選んでも、拒否の規則で止めても、`-p` で `--disallowedTools` に当てても `safety_event` が出ず、`tool_decision` だけが届いた（`-p` の場合は、受け口を通さずに Claude Code の出力を直接見ても出ていない）。README の「観測」の「残る危険」にその版と条件を書き、`safety_event` の出る条件は Claude Code のドキュメントの説明として書き分けた。`dev help observe` にも同じ注意を足した。フックでの差し戻しや sandbox の拒否で出るかは確かめていない。`safety_event` が届かないあいだ、`report` は `safety_event` から出す候補（フック・手順・許可するドメイン・sandbox の設定の見直し）を出さない（許可の追加の候補は `tool_decision` から出る）。動作の変更は無い。
+
+### 移行
+- 動作の変更は無い。手で行う移行の作業は無い（`dev self-update` で `dev help observe` の注意も新しくなる）。
 
 ## v0.8.0
 
